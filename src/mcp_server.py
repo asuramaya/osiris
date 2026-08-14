@@ -126,7 +126,7 @@ class BoundedMCP(FastMCP):
             assert tool is not None  # call_tool already raised if the name were unknown
             return tool.fn_metadata.convert_result(fit(result, tool=name))
         finally:
-            _record_tool_call(name, (time.monotonic() - t0) * 1000)
+            _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000)
 
 
 # TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
@@ -174,8 +174,17 @@ async def _nudge_tool_list_refresh(ctx: Context | None) -> None:
 # to Postgres every 60s, decoupled from any individual call, so the thing being measured never
 # pays for being measured. try/finally in BoundedMCP.call_tool counts failures too — a
 # counter that only saw successes would report the expensive calls as cheap.
+#
+# CALLER ATTRIBUTION (task #170, migration 0048, Thoth msg 4279, decision 700b6148's own
+# named gap): keyed (tool, caller) instead of bare tool — WITHOUT it this table ranks tools
+# but never causes; a "search is expensive" reading could really be "one busy agent's search
+# habit is expensive." `caller` is a LINEAGE ROOT (agents.py's `_generation()`, the same
+# soul-folding doors.py's `_record` already uses), not a raw agent_id — a seat mints a new
+# agent_id on every succession/compaction, so grouping by the raw id would fragment one
+# caller's real cost across dozens of rows. Resolved CACHE-ONLY from `_agents` (never a new
+# `_ident_for` reattach, which can hit Postgres) — see `_caller_for` below.
 _TOOL_STATS_FLUSH_INTERVAL_S = 60
-_tool_call_stats: dict[str, dict[str, float]] = {}
+_tool_call_stats: dict[tuple[str, str], dict[str, float]] = {}
 _tool_stats_flush_task: asyncio.Task[None] | None = None
 _tool_stats_window_start: datetime | None = None
 # WHAT THIS CANNOT SEE — lives in tool_traffic()'s own output (`blind_spots`), not only in a
@@ -185,7 +194,9 @@ _tool_stats_window_start: datetime | None = None
 # console slowdown lived entirely on a surface this counter cannot see. osiris-worker (arq
 # cron), osiris-pulse (heartbeat), and osiris-manager (the hands daemon) are likewise separate
 # processes calling orchestrator functions directly, never through MCP. This answers "which
-# MCP TOOL is expensive," never "which SURFACE is expensive."
+# MCP TOOL is expensive," never "which SURFACE is expensive." Caller attribution (#170) does
+# NOT change any of this — those three daemons never go through MCP at all, so they stay
+# exactly as uncounted as before, not newly countable.
 _TOOL_STATS_BLIND_SPOTS = (
     "osiris-console (:8011, a separate uvicorn process) — not counted; "
     "task #164's own console slowdown lived entirely here",
@@ -195,11 +206,26 @@ _TOOL_STATS_BLIND_SPOTS = (
     "osiris-manager (the hands daemon) — not counted, calls orchestrator functions directly",
     "direct Postgres access (scripts, psql, one-off measurement runs like this task's own) — "
     "not counted, and never can be by an application-level counter",
+    "caller attribution is CACHE-ONLY (task #170): a call on a connection whose identity "
+    "isn't cached yet — in practice, the very first call of a fresh session before mount()/"
+    "orient() resolves it — is bucketed under 'unattributed' rather than paying for a "
+    "reattach query just to label a telemetry row",
 )
 
 
-def _record_tool_call(name: str, ms: float) -> None:
-    row = _tool_call_stats.setdefault(name, {"count": 0.0, "total_ms": 0.0})
+def _caller_for(ctx: Context | None) -> str:
+    """The lineage root attributed to this call, CACHE-ONLY — never a new DB round trip on
+    the hot path (see the TOOL-CALL TELEMETRY block comment above for why raw agent_id is
+    the wrong grain and why this never calls `_ident_for`'s reattach fallback)."""
+    from src.orchestrator.agents import _generation
+
+    key = _conn_key(ctx)
+    ident = _agents.get(key) if key is not None else None
+    return _generation(ident.agent_id)[0] if ident is not None else "unattributed"
+
+
+def _record_tool_call(name: str, caller: str, ms: float) -> None:
+    row = _tool_call_stats.setdefault((name, caller), {"count": 0.0, "total_ms": 0.0})
     row["count"] += 1
     row["total_ms"] += ms
 
@@ -232,10 +258,10 @@ async def _flush_tool_stats_once() -> None:
     try:
         pool = await _pool_get()
         await pool.executemany(
-            "INSERT INTO mcp_tool_stats (tool_name, window_start, window_end, "
-            "call_count, total_ms) VALUES ($1, $2, $3, $4, $5)",
-            [(tool, window_start, window_end, int(v["count"]), v["total_ms"])
-             for tool, v in batch.items()],
+            "INSERT INTO mcp_tool_stats (tool_name, caller, window_start, window_end, "
+            "call_count, total_ms) VALUES ($1, $2, $3, $4, $5, $6)",
+            [(tool, caller, window_start, window_end, int(v["count"]), v["total_ms"])
+             for (tool, caller), v in batch.items()],
         )
     except Exception:  # noqa: BLE001 — telemetry must never break serving
         import logging
@@ -420,33 +446,61 @@ _pool: asyncpg.Pool | None = None
 
 @mcp.tool()
 async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
-    """WHICH MCP TOOL IS EXPENSIVE (task #167) — per-tool call count + total/avg wall-clock
-    time, newest-cost-first. Two sources, both returned: `persisted` (flushed 60s windows
-    from `mcp_tool_stats`, going back `window_minutes`) and `current_unflushed_window` (the
-    live in-memory counters since the last flush — may be a partial window). Failures count
-    too (BoundedMCP.call_tool times/counts in a try/finally), so a broken tool doesn't read
-    as cheap. `blind_spots` names what this can never see — read it before trusting a total."""
+    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE (task #167, caller attribution task #170) —
+    call count + total/avg wall-clock time, newest-cost-first, cut two ways: `persisted`/
+    `current_unflushed_window` by TOOL (summed across callers — the original #167 question),
+    `persisted_by_caller`/`current_unflushed_by_caller` by CALLER (summed across tools — the
+    #170 question this table couldn't answer before: is a tool's cost concentrated in one
+    caller or spread across many). `persisted` reads flushed 60s windows from `mcp_tool_stats`
+    going back `window_minutes`; the `current_unflushed_*` pair is the live in-memory counters
+    since the last flush — may be a partial window. Failures count too (BoundedMCP.call_tool
+    times/counts in a try/finally), so a broken tool doesn't read as cheap. `blind_spots`
+    names what this can never see — read it before trusting a total, including the caller
+    cut's own cache-only limitation."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
-    rows = await pool.fetch(
+    tool_rows = await pool.fetch(
         "SELECT tool_name, sum(call_count) AS calls, sum(total_ms) AS total_ms "
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY tool_name ORDER BY total_ms DESC", since,
     )
-    persisted = [
-        {"tool": r["tool_name"], "calls": r["calls"], "total_ms": round(r["total_ms"], 1),
-         "avg_ms": round(r["total_ms"] / r["calls"], 2) if r["calls"] else None}
-        for r in rows
-    ]
+    caller_rows = await pool.fetch(
+        "SELECT caller, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "FROM mcp_tool_stats WHERE window_start >= $1 "
+        "GROUP BY caller ORDER BY total_ms DESC", since,
+    )
+
+    def _fmt(calls: int, total_ms: float) -> dict[str, Any]:
+        return {"calls": calls, "total_ms": round(total_ms, 1),
+                "avg_ms": round(total_ms / calls, 2) if calls else None}
+
+    persisted = [{"tool": r["tool_name"], **_fmt(r["calls"], r["total_ms"])} for r in tool_rows]
+    persisted_by_caller = [
+        {"caller": r["caller"], **_fmt(r["calls"], r["total_ms"])} for r in caller_rows]
+
+    by_tool: dict[str, dict[str, float]] = {}
+    by_caller: dict[str, dict[str, float]] = {}
+    for (tool, caller), v in _tool_call_stats.items():
+        t = by_tool.setdefault(tool, {"count": 0.0, "total_ms": 0.0})
+        t["count"] += v["count"]
+        t["total_ms"] += v["total_ms"]
+        c = by_caller.setdefault(caller, {"count": 0.0, "total_ms": 0.0})
+        c["count"] += v["count"]
+        c["total_ms"] += v["total_ms"]
     live = [
-        {"tool": name, "calls": int(v["count"]), "total_ms": round(v["total_ms"], 1),
-         "avg_ms": round(v["total_ms"] / v["count"], 2) if v["count"] else None}
-        for name, v in sorted(_tool_call_stats.items(), key=lambda kv: -kv[1]["total_ms"])
+        {"tool": name, **_fmt(int(v["count"]), v["total_ms"])}
+        for name, v in sorted(by_tool.items(), key=lambda kv: -kv[1]["total_ms"])
+    ]
+    live_by_caller = [
+        {"caller": name, **_fmt(int(v["count"]), v["total_ms"])}
+        for name, v in sorted(by_caller.items(), key=lambda kv: -kv[1]["total_ms"])
     ]
     return {
         "window_minutes": window_minutes,
         "persisted": persisted,
         "current_unflushed_window": live,
+        "persisted_by_caller": persisted_by_caller,
+        "current_unflushed_by_caller": live_by_caller,
         "measures": "MCP tool calls on this one shared osiris-mcp process only",
         "blind_spots": list(_TOOL_STATS_BLIND_SPOTS),
     }
