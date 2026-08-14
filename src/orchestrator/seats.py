@@ -2283,6 +2283,41 @@ async def peer_reachable(pool: asyncpg.Pool, seat_id: str) -> list[str]:
     return [seat_id, peer] if peer is not None else [seat_id]
 
 
+async def peer_ledger(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> list[dict[str, Any]]:
+    """The pair's shared reciprocity ledger (task #76 item 3, spec e6636c7e's "deliberately
+    UNSETTLED reciprocity ledger" — hxaro: open items are what make a parked pair
+    resumable). ZERO new storage: an item staying open on purpose, resumable rather than
+    closed, is already exactly what a Thread's own lifecycle models — open_thread/
+    resolve_thread stay the only write path, this only reads. Every OPEN thread owned by
+    EITHER seat, oldest first (age is what makes an item worth resuming, hxaro's own
+    framing, not amount) — a pair's whole shared backlog as one list, which nothing
+    exposed before this (an ordinary `owner` read only ever answers for ONE name).
+    `seat_a`/`seat_b` need not be an active peer_of pair — a healed bond's own ledger stays
+    readable, the same as any other historical query in this file."""
+    rows = await pool.fetch(
+        "SELECT o.id, o.created_at, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS kind, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    = 'open' "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    = ANY($1) "
+        "ORDER BY o.created_at ASC", [seat_a, seat_b])
+    return [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"],
+            "owner": r["owner"], "opened": r["created_at"].isoformat()} for r in rows]
+
+
 async def peer_seats(
     actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
 ) -> dict[str, Any]:
