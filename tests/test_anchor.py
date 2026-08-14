@@ -93,6 +93,49 @@ def test_an_agent_s_OWN_anchor_is_never_overwritten() -> None:
         assert ti["session_anchor"] == "/home/x/.claude/jobs/deadbeef"  # type: ignore[index]
 
 
+def test_mount_gets_transcript_path_and_bridge_id_stamped_zero_compliance() -> None:
+    """#48 piece 1 (decision 424c4158): view_seat/bridged_seat need transcript_path and
+    CLAUDE_CODE_BRIDGE_SESSION_ID to run inside mount() — same zero-compliance lane as
+    job_dir/session_anchor above, never an agent-supplied field."""
+    import os as _os
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_BRIDGE_SESSION_ID"] = "bridge-xyz"
+    out = subprocess.run(
+        [sys.executable, str(_HOOK)],
+        input=json.dumps({"tool_name": "mcp__osiris__mount",
+                          "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                          "transcript_path": "/home/x/.claude/projects/p/other-sid.jsonl",
+                          "tool_input": {}}),
+        capture_output=True, text=True, check=False, env=env)
+    ti = json.loads(out.stdout)["hookSpecificOutput"]["updatedInput"]
+    assert ti["transcript_path"] == "/home/x/.claude/projects/p/other-sid.jsonl"
+    assert ti["bridge_session_id"] == "bridge-xyz"
+
+
+def test_mount_never_overwrites_a_caller_supplied_transcript_path_or_bridge_id() -> None:
+    """Same rule as the anchor above — hand-supplied values are never a real caller's
+    (these are hook-stamped fields, but a stale re-fire of the hook must still be idempotent
+    rather than clobbering what an earlier pass already wrote)."""
+    import os as _os
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_BRIDGE_SESSION_ID"] = "bridge-new"
+    out = subprocess.run(
+        [sys.executable, str(_HOOK)],
+        input=json.dumps({"tool_name": "mcp__osiris__mount",
+                          "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                          "transcript_path": "/home/x/other.jsonl",
+                          "tool_input": {"transcript_path": "/home/x/kept.jsonl",
+                                        "bridge_session_id": "bridge-kept"}}),
+        capture_output=True, text=True, check=False, env=env)
+    payload = json.loads(out.stdout) if out.stdout.strip() else {}
+    ti = (payload.get("hookSpecificOutput") or {}).get("updatedInput", {
+        "transcript_path": "/home/x/kept.jsonl", "bridge_session_id": "bridge-kept"})
+    assert ti["transcript_path"] == "/home/x/kept.jsonl"
+    assert ti["bridge_session_id"] == "bridge-kept"
+
+
 def test_a_non_osiris_tool_is_never_touched() -> None:
     """The hook fires on every PreToolUse. It must be invisible to everything that is not ours."""
     assert _run_hook({"tool_name": "Bash", "session_id": "513aa520-aaaa",

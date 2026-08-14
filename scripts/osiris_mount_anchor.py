@@ -45,6 +45,7 @@ adding the name, not by touching the guard.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -122,6 +123,21 @@ def main() -> int:
             else:
                 ti["job_dir"] = derived
                 changed = True
+        # THE TAB VIEW + THE BRIDGE (#48 piece 1, decision 424c4158): mount() the tool
+        # never had these two automount() doors — this session's own transcript_path
+        # (the hook's own observation, same lane as the spawn stamp above) and
+        # CLAUDE_CODE_BRIDGE_SESSION_ID (this process's own env, same as
+        # osiris_whisper.py's bridge leg) are zero-compliance facts, not agent-supplied
+        # ones, so they are stamped here exactly like session_anchor/job_dir — never left
+        # for the agent to guess or omit.
+        tp = str(payload.get("transcript_path") or "")
+        if tp.endswith(".jsonl") and not ti.get("transcript_path"):
+            ti["transcript_path"] = tp
+            changed = True
+        bridge_id = os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID") or ""
+        if bridge_id and not ti.get("bridge_session_id"):
+            ti["bridge_session_id"] = bridge_id
+            changed = True
 
     # THE ANCHOR ON EVERY CALL, not only at mount (d5fdc94a / f8525d2c) — and this is the whole
     # fix for the most-reported bug in the fleet.
