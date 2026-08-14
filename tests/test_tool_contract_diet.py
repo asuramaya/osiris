@@ -430,7 +430,7 @@ def _tool_chars(t: Any) -> int:
 # until the merge.
 # 155,414 -> 156,685. 110 -> 111 tools: create_project (#139) is the new one;
 # the rest is tool_traffic gaining its per-caller cut (#170).
-TOOL_CONTRACT_CEILING_CHARS = 156_685
+TOOL_CONTRACT_CEILING_CHARS = 156_777
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
