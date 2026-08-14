@@ -95,40 +95,14 @@ def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool
 def _ctx_pct(transcript_path: str, model_id: str) -> int | None:
     """Context occupancy % from the transcript's TAIL (the harness's own usage record) — the
     operator's ambient answer to 'how close is this tab to a compaction death'. Window tier
-    from the display id ([1m] = 1M, else 200k). None = omit the segment, never lie. Mirrors
-    src/orchestrator/context_lens.py (inlined: this script imports nothing from the repo)."""
-    try:
-        p = Path(transcript_path)
-        size = p.stat().st_size
-        with p.open("rb") as fh:
-            fh.seek(max(0, size - 262_144))
-            tail = fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    for line in reversed(tail.splitlines()):
-        if '"usage"' not in line:
-            continue
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if e.get("type") != "assistant" or e.get("isSidechain"):
-            continue
-        u = (e.get("message") or {}).get("usage")
-        if not isinstance(u, dict) or "input_tokens" not in u:
-            continue
-        used = (int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
-                + int(u.get("cache_creation_input_tokens") or 0))
-        env = os.environ.get("OSIRIS_CONTEXT_WINDOW", "")
-        if env.isdigit():
-            window = int(env)
-        elif "[1m]" in model_id or used > 200_000:
-            # a bare-id tab past 200k and alive proves the default wrong (fable runs 1M here)
-            window = 1_000_000
-        else:
-            window = 200_000
-        return round(100 * used / window)
-    return None
+    from the display id ([1m] = 1M, else 200k). None = omit the segment, never lie. Delegates
+    to context_lens.glance — the same tail-read this script used to carry its own copy of
+    (seam 6, #148: two hand-parsers of the same undocumented shape is a hazard, not a
+    tidiness complaint; the ONE-AUTHORITY IMPORTS note above already killed this class for
+    mail/fleet/briefs, this closes the one holdout)."""
+    from src.orchestrator.context_lens import glance
+    result = glance(Path(transcript_path), model_id)
+    return result["pct"] if result is not None else None
 
 
 def _succession(session_id: str, model_id: str) -> str | None:

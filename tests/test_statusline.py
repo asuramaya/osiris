@@ -575,3 +575,30 @@ def test_no_session_id_never_touches_the_cache(monkeypatch: pytest.MonkeyPatch) 
     sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None, intent_hint=None)
     sl._counts_cached("proj", "", "claude-fable-5", "claude-fable-5", None, intent_hint=None)
     assert calls == 2
+
+
+def test_ctx_pct_agrees_with_context_lens_glance(tmp_path: Path) -> None:
+    """_ctx_pct used to carry its own hand-rolled copy of context_lens.glance's tail-read —
+    two independent parsers of the same undocumented harness shape (seam 6, #148). Now it
+    delegates. This proves the delegation actually reaches glance() rather than silently
+    returning something else, against a real transcript tail: a bare-id tab past 200k should
+    self-correct to the 1M tier exactly as glance()/window_for() does."""
+    from src.orchestrator import context_lens
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant", "isSidechain": False,
+        "message": {"usage": {"input_tokens": 5_000, "cache_read_input_tokens": 250_000,
+                               "cache_creation_input_tokens": 0, "output_tokens": 100}},
+    }) + "\n")
+
+    pct = sl._ctx_pct(str(transcript), "claude-fable-5")
+    expected = context_lens.glance(transcript, "claude-fable-5")
+    assert expected is not None
+    assert pct == expected["pct"]
+    assert pct == 26  # 255_000 / 1_000_000 self-corrected tier, not the 200k default
+
+
+def test_ctx_pct_none_when_transcript_unreadable() -> None:
+    """Unreadable transcript: omit the segment, never lie — same contract glance() keeps."""
+    assert sl._ctx_pct("/nonexistent/path.jsonl", "claude-fable-5") is None
