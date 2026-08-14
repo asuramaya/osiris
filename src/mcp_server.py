@@ -3467,8 +3467,8 @@ async def launch(target: str, message: str = "", model: str | None = None,
     the default again.
 
     Idempotent: a live body already holding the seat is RETURNED, never twinned. `message`, if
-    given, is delivered as the body's opening brief over the ordinary mail lane — never a
-    hand-forged turn; the body reads it via inbox() once it has mounted.
+    given, is delivered as the opening brief over mail — ONLY on the `launched` path. On
+    `already-live`, message is DROPPED, unsent — use wake() instead.
 
     THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
     caller can assert is an override that can be forged; the operator's real hand stays
