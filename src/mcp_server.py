@@ -1789,6 +1789,7 @@ async def mount(
     cwd: str, job_dir: str | None = None, model: str | None = None,
     session_anchor: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, subagent_transcript: str | None = None,
+    transcript_path: str | None = None, bridge_session_id: str | None = None,
     verbose: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
@@ -1805,7 +1806,14 @@ async def mount(
 
     `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
     next' reminder) that terse mode (the default) drops — every structured fact survives
-    either way; verbose only adds explanation of facts already present."""
+    either way; verbose only adds explanation of facts already present.
+
+    `transcript_path`/`bridge_session_id` are hook-stamped, same as `session_anchor` — a
+    caller never sets these by hand. They complete the revisit-resolution chain to match
+    automount()'s own (#48 piece 1, decision 424c4158): a tab-view of a living session
+    (`transcript_path` names a file that belongs to another session's mount row) and a
+    background-job fork (`bridge_session_id` from CLAUDE_CODE_BRIDGE_SESSION_ID) each
+    REBIND to their existing soul instead of minting a stranger — same as fork/ledger."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -1888,6 +1896,7 @@ async def mount(
     # and the declared one is not, the harness's observation outranks the mind's memory.
     cwd_note = None
     declared_project_label: str | None = None
+    bridge_ambiguity: str | None = None
     if (bound is not None and bound.cwd and bound.cwd != cwd
             and mounts.stale_recollection(job_dir or "", cwd, bound.cwd)):
         # THE OVERRIDE MUST NOT DISCARD A MORE-SPECIFIC DECLARED PIN (ruling 13af22fc,
@@ -2008,12 +2017,44 @@ async def mount(
         if forked is not None:
             ident.agent_id = forked
         else:
-            # THE SESSION LEDGER (16e3cee9): the graph remembers whose sid this is even
-            # after a registry accident — a known anchor REBINDS, never mints a twin.
-            ledgered = await handshake.ledger_seat(
-                Actions(pool), sid_prefix=Path(job_dir).name)
-            if ledgered is not None:
-                ident.agent_id = ledgered
+            # THE TAB VIEW (#48 piece 1, decision 424c4158 — ported from automount(), which
+            # has carried this door since the alias-clone cure, 2026-07-16; mount() the tool
+            # never had it, so a whisperless caller minted a clone here where a whisper-
+            # greeted one would have adopted). `transcript_path` is hook-stamped
+            # (scripts/osiris_mount_anchor.py), never hand-supplied — a live tab attached
+            # through a NEW sid whose transcript_path names ANOTHER session's file is a
+            # window onto that mind, not a stranger.
+            viewed = (await handshake.view_seat(
+                Actions(pool), transcript_path=transcript_path,
+                session_id=Path(job_dir).name)
+                if transcript_path else None)
+            if viewed is not None:
+                ident.agent_id = viewed
+            else:
+                # THE SESSION LEDGER (16e3cee9): the graph remembers whose sid this is even
+                # after a registry accident — a known anchor REBINDS, never mints a twin.
+                ledgered = await handshake.ledger_seat(
+                    Actions(pool), sid_prefix=Path(job_dir).name)
+                if ledgered is not None:
+                    ident.agent_id = ledgered
+                elif bridge_session_id:
+                    # THE BRIDGE (#48 piece 1, decision 424c4158 — ported from automount(),
+                    # task #68's binding leg): a background-job fork's transcript starts a
+                    # genuinely fresh record chain fork_seat cannot see; the harness's own
+                    # CLAUDE_CODE_BRIDGE_SESSION_ID (hook-stamped, same lane as
+                    # transcript_path) names the one continuing conversation. Same fail-open
+                    # shape as automount() (ruling 61e00f25): ambiguity is CONFESSED in the
+                    # payload below, never guessed away and never a hard refusal — the mount
+                    # still lands, degraded to the next door (office), same as a bridge that
+                    # simply resolved to nothing.
+                    try:
+                        bridged = await handshake.bridged_seat(
+                            Actions(pool), bridge_session_id=bridge_session_id)
+                    except handshake.BridgeAmbiguity as e:
+                        bridge_ambiguity = str(e)
+                        bridged = None
+                    if bridged is not None:
+                        ident.agent_id = bridged
     # THE FIRST ACT SEATS YOU (16e3cee9): a still-anonymous mind mounting from a seat's
     # office IS the seat's next life — the mint happens at this act, never at the whisper.
     mount_mint_reason = None
@@ -2108,6 +2149,7 @@ async def mount(
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
            **({"project_pin_error": pin_warn} if pin_warn else {}),
            **({"write_attribution_disagreement": wa_warn} if wa_warn else {}),
+           **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
            "note": "linked — writes now attributed to you; call orient() next"}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
         out["operator_mail"] = (f"{op_unread} of your briefs await the operator's eye — "

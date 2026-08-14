@@ -291,6 +291,131 @@ async def test_mount_tool_welcomes_an_unbound_fresh_session(
         srv._pool = saved_pool
 
 
+async def test_mount_wires_view_seat_and_adopts_the_soul_it_shows(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#48 piece 1 (decision 424c4158): mount() the tool never had automount()'s tab-view
+    door — a whisperless caller (any vendor-neutral walk-in) minted a clone here where a
+    whisper-greeted Claude session would have adopted. `handshake.view_seat` already does
+    this correctly (tested on its own in test_handshake.py); this proves mount() now
+    CALLS it, with the same args automount() does, and adopts its result — no second
+    implementation."""
+    from src import mcp_server as srv
+    from src.orchestrator import handshake
+
+    seen: dict[str, object] = {}
+
+    async def _fake_view_seat(actions_arg, *, transcript_path, session_id, jobs_home=None):
+        seen["transcript_path"] = transcript_path
+        seen["session_id"] = session_id
+        return "agent:the-viewed-soul"
+
+    monkeypatch.setattr(handshake, "fork_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "view_seat", _fake_view_seat)
+    job_dir = str(tmp_path / "jobs" / "ab12cd34")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir,
+                              transcript_path="/w/other-session.jsonl")
+    finally:
+        srv._pool = saved_pool
+    assert out["agent"] == "agent:the-viewed-soul"
+    assert seen["transcript_path"] == "/w/other-session.jsonl"
+    assert seen["session_id"] == "ab12cd34"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:ab12cd34'") == 0
+
+
+async def test_mount_skips_view_seat_without_a_transcript_path(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller with no transcript_path (the hook did not stamp one — nothing to view) must
+    never call view_seat at all, exactly as automount() only tries it `if transcript_path`."""
+    from src import mcp_server as srv
+    from src.orchestrator import handshake
+
+    called = {"view": False}
+
+    async def _fake_view_seat(*a, **k):
+        called["view"] = True
+        return None
+
+    monkeypatch.setattr(handshake, "fork_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "view_seat", _fake_view_seat)
+    job_dir = str(tmp_path / "jobs" / "cd34ef56")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert not called["view"]
+    assert out["agent"].startswith("agent:")
+
+
+async def test_mount_wires_bridged_seat_after_view_and_ledger_fail(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bridge is the LAST resolution door before the office deed — tried only once
+    fork, view, and the session ledger have all come up empty, same fallthrough order as
+    automount()."""
+    from src import mcp_server as srv
+    from src.orchestrator import handshake
+
+    seen: dict[str, object] = {}
+
+    async def _fake_bridged_seat(actions_arg, *, bridge_session_id):
+        seen["bridge_session_id"] = bridge_session_id
+        return "agent:the-bridged-soul"
+
+    monkeypatch.setattr(handshake, "fork_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "ledger_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "bridged_seat", _fake_bridged_seat)
+    job_dir = str(tmp_path / "jobs" / "ef56ab78")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir,
+                              bridge_session_id="bridge-xyz")
+    finally:
+        srv._pool = saved_pool
+    assert out["agent"] == "agent:the-bridged-soul"
+    assert seen["bridge_session_id"] == "bridge-xyz"
+
+
+async def test_mount_confesses_bridge_ambiguity_and_falls_through_never_refuses(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same fail-open shape as automount() (ruling 61e00f25): an ambiguous bridge id is
+    CONFESSED in the payload, never guessed away and never a hard mount refusal — the
+    session still mounts, degraded to the next door."""
+    from src import mcp_server as srv
+    from src.orchestrator import handshake
+
+    async def _raising_bridged_seat(actions_arg, *, bridge_session_id):
+        raise handshake.BridgeAmbiguity(f"bridge id {bridge_session_id!r} names 2 lineages")
+
+    monkeypatch.setattr(handshake, "fork_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "ledger_seat", lambda *a, **k: _none())
+    monkeypatch.setattr(handshake, "bridged_seat", _raising_bridged_seat)
+    job_dir = str(tmp_path / "jobs" / "ab78cd90")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir,
+                              bridge_session_id="bridge-ambig")
+    finally:
+        srv._pool = saved_pool
+    assert "error" not in out                       # never a refusal
+    assert "2 lineages" in out["bridge_ambiguity"]
+    assert out["agent"].startswith("agent:")         # still mounted
+
+
+async def _none(*_a: object, **_k: object) -> None:
+    return None
+
+
 async def test_mount_confesses_a_broken_osiris_pin(
     actions: Actions, tmp_path: Path,
 ) -> None:
