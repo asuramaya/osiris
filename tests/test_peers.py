@@ -192,3 +192,119 @@ async def test_peer_seats_serializes_two_concurrent_calls_sharing_a_seat(
     winner_peer = "seat:prlockaa" if successes[0]["peered"][0] == "seat:prlockaa" \
         else "seat:prlockcc"
     assert await peer_of_seat(actions.pool, "seat:prlockbb") == winner_peer
+
+
+async def test_hold_action_mints_an_owned_severity_hold_thread(actions: Actions) -> None:
+    """Task #76 item 4a: the recorded half of a mutual HOLD reuses open_thread's ordinary
+    obligation shape — owner=held (whose move it is), severity='hold' (filterable, never
+    a text match), the hold's own fields stamped on the same thread object."""
+    from src.orchestrator.seats import hold_action, peer_seats
+
+    await _seat(actions, "seat:hd1aaaaa")
+    await _seat(actions, "seat:hd1bbbbb")
+    await peer_seats(actions, "seat:hd1aaaaa", "seat:hd1bbbbb", because="paired",
+                     actor="test")
+
+    out = await hold_action(actions, "seat:hd1aaaaa", "seat:hd1bbbbb",
+                            act="deleting the shared checkout", because="risky, unreviewed",
+                            hours=6, actor="test")
+
+    assert out["holder"] == "seat:hd1aaaaa" and out["held_seat"] == "seat:hd1bbbbb"
+    assert out["act"] == "deleting the shared checkout"
+    for name, expected in (
+        ("owner", "seat:hd1bbbbb"), ("severity", "hold"),
+        ("hold_holder", "seat:hd1aaaaa"), ("hold_held", "seat:hd1bbbbb"),
+        ("hold_act", "deleting the shared checkout"),
+        ("hold_because", "risky, unreviewed"), ("hold_deadline", out["deadline"]),
+    ):
+        val = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id::text=$1 AND a.name=$2", out["held"], name)
+        assert val == expected, name
+
+
+async def test_hold_action_refuses_blank_act_or_because(actions: Actions) -> None:
+    from src.orchestrator.seats import hold_action, peer_seats
+
+    await _seat(actions, "seat:hd2aaaaa")
+    await _seat(actions, "seat:hd2bbbbb")
+    await peer_seats(actions, "seat:hd2aaaaa", "seat:hd2bbbbb", because="paired",
+                     actor="test")
+
+    out = await hold_action(actions, "seat:hd2aaaaa", "seat:hd2bbbbb", act="  ",
+                            because="test", actor="test")
+    assert "act is required" in out["error"]
+    out = await hold_action(actions, "seat:hd2aaaaa", "seat:hd2bbbbb", act="test",
+                            because=" ", actor="test")
+    assert "because is required" in out["error"]
+
+
+async def test_hold_action_refuses_non_positive_hours(actions: Actions) -> None:
+    from src.orchestrator.seats import hold_action, peer_seats
+
+    await _seat(actions, "seat:hd3aaaaa")
+    await _seat(actions, "seat:hd3bbbbb")
+    await peer_seats(actions, "seat:hd3aaaaa", "seat:hd3bbbbb", because="paired",
+                     actor="test")
+
+    out = await hold_action(actions, "seat:hd3aaaaa", "seat:hd3bbbbb", act="test",
+                            because="test", hours=0, actor="test")
+    assert "hours must be positive" in out["error"]
+
+
+async def test_hold_action_refuses_a_seat_holding_itself(actions: Actions) -> None:
+    from src.orchestrator.seats import hold_action
+
+    await _seat(actions, "seat:hd4aaaaa")
+
+    out = await hold_action(actions, "seat:hd4aaaaa", "seat:hd4aaaaa", act="test",
+                            because="test", actor="test")
+    assert "cannot hold its own act" in out["error"]
+
+
+async def test_hold_action_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import hold_action
+
+    await _seat(actions, "seat:hd5aaaaa")
+
+    out = await hold_action(actions, "seat:hd5aaaaa", "seat:hd5nosuch", act="test",
+                            because="test", actor="test")
+    assert "no such active seat" in out["error"] and "hd5nosuch" in out["error"]
+
+
+async def test_hold_action_refuses_a_non_peer(actions: Actions) -> None:
+    """v1's hold is a peer's own power — a seat with no active peer_of bond to the other
+    side cannot hold its act, even if both seats otherwise exist and are active."""
+    from src.orchestrator.seats import hold_action
+
+    await _seat(actions, "seat:hd6aaaaa")
+    await _seat(actions, "seat:hd6bbbbb")
+
+    out = await hold_action(actions, "seat:hd6aaaaa", "seat:hd6bbbbb", act="test",
+                            because="test", actor="test")
+    assert "not an active peer_of pair" in out["error"]
+
+
+async def test_hold_action_is_resolved_by_the_ordinary_resolve_thread_verb(
+    actions: Actions,
+) -> None:
+    """No new resolve path — the hold IS a Thread, so resolve_thread heals it exactly like
+    any other obligation."""
+    from src.orchestrator.seats import hold_action, peer_seats
+
+    await _seat(actions, "seat:hd7aaaaa")
+    await _seat(actions, "seat:hd7bbbbb")
+    await peer_seats(actions, "seat:hd7aaaaa", "seat:hd7bbbbb", because="paired",
+                     actor="test")
+    out = await hold_action(actions, "seat:hd7aaaaa", "seat:hd7bbbbb", act="test act",
+                            because="test", actor="test")
+
+    from src.orchestrator.capture import resolve_thread
+
+    resolved = await resolve_thread(actions, out["held"], because="respected the hold",
+                                    source="test")
+    assert resolved is not None
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id::text=$1 AND a.name='status'", out["held"])
+    assert status == "resolved"
