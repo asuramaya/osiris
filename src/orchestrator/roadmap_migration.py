@@ -124,11 +124,23 @@ def plan_migration(tasks: list[dict[str, Any]], *, store: str) -> dict[str, Any]
 
 def aggregate_line(counts: dict[str, int]) -> str:
     """One line, never per-row noise (Khnum's batch-volume rule, msg 4408): "migrated N,
-    M unsorted (X%)" — same shape as _fn_roadmap_open's "N more not shown"."""
+    M unsorted (X%)" — same shape as _fn_roadmap_open's "N more not shown". This is the
+    PLAN-level line (before any write); see `run_aggregate_line` for the line a real
+    `apply_migration` run emits, which adds the read-back-repair count."""
     total = counts["total"]
     pct = (100 * counts["unsorted"] / counts["threads"]) if counts["threads"] else 0.0
     return (f"migrated {total} ({counts['decisions']} decisions, {counts['threads']} "
             f"threads), {counts['unsorted']} unsorted ({pct:.0f}% of threads)")
+
+
+def run_aggregate_line(counts: dict[str, int], results: list[dict[str, Any]]) -> str:
+    """One line for an actual `apply_migration` run (msg 4429): plan_migration's own
+    aggregate_line plus K, the count of times the open_thread dedup-discard signature
+    (42176e16) actually fired and had to be repaired via reclassify_thread — the ONLY
+    place this is ever observable, per Thoth's own instruction, so it must be measured
+    every run rather than assumed rare from this one design pass."""
+    repairs = sum(1 for r in results if r.get("arc_backfilled"))
+    return f"{aggregate_line(counts)}, {repairs} read-back repairs"
 
 
 async def apply_migration(
@@ -202,4 +214,4 @@ async def apply_migration(
         results.append({"task_id": entry["task_id"], "target": "Thread", "id": str(tid),
                         "deduped": deduped, "arc_backfilled": arc_backfilled})
 
-    return {"rows": results, "aggregate": aggregate_line(plan["counts"])}
+    return {"rows": results, "aggregate": run_aggregate_line(plan["counts"], results)}

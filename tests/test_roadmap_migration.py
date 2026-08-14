@@ -9,6 +9,7 @@ from src.orchestrator.roadmap_migration import (
     ARC_BY_TASK_ID,
     aggregate_line,
     plan_migration,
+    run_aggregate_line,
 )
 
 STORE = "store-a"
@@ -138,3 +139,24 @@ def test_aggregate_line_handles_zero_threads_without_dividing_by_zero() -> None:
     plan = plan_migration([_task("1", status="completed")], store=STORE)
     line = aggregate_line(plan["counts"])
     assert "0 unsorted (0% of threads)" in line
+
+
+# ── run_aggregate_line: the real-run line, K = read-back repairs (msg 4429) ────────────
+
+def test_run_aggregate_line_appends_zero_repairs_when_none_fired() -> None:
+    plan = plan_migration([_task("1", status="pending")], store=STORE)
+    results = [{"task_id": "1", "target": "Thread", "id": "x", "deduped": False,
+                "arc_backfilled": False}]
+    assert run_aggregate_line(plan["counts"], results).endswith("0 read-back repairs")
+
+
+def test_run_aggregate_line_counts_only_arc_backfilled_rows() -> None:
+    plan = plan_migration([_task("1", status="pending"), _task("2", status="pending")],
+                          store=STORE)
+    results = [
+        {"task_id": "1", "target": "Thread", "id": "x", "deduped": True,
+         "arc_backfilled": True},
+        {"task_id": "2", "target": "Thread", "id": "y", "deduped": False,
+         "arc_backfilled": False},
+    ]
+    assert run_aggregate_line(plan["counts"], results).endswith("1 read-back repairs")

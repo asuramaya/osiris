@@ -1,6 +1,8 @@
 """recall(ref) — the full, untruncated record for a Thread or Decision (thread d6ed2f17)."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from src.actions.core import Actions
 from src.orchestrator.capture import (
     amend_decision,
@@ -9,6 +11,10 @@ from src.orchestrator.capture import (
     record_decision,
 )
 from src.orchestrator.recall import recall
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
+
+NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
 _LONG_SUMMARY = (
     "A" * 200 + " — this summary is well past the 160-char cap task #60 applies in "
@@ -167,6 +173,66 @@ async def test_recall_addendum_observed_at_survives_real_json_serialization(
 # ═══════════ THE MCP TOOL LAYER ═══════════
 # doors()'s own wrapper test is the precedent: recall(), like doors(), needs no mounted
 # identity (a pure read), so the tool function is called directly with only srv._pool swapped.
+
+# ═══════════ legacy_task_ref lookup (msg 4429's acceptance test: "#150" must resolve) ══
+
+async def _stamp_legacy_ref(actions: Actions, oid, task_id: str, store: str) -> None:
+    conf = confidence_for(EvidenceClass.SELF_DECLARED)
+    await actions.assert_property(
+        oid, "legacy_task_ref", {"store": store, "id": task_id}, "roadmap_migration", NOW,
+        conf, evidence_class=EvidenceClass.SELF_DECLARED.value,
+    )
+
+
+async def test_recall_resolves_a_bare_hash_number_via_legacy_task_ref(
+    actions: Actions,
+) -> None:
+    did = await record_decision(actions, "migrated row #150", kind="decision",
+                                rationale="root-caused and half-fixed", source="agent:me")
+    await _stamp_legacy_ref(actions, did, "150", "store-a")
+
+    out = await recall(actions.pool, "#150")
+
+    assert out["type"] == "Decision" and out["id"] == str(did)[:8]
+
+
+async def test_recall_resolves_the_same_number_without_the_hash_prefix(
+    actions: Actions,
+) -> None:
+    tid = await open_thread(actions, "migrated row 168", kind="obligation", source="agent:me")
+    await _stamp_legacy_ref(actions, tid, "168", "store-a")
+
+    out = await recall(actions.pool, "168")
+
+    assert out["type"] == "Thread" and out["id"] == str(tid)[:8]
+
+
+async def test_recall_refuses_a_legacy_task_id_present_in_two_stores(
+    actions: Actions,
+) -> None:
+    did = await record_decision(actions, "store A's own #171", kind="decision",
+                                source="agent:me")
+    tid = await open_thread(actions, "store B's own, unrelated #171", source="agent:other")
+    await _stamp_legacy_ref(actions, did, "171", "store-a")
+    await _stamp_legacy_ref(actions, tid, "171", "store-b")
+
+    out = await recall(actions.pool, "#171")
+
+    assert "error" in out
+    assert "171" in out["error"] and "store-a" in out["error"] and "store-b" in out["error"]
+
+
+async def test_recall_falls_through_to_the_ordinary_ladder_when_no_legacy_ref_matches(
+    actions: Actions,
+) -> None:
+    # "#999" never migrated, but a Thread's own summary happens to quote it — unchanged,
+    # pre-existing substring-match behavior must still work.
+    await open_thread(actions, "still waiting on #999 to land", source="agent:me")
+
+    out = await recall(actions.pool, "#999")
+
+    assert out.get("type") == "Thread"
+
 
 async def test_the_mcp_tool_wrapper_delegates_to_recall(actions: Actions) -> None:
     import src.mcp_server as srv
