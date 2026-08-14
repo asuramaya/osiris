@@ -1895,6 +1895,60 @@ async def thread_notes(pool: asyncpg.Pool, thread_id: uuid.UUID) -> list[dict[st
              "confidence": float(r["confidence"])} for r in rows]
 
 
+async def correct_thread_summary(
+    actions: Actions, ref: str, corrected_summary: str, *, because: str | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID | None:
+    """THE VERB `annotate_thread` NAMES AND REFUSES TO BE (its own docstring: "a caller who
+    means the earlier understanding was wrong wants a different verb entirely") — this is
+    that verb (roadmap ledger-rot stage 2/3, decision ccbe37cf, Thoth DM 4359).
+
+    THE PROBLEM MEASURED, NOT ASSUMED: a Thread's own `summary` can never be re-asserted in
+    place — `open_thread` mints on `_canon("thread", summary)`, so the ORIGINAL summary text
+    IS the object's own identity/dedup key; re-asserting it under a changed value would not
+    correct the thread, it would silently stop finding it (a caller who now supplies the
+    corrected text mints a TWIN instead of updating the original — the exact failure this
+    verb exists to prevent). `annotate_thread`'s `_append_property_name` pattern (many
+    independently-current notes, by design, see its own docstring) is the wrong shape here
+    too: a correction is not one more coexisting note, it is THE new headline — there should
+    be exactly one live answer to "what does this thread's summary currently say," with the
+    prior wording kept as queryable history, not a growing pile of undated candidates.
+
+    THE FIX: `corrected_summary` is an ORDINARY property, not an appended one — the SAME
+    supersession machinery every other property on this graph already uses (assert_property's
+    own within-source supersede). Calling this again re-asserts it: the new text wins in
+    `current_assertions`, the old one survives as non-current, queryable history exactly the
+    way `summary`/`status`/everything else already works — no new mechanism, no twin, `summary`
+    itself untouched (still the object's own identity, still what a caller matches against).
+    `because` (optional) rides the same pattern as a second property, `corrected_because` —
+    why the headline changed, not just that it did.
+
+    ONE HOP, NOT SIX (Thoth's own requirement): `recall()`'s existing flat-dump already
+    returns every CURRENT property by name with no special-casing — `corrected_summary` (and
+    `corrected_because`) appear there for free, sitting right beside the untouched original
+    `summary`, in the SAME call. No change to recall.py was needed or made: this is exactly
+    why a plain property was the right shape and `_append_property_name` (recall.py's
+    note/addendum branch, deliberately EXCLUDED from the flat dump) would have been the wrong
+    one — a reader gets original AND correction in one recall(ref), not a second lookup.
+
+    Returns the thread id, or None if `ref` matched nothing (same convention as
+    `resolve_thread`/`annotate_thread`). Raises ValueError on a blank corrected_summary."""
+    corrected_summary = corrected_summary.strip()
+    if not corrected_summary:
+        raise ValueError(
+            "corrected_summary must not be blank — an empty correction is not testimony")
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    observed = datetime.now(UTC)
+    await actions.assert_property(tid, "corrected_summary", corrected_summary, source, observed,
+                                  _CONF, evidence_class=_EC)
+    if because:
+        await actions.assert_property(tid, "corrected_because", because.strip(), source,
+                                      observed, _CONF, evidence_class=_EC)
+    return tid
+
+
 async def amend_decision(
     actions: Actions, ref: str, addendum: str, *, source: str = _SOURCE,
 ) -> uuid.UUID | None:

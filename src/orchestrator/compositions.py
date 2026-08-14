@@ -2071,6 +2071,21 @@ _NOT_HALTED = (
     "    AND ha.value #>> '{}' = 'halted')"
 )
 
+# THE CORRECTED SUMMARY WINS BY DEFAULT (roadmap ledger-rot stage 3.5, decision c0bc6d33 +
+# Thoth LXXIV's DM 4364: "a reader must get the corrected text by default... orient()/roadmap
+# must surface the corrected summary, not the original with a footnote"). `corrected_summary`
+# (correct_thread_summary, capture.py) is never touched by open_thread's own dedup key, so a
+# reader here needs the WINNING one of the two, not the original alone — same COALESCE shape
+# everywhere a wall/roadmap query selects `summary` for display. `summary` itself stays
+# reachable too (recall(ref) already surfaces both, unchanged since stage 3).
+_SUMMARY_DISPLAY_SQL = (
+    "COALESCE("
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+)
+
 async def open_thread_wall(
     pool: asyncpg.Pool, proj: uuid.UUID,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -2089,9 +2104,7 @@ async def open_thread_wall(
     entry)."""
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        f" {_SUMMARY_DISPLAY_SQL} AS summary, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
@@ -2126,9 +2139,7 @@ async def open_thread_wall(
         seen = {r["id"] for r in rows}
         unfiled = await pool.fetch(
             "SELECT o.id, o.created_at, "
-            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-            "   AND a.name='summary' "
-            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+            f" {_SUMMARY_DISPLAY_SQL} AS summary, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
             "   AND a.name='kind' "
             "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
@@ -2256,9 +2267,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     top_rows = [dict(r) for r in await pool.fetch(
         "SELECT str_id AS id, summary, kind, owner, arc, last_touched, project FROM ("
         " SELECT substr(o.id::text, 1, 8) AS str_id, o.created_at, "
-        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='summary' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        f" {_SUMMARY_DISPLAY_SQL} AS summary, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='kind' "
         "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
@@ -3874,6 +3883,13 @@ def _col_value(oid: uuid.UUID, facts: dict[str, str], prop: str) -> Any:
     own ids)."""
     if prop == "id":
         return str(oid)[:8]
+    if prop == "summary":
+        # THE CORRECTED SUMMARY WINS BY DEFAULT (roadmap ledger-rot stage 3.5, decision
+        # c0bc6d33 + Thoth LXXIV's DM 4364): `facts` already carries BOTH properties (winning_
+        # props returns every current one, not just requested columns) — same COALESCE law
+        # as _SUMMARY_DISPLAY_SQL, applied here for the op-tree's own column path (roadmap's
+        # resolved/retracted sections and any other `table` op reading a Thread's summary).
+        return facts.get("corrected_summary") or facts.get("summary")
     return facts.get(prop)
 
 

@@ -61,6 +61,7 @@ SPAWN_AWARE = {
     "mcp__osiris__release_lease", "mcp__osiris__settle", "mcp__osiris__register_blind_spot",
     "mcp__osiris__hold_memory", "mcp__osiris__annotate_thread", "mcp__osiris__amend_decision",
     "mcp__osiris__amend_practice", "mcp__osiris__ack_handoff",
+    "mcp__osiris__correct_thread_summary",
 }
 
 # tools whose server signature accepts `session_anchor` — the RE-ATTACH hint, carried on EVERY
