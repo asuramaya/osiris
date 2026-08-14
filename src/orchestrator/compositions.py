@@ -1349,7 +1349,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     a live lineage's own threads/decisions can hide from itself, John XVII's own specimen;
     thread 8640a625/decision fce39baa — invalidate_works_in is the repair, this only
     counts, per ruling 1973d46f's own law that a reconciler with no trigger is worse than
-    none).
+    none), PEER-SILENT (warn: an active peer_of pair with no direct mail between either
+    side's holders in `stale_days` — a mechanical proxy for v1's fiduciary-disclosure duty,
+    task #76 item 2, spec e6636c7e; testimony that a pair has gone quiet, never proof a
+    finding was actually withheld).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -1861,6 +1864,58 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "invalidate_works_in it; this check only counts, it never guesses "
                    "which"}
         for r in dup])
+
+    # PEER-SILENT — task #76 item 2 (spec e6636c7e): v1's fiduciary-disclosure duty
+    # ("surface in-scope findings and risks to your peer proactively — silence is a
+    # violation", offices.py's PEER ADDENDUM) is prose only; nothing in this function
+    # measured it. A true "was every in-scope finding disclosed" check needs a disclosure
+    # marker that does not exist yet — this is the honest, mechanical proxy available from
+    # EXISTING conventions alone (reuse, not new machinery): has this pair exchanged ANY
+    # direct mail at all, recently? An active peer_of pair where no DM has passed between
+    # either side's holders in `stale_days` (or ever) is flagged — not proof a finding was
+    # withheld, but the coarse tripwire the spec's own "silence is a violation" language
+    # calls for. Matches EVERY agent that has EVER held either seat (the same `holds` edge
+    # `held_seat`/`resolve_seat` read elsewhere), not just the current generation, so a
+    # mid-reign swap on either side never produces a false silence. Counts a DM addressed
+    # directly agent-to-agent OR to either seat's own address (`to_agent='seat:...'`);
+    # deliberately does NOT count project broadcasts — a peer bond is a private duty, and
+    # crediting a broadcast neither peer need have read would hide real silence.
+    peer_silence = await pool.fetch(
+        "WITH active_peers AS ("
+        "  SELECT oa.canonical AS seat_a, ob.canonical AS seat_b, oa.id AS seat_a_id, "
+        "    ob.id AS seat_b_id, l.properties->>'because' AS because, "
+        "    l.first_seen AS peered_since "
+        "  FROM links l JOIN objects oa ON oa.id=l.from_id JOIN objects ob ON ob.id=l.to_id "
+        "  WHERE l.type='peer_of' AND (l.valid_until IS NULL OR l.valid_until > now())), "
+        "holders_a AS (SELECT ap.seat_a AS seat, f.canonical AS agent FROM active_peers ap "
+        "  JOIN links hl ON hl.to_id=ap.seat_a_id AND hl.type='holds' "
+        "  JOIN objects f ON f.id=hl.from_id), "
+        "holders_b AS (SELECT ap.seat_b AS seat, f.canonical AS agent FROM active_peers ap "
+        "  JOIN links hl ON hl.to_id=ap.seat_b_id AND hl.type='holds' "
+        "  JOIN objects f ON f.id=hl.from_id) "
+        "SELECT ap.seat_a, ap.seat_b, ap.because, ap.peered_since, "
+        "  MAX(m.created_at) AS last_contact "
+        "FROM active_peers ap "
+        "LEFT JOIN holders_a ha ON ha.seat=ap.seat_a "
+        "LEFT JOIN holders_b hb ON hb.seat=ap.seat_b "
+        "LEFT JOIN fleet_messages m "
+        "  ON (m.from_agent=ha.agent AND (m.to_agent=hb.agent OR m.to_agent=ap.seat_b)) "
+        "  OR (m.from_agent=hb.agent AND (m.to_agent=ha.agent OR m.to_agent=ap.seat_a)) "
+        "GROUP BY ap.seat_a, ap.seat_b, ap.because, ap.peered_since "
+        "HAVING MAX(m.created_at) IS NULL "
+        "  OR MAX(m.created_at) < now() - make_interval(days => $1) "
+        "ORDER BY ap.peered_since", stale_days)
+    land("peer-silent", "warn", [
+        {"subject": f"{r['seat_a']} <-> {r['seat_b']}",
+         "detail": f"peered since {r['peered_since'].isoformat()} ({r['because']!r}) — "
+                   + (f"last direct mail between them was {r['last_contact'].isoformat()}"
+                      if r["last_contact"] is not None
+                      else "no direct mail between them has ever been seen")
+                   + f", past the {stale_days}-day disclosure window. A proxy for the "
+                     "fiduciary-disclosure duty (spec e6636c7e), not proof either peer "
+                     "withheld a finding — testimony for a mind to judge, same as every "
+                     "other check here"}
+        for r in peer_silence])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
