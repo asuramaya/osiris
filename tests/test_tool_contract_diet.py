@@ -430,7 +430,7 @@ def _tool_chars(t: Any) -> int:
 # until the merge.
 # 155,414 -> 156,685. 110 -> 111 tools: create_project (#139) is the new one;
 # the rest is tool_traffic gaining its per-caller cut (#170).
-TOOL_CONTRACT_CEILING_CHARS = 160_282
+TOOL_CONTRACT_CEILING_CHARS = 161_137
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -491,6 +491,13 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     A coordinator had no such call, so mount()'s LIVE co-agent list was read as the roster
     and cold seats read as vacant; two real misroutes followed (Alfred XIII, 2813da48).
     102 -> 103 (2026-08-08, task #156.4): wake_preflight — which gates would refuse a wake,
-    asked BEFORE the attempt instead of discovered as a wall of refusals after."""
+    asked BEFORE the attempt instead of discovered as a wall of refusals after.
+    103 -> 113: TEN RAISES WENT UNRECORDED HERE. The assert moved, this log did not — so
+    the file whose whole purpose is to be the one place the combined surface is visible
+    stopped being that, silently, for ten tools. Named rather than back-filled: prose
+    reconstructed from git and typed once is the same defect one layer up (ruling
+    e6277013). Read the commit that raised the assert for a given tool's provenance.
+    113 -> 114 (2026-08-14, task #76 item 3): peer_ledger — the history of the peer
+    relationship between two seats, the last item of the #76 punch list."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 113
+    assert len(per_tool) == 114
