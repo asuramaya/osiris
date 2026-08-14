@@ -317,20 +317,43 @@ async def seat_occupancy(
 
     VACANT — no `holds` link has EVER existed for this seat (mint_seat's own law: a seat is
     furniture until a body sits in it). OCCUPIED — an active holder exists AND is live right
-    now (agent_mounts, the same live_secs window every other liveness read in this codebase
-    shares — live_souls, resolve_seat, held_seat's own contention check, the fleet roster).
-    COLD — held, now or in the past, but nobody live this instant: the ordinary in-between
-    state of a seat between sessions, never an alarm by itself.
+    now. COLD — held, now or in the past, but nobody live this instant: the ordinary
+    in-between state of a seat between sessions, never an alarm by itself.
+
+    LIVENESS ITSELF IS mounts.agent_liveness() — NOT A SECOND COPY (Alfred's question via
+    Thoth, msg 4394/4405, decision 59b3092c): this used to run its own inline agent_mounts-
+    only query, the exact single-source shape the dispatch-listener probe had BEFORE ruling
+    70493925 gave it a current_assertions.last_active fallback — a repair carried to one
+    reader and never to this one, the week's tenth instance of that pattern and the most
+    expensive, because every human-facing occupancy figure (roster(), fleet()) reads through
+    here. Delegating makes this MORE PERMISSIVE than before (agent_liveness's freshest-of-
+    two-signals can only turn a false "cold" into a true "occupied", never the reverse) —
+    the direction was checked against every caller before landing (see commit message).
+
+    `live_secs` is NO LONGER HONORED as a variable window — agent_liveness owns the ONE
+    liveness window (LIVENESS_WINDOW_MINUTES) every reader now shares, and a second window
+    threaded in here would only grow back into a second copy of the disease this fixes. Kept
+    only for signature stability (nothing in this codebase varies it — confirmed by grep
+    across src/ and tests/, zero non-default call sites); passing a non-default value raises
+    rather than being silently dropped, so a future caller who actually needs a different
+    window finds a refusal to design against, not a value that quietly stopped doing anything.
 
     LINEAGE-AWARE the same way held_seat is: the active holder's liveness is read across its
-    whole lineage (base id or any `-<suffix>` generation), because bind_holder/follow_binding
-    keep the holds link on the freshest generation but a mount row can still be tagged to an
-    ancestor label mid-succession.
+    whole lineage (base id or any `-<suffix>` generation) by agent_liveness itself, because
+    bind_holder/follow_binding keep the holds link on the freshest generation but a mount row
+    can still be tagged to an ancestor label mid-succession.
 
     This IS the read launch() needs for its own idempotency (detect-existing-window before
     spawning, never mint a twin body) and its honest liveness receipt (Ra's requirement,
     53ae1a87: body-exists and can-receive are separate states, each independently
     verifiable) — call it with the seat about to be launched into, before launching."""
+    if live_secs != _LIVE_SECS:
+        raise ValueError(
+            f"seat_occupancy no longer supports a custom live_secs ({live_secs!r}) — "
+            "liveness is delegated to mounts.agent_liveness()'s own shared window "
+            f"(LIVENESS_WINDOW_MINUTES) so every reader agrees; the default ({_LIVE_SECS}) "
+            "already matches it. A genuine need for a different window is a design "
+            "question for mounts.py's shared helper, not a per-caller parameter here.")
     ever_held = await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='holds' LIMIT 1", seat_id)
@@ -344,13 +367,9 @@ async def seat_occupancy(
         "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
     if holder is None:
         return {"state": "cold", "holder": None, "live": False}
-    from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import agent_liveness
 
-    base = _generation(holder)[0]
-    live = bool(await pool.fetchval(
-        "SELECT max(last_seen) > now() - make_interval(secs => $2) "
-        "FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
-        base, float(live_secs)))
+    live = (await agent_liveness(pool, holder))["live"]
     return {"state": "occupied" if live else "cold", "holder": holder, "live": live}
 
 
