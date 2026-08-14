@@ -1477,6 +1477,81 @@ async def test_roster_duplicate_siblings_absent_outside_duplicate_suspect(
     assert "duplicate_siblings" not in row["pin"]
 
 
+async def test_roster_names_a_pin_that_matches_a_name_not_a_canonical(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Task #152/#157 arc: the exact khepri mistake shape (decisions 126210f0/23b667d0) —
+    a pin holding a project's post-rename DISPLAY NAME instead of its stable CANONICAL
+    SUFFIX. roster()'s canonical-only lookup correctly reports no-such-project (nothing has
+    THIS canonical); `pin.name_resolution` names what it actually found, WITHOUT ever
+    implying the pin should be silently trusted or auto-corrected."""
+    from src.orchestrator.seats import roster
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:tony", "test")
+    await actions.assert_property(proj, "name", "cultural-infrastructure", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "cultural-infrastructure"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rname1", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["triage_bucket"] == "no-such-project"   # canonical lookup, unchanged
+    assert row["pin"]["name_resolution"] == {
+        "resolved_by": "name", "canonical": "repo:tony",
+        "note": ("this pin's value matches an existing object's current NAME, not its "
+                 "canonical suffix — a pin should hold the canonical (stable across a "
+                 "rename), never a display name; correct the pin to the canonical shown "
+                 "here, never to the name it currently holds"),
+    }
+
+
+async def test_roster_names_resolution_stays_none_when_the_pin_genuinely_matches_nothing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A pin that resolves via neither canonical nor name gets NO name_resolution field at
+    all — the field's presence itself is the signal that something was found by name."""
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "nothing-answers-to-this"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rname2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["triage_bucket"] == "no-such-project"
+    assert "name_resolution" not in row["pin"]
+
+
+async def test_roster_names_resolution_reports_ambiguity_never_picks(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Two live objects answering to the same name (#110's ballgem/sutra shape) must report
+    ambiguous:true and every candidate — never silently prefer one (#102's law)."""
+    from src.orchestrator.seats import roster
+
+    p1 = await actions.create_or_find_object("SoftwareProject", "repo:twin-a", "test")
+    p2 = await actions.create_or_find_object("SoftwareProject", "repo:twin-b", "test")
+    for p in (p1, p2):
+        await actions.assert_property(p, "name", "sharedname", "test", datetime.now(UTC),
+                                      0.9, evidence_class="self_declared")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "sharedname"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rname3", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin"]["triage_bucket"] == "no-such-project"
+    assert row["pin"]["name_resolution"]["ambiguous"] is True
+    assert row["pin"]["name_resolution"]["candidates"] == ["repo:twin-a", "repo:twin-b"]
+
+
 async def test_roster_always_returns_caveats(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
