@@ -20,6 +20,7 @@ from src.orchestrator.deploy_guard import (
     check_schema_drift,
     check_unreviewed_boot,
     diverged_since_last_deploy,
+    local_ref_hygiene,
     origin_visibility,
     schema_drift,
     unreviewed_boot,
@@ -833,3 +834,61 @@ async def test_origin_visibility_fails_open_when_the_github_api_is_unreachable(
 
     note = await origin_visibility(small_repo)
     assert note.startswith("origin: unknown (")
+
+
+# --- local_ref_hygiene (the --mirror exposure read, same 2026-08-15 incident) ---------------
+
+async def test_local_ref_hygiene_is_clean_on_an_ordinary_repo(small_repo: Path) -> None:
+    _commit(small_repo, "a")
+    note = await local_ref_hygiene(small_repo)
+    assert "no refs outside refs/heads, refs/tags, or refs/remotes" in note
+    assert "extra reachable" not in note
+
+
+async def test_local_ref_hygiene_names_a_stray_ref(small_repo: Path) -> None:
+    a = _commit(small_repo, "a")
+    _git(small_repo, "update-ref", "refs/temp-main-old", a)
+    note = await local_ref_hygiene(small_repo)
+    assert "refs/temp-main-old" in note
+    assert "1 ref(s) outside refs/heads|tags|remotes" in note
+
+
+async def test_local_ref_hygiene_does_not_flag_ordinary_remote_tracking_refs(
+    small_repo: Path,
+) -> None:
+    """Caught live while dogfooding against the real osiris checkout: `refs/remotes/*` is
+    present in EVERY clone that has ever fetched — flagging it as stray would drown the
+    real signal in noise on every single ordinary checkout, not just this repo's own."""
+    a = _commit(small_repo, "a")
+    _git(small_repo, "update-ref", "refs/remotes/origin/main", a)
+    note = await local_ref_hygiene(small_repo)
+    assert "no refs outside refs/heads, refs/tags, or refs/remotes" in note
+    assert "extra reachable" not in note
+
+
+async def test_local_ref_hygiene_catches_a_commit_count_mismatch(small_repo: Path) -> None:
+    """The exact incident signature: a stray ref keeping OLD history alive that a mirror
+    push would carry, invisible to any check of the real branches' own content."""
+    _git(small_repo, "checkout", "-q", "--orphan", "stray-history")
+    stray_commit = _commit(small_repo, "history nobody meant to keep publishing")
+    _git(small_repo, "update-ref", "refs/temp-main-old", stray_commit)
+    _git(small_repo, "checkout", "-q", "--orphan", "main")
+    _commit(small_repo, "the real, intended history")
+    _git(small_repo, "branch", "-D", "stray-history")
+
+    note = await local_ref_hygiene(small_repo)
+    assert "extra reachable only via a stray ref" in note
+    assert "1 extra" in note
+
+
+async def test_local_ref_hygiene_includes_tags_as_intended(small_repo: Path) -> None:
+    a = _commit(small_repo, "a")
+    _git(small_repo, "tag", "v1.0.0", a)
+    note = await local_ref_hygiene(small_repo)
+    assert "no refs outside refs/heads, refs/tags, or refs/remotes" in note
+    assert "extra reachable" not in note
+
+
+async def test_local_ref_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
+    note = await local_ref_hygiene(tmp_path)
+    assert "UNKNOWN" in note

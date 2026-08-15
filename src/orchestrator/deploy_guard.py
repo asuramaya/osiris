@@ -364,3 +364,69 @@ async def origin_visibility(repo_root: Path) -> str:
 
     names = f" — {', '.join(branches)}" if branches else ""
     return f"origin: {visibility}, {len(branches)} branch(es) reachable{names}"
+
+
+async def local_ref_hygiene(repo_root: Path) -> str:
+    """THE SECOND SURFACE OF THE SAME INCIDENT (Thoth's own post-incident audit, msg 4671):
+    `origin_visibility` reads what origin already carries; this reads what this LOCAL
+    checkout would carry if someone ran `git push --mirror` — the exact mechanism that kept
+    a pre-redaction object graph alive tonight. Five stray `refs/temp-main*` refs, left over
+    from an earlier session, held 2,096 commits reachable — every CONTENT check on the real
+    branches read clean; only the COMMIT COUNT disagreeing with what the intended branch set
+    should carry gave it away. `--mirror` publishes every ref under `refs/`, not just
+    `refs/heads/*` and `refs/tags/*` (git's own documented behavior) — so any OTHER
+    namespace present locally (a stray `refs/temp-main*`, a leftover `refs/original/*` from
+    a past filter-repo run, anything unexpected) is exactly this exposure surface.
+
+    NEVER REFUSES (577988ed, same discipline as `origin_visibility`): any git failure
+    degrades to an honest 'unknown' segment, never silently 'clean'.
+
+    LOCAL-ONLY, NO NETWORK: everything here is `git for-each-ref`/`git rev-list` against
+    this checkout's own refs — a read of what COULD be sent, not a read of origin itself
+    (that's `origin_visibility`'s job). ORDINARY REMOTE-TRACKING REFS ARE NOT STRAY
+    (`refs/remotes/*` — present in EVERY checkout that has ever fetched, and even though
+    `--mirror` literally does republish them too, doing so only reflects origin's own
+    already-public history back at itself, never undisclosed local-only content; flagging
+    them would drown the real signal in noise present on every single checkout). "Stray"
+    here means every ref OUTSIDE `refs/heads/*`, `refs/tags/*`, AND `refs/remotes/*` — the
+    exact shape of tonight's specimen (`refs/temp-main*`, an ad-hoc local scratch namespace
+    nobody currently uses for anything, not a remote-tracking ref). The commit-count
+    comparison follows the same scope: "intended" is heads+tags+remotes (everything a
+    normal checkout legitimately carries), so a non-zero "extra" means commits reachable
+    ONLY through a genuinely stray ref — precisely the signature that caught tonight's
+    incident, worth surfacing even when the stray ref's own name looks innocuous."""
+    all_refs = await asyncio.to_thread(
+        subprocess.run, ["git", "for-each-ref", "--format=%(refname)"], cwd=repo_root,
+        capture_output=True, text=True, timeout=15, check=False)
+    if all_refs.returncode != 0:
+        return (f"ref hygiene: for-each-ref failed ({all_refs.stderr.strip()[:200]!r}) — "
+                "UNKNOWN, not assumed clean")
+    refs = [line for line in all_refs.stdout.splitlines() if line]
+    _ordinary = ("refs/heads/", "refs/tags/", "refs/remotes/")
+    stray = sorted(r for r in refs if not r.startswith(_ordinary))
+
+    intended = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "rev-list", "--count", "--branches", "--tags", "--remotes"],
+        cwd=repo_root, capture_output=True, text=True, timeout=15, check=False)
+    everything = await asyncio.to_thread(
+        subprocess.run, ["git", "rev-list", "--count", "--all"], cwd=repo_root,
+        capture_output=True, text=True, timeout=15, check=False)
+    if intended.returncode != 0 or everything.returncode != 0:
+        counts_note = "commit counts UNKNOWN (rev-list failed)"
+    else:
+        try:
+            n_intended = int(intended.stdout.strip())
+            n_all = int(everything.stdout.strip())
+        except ValueError:
+            counts_note = "commit counts UNKNOWN (unparseable rev-list output)"
+        else:
+            extra = n_all - n_intended
+            counts_note = (
+                f"{n_all} commits reachable from ALL local refs, {n_intended} from "
+                f"heads+tags+remotes — {extra} extra reachable only via a stray ref"
+                if extra else f"{n_all} commits reachable, all of it via heads+tags+remotes")
+
+    stray_note = (f"{len(stray)} ref(s) outside refs/heads|tags|remotes: {', '.join(stray)}"
+                  if stray else "no refs outside refs/heads, refs/tags, or refs/remotes")
+    return f"ref hygiene: {stray_note}; {counts_note}"

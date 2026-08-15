@@ -1,0 +1,19 @@
+#!/bin/sh
+# The pre-push secret/PII guard (scripts/push_guard.py, 2026-08-15 incident, ruling 2fc98818).
+# UNLIKE .githooks/pre-commit, this file is NOT wired via `core.hooksPath` (#133's landmine
+# stays untouched, Khnum's own Q2 finding, decision 820faa9d) -- it is installed by copying
+# this exact file into the SHARED .git/hooks/pre-push (scripts/install_push_guard_hook.sh),
+# which every worktree of this repo shares (hooks are not per-worktree). This tracked copy is
+# the source of truth `push_guard.hook_status()` verifies the installed copy against.
+#
+# FAIL-OPEN ON INFRASTRUCTURE, NOT ON A REAL MATCH (577988ed): push_guard.py's own exit code
+# is trusted as-is -- 0 lets the push through (clean scan, OR any internal failure; the
+# fail-open logic lives in Python, not here), 1 refuses. This shim adds no logic of its own.
+#
+# WORKTREE-AWARE (same discipline as pre-commit's own shim, thread 64c6b197): --git-common-dir
+# resolves to the MAIN checkout's .git from any worktree, so the venv interpreter is always
+# found regardless of which worktree is doing the pushing; --show-toplevel stays the CALLING
+# tree's own copy of push_guard.py, so a worktree on a different branch scans its own commits.
+MAIN_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+exec "$MAIN_ROOT/.venv/bin/python3" \
+    "$(git rev-parse --show-toplevel)/scripts/push_guard.py"
