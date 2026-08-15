@@ -561,11 +561,11 @@ async def test_fields_take_and_depth_compose_on_the_real_roadmap_shape(
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:pgtest", "test")
-    await actions.assert_property(proj, "name", "pgtest", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
     for i in range(5):
-        await open_thread(actions, f"duty {i}", repo="pgtest", arc="Fleet-Hygiene",
+        await open_thread(actions, f"duty {i}", repo="osiris", arc="Fleet-Hygiene",
                           owner="agent:x", source="agent:me")
     await save_composition(actions.pool, "roadmap", ROADMAP)
 
@@ -855,10 +855,10 @@ async def test_roadmap_composition_open_section_is_echo_filtered_and_arc_grouped
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp", "test")
-    await actions.assert_property(proj, "name", "rmcomp", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
-    await open_thread(actions, "a real duty", repo="rmcomp", arc="Fleet-Hygiene",
+    await open_thread(actions, "a real duty", repo="osiris", arc="Fleet-Hygiene",
                       owner="agent:x", source="agent:me")
     # a miner echo: derived-only, never touched by a self_declared assertion
     echo = await actions.create_or_find_object("Thread", "thread:echo-rm", "session-miner")
@@ -888,12 +888,12 @@ async def test_roadmap_open_section_names_its_own_dropped_tail(actions: Actions)
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ORIENT_OPEN_THREADS, ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmmore", "test")
-    await actions.assert_property(proj, "name", "rmmore", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
     total = ORIENT_OPEN_THREADS + 2
     for i in range(total):
-        await open_thread(actions, f"duty {i}", repo="rmmore", arc="Fleet-Hygiene",
+        await open_thread(actions, f"duty {i}", repo="osiris", arc="Fleet-Hygiene",
                           owner="agent:x", source="agent:me")
 
     await save_composition(actions.pool, "roadmap", ROADMAP)
@@ -909,10 +909,10 @@ async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actio
     from src.orchestrator.capture import open_thread, resolve_thread
     from src.orchestrator.compositions import ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcomp2", "test")
-    await actions.assert_property(proj, "name", "rmcomp2", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
-    tid = await open_thread(actions, "shipped work", repo="rmcomp2", arc="Token-Cost",
+    tid = await open_thread(actions, "shipped work", repo="osiris", arc="Token-Cost",
                             owner="agent:builder", source="agent:me")
     await resolve_thread(actions, str(tid), because="done", source="agent:me")
 
@@ -933,11 +933,11 @@ async def test_roadmap_open_section_shows_the_corrected_summary_by_default(
     from src.orchestrator.capture import correct_thread_summary, open_thread
     from src.orchestrator.compositions import ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcorrect", "test")
-    await actions.assert_property(proj, "name", "rmcorrect", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
     tid = await open_thread(actions, "six seats pinned to dead project names",
-                            repo="rmcorrect", arc="Fleet-Hygiene", owner="agent:x",
+                            repo="osiris", arc="Fleet-Hygiene", owner="agent:x",
                             source="agent:me")
     await correct_thread_summary(
         actions, str(tid), "almost entirely different population once re-measured")
@@ -959,11 +959,11 @@ async def test_roadmap_resolved_section_shows_the_corrected_summary_by_default(
     from src.orchestrator.capture import correct_thread_summary, open_thread, resolve_thread
     from src.orchestrator.compositions import ROADMAP
 
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:rmcorrect2", "test")
-    await actions.assert_property(proj, "name", "rmcorrect2", "test", NOW, 0.9,
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
+    await actions.assert_property(proj, "name", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
     tid = await open_thread(actions, "docs compile from the graph, live accretion",
-                            repo="rmcorrect2", arc="Token-Cost", owner="agent:builder",
+                            repo="osiris", arc="Token-Cost", owner="agent:builder",
                             source="agent:me")
     await correct_thread_summary(
         actions, str(tid), "shipped from the static schema manifest, never live accretion")

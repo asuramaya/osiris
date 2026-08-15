@@ -5265,11 +5265,10 @@ async def open_thread(
     `leased_to` names who already holds it. Asking again as the SAME assignee finds your own
     open build; a DIFFERENT assignee asking for near-duplicate work surfaces it too, by
     design — a double-assignment must be VISIBLE, never silent.
-    `arc` names which of a CLOSED taxonomy (capture.ARCS: Identity-Succession,
-    Compaction-Resilience, Model-Identity, Token-Cost, Surfaces-Roadmap-Docs,
-    Fleet-Hygiene, Security) this thread belongs to — the roadmap screen's top grouping.
-    Omit it for the common case; an unrecognized value refuses loudly. Unset, the receipt's
-    `arc` reads "unsorted".
+    `arc` names which of a CLOSED taxonomy (capture.ARCS) this thread belongs to — the
+    roadmap screen's top grouping. OSIRIS-SCOPED (d8ac7f5f): legal only on an osiris
+    thread, where a bad value refuses loudly; elsewhere dropped, receipt names why. Omit
+    for the common case; unset/dropped, the receipt reads "unsorted".
     `resolves` closes a PREDECESSOR thread this new one supersedes, in the same call —
     decision 883bb3da's own diagnosed gap: a lineage's own board-state/handoff threads
     accumulate forever because nothing ever closed the ancestor's when the successor
@@ -5359,8 +5358,12 @@ async def open_thread(
         )
     except ValueError as e:
         return {"error": str(e)}
+    if arc and not await capture.arc_in_scope(pool, repo):
+        arc_receipt = capture._arc_out_of_scope_note(f"repo:{repo}" if repo else "(no project)")
+    else:
+        arc_receipt = arc or capture._ARC_UNSORTED
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false",
-          "arc": arc or capture._ARC_UNSORTED}
+          "arc": arc_receipt}
     if assignee:
         out["assignee"] = assignee.strip()
     if files_touched:
@@ -6123,15 +6126,24 @@ async def reclassify_thread(
     exists: its own near-duplicate collision path returns the existing id without ever
     asserting `arc` on it, a silent no-op discovered live (task #76's roadmap follow-on).
     This is the door for backfilling arc onto a thread you're re-reading, not opening.
-    Unrecognized value refuses loudly, same law `open_thread` already applies."""
+    OSIRIS-SCOPED (d8ac7f5f), same law as open_thread's arc: dropped and named, never
+    refused, outside osiris."""
+    pool = await _pool_get()
     t = await capture.reclassify_thread(
-        Actions(await _pool_get()), ref, kind=kind, because=because, owner=owner, arc=arc,
+        Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
         source=await _actor_for(ctx, subagent_id, subagent_type))
     if t is None:
         return {"error": f"no thread matched {ref!r}"}
     out = {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
     if arc:
-        out["arc"] = arc
+        if await capture.arc_in_scope_for_thread(pool, t):
+            out["arc"] = arc
+        else:
+            rows = await pool.fetch(
+                "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+                "WHERE l.from_id=$1 AND l.type='in_repo'", t)
+            label = ", ".join(r["canonical"] for r in rows) or "(no project)"
+            out["arc"] = capture._arc_out_of_scope_note(label)
     return out
 
 

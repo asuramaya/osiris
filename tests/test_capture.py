@@ -207,7 +207,7 @@ async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Acti
     try:
         omitted = await srv.open_thread("a thread with no arc chosen", repo="arcproj")
         named = await srv.open_thread(
-            "a thread deliberately filed under Fleet-Hygiene", repo="arcproj",
+            "a thread deliberately filed under Fleet-Hygiene", repo="osiris",
             arc="Fleet-Hygiene")
     finally:
         srv._pool = saved_pool
@@ -220,6 +220,47 @@ async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Acti
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='arc' LIMIT 1", uuid.UUID(omitted["id"]))
     assert stored is None
+
+
+async def test_mcp_open_thread_receipt_names_the_out_of_scope_arc_honestly(
+    actions: Actions,
+) -> None:
+    """The repo gate (decision d8ac7f5f, msg 4526): a caller who files to a real, non-osiris
+    project and passes an arc anyway is told why in the SAME receipt slot _ARC_UNSORTED
+    already uses — never a refusal, never silently ignored."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "a ballgem thread with an osiris-shaped arc", repo="ballgem",
+            arc="Fleet-Hygiene")
+    finally:
+        srv._pool = saved_pool
+    assert out["arc"] != "Fleet-Hygiene"
+    assert "osiris-scoped" in out["arc"]
+    stored = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='arc' LIMIT 1", uuid.UUID(out["id"]))
+    assert stored is None
+
+
+async def test_mcp_reclassify_thread_receipt_names_the_out_of_scope_arc_honestly(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        opened = await srv.open_thread("a ballgem thread awaiting triage", repo="ballgem")
+        out = await srv.reclassify_thread(opened["id"], kind="obligation",
+                                          arc="Fleet-Hygiene")
+    finally:
+        srv._pool = saved_pool
+    assert out["arc"] != "Fleet-Hygiene"
+    assert "osiris-scoped" in out["arc"]
 
 
 async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -> None:
@@ -3278,10 +3319,10 @@ async def test_open_thread_dedup_is_silent_when_the_repeat_matches_exactly(
     srv._pool = actions.pool
     try:
         first = await srv.open_thread(
-            "the exact-repeat no-op case", repo="noopproj", kind="obligation",
+            "the exact-repeat no-op case", repo="osiris", kind="obligation",
             arc="Fleet-Hygiene")
         second = await srv.open_thread(
-            "The exact-repeat no-op case.", repo="noopproj", kind="obligation",
+            "The exact-repeat no-op case.", repo="osiris", kind="obligation",
             arc="Fleet-Hygiene")
     finally:
         srv._pool = saved_pool
@@ -3351,6 +3392,72 @@ async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
 
     with pytest.raises(ValueError, match="arc must be one of"):
         await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")
+
+
+# --- THE REPO GATE (decision d8ac7f5f, msg 4526) -----------------------------------------
+
+async def test_open_thread_sets_arc_when_repo_is_osiris(actions: Actions) -> None:
+    t = await open_thread(actions, "an osiris-filed thread wants an arc", repo="osiris",
+                          arc="Fleet-Hygiene", source="agent:me")
+    assert (await _props(actions.pool, t))["arc"] == "Fleet-Hygiene"
+
+
+async def test_open_thread_drops_arc_for_a_non_osiris_repo(actions: Actions) -> None:
+    """The actual case the gate exists for: a live agent explicitly files to their OWN
+    project (ballgem, never osiris) and passes an arc anyway — dropped, never persisted,
+    never a refusal (577988ed)."""
+    t = await open_thread(actions, "a ballgem thread with an osiris-shaped arc",
+                          repo="ballgem", arc="Fleet-Hygiene", source="agent:me")
+    assert "arc" not in await _props(actions.pool, t)
+
+
+async def test_open_thread_never_refuses_an_invalid_arc_for_a_non_osiris_repo(
+    actions: Actions,
+) -> None:
+    """A non-osiris repo takes arc out of scope BEFORE the taxonomy check ever runs — an
+    out-of-taxonomy value there is moot, not a refusal-worthy typo (only an osiris-scoped
+    caller gets the loud ValueError; see test_open_thread_refuses_an_arc_outside_the_
+    locked_taxonomy above)."""
+    t = await open_thread(actions, "a ballgem thread with total nonsense for an arc",
+                          repo="ballgem", arc="Not-A-Real-Arc-At-All", source="agent:me")
+    assert "arc" not in await _props(actions.pool, t)
+
+
+async def test_open_thread_sets_arc_for_an_internal_caller_with_no_repo_at_all(
+    actions: Actions,
+) -> None:
+    """deploy_guard.py's boot alarms and task_sync.py's tier2 mints call capture.open_thread
+    directly with arc="Fleet-Hygiene" and NO repo — Khnum's own "two hardcoded automated
+    callers... work at 100%" (decision 9ffc5840) must keep working: an unspecified repo
+    reads as an internal osiris caller, not a foreign one, so arc still lands."""
+    t = await open_thread(actions, "a deploy-guard-shaped alarm with no repo passed",
+                          arc="Fleet-Hygiene", source="boot:some-service")
+    assert (await _props(actions.pool, t))["arc"] == "Fleet-Hygiene"
+
+
+async def test_reclassify_thread_backfills_arc_only_when_the_thread_is_osiris_scoped(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "a ballgem thread getting triaged", repo="ballgem",
+                          source="agent:x")
+    got = await reclassify_thread(actions, str(t), kind="obligation", arc="Fleet-Hygiene",
+                                  source="agent:triager")
+    assert got == t
+    assert "arc" not in await _props(actions.pool, t)
+
+
+async def test_reclassify_thread_backfills_arc_when_the_thread_is_osiris_scoped(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import reclassify_thread
+
+    t = await open_thread(actions, "an osiris thread getting triaged", repo="osiris",
+                          source="agent:x")
+    await reclassify_thread(actions, str(t), kind="obligation", arc="Fleet-Hygiene",
+                            source="agent:triager")
+    assert (await _props(actions.pool, t))["arc"] == "Fleet-Hygiene"
 
 
 # --- THE THAW (ruling 1e6d7367): Practice, Superstition's positive twin ------------------

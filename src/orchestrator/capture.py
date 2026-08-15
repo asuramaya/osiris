@@ -951,6 +951,75 @@ ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token
 # "unsorted" on the roadmap recognizes the same fact stated twice, not two different ones.
 _ARC_UNSORTED = "unsorted — arc was left unset (capture.ARCS names the taxonomy)"
 
+# THE REPO GATE (decision d8ac7f5f, msg 4526: Thoth accepted the pushback against a
+# per-project taxonomy mechanism) — ARCS is an osiris-coordination taxonomy, not a
+# general one: 506 of 661 fleet-wide arc-null threads trace to 37 DISTINCT non-osiris
+# projects whose work genuinely has no home in these seven names (decision 94666730), and
+# the only reader of `arc` anywhere in this codebase is osiris's own roadmap composition.
+# Rather than build a taxonomy-per-project mechanism nobody has asked for, `arc` becomes
+# legal to SET only when the thread's own project resolves to osiris itself — making the
+# code say what the world already does, additively (577988ed binds: never a refusal, never
+# a strip of the 219 threads that already carry an arc off-scope; a caller who passes one
+# anyway is told why, not turned away).
+#
+# UNSPECIFIED REPO READS AS IN-SCOPE, NOT OUT (found live before shipping, not guessed):
+# deploy_guard.py's two boot alarms and task_sync.py's tier2 mints call capture.open_thread
+# directly with arc="Fleet-Hygiene" and NO `repo` at all — these are exactly the "two
+# hardcoded automated callers" Khnum's own arc-adoption decision (9ffc5840) named as
+# working at 100%. They are osiris's own machinery, never called by any other project's
+# code, and never threaded a repo string before this gate existed either. Treating an
+# absent repo as OUT of scope would have silently zeroed their arc — a real regression a
+# naive read of "legal only when repo=osiris" would have shipped. The actual case this gate
+# exists for (a live agent explicitly filing to their OWN non-osiris project) always
+# arrives with a resolved repo — either explicit or defaulted from the caller's own mount
+# identity (mcp_server.open_thread's `ident.project` fill) — so gating only on a repo that
+# resolves to something OTHER than osiris catches the real case without breaking the
+# unnamed-caller one.
+async def arc_in_scope(pool: asyncpg.Pool, repo: str | None) -> bool:
+    """True when `repo` is unspecified (an internal osiris caller that never threads a
+    project string) or names osiris itself. False only when `repo` resolves to a
+    DIFFERENT, real project, or to nothing at all under a NAMED string — the actual case
+    this gate exists for. The literal string "osiris" short-circuits BEFORE any DB
+    resolution: `open_thread(repo="osiris", ...)` mints the osiris SoftwareProject itself
+    via `link_repo` only AFTER this gate runs, so resolving-first would find no such
+    project yet on the very first call — a chicken-and-egg false negative a name check
+    sidesteps entirely."""
+    if not repo:
+        return True
+    name = repo.removeprefix("repo:").strip()
+    if name == "osiris":
+        return True
+    proj = await _resolve_repo(pool, name)
+    if proj is None:
+        return False
+    osiris_id = await _resolve_repo(pool, "osiris")
+    return osiris_id is not None and proj == osiris_id
+
+
+async def arc_in_scope_for_thread(pool: asyncpg.Pool, thread_id: uuid.UUID) -> bool:
+    """The same gate as `arc_in_scope`, for an ALREADY-EXISTING thread (reclassify_thread's
+    own door): true when the thread carries NO in_repo edge at all (same permissive default
+    as an unspecified `repo` — a thread deploy_guard/task_sync minted never got one either)
+    or carries one to osiris itself. False when it has an in_repo edge to a real, different
+    project — including the case where osiris itself was never minted, since a thread that
+    IS filed somewhere cannot then match a project that doesn't exist."""
+    repo_ids = await pool.fetch(
+        "SELECT DISTINCT l.to_id FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
+        thread_id)
+    if not repo_ids:
+        return True
+    osiris_id = await _resolve_repo(pool, "osiris")
+    if osiris_id is None:
+        return False
+    return any(r["to_id"] == osiris_id for r in repo_ids)
+
+
+def _arc_out_of_scope_note(label: str) -> str:
+    """The receipt-only sentinel for an out-of-scope `arc` — same shape as _ARC_UNSORTED
+    and offices._CHARTER_UNDECLARED: never persisted, never a refusal, always visible."""
+    return (f"osiris-scoped — {label} is not the osiris project, so this thread will not "
+            "carry an arc (capture.ARCS names osiris's own roadmap taxonomy only)")
+
 
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
@@ -985,11 +1054,14 @@ async def open_thread(
 
     `arc` (thread 8df8e611, roadmap v2) names which of the CLOSED taxonomy (`ARCS`,
     above) this thread belongs to — the roadmap screen's top-level grouping, one level
-    above `status`. Raises ValueError on anything outside `ARCS`: a locked taxonomy that
-    silently accepted typos would fragment into permanently-empty arcs nobody finds
-    again. Omitted (the common case for now) leaves the thread arc-less; the roadmap
-    composition's own open half (`compositions._fn_roadmap_open`) buckets those as
-    "unsorted" rather than guessing.
+    above `status`. OSIRIS-SCOPED (decision d8ac7f5f): legal to set only when `repo`
+    resolves to the osiris project itself — raises ValueError on anything outside `ARCS`
+    for an osiris thread (a locked taxonomy that silently accepted typos would fragment
+    into permanently-empty arcs nobody finds again), but for any OTHER project a supplied
+    `arc` is silently dropped rather than validated or refused (577988ed: arc has no legal
+    home outside osiris, so a caller is told why, never turned away). Omitted (the common
+    case) leaves the thread arc-less; the roadmap composition's own open half
+    (`compositions._fn_roadmap_open`) buckets those as "unsorted" rather than guessing.
 
     `severity` (ruling c5b184cd, thread d56e7073/#44 — the live-desk composition's
     drift_alarms leg) names an alarm-shaped open in a real, filterable property instead
@@ -1021,8 +1093,12 @@ async def open_thread(
     problem), carrying the git branch and the repo-relative files this build touches so a
     later reader — or `open_thread`'s own collision check, below — can find it by file
     overlap instead of only by already suspecting it exists."""
-    if arc is not None and arc not in ARCS:
-        raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
+    if arc is not None:
+        if await arc_in_scope(actions.pool, repo):
+            if arc not in ARCS:
+                raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
+        else:
+            arc = None  # out-of-scope: dropped, never refused (577988ed) — see mcp_server's receipt
     observed = datetime.now(UTC)
     effective_owner = assignee if assignee is not None else owner
     to_resolve: list[uuid.UUID] = []
@@ -1248,14 +1324,21 @@ async def reclassify_thread(
     afterward rather than trusting the receipt). This was the missing verb, not a filing
     gap — `reclassify_thread` already exists for exactly this shape (judging an EXISTING
     thread's own metadata after the fact) and `arc` is a closed taxonomy exactly like
-    `kind`, so it gets the same validate-then-assert treatment rather than new machinery."""
+    `kind`, so it gets the same validate-then-assert treatment rather than new machinery.
+    OSIRIS-SCOPED (decision d8ac7f5f), same law as `open_thread`'s own `arc`: legal to set
+    only when the thread already carries an in_repo edge to osiris itself — dropped, never
+    refused, for any other project's thread."""
     if kind not in _TRIAGE_KINDS:
         raise ValueError(f"kind must be one of {_TRIAGE_KINDS}")
-    if arc is not None and arc not in ARCS:
-        raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None
+    if arc is not None:
+        if await arc_in_scope_for_thread(actions.pool, tid):
+            if arc not in ARCS:
+                raise ValueError(f"arc must be one of {ARCS}, got {arc!r}")
+        else:
+            arc = None  # out-of-scope: dropped, never refused (577988ed) — see mcp_server's receipt
     observed = datetime.now(UTC)
     await actions.assert_property(tid, "kind", kind, source, observed, _CONF,
                                   evidence_class=_EC)
