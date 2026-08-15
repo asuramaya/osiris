@@ -20,6 +20,7 @@ from src.orchestrator.deploy_guard import (
     check_schema_drift,
     check_unreviewed_boot,
     diverged_since_last_deploy,
+    origin_visibility,
     schema_drift,
     unreviewed_boot,
 )
@@ -709,3 +710,126 @@ async def test_real_record_deploy_is_a_noop_off_a_non_git_root(actions: Actions)
     head = await _real_record_deploy(actions.pool, Path("/no/such/git/repo"))
     assert head is None
     assert await get_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY) is None
+
+
+# --- origin_visibility (the read-side alarm, 2026-08-15 incident, ruling 2fc98818) ---------
+
+class _FakeResponse:
+    def __init__(self, status_code: int, json_body: dict[str, Any] | None = None) -> None:
+        self.status_code = status_code
+        self._json = json_body or {}
+
+    def json(self) -> dict[str, Any]:
+        return self._json
+
+
+class _FakeAsyncClient:
+    def __init__(self, outcome: _FakeResponse | Exception) -> None:
+        self._outcome = outcome
+
+    async def __aenter__(self) -> _FakeAsyncClient:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def get(self, url: str) -> _FakeResponse:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _stub_ls_remote_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No branches, no error — isolates the GitHub-visibility leg from a real network
+    `ls-remote` against a URL that was never a real reachable remote."""
+    import src.orchestrator.deploy_guard as guard
+
+    real_run = subprocess.run
+
+    def _fake_run(argv: list[str], **kwargs: Any) -> Any:
+        if argv[:2] == ["git", "ls-remote"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(guard.subprocess, "run", _fake_run)
+
+
+async def test_origin_visibility_reports_no_remote_when_none_configured(
+    small_repo: Path,
+) -> None:
+    assert await origin_visibility(small_repo) == "origin: no remote configured"
+
+
+async def test_origin_visibility_lists_real_branches_from_a_local_remote(
+    small_repo: Path, tmp_path: Path,
+) -> None:
+    """A REAL `git ls-remote` against a real local repo, not a mock — the branch-listing leg
+    needs no network to prove it reads the true ref set, same discipline as `_is_ancestor`'s
+    own real-repo tests in this file."""
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _git(upstream, "init", "-q")
+    _git(upstream, "config", "user.email", "test@test")
+    _git(upstream, "config", "user.name", "test")
+    _commit(upstream, "a")
+    _git(upstream, "checkout", "-q", "-b", "feature")
+    _commit(upstream, "b")
+    _git(small_repo, "remote", "add", "origin", str(upstream))
+
+    note = await origin_visibility(small_repo)
+    assert "2 branch(es) reachable" in note
+    assert "feature" in note
+    assert "unrecognizable github.com owner/repo" in note or "unknown" in note
+
+
+async def test_origin_visibility_fails_open_when_ls_remote_errors(small_repo: Path) -> None:
+    _git(small_repo, "remote", "add", "origin", "/no/such/path/at/all")
+    note = await origin_visibility(small_repo)
+    assert "UNKNOWN" in note
+    assert "branches/visibility" in note
+
+
+async def test_origin_visibility_reports_public_from_the_github_api(
+    small_repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+
+    _git(small_repo, "remote", "add", "origin", "https://github.com/testowner/testrepo.git")
+    _stub_ls_remote_clean(monkeypatch)
+    monkeypatch.setattr(
+        guard, "httpx",
+        type("_H", (), {"AsyncClient": lambda **_: _FakeAsyncClient(
+            _FakeResponse(200, {"private": False}))}))
+
+    assert await origin_visibility(small_repo) == "origin: PUBLIC, 0 branch(es) reachable"
+
+
+async def test_origin_visibility_reads_private_from_a_404(
+    small_repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+
+    _git(small_repo, "remote", "add", "origin", "git@github.com:testowner/testrepo.git")
+    _stub_ls_remote_clean(monkeypatch)
+    monkeypatch.setattr(
+        guard, "httpx",
+        type("_H", (), {"AsyncClient": lambda **_: _FakeAsyncClient(_FakeResponse(404))}))
+
+    note = await origin_visibility(small_repo)
+    assert "private-or-nonexistent" in note
+
+
+async def test_origin_visibility_fails_open_when_the_github_api_is_unreachable(
+    small_repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+
+    _git(small_repo, "remote", "add", "origin", "https://github.com/testowner/testrepo.git")
+    _stub_ls_remote_clean(monkeypatch)
+    monkeypatch.setattr(
+        guard, "httpx",
+        type("_H", (), {"AsyncClient": lambda **_: _FakeAsyncClient(
+            ConnectionError("no network"))}))
+
+    note = await origin_visibility(small_repo)
+    assert note.startswith("origin: unknown (")

@@ -27,12 +27,15 @@ here prevents an unreviewed boot from serving, it only makes sure nobody can mis
 happened."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
+import re
 import subprocess
 from pathlib import Path
 
 import asyncpg
+import httpx
 
 _log = logging.getLogger("osiris.deploy_guard")
 
@@ -301,3 +304,63 @@ async def alarm_unreviewed_boot(pool: asyncpg.Pool, drift: str, *, service: str)
                  "it, then `osiris deploy` to re-sync the ledger.",
             dedup_window_secs=86400,
         )
+
+
+async def origin_visibility(repo_root: Path) -> str:
+    """THE READ-SIDE ALARM (2026-08-15 incident, ruling 2fc98818): "NO SEAT PUSHES" was
+    restated in every deploy report for over a day while origin sat PUBLIC with four
+    branches and the operator's own email in six commit messages, because the rule lived
+    only in prose and nobody ever ran `git ls-remote` — a policy-layer instance of 60bc15db
+    (a check that cannot distinguish "nobody pushed" from "nobody looked", and reports the
+    former). This measures origin's TRUE state, every deploy, so the report is an
+    instrument again, not a restated assumption.
+
+    NEVER REFUSES, NEVER BLOCKS (577988ed, same fail-open discipline as `schema_drift`
+    above): any read failure — no origin configured, `ls-remote` erroring, the network
+    down, GitHub's API unreachable — degrades to an honest 'unknown' segment in the
+    returned line, never a silent omission and never a raised exception that could hold up
+    a deploy. A false alarm here costs one confusing report line; a refusal would strand
+    every deploy on a network blip, exactly the asymmetry this module's own docstring
+    already names.
+
+    TWO INDEPENDENT READS, deliberately not one: `git ls-remote --heads origin` names
+    every reachable branch — the actual blast radius of whatever has already been pushed,
+    not what any seat MEANT to push. GitHub's own unauthenticated repos API confesses
+    `private` directly; `ls-remote` alone cannot answer "can a stranger see this" because
+    it succeeds identically whether the repo is public or merely one we hold credentials
+    for. READ-ONLY BY CONSTRUCTION: no fetch, no clone, no write — a bare listing of what
+    the network already advertises."""
+    url = (await asyncio.to_thread(
+        subprocess.run, ["git", "config", "--get", "remote.origin.url"], cwd=repo_root,
+        capture_output=True, text=True, timeout=5, check=False)).stdout.strip()
+    if not url:
+        return "origin: no remote configured"
+
+    ls = await asyncio.to_thread(
+        subprocess.run, ["git", "ls-remote", "--heads", "origin"], cwd=repo_root,
+        capture_output=True, text=True, timeout=15, check=False)
+    if ls.returncode != 0:
+        return (f"origin: ls-remote failed ({ls.stderr.strip()[:200]!r}) — "
+                "branches/visibility UNKNOWN, not assumed clean")
+    branches = sorted(
+        line.split("refs/heads/", 1)[1] for line in ls.stdout.splitlines()
+        if "refs/heads/" in line)
+
+    match = re.search(r"github\.com[:/]([^/]+)/([^/.]+?)(?:\.git)?/?$", url)
+    visibility = "unknown (remote isn't a recognizable github.com owner/repo URL)"
+    if match:
+        owner, name = match.group(1), match.group(2)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"https://api.github.com/repos/{owner}/{name}")
+            if resp.status_code == 200:
+                visibility = "PUBLIC" if resp.json().get("private") is False else "private"
+            elif resp.status_code == 404:
+                visibility = "private-or-nonexistent (404, unauthenticated read)"
+            else:
+                visibility = f"unknown (GitHub API returned {resp.status_code})"
+        except Exception as exc:  # noqa: BLE001 — an unreachable check is UNKNOWN, never a silent PRIVATE
+            visibility = f"unknown ({exc})"
+
+    names = f" — {', '.join(branches)}" if branches else ""
+    return f"origin: {visibility}, {len(branches)} branch(es) reachable{names}"

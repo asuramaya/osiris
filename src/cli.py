@@ -1389,6 +1389,9 @@ async def cmd_deploy(
         else:
             print("compositions: up to date")
 
+        from src.orchestrator.deploy_guard import origin_visibility
+        print(await origin_visibility(root))
+
         return 1 if fails else 0
     finally:
         if owns_pool:
