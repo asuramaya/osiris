@@ -15,9 +15,12 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    ARC_DEFINITIONS,
+    ARCS,
     _decision_snapshot,
     amend_decision,
     annotate_thread,
+    arc_definition,
     backfill_decided_in,
     correct_thread_summary,
     decision_addenda,
@@ -3392,6 +3395,17 @@ async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
 
     with pytest.raises(ValueError, match="arc must be one of"):
         await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")
+
+
+# --- ARC_DEFINITIONS (Thoth's follow-on ask, msg 4566) ------------------------------------
+
+def test_every_arc_has_exactly_one_definition() -> None:
+    assert set(ARC_DEFINITIONS) == set(ARCS)
+
+
+def test_arc_definition_returns_none_outside_the_closed_taxonomy() -> None:
+    assert arc_definition("Not-A-Real-Arc") is None
+    assert arc_definition("Identity-Succession") == ARC_DEFINITIONS["Identity-Succession"]
 
 
 # --- THE REPO GATE (decision d8ac7f5f, msg 4526) -----------------------------------------
