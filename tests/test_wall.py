@@ -475,10 +475,10 @@ async def test_wall_items_carry_arc_only_when_declared(actions: Actions) -> None
     """`arc` rides the wall item exactly like `kind`/`owner` already do — present only when
     a mind (or the miner) actually named one, never a null-key placeholder (Fulcrum III's
     verdict, extended to the new field)."""
-    proj = await actions.create_or_find_object("SoftwareProject", "repo:arcrank", "session")
-    await open_thread(actions, "a thread with a named arc", repo="arcrank",
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
+    await open_thread(actions, "a thread with a named arc", repo="osiris",
                       arc="Token-Cost", source="agent:me")
-    await open_thread(actions, "a thread with no arc at all", repo="arcrank",
+    await open_thread(actions, "a thread with no arc at all", repo="osiris",
                       source="agent:me")
 
     wall, _echoes = await open_thread_wall(actions.pool, proj)
