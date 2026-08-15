@@ -1341,7 +1341,7 @@ async def misfiled_by_lineage(
 
 async def nearest_handoff_ancestor(
     pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
-) -> tuple[str, list[dict[str, Any]]] | None:
+) -> tuple[tuple[str, list[dict[str, Any]]] | None, bool]:
     """Bounded chain-walk to the nearest ancestor bearing a handoff (thread e749036e,
     2026-07-27, Thoth LX's diagnosis): a one-hop-only succession-note read goes blind the
     moment the IMMEDIATE ancestor is a phantom (or simply never wrote a handoff) even
@@ -1381,7 +1381,28 @@ async def nearest_handoff_ancestor(
 
     Each returned pick now also carries `id` (the object's own short-resolvable uuid,
     stringified) — ack_handoff needs a ref to acknowledge; before this fix callers had no
-    way to name what they were looking at."""
+    way to name what they were looking at.
+
+    RETURNS `(result, complete)` (decision 8b375ed7, the same completeness-signal shape
+    `lineage_root`/`_lineage_ancestors` already carry per decision 1cb389be — the third
+    specimen of that exact disease this reign): `complete=True` when the walk reached a
+    genuine stopping point within `max_hops` — either it FOUND a handoff, or it walked all
+    the way to a true `succeeded_from IS NULL` terminus and confirmed there is nothing to
+    find. `complete=False` ONLY when the walk exhausted `max_hops` without resolving either
+    way — `result=None` is then NOT "nothing to inherit", it is "stopped looking", the exact
+    collision obligation 4c303c43 named unverified since 2026-08-09 and this reign
+    confirmed live: 64 of 636 real successions (10%) hit precisely this — a real marked
+    handoff sits 6-13+ hops back, past `max_hops=5`, silently indistinguishable from a
+    genuinely clean chain until now. `max_hops` itself is UNCHANGED here on purpose — a
+    bigger bound only moves the same silent cliff further out (the fix already learned once
+    this reign, not to repeat); a caller that needs to actually FIND a handoff beyond the
+    default bound passes a larger `max_hops` explicitly and reads `complete` either way.
+    THIS SIGNAL IS BUILT, NOT YET WIRED INTO ANY VISIBLE SURFACE (decision, msg 4651): no
+    caller's own observable output changes in this pass — orient()'s succession_note,
+    handshake's boot whisper, and handoff_briefing's boundary all still behave byte-for-byte
+    as before for the same graph state. Surfacing `complete` to a reader is a deliberate,
+    separate, operator-authorized step, held per that same decision: it changes what every
+    session sees on its first call, which is not this build's authorization."""
     ack_clause = (
         "(SELECT h.value #>> '{}' FROM current_assertions h "
         " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
@@ -1409,12 +1430,12 @@ async def nearest_handoff_ancestor(
             "ORDER BY o.id, a.confidence DESC, a.observed_at DESC", cur)
         picks = sorted(rows, key=lambda r: r["observed_at"], reverse=True)[:2]
         if picks:
-            return cur, [dict(r) for r in picks]
+            return (cur, [dict(r) for r in picks]), True
         nxt = await _succeeded_from_of(pool, cur)
         if nxt is None:
-            return None
+            return None, True  # a genuine terminus reached — clean, not truncated
         cur = nxt
-    return None
+    return None, False  # max_hops exhausted — stopped looking, not "nothing to find"
 
 
 @asynccontextmanager
