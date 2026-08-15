@@ -1110,7 +1110,12 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
     again = _anchored("claude-fable-5")
     a3 = await register_agent(actions, again, actor="analyst:operator")
     assert a3 == a2 and again.agent_id == "agent:0806072e-ii"
-    assert again.succeeded_from is None and again.model_succession is None
+    # succeeded_from IS repopulated on this idempotent, non-minting call (the reconstruction
+    # fix, msg 4673): a fresh AgentIdentity built for an ALREADY-minted agent used to lose
+    # this fact permanently the moment resolve_identity() rebuilt it with no DB access —
+    # register_agent now recovers it from the graph's own durable property instead of
+    # leaving it None. model_succession stays None: no seam fired on this call, unrelated.
+    assert again.succeeded_from == "agent:0806072e" and again.model_succession is None
     # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): "-ii" is a WITNESSED mind (this decision
     # is its act) — without one, the next seam would fold it as a zero-turn phantom instead
     # of chaining a third generation onto it (see test_fold_zero_turn_ancestors_* in this
@@ -1122,6 +1127,39 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
     assert third.agent_id == "agent:0806072e-iii"
     assert third.succeeded_from == "agent:0806072e-ii"
     assert a4 not in (a, a2)
+
+
+async def test_register_agent_recovers_succeeded_from_after_a_simulated_bounce(
+    actions: Actions,
+) -> None:
+    """THE RECONSTRUCTION FIX (msg 4673, operator-authorized): a fresh `AgentIdentity`
+    built the way `resolve_identity()` genuinely builds one — no pool, `succeeded_from`
+    at its dataclass default of None — for an agent that ALREADY has a real predecessor
+    in the graph must NOT lose that fact just because it wasn't reconstructed via the
+    in-memory `_agents[key]` cache (a server bounce, `_reattach`'s own cache-miss path).
+    Before this fix, `identity.succeeded_from` stayed None forever from that point on;
+    orient()'s `if ident and ident.succeeded_from:` gate never opened again for that
+    session, though the Agent's own `succeeded_from` property was correct throughout."""
+    ancestor = _anchored("claude-opus-4-8")
+    await register_agent(actions, ancestor, actor="analyst:operator")
+    heir = _anchored("claude-fable-5")
+    heir_id = await register_agent(actions, heir, actor="analyst:operator")
+    assert heir.agent_id == "agent:0806072e-ii"
+    assert heir.succeeded_from == "agent:0806072e"  # the real mint, correct as before
+
+    # SIMULATE THE BOUNCE: a brand-new AgentIdentity for the SAME (already-minted) agent,
+    # exactly as resolve_identity() would build one on a cache-miss re-attach — no memory
+    # of the mint that just happened, succeeded_from unset.
+    reconstructed = AgentIdentity(agent_id="agent:0806072e-ii", session="0806072e",
+                                  project="sibling-two", model="claude-fable-5",
+                                  cwd="/w/sibling-two", model_method="job_dir",
+                                  model_history=("claude-fable-5",))
+    assert reconstructed.succeeded_from is None  # the bug's own precondition, confirmed
+
+    second_id = await register_agent(actions, reconstructed, actor="analyst:operator")
+
+    assert second_id == heir_id  # no new mint — same agent, correctly recognized as head
+    assert reconstructed.succeeded_from == "agent:0806072e"  # recovered, not lost
 
 
 async def test_remount_of_a_retired_identity_mints_an_heir(actions: Actions) -> None:
