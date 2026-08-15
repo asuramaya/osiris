@@ -61,7 +61,8 @@ def test_parse_webpage_mines_plaintext_contact_email() -> None:
     objs = {(o.type, o.canonical): o for o in r.objects}
 
     # same-domain email == the entity's own contact -> DIRECT_OBSERVATION
-    assert objs[("Email", "contact@voltara.example")].evidence_class is EvidenceClass.DIRECT_OBSERVATION
+    own_contact = objs[("Email", "contact@voltara.example")]
+    assert own_contact.evidence_class is EvidenceClass.DIRECT_OBSERVATION
     # off-domain email merely co-occurs
     assert objs[("Email", "ops@thirdparty.example")].evidence_class is EvidenceClass.CO_OCCURRENCE
     # text inside <script> is NOT mined
