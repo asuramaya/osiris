@@ -430,7 +430,16 @@ def _tool_chars(t: Any) -> int:
 # until the merge.
 # 155,414 -> 156,685. 110 -> 111 tools: create_project (#139) is the new one;
 # the rest is tool_traffic gaining its per-caller cut (#170).
-TOOL_CONTRACT_CEILING_CHARS = 163_475
+# 163,475 -> 163,650 (2026-08-15, msg 4679). TOOL COUNT UNCHANGED at 115 — this is +173
+# chars of prose on ONE existing tool, and it is the integrator's line so the integrator
+# raises it (45e72476). Imhotep flagged the overrun and refused to raise it himself, which
+# is the rule working. THE GROWTH IS ack_handoff's `resolved` FIELD: acking a handoff left
+# the Thread's own status 'open' forever, so a receipt saying "acknowledged: true" could not
+# distinguish "acked" from "acked AND retired." That is 42176e16 at a receipt boundary — the
+# defect family this house spent the week closing — and the field is worthless if the
+# docstring does not say the caller may read it. Prose that makes a new honesty field
+# LEGIBLE is load-bearing; prose that re-explains an unchanged one is the diet's target.
+TOOL_CONTRACT_CEILING_CHARS = 163_650
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
