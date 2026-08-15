@@ -109,7 +109,7 @@ async def since_last_handoff(
     would otherwise re-list a predecessor's own handoff as "shipped" in their successor's
     first briefing, which is exactly the kind of confusing double-count a boundary exists
     to prevent."""
-    found = await nearest_handoff_ancestor(
+    found, _complete = await nearest_handoff_ancestor(
         pool, agent_id, max_hops=max_hops, respect_ack=False)
     if found is None:
         return None, "no prior handoff found within the walked chain — compiling full history"

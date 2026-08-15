@@ -2747,7 +2747,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     # unacknowledged handoff redelivers on every orient(), exactly like unsettled mail.
     inheritance = None
     if ident and ident.succeeded_from:
-        found = await nearest_handoff_ancestor(pool, ident.succeeded_from)
+        found, _complete = await nearest_handoff_ancestor(pool, ident.succeeded_from)
         if found:
             from_id, picks = found
             inheritance = {

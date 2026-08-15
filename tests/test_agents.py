@@ -3310,8 +3310,9 @@ async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions
                                 source="agent:nha0001", repo="nhaproj")
     await actions.assert_property(did, "is_handoff", "true", "agent:nha0001",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    found = await nearest_handoff_ancestor(actions.pool, "agent:nha0001")
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:nha0001")
     assert found is not None and found[0] == "agent:nha0001"
+    assert complete is True
 
 
 async def test_nearest_handoff_ancestor_walks_past_silence_within_the_bound(
@@ -3330,13 +3331,16 @@ async def test_nearest_handoff_ancestor_walks_past_silence_within_the_bound(
                                   now, 0.9, evidence_class="direct_observation")
     await actions.assert_property(a12, "succeeded_from", "agent:nha0011", "agent:nha0012",
                                   now, 0.9, evidence_class="direct_observation")
-    found = await nearest_handoff_ancestor(actions.pool, "agent:nha0012")
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:nha0012")
     assert found is not None and found[0] == "agent:nha0010"
+    assert complete is True
 
 
 async def test_nearest_handoff_ancestor_gives_up_past_the_bound(actions: Actions) -> None:
     """A handoff 6 hops back (past max_hops=5) is never found — bounded on purpose, never
-    an unbounded search."""
+    an unbounded search. complete=False is the honest signal that this is a TRUNCATION,
+    not a clean "nothing here" (decision 8b375ed7 — the specimen 4c303c43 flagged unverified
+    on 2026-08-09, confirmed live at fleet scale: 64/636 real successions hit exactly this)."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
     await open_thread(actions, "HANDOFF — too far back to matter",
@@ -3349,7 +3353,26 @@ async def test_nearest_handoff_ancestor_gives_up_past_the_bound(actions: Actions
         await actions.assert_property(obj, "succeeded_from", prev, cur, now, 0.9,
                                       evidence_class="direct_observation")
         prev = cur
-    assert await nearest_handoff_ancestor(actions.pool, "agent:nhb0006") is None
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:nhb0006")
+    assert found is None
+    assert complete is False
+
+
+async def test_nearest_handoff_ancestor_complete_when_chain_genuinely_terminates(
+    actions: Actions,
+) -> None:
+    """A chain that reaches a true succeeded_from-IS-NULL origin within max_hops, finding
+    nothing, is COMPLETE — genuinely clean, distinguishable from a truncated walk (the
+    other half of decision 8b375ed7's contract)."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    await actions.create_or_find_object("Agent", "agent:nhc0000", "agent:nhc0000")
+    child = await actions.create_or_find_object("Agent", "agent:nhc0001", "agent:nhc0001")
+    await actions.assert_property(child, "succeeded_from", "agent:nhc0000", "agent:nhc0001",
+                                  datetime.now(UTC), 0.9, evidence_class="direct_observation")
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:nhc0001")
+    assert found is None
+    assert complete is True
 
 
 async def test_nearest_handoff_ancestor_respects_an_explicit_ack_by_default(
@@ -3373,10 +3396,14 @@ async def test_nearest_handoff_ancestor_respects_an_explicit_ack_by_default(
                                   now + timedelta(seconds=1), 0.9,
                                   evidence_class="self_declared")
 
-    assert await nearest_handoff_ancestor(actions.pool, "agent:bleedack0001") is None
-    found = await nearest_handoff_ancestor(
+    acked, acked_complete = await nearest_handoff_ancestor(
+        actions.pool, "agent:bleedack0001")
+    assert acked is None
+    assert acked_complete is True  # a respected ack is a clean answer, not a truncation
+    found, complete = await nearest_handoff_ancestor(
         actions.pool, "agent:bleedack0001", respect_ack=False)
     assert found is not None and found[0] == "agent:bleedack0001"
+    assert complete is True
 
 
 async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions) -> None:
@@ -3388,9 +3415,10 @@ async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions)
                                 kind="choice", source="agent:nhaid0001", repo="nhaproj")
     await actions.assert_property(did, "is_handoff", "true", "agent:nhaid0001",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    found = await nearest_handoff_ancestor(actions.pool, "agent:nhaid0001")
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:nhaid0001")
     assert found is not None
     assert str(found[1][0]["id"]) == str(did)
+    assert complete is True
 
 
 # ═══ RESOLVE_HANDLE / THE INELIGIBLE-HOLDER GUARD (task #142 punch-list item 3, Thoth's

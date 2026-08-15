@@ -791,7 +791,8 @@ async def automount(
             # can carry the real parting words even when the immediate ancestor never wrote
             # one (a phantom, or simply silent) and a real one sits a hop or two further back.
             from src.orchestrator.agents import nearest_handoff_ancestor
-            handoff_found = await nearest_handoff_ancestor(actions.pool, ident.succeeded_from)
+            handoff_found, _handoff_complete = await nearest_handoff_ancestor(
+                actions.pool, ident.succeeded_from)
             handoff = None
             if handoff_found:
                 handoff_from, handoff_picks = handoff_found
