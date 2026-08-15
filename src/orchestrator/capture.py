@@ -940,6 +940,64 @@ async def find_near_duplicate_decision(
 ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token-Cost",
         "Surfaces-Roadmap-Docs", "Fleet-Hygiene", "Security")
 
+# ONE LINE PER ARC (Thoth's follow-on ask, msg 4566, decision <this build>): three separate
+# "the taxonomy is broken" findings this week — Sekhmet's own dual-fits, Imhotep's
+# independent dual-fit/no-fit rows, Thoth's own inherited framing — may all trace to the
+# same absence: NONE of the seven ever carried a definition anywhere, so an undocumented
+# boundary read as ambiguous even where the taxonomy itself was fine. Written by re-reading
+# the actual specimens that forced each boundary (not guessed): the two threads that
+# dual-fit Identity-Succession/Compaction-Resilience (29353a3a, eb767bc1 — both a specific
+# succession's own board-state/handoff note) resolve cleanly once Identity-Succession is
+# drawn as THAT EVENT's own record and Compaction-Resilience as the GENERAL mechanism any
+# session leans on, not one lineage's instance of it — see ARC_DEFINITIONS's own two entries
+# below for the drawn line. Never validated or persisted (ARCS itself stays the only closed
+# set); reference text for a mind choosing an arc, not a second schema.
+ARC_DEFINITIONS: dict[str, str] = {
+    "Identity-Succession": (
+        "An AGENT or SEAT's own identity crossing a generation — minting, lineage, "
+        "charter, handles, and the board-state/handoff note a SPECIFIC succession event "
+        "produces. NOT a SoftwareProject's identity (dedup, case-collision, fork "
+        "detection) — that has no arc yet, a named gap, not this one's job to cover."
+    ),
+    "Compaction-Resilience": (
+        "The GENERAL mechanism that lets ANY session survive losing its context window — "
+        "the offload ritual, resumability, transcript/session persistence infrastructure. "
+        "NOT one particular lineage's own handoff note (that's Identity-Succession); this "
+        "is the machinery, not an instance of using it."
+    ),
+    "Model-Identity": (
+        "Which MODEL an agent is actually running as, and the harness silently swapping "
+        "or degrading it. NOT the rest of a seat's pin file — house/seat/project belong "
+        "to Identity-Succession; this is the model field and its precedence alone."
+    ),
+    "Token-Cost": (
+        "Spend and budget — what a session or the fleet actually burns, including the "
+        "unpriced-subscription-lane gap where no local meter can see the true number."
+    ),
+    "Surfaces-Roadmap-Docs": (
+        "The fleet's own outward-facing text — CLI/MCP vocabulary alignment, docs, and "
+        "the roadmap/board rendering itself, not the underlying work those surfaces show."
+    ),
+    "Fleet-Hygiene": (
+        "Tool/ledger/graph reliability bugs — a verb that silently drops data, a lint "
+        "check, a stale-obligation sweep. The machinery's own correctness, not what it "
+        "was used to build."
+    ),
+    "Security": (
+        "Vulnerabilities, credential handling, and PII/secret exposure. Rare by design "
+        "in an internal coordination tool, not proven dead weight — no evidence either "
+        "way yet (decision 42433f6e/608b0e14)."
+    ),
+}
+for _arc_name in ARCS:
+    assert _arc_name in ARC_DEFINITIONS, f"{_arc_name!r} has no ARC_DEFINITIONS entry"
+
+
+def arc_definition(arc: str) -> str | None:
+    """The one-line boundary for `arc` — None for anything outside ARCS (never guessed)."""
+    return ARC_DEFINITIONS.get(arc)
+
+
 # THE ONE UNSORTED SENTINEL (ruling e6277013's arc-adoption follow-on, measured at 7.2%
 # fleet-wide): the same shape as offices._CHARTER_UNDECLARED — never persisted (ARCS stays
 # a closed taxonomy; this is not a legal `arc` value and never becomes one), a receipt-only
