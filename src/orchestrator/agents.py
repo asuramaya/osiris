@@ -2476,6 +2476,28 @@ async def register_agent(
                                       upcoming_project=identity.project)
             identity.agent_id = heir
             src = heir
+    if identity.succeeded_from is None:
+        # THE RECONSTRUCTION FIX (msg 4673 — operator-authorized, "work on infra and
+        # hygiene"): `succeeded_from` is written onto `identity` in
+        # exactly ONE place in this whole module — the mint branch just above, for the
+        # single turn a seam is actually detected. Every LATER call for the SAME
+        # (already-minted, already-head) agent builds a brand-new `AgentIdentity` via
+        # `resolve_identity()` (no pool, no DB access, `succeeded_from` stays its dataclass
+        # default of None) — so before this fix, any MCP server bounce or fresh connection
+        # after the one true mint turn PERMANENTLY blinded that session's own succession
+        # signal: orient()'s `if ident and ident.succeeded_from:` gate never opened again,
+        # for the rest of that agent's life, even though the Agent's own `succeeded_from`
+        # property in the graph was correct the entire time (confirmed live: new Thoth,
+        # hop distance 1 to her real predecessor, DB row correct, session-side field
+        # simply never repopulated — pure read-side loss, not a write bug). Recovered here,
+        # via the SAME primitive `nearest_handoff_ancestor`'s own walk already uses
+        # (`_succeeded_from_of`), at the one place this function already touches the DB for
+        # this exact agent — cheap (a single indexed point lookup, the same shape as
+        # `_winning_retired`/`_last_anchored_stamp` just above, not a new query class on
+        # this hot path) rather than widening `resolve_identity` with a pool it was never
+        # given. Guarded on `is None` so a genuine mint this same turn (which already set
+        # the correct value above) is never overwritten by a redundant read.
+        identity.succeeded_from = await _succeeded_from_of(actions.pool, identity.agent_id)
     if mint_because is not None and mint_because == mint_reason and (
         mint_reason in _SEAM_NOTIFY_REASONS
     ):

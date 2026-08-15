@@ -5739,6 +5739,49 @@ async def _retire_stale_handoffs(
     return {"retired": retired, "skipped_incomplete_walk": skipped}
 
 
+async def _resolve_acked_handoff_threads(
+    pool: asyncpg.Pool, actor: str, now: datetime, *, repo: str | None = None,
+) -> list[str]:
+    """A ONE-TIME BACKFILL UTILITY, NOT A LIVE TRIGGER — same shape and same reasoning as
+    `_retire_stale_handoffs` right above (Thoth msg 4673, Sekhmet's independent code-level
+    confirmation, decision 4bf6d835): `ack_handoff` did not resolve a handoff Thread's own
+    `status` until this same dispatch fixed it going forward. This cleans up the population
+    that accumulated BEFORE that fix — every Thread whose CURRENT `is_handoff` is already
+    'false' (a real, deliberate ack already happened) but whose CURRENT `status` is still
+    'open'. THE DISCRIMINATOR IS THE ACK, NEVER TIME (Thoth's binding constraint) — this
+    reads is_handoff, never `observed_at`/age, so an UNACKED handoff (unread, not stale) is
+    never touched, only ever a genuinely acknowledged one. `repo` optionally scopes to one
+    project's own `in_repo`-linked Threads (osiris, matching Sekhmet's own already-vetted
+    population); omitted, this is fleet-wide. Returns short ids resolved, for the caller's
+    own before/after re-query — never trusted from a bare count."""
+    where_repo = ""
+    args: list[Any] = []
+    if repo:
+        where_repo = (
+            " AND EXISTS (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
+            "  AND p.type='SoftwareProject' AND p.canonical=$1 "
+            "  WHERE l.from_id=o.id AND l.type='in_repo')")
+        args.append(f"repo:{repo}")
+    rows = await pool.fetch(
+        "SELECT o.id FROM objects o WHERE o.type='Thread' AND o.status='active' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='is_handoff' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " = 'false' "
+        "AND COALESCE((SELECT a2.value #>> '{}' FROM current_assertions a2 "
+        " WHERE a2.object_id=o.id AND a2.name='status' "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1), 'open') = 'open'"
+        f"{where_repo}", *args)
+    actions = Actions(pool)
+    resolved: list[str] = []
+    for r in rows:
+        tid = await capture.resolve_thread(
+            actions, str(r["id"]), because="already-acked handoff, backfilled after "
+            "ack_handoff's own status-resolution fix (msg 4673)", source=actor)
+        if tid is not None:
+            resolved.append(str(tid)[:8])
+    return resolved
+
+
 @mcp.tool()
 async def ack_handoff(
     ref: str, subagent_id: str | None = None, subagent_type: str | None = None,
@@ -5766,15 +5809,21 @@ async def ack_handoff(
     way a mail ack is never revoked for going unfollowed-up. An UNacked handoff is what
     redelivers, mail's own at-least-once shape — the correct failure mode, not a bug.
 
-    Never deleted, never inaccessible — recall()/search() see it exactly as before; only
-    succession_note and the open_threads/recent_decisions cap-exemption change."""
+    Never deleted, never inaccessible — recall()/search() see it exactly as before.
+
+    ALSO RESOLVES a Thread-shaped handoff's `status` (msg 4673, decision 4bf6d835): used to
+    stay 'open' forever after acking. `resolved` names whether this landed — always False
+    for a Decision, which has no status. Discriminator is the ack, never time."""
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
+    matched_thread = False
     try:
         oid = await _find_thread(pool, ref, require_identifier=True)
-        if oid is None:
+        if oid is not None:
+            matched_thread = True
+        else:
             oid = await _find_decision(pool, ref, require_identifier=True)
     except RefAmbiguous as exc:
         return {"error": str(exc)}
@@ -5804,7 +5853,12 @@ async def ack_handoff(
     now = datetime.now(UTC)
     await Actions(pool).assert_property(
         oid, "is_handoff", "false", actor, now, 0.9, evidence_class="self_declared")
-    return {"id": str(oid)[:8], "acknowledged": True}
+    resolved = False
+    if matched_thread:
+        resolved = await capture.resolve_thread(
+            Actions(pool), str(oid), because="acknowledged via ack_handoff",
+            source=actor) is not None
+    return {"id": str(oid)[:8], "acknowledged": True, "resolved": resolved}
 
 
 @mcp.tool()
