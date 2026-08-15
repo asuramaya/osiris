@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 from src.orchestrator.settle import (
     closure_edge_coverage,
     filed_under_check,
@@ -887,6 +887,14 @@ async def _is_handoff_value(pool: Any, short_id: str) -> str | None:
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", short_id)
 
 
+async def _status_value(pool: Any, short_id: str) -> str | None:
+    """Same current-winner discipline as `_is_handoff_value`, for a Thread's `status`."""
+    return await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='status' AND o.id::text LIKE $1 || '%' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", short_id)
+
+
 async def _succeed(actions: Actions, heir: str, predecessor: str) -> None:
     """Record a REAL succeeded_from property (heir -> predecessor), the same shape
     register_agent's own real minting path writes — needed since ack_handoff's lineage
@@ -947,7 +955,9 @@ async def test_ack_handoff_retires_a_same_lineage_handoff(actions: Actions) -> N
     await _succeed(actions, "agent:ackone-ii", "agent:ackone")
 
     out = await _ack_as(actions.pool, "agent:ackone-ii", d1)
-    assert out == {"id": d1, "acknowledged": True}
+    # resolved is False: d1 is a Decision, which has no `status` to resolve — a clean no-op
+    # on the Thread-only resolve_thread call, not a failure of this fix.
+    assert out == {"id": d1, "acknowledged": True, "resolved": False}
     assert await _is_handoff_value(actions.pool, d1) == "false"
 
 
@@ -984,7 +994,7 @@ async def test_ack_handoff_succeeds_across_an_id_format_change(actions: Actions)
     await _succeed(actions, "agent:ackformat-g40-g40", "agent:ackformat-iii")
 
     out = await _ack_as(actions.pool, "agent:ackformat-g40-g40", d1)
-    assert out == {"id": d1, "acknowledged": True}
+    assert out == {"id": d1, "acknowledged": True, "resolved": False}  # d1 is a Decision
     assert await _is_handoff_value(actions.pool, d1) == "false"
 
 
@@ -1119,6 +1129,98 @@ async def test_retire_stale_handoffs_skips_a_candidate_with_a_truncated_walk(
     assert deep_id in receipt["skipped_incomplete_walk"]
     assert deep_id not in receipt["retired"]
     assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched
+
+
+# ═══ _resolve_acked_handoff_threads — the retroactive backfill, msg 4673/decision 4bf6d835 ═══
+# ack_handoff's own status-resolution fix (this same dispatch) only covers FUTURE acks; this
+# is the one-time cleanup for the population that accumulated before it existed. Same shape
+# and reasoning as _retire_stale_handoffs right above it: manual, never a live trigger.
+
+async def test_resolve_acked_handoff_threads_resolves_an_already_acked_open_thread(
+    actions: Actions,
+) -> None:
+    """THE EXACT SPECIMEN THIS FIX EXISTS FOR: is_handoff already 'false' (a real ack
+    already happened, simulated here by writing it directly — as it would have, before
+    ack_handoff itself resolved the status), status still 'open'. THE DISCRIMINATOR IS THE
+    ACK, never time — this thread's own creation timestamp is irrelevant to the query."""
+    from src import mcp_server as srv
+
+    tid = await open_thread(actions, "already-acked, still open — the backfill's own target",
+                            kind="obligation", source="agent:backfillone")
+    await actions.assert_property(tid, "is_handoff", "true", "agent:backfillone",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    # the ack, pre-fix shape: is_handoff flips, status never does (simulating history)
+    await actions.assert_property(tid, "is_handoff", "false", "agent:backfillone-ii",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    short = str(tid)[:8]
+    assert await _status_value(actions.pool, short) == "open"
+
+    resolved = await srv._resolve_acked_handoff_threads(
+        actions.pool, "agent:backfiller", datetime.now(UTC))
+    assert short in resolved
+    assert await _status_value(actions.pool, short) == "resolved"
+
+
+async def test_resolve_acked_handoff_threads_leaves_an_unacked_handoff_open(
+    actions: Actions,
+) -> None:
+    """AN UNACKED HANDOFF IS NOT STALE, IT IS UNREAD — the whole binding constraint (msg
+    4673: "the discriminator is the ack, never time"). This must never be swept in."""
+    from src import mcp_server as srv
+
+    tid = await open_thread(actions, "unacked — must stay open no matter how old",
+                            kind="obligation", source="agent:backfillunread")
+    await actions.assert_property(tid, "is_handoff", "true", "agent:backfillunread",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    short = str(tid)[:8]
+
+    resolved = await srv._resolve_acked_handoff_threads(
+        actions.pool, "agent:backfiller", datetime.now(UTC))
+    assert short not in resolved
+    assert await _status_value(actions.pool, short) == "open"
+
+
+async def test_resolve_acked_handoff_threads_ignores_an_already_resolved_one(
+    actions: Actions,
+) -> None:
+    """Idempotent: a thread already resolved (by an earlier backfill run, or the live
+    ack_handoff fix) is not re-touched or double-counted."""
+    from src import mcp_server as srv
+
+    tid = await open_thread(actions, "already resolved before this run",
+                            kind="obligation", source="agent:backfilldone")
+    await actions.assert_property(tid, "is_handoff", "false", "agent:backfilldone",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await resolve_thread(actions, str(tid), because="already closed")
+    short = str(tid)[:8]
+
+    resolved = await srv._resolve_acked_handoff_threads(
+        actions.pool, "agent:backfiller", datetime.now(UTC))
+    assert short not in resolved  # the query's own status='open' filter excludes it
+
+
+async def test_resolve_acked_handoff_threads_can_scope_to_one_repo(actions: Actions) -> None:
+    """`repo` scopes the backfill to one project's in_repo-linked Threads — the safe,
+    house-boundary-respecting shape (Sekhmet's own already-vetted osiris population, msg
+    4673), never a blind fleet-wide sweep unless explicitly asked for."""
+    from src import mcp_server as srv
+
+    in_scope = await open_thread(actions, "acked, in the scoped repo",
+                                 repo="backfillrepo", kind="obligation",
+                                 source="agent:backfillscoped")
+    out_of_scope = await open_thread(actions, "acked, a DIFFERENT repo entirely",
+                                     repo="backfillother", kind="obligation",
+                                     source="agent:backfillscoped")
+    for tid in (in_scope, out_of_scope):
+        await actions.assert_property(tid, "is_handoff", "false", "agent:backfillscoped",
+                                      datetime.now(UTC), 0.9, evidence_class="self_declared")
+    in_short, out_short = str(in_scope)[:8], str(out_of_scope)[:8]
+
+    resolved = await srv._resolve_acked_handoff_threads(
+        actions.pool, "agent:backfiller", datetime.now(UTC), repo="backfillrepo")
+    assert in_short in resolved
+    assert out_short not in resolved
+    assert await _status_value(actions.pool, out_short) == "open"  # untouched, different repo
 
 
 # ═══ misfiled_by_lineage — #145's discovery half (decision b89477a0/61cb1f02) ═══
@@ -1259,10 +1361,13 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
         threads_open=[{"summary": "ackcross's own thread-shaped handoff",
                        "kind": "obligation", "is_handoff": True}])
     t1 = gen1["accepted"]["threads_opened"][0]["id"]
+    assert await _status_value(actions.pool, t1) == "open"  # baseline, before the ack
     await _succeed(actions, "agent:ackcross-ii", "agent:ackcross")
     out = await _ack_as(actions.pool, "agent:ackcross-ii", t1)
     assert out["acknowledged"] is True
+    assert out["resolved"] is True  # the Thread half of this fix (msg 4673)
     assert await _is_handoff_value(actions.pool, t1) == "false"
+    assert await _status_value(actions.pool, t1) == "resolved"
 
     gen2 = await _settle_as(
         actions.pool, "agent:ackcross-ii",
@@ -1272,6 +1377,7 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
     await _succeed(actions, "agent:ackcross-iii", "agent:ackcross-ii")
     out2 = await _ack_as(actions.pool, "agent:ackcross-iii", d2)
     assert out2["acknowledged"] is True
+    assert out2["resolved"] is False  # a Decision has no status to resolve — clean no-op
     assert await _is_handoff_value(actions.pool, d2) == "false"
 
 
