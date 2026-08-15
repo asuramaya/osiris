@@ -527,6 +527,13 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 # and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
 # snippet still headlines with the OR query, and grade × recency weigh exactly as the
 # strict door does.
+#
+# `n AS MATERIALIZED` IS LOAD-BEARING (measured, not stylistic): `n` is a single-row count
+# referenced only inside SubPlan 3's per-candidate rank calc, so PG's once-referenced-CTE
+# heuristic auto-inlines it — re-executing count(*) FROM corpus per candidate row instead of
+# once. Live EXPLAIN ANALYZE: 397s total, 332s of it this one CTE re-scanning corpus 20,003
+# times (213M temp-read buffers). The per-row to_tsvector() build (`corpus`) and `df` cost
+# under 4s combined — real at scale, but not this query's actual villain.
 _RELAX_SQL = (
     "WITH words AS (SELECT DISTINCT lower(w) AS w FROM unnest($1::text[]) AS w), "
     "corpus AS ("
@@ -536,7 +543,7 @@ _RELAX_SQL = (
     "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
     "   AND o.status = 'active' "
     "  WHERE a.name IN (" + _FTS_FIELDS + ")), "
-    "n AS (SELECT count(*)::float + 1 AS total FROM corpus), "
+    "n AS MATERIALIZED (SELECT count(*)::float + 1 AS total FROM corpus), "
     "df AS (SELECT w.w, count(*) + 1 AS d FROM words w "
     "       JOIN corpus c ON c.tv @@ plainto_tsquery('english', w.w) GROUP BY w.w), "
     "cand AS ("
