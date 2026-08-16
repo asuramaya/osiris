@@ -27,6 +27,7 @@ from src.cli import (
     cmd_annotate_thread,
     cmd_attach,
     cmd_boot_status,
+    cmd_bootstrap,
     cmd_charter_for,
     cmd_deploy,
     cmd_fold_project,
@@ -2097,3 +2098,47 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     assert "next: osiris launch Henry" in text
     assert workspace.is_dir()
     assert (workspace / ".osiris").read_text() == 'project = "Henry"\n'
+
+
+async def test_cli_parser_accepts_bootstrap(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["bootstrap", "/tmp/some-project"])
+    assert args.command == "bootstrap"
+    assert args.path == "/tmp/some-project"
+    assert args.project is None and args.actor == "console"
+
+    named = parser.parse_args(
+        ["bootstrap", "/tmp/some-project", "--project", "Custom", "--actor", "operator"])
+    assert named.project == "Custom" and named.actor == "operator"
+
+
+async def test_cmd_bootstrap_ingests_memory_and_registers_the_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#135 deliverable 3's last missing verb — the console-script door onto the SAME
+    bootstrap_project the MCP `bootstrap` tool wraps, no duplicated logic."""
+    import io
+    from contextlib import redirect_stdout
+
+    project_dir = tmp_path / "some-project"
+    project_dir.mkdir()
+    (project_dir / "CLAUDE.md").write_text(
+        "# CLAUDE.md — build log\n\n## 2026-08-16\nFirst entry.\n")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_bootstrap(str(project_dir), project=None, actor="console",
+                                  pool=actions.pool)
+
+    assert out == 0
+    text = buf.getvalue()
+    assert "project=some-project" in text
+    assert "entries=" in text
+    assert "CLAUDE.md" in text
+
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        "repo:some-project")
+    assert row is not None

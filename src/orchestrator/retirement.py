@@ -25,6 +25,35 @@ from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 
+async def list_assertions(actions: Actions, *, ref: str, name: str) -> dict[str, Any]:
+    """READ-ONLY (task #157/#382067d9's own gap): retire_assertion needs a `superseded_id`
+    — an assertions.id — and until this, NOTHING exposed one. dossier()/trace_evidence()
+    both resolve through current_assertions to a single belief-winner or a bare value list;
+    neither ever surfaced the row id underneath. This is the smallest possible door: every
+    CURRENT (non-superseded) assertion of `name` on the object `ref` resolves to, each
+    carrying its own `id` — exactly what retire_assertion's own required argument needs,
+    with nothing else layered on (no write, no ranking, no bulk scope)."""
+    name = (name or "").strip()
+    if not name:
+        return {"error": "name is required"}
+    pool = actions.pool
+    object_id = await resolve_ref(pool, ref)
+    if object_id is None:
+        return {"error": f"no object matches {ref!r}"}
+    rows = await pool.fetch(
+        "SELECT id, value, source_id, confidence, observed_at FROM current_assertions "
+        "WHERE object_id=$1 AND name=$2 ORDER BY confidence DESC, observed_at DESC",
+        object_id, name)
+    return {
+        "ref": ref, "object_id": str(object_id), "name": name,
+        "assertions": [
+            {"id": r["id"], "value": r["value"], "source": r["source_id"],
+             "confidence": r["confidence"], "observed_at": r["observed_at"].isoformat()}
+            for r in rows
+        ],
+    }
+
+
 async def retire_assertion(
     actions: Actions, *, ref: str, name: str, superseded_id: int, value: Any,
     because: str, actor: str,
