@@ -23,7 +23,14 @@ already uses"), applied here to recall() instead, since that is Decision/Thread'
 equivalent surface, not a listing composition. annotate_thread's `note:%` rows carried the
 IDENTICAL gap (verified: zero callers of `thread_notes` anywhere outside tests, same as
 `decision_addenda` before this fix) — fixed in the same pass since both live in this same
-function, not a second, separate defect worth leaving half-mended right next to the first."""
+function, not a second, separate defect worth leaving half-mended right next to the first.
+
+BEARS_ON'S OWN READ-BACK (898840dc, Thoth msg 4828): a Thread's `bears_on_from` list is
+every live `answers` edge FROM a Decision INTO it (mint_bears_on's own edge) - decisions
+that speak to this row without having closed it, oldest first. Scoped to recall() only,
+not orient()'s summary view: this is a per-object query, appropriate for the one-thread-
+at-a-time surface, not for a per-session listing that would multiply it by every open
+thread on the board."""
 from __future__ import annotations
 
 import re
@@ -94,6 +101,24 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         from src.orchestrator.capture import thread_notes
         notes = await thread_notes(pool, oid)
         record["notes"] = [{**n, "observed_at": n["observed_at"].isoformat()} for n in notes]
+        # THE MEASURER'S MOMENT'S OWN READ-BACK (898840dc/e123b9fa): mint_bears_on() mints
+        # an `answers` edge from a fresh Decision onto exactly the stale row it speaks to,
+        # WITHOUT closing it — but nothing ever read that edge back onto the thread's own
+        # surface, so a reader recalling this row had no way to see "N decisions already
+        # speak to this" and could re-measure something already answered (the exact shape
+        # four of six stale board rows turned out to be, Seshat's own sweep). Live edges
+        # only (valid_until IS NULL) — an unmerge/retraction must not go on citing a row.
+        bearers = await pool.fetch(
+            "SELECT d.id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS summary "
+            "FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
+            "WHERE l.to_id=$1 AND l.type='answers' AND l.valid_until IS NULL "
+            "ORDER BY d.created_at", oid)
+        record["bears_on_from"] = [
+            {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]}
+            for r in bearers]
     elif otype == "Decision":
         from src.orchestrator.capture import decision_addenda
         addenda = await decision_addenda(pool, oid)
