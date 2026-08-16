@@ -1957,21 +1957,26 @@ async def cmd_new(
 # --- bootstrap ---------------------------------------------------------------------------------
 
 async def cmd_bootstrap(
-    path: str, *, project: str | None, actor: str, pool: asyncpg.Pool | None = None,
+    cwd: str, *, project: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris bootstrap <path> [--project P] [--actor <who>] — the console-script door
-    onto bootstrap.bootstrap_project, the SAME function the `bootstrap` MCP tool wraps.
-    #135 deliverable 3's last of three missing verbs (decision 3db8832c): a no-ctx,
-    explicit-string-arg function, same shape as mint-seat/new's own CLI doors, undoored
-    until now for no architectural reason.
+    """osiris bootstrap <cwd> [--project P] [--actor <who>] — the console-script door
+    onto bootstrap.bootstrap_project, the SAME function the `bootstrap` MCP tool wraps —
+    same name, same first param name (`cwd`, matching the MCP tool's own signature
+    exactly rather than a synonym like `path`, per the CLI/MCP parity law, decision
+    0b29f1cbcc5a). #135 deliverable 3's last of three missing verbs (decision 3db8832c):
+    a no-ctx, explicit-string-arg function, same shape as mint-seat/new's own CLI doors,
+    undoored until now for no architectural reason.
 
-    Migrates `path`'s markdown MEMORY (CLAUDE.md build log / DESIGN.md / memory essays)
+    Migrates `cwd`'s markdown MEMORY (CLAUDE.md build log / DESIGN.md / memory essays)
     into the graph as retrieval-sized Reference nodes and registers the SoftwareProject —
     it does NOT touch the project's files (no hands); it prints a suggested boot-sector
     CLAUDE.md for a human or that project's own agent to review and write. `--actor`
     stamps every write this call makes (the registration and every ingested log entry),
     same default-to-console pattern as mint-seat/new (a raw terminal call already carries
-    operator authority by construction — see `_CONSOLE_ACTOR`'s own comment)."""
+    operator authority by construction — see `_CONSOLE_ACTOR`'s own comment). `--project`
+    is CLI-only (declared in CLI_ONLY_PARAMS): bootstrap_project itself takes this
+    override, the MCP tool's own wrapper simply never exposes it — a gap on that side,
+    not an inconsistency to paper over here."""
     from src.actions.core import Actions
     from src.orchestrator.bootstrap import bootstrap_project
 
@@ -1990,7 +1995,7 @@ async def cmd_bootstrap(
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
-        out = await bootstrap_project(Actions(pool), path, project=project, source=actor)
+        out = await bootstrap_project(Actions(pool), cwd, project=project, source=actor)
     finally:
         if owns_pool:
             await pool.close()
@@ -2319,9 +2324,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "    osiris bootstrap ~/code/some-project\n"
             "example, naming the project explicitly:\n"
             "    osiris bootstrap ~/code/some-project --project some-project")
-    p_bootstrap.add_argument("path", help="the project's directory on disk")
+    p_bootstrap.add_argument("cwd", help="the project's directory on disk")
     p_bootstrap.add_argument("--project", default=None,
-                             help="defaults to the directory's own basename")
+                             help="defaults to the directory's own basename — CLI-only, "
+                                  "the MCP tool always infers it")
     p_bootstrap.add_argument("--actor", default=_CONSOLE_ACTOR,
                              help=f"who is performing this act — defaults to "
                                   f"{_CONSOLE_ACTOR!r}")
@@ -2383,7 +2389,7 @@ def main(argv: list[str] | None = None) -> int:
             args.handle, args.path, project=args.project, model=args.model,
             actor=args.actor))
     if args.command == "bootstrap":
-        return asyncio.run(cmd_bootstrap(args.path, project=args.project, actor=args.actor))
+        return asyncio.run(cmd_bootstrap(args.cwd, project=args.project, actor=args.actor))
     return 2  # pragma: no cover - every real subparser choice is handled above; argparse
     # itself refuses anything not in `sub.choices`, so this is unreachable in practice
 

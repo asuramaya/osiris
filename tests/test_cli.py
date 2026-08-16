@@ -2106,7 +2106,7 @@ async def test_cli_parser_accepts_bootstrap(actions: Actions) -> None:
     parser = _build_parser()
     args = parser.parse_args(["bootstrap", "/tmp/some-project"])
     assert args.command == "bootstrap"
-    assert args.path == "/tmp/some-project"
+    assert args.cwd == "/tmp/some-project"
     assert args.project is None and args.actor == "console"
 
     named = parser.parse_args(

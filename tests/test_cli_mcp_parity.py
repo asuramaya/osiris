@@ -67,6 +67,9 @@ CLI_ONLY_PARAMS = {
     ("mint-seat", "adopt"): "deliberate console-only escape hatch, stated explicitly in "
         "mint_seat's own MCP docstring (dispatch 3678 addendum, msg 3681)",
     ("mint-seat", "force"): "deliberate console-only escape hatch, same docstring",
+    ("bootstrap", "project"): "bootstrap_project itself takes this override; the MCP "
+        "tool's own wrapper never exposes it, always inferring from cwd's basename — a "
+        "gap on that side, not an inconsistency to hide here",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
