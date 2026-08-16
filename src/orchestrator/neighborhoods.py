@@ -147,6 +147,13 @@ async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict
 _CENSUS_SKIP = {".claude", "node_modules", ".venv", "venv", "__pycache__"}
 
 
+def _path_gone(path: str | None) -> bool:
+    """A plain sync wrapper so `census_trees` (async) never calls a blocking Path method
+    inline (ASYNC240, this codebase's own ruff gate) — no recorded path at all counts as
+    gone too (nothing to have moved from)."""
+    return not path or not Path(path).exists()
+
+
 def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
     """Every git repository under the census roots (bounded walk, sync disk IO).
 
@@ -217,8 +224,27 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     assertion at all — absence stays absence, never a persisted null standing in for
     "checked, found nothing" (60bc15db: a reader downstream must be able to tell
     "no signal" from "confirmed empty", and skipping the write is how that distinction
-    survives here)."""
-    from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo
+    survives here).
+
+    THE LOCATION FIX (obligation e5b0ece4, decision fa0eb021, Thoth's dispatch msg 4762):
+    a RENAMED directory fails the name lookup above and, before this fix, minted a
+    DUPLICATE SoftwareProject rather than reconnecting to the one that already existed
+    under its old name. When name lookup finds nothing but the directory has a real
+    remote_url, this now tries that remote_url as a second signal: an unambiguous match
+    (exactly one active SoftwareProject already carrying it) reconnects — updating only
+    `on_disk_path`/`remote_url` on the EXISTING object; more than one match refuses per
+    entry rather than guessing. THE BINDING LINE, not a preference: this carries LOCATION
+    forward and never RE-DERIVES IDENTITY — `name`/`canonical` stay `rename_project`'s own
+    deliberate act (1db1ff41), the same discipline that closed 13af22fc's phantom-repo
+    defect. Reconnect is additionally gated on the OLD on_disk_path being confirmed GONE
+    (or never having been recorded) — a live old path means this is a COPY of a working
+    tree, not a MOVE, and a copy must mint its own object rather than steal another
+    checkout's identity. ONE WALK, loud receipt (`reconnected` in the return dict): the
+    same idempotent 10-minute cadence that already bounds on_disk_path staleness bounds a
+    missed reconnect too, and a bad reconnect can't reach the graph in the first place
+    because the ambiguous case above refuses outright — a second confirmation walk would
+    buy no correctness gain here, only latency."""
+    from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo, _resolve_repo_by_remote
     from src.orchestrator.project_identity import _git_remote
 
     observed = datetime.now(UTC)
@@ -226,12 +252,58 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     minted: list[str] = []
     pathed: list[str] = []
     remoted: list[str] = []
+    reconnected: list[str] = []
     refused: list[dict[str, str]] = []
     known = 0
     for repo in _git_dirs(roots):
         name = repo.name
         _, remote_url = _git_remote(str(repo))
         existing = await _resolve_repo(actions.pool, name)
+        if existing is None and remote_url:
+            # THE LOCATION FIX (obligation e5b0ece4, decision fa0eb021): a renamed directory
+            # fails the name lookup above and would otherwise mint a DUPLICATE. Try the
+            # remote_url as a second signal before minting. THE BINDING LINE (Thoth, msg
+            # 4762): this carries LOCATION forward and never RE-DERIVES IDENTITY — only
+            # on_disk_path/remote_url move here; name/canonical stay rename_project's own
+            # deliberate act (1db1ff41). Unambiguous match → reconnect. More than one
+            # candidate → refuse per entry, never guess (577988ed inverted for identity).
+            candidates = await _resolve_repo_by_remote(actions.pool, remote_url)
+            if len(candidates) > 1:
+                refused.append({
+                    "name": name, "path": str(repo),
+                    "reason": f"ambiguous remote_url match: {len(candidates)} active "
+                    "SoftwareProjects already carry this remote — refusing to guess which "
+                    "one this directory reconnects to (a human/seat declaration is needed, "
+                    "same doctrine as fork_project)",
+                })
+                continue
+            if len(candidates) == 1:
+                candidate = candidates[0]
+                old_path = await actions.pool.fetchval(
+                    "SELECT a.value #>> '{}' FROM current_assertions a "
+                    "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", candidate)
+                if old_path == str(repo):
+                    # ALREADY reconnected here on a prior walk — the object's own `name`
+                    # deliberately never moved to match the directory (the binding line),
+                    # so a name lookup will keep missing forever; recognize this exact
+                    # location as KNOWN rather than re-walking the move/copy gate below on
+                    # every future census (idempotency for the reconnected case).
+                    existing = candidate
+                # GATE (a), Thoth's binding lean: reconnect only once the OLD path is
+                # confirmed gone — that's what keeps a COPY (two live checkouts of one
+                # remote) from being misread as a MOVE. No recorded path at all is not a
+                # copy risk either, so it clears the gate too.
+                elif _path_gone(old_path):
+                    await actions.assert_property(
+                        candidate, "on_disk_path", str(repo), "disk-census",
+                        observed, 0.9, evidence_class=ec)
+                    await actions.assert_property(
+                        candidate, "remote_url", remote_url, "disk-census",
+                        observed, 0.9, evidence_class=ec)
+                    reconnected.append(name)
+                    continue
+                # else: the OLD path still exists — this is a COPY, not a MOVE; falls
+                # through to mint its own object rather than steal the original's identity.
         if existing is None:
             try:
                 obj = await _mint_or_find_repo(actions, name, observed, source="disk-census",
@@ -266,7 +338,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                                               "disk-census", observed, 0.9, evidence_class=ec)
                 remoted.append(name)
     return {"known": known, "minted": minted, "pathed": pathed, "remoted": remoted,
-            "refused": refused}
+            "reconnected": reconnected, "refused": refused}
 
 
 async def neighborhoods_of(

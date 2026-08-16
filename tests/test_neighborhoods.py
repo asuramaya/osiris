@@ -194,6 +194,101 @@ async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change
     assert healed_url == "git@newhost:x/withremote.git"
 
 
+async def test_census_trees_reconnects_a_renamed_directory_by_remote_url(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """CREATE-SHAPE's location half (obligation e5b0ece4, decision fa0eb021, Thoth msg
+    4762): a renamed directory fails the name lookup and, pre-fix, minted a DUPLICATE
+    SoftwareProject rather than reconnecting to the one that already existed. An
+    unambiguous remote_url match now reconnects the EXISTING object — only on_disk_path/
+    remote_url move; name/canonical never change (THE BINDING LINE: this carries LOCATION
+    forward and never RE-DERIVES IDENTITY — that stays rename_project's own deliberate
+    act, 1db1ff41)."""
+    import shutil
+
+    from src.orchestrator.neighborhoods import census_trees
+    old_path = _real_git_repo(tmp_path, "oldname", "git@github.com:x/thing.git")
+
+    first = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert first["minted"] == ["oldname"]
+    proj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:oldname'")
+
+    new_path = tmp_path / "code" / "newname"
+    shutil.move(str(old_path), str(new_path))
+
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["reconnected"] == ["newname"]
+    assert out["minted"] == []
+    assert out["refused"] == []
+
+    row = await actions.pool.fetchrow(
+        "SELECT o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='name' LIMIT 1) AS name, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='on_disk_path' LIMIT 1) AS path "
+        "FROM objects o WHERE o.id=$1", proj_id)
+    assert row["canonical"] == "repo:oldname"  # identity untouched
+    assert row["name"] == "oldname"
+    assert row["path"] == str(new_path)  # location carried forward
+    only_one = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND status='active'")
+    assert only_one == 1  # no twin minted under the new basename
+
+    # idempotent: a third walk over the settled state writes nothing further
+    again = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert again["reconnected"] == [] and again["minted"] == []
+    assert again["known"] == 1
+
+
+async def test_census_trees_refuses_an_ambiguous_remote_url_match(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """More than one active SoftwareProject already carries the SAME remote_url — an
+    un-repointed fork is exactly this shape (the local-git-fork-detection blind spot,
+    #144 Rule 2). Refuses per entry rather than guessing which one a renamed directory
+    reconnects to, the same doctrine as fork_project (declared, never inferred)."""
+    from src.orchestrator.neighborhoods import census_trees
+    remote = "git@github.com:x/shared.git"
+    a = await actions.create_or_find_object("SoftwareProject", "repo:proj-a", "analyst:test")
+    await actions.assert_property(a, "remote_url", remote, "analyst:test",
+                                  datetime.now(UTC), 0.9)
+    b = await actions.create_or_find_object("SoftwareProject", "repo:proj-b", "analyst:test")
+    await actions.assert_property(b, "remote_url", remote, "analyst:test",
+                                  datetime.now(UTC), 0.9)
+
+    _real_git_repo(tmp_path, "mystery", remote)
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["minted"] == [] and out["reconnected"] == []
+    assert [r["name"] for r in out["refused"]] == ["mystery"]
+    assert "ambiguous remote_url" in out["refused"][0]["reason"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE canonical='repo:mystery'") is None
+
+
+async def test_census_trees_does_not_reconnect_a_live_copy_of_an_existing_checkout(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """GATE (a), Thoth's binding lean (msg 4762): reconnect only once the OLD on_disk_path
+    is confirmed GONE. A second, independent clone of the same remote sitting ALONGSIDE
+    the first — a COPY, not a MOVE — must mint its own object rather than steal the first
+    checkout's identity, even though its remote_url matches."""
+    from src.orchestrator.neighborhoods import census_trees
+    remote = "git@github.com:x/thing.git"
+    _real_git_repo(tmp_path, "original", remote)
+    first = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert first["minted"] == ["original"]
+
+    _real_git_repo(tmp_path, "second-checkout", remote)  # original still on disk
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["minted"] == ["second-checkout"]
+    assert out["reconnected"] == []
+    assert out["refused"] == []
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND status='active'") == 2
+
+
 def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
     tmp_path: Path,
 ) -> None:
