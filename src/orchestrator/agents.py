@@ -33,7 +33,7 @@ from typing import Any
 
 import asyncpg
 
-from src.actions.core import ActionError, Actions
+from src.actions.core import Actions
 from src.ingest.harness import ModelReading
 from src.ingest.sessions import (
     _job_id,
@@ -1772,44 +1772,6 @@ async def invalidate_works_in(
             "still_working_in": remaining, "because": because}
 
 
-async def _normalize_project_label_through_merge(
-    actions: Actions, label: str,
-) -> tuple[str, str | None]:
-    """Resolve a project label through `merged_into` to its current survivor's live
-    label (obligation a980aff2, henry->shellbiz): a seat's `.osiris` pin naming a label
-    that has since been FOLDED into another must compare as the SURVIVOR, the same live
-    label `_write_attribution`'s own in_repo-edge lookup already reports for the write
-    side — otherwise every fold produces a permanent false 'disagrees', the henry/shellbiz
-    defect. Walks with `Actions.resolve_object_id` (actions/core.py) — the SAME chain-walk
-    every other merge-aware reader already trusts, not a re-derivation.
-
-    Never guesses: the label names its own SoftwareProject by EXACT canonical only
-    (case-insensitive, matching `_resolve_or_mint_project`'s own lookup) — no string
-    similarity, no directory-name fallback (13af22fc's phantom-repo defect). A label that
-    names no object, or one that's already live (not merged), returns itself unchanged,
-    second element None. A chain too deep to resolve (a cycle) is NEVER silently picked
-    through — the original label comes back untouched alongside a confession string for
-    the caller to surface, never a guessed winner (this house names disagreement, it
-    never crowns a side)."""
-    from src.orchestrator.project_identity import _live_label
-
-    row = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' "
-        "AND lower(canonical) = lower($1)", f"repo:{label}")
-    if row is None:
-        return label, None
-    try:
-        winner = await actions.resolve_object_id(row["id"])
-    except ActionError:
-        return label, (f"merge chain for {label!r} could not be resolved (broken/cyclic "
-                       "merged_into edge) — compared unnormalized rather than guessing a "
-                       "winner")
-    if winner == row["id"]:
-        return label, None
-    canon = await actions.pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
-    return await _live_label(actions.pool, winner, canon), None
-
-
 async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID:
     """Find-or-create a SoftwareProject CASE-INSENSITIVELY on its bare label (thread
     69911d0c): both mint_heir and register_agent used to call
@@ -2660,9 +2622,12 @@ async def register_agent(
             merge_confession: str | None = None
             if identity.project:
                 try:
+                    from src.orchestrator.project_identity import (
+                        _normalize_project_label_through_merge,
+                    )
                     project_label, merge_confession = (
                         await _normalize_project_label_through_merge(
-                            actions, identity.project))
+                            actions.pool, identity.project))
                 except Exception as exc:  # noqa: BLE001 — see note above
                     logger.warning("merge-normalization failed for %r: %r",
                                    identity.project, exc)

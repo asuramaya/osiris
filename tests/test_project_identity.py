@@ -266,6 +266,58 @@ async def test_write_attribution_ignores_a_healed_invalidated_edge(
     assert ev["candidates"]["healproj"]["write_attribution"]["count"] == 1
 
 
+async def test_pin_naming_a_folded_label_normalizes_to_the_survivor(
+    actions: Actions, tmp_path,
+) -> None:
+    """Decision 540007ca's sibling finding, confirmed independently by Till on the real
+    ramstein fold: a seat's `.osiris` pin naming a label that has since been FOLDED into
+    another used to show up as its OWN stale candidate — pin_match true only against
+    itself, declared_charter (which already reads live labels) landing on the SURVIVOR
+    instead, remote_agrees reading the LOSER's own frozen on_disk_path/remote_url
+    (fold_project moves edges, never properties) — so 'agreement' read 'disagree' even
+    after the operator corrected the pin to the right lowercase spelling. The pin must
+    normalize through merged_into the same way write_attribution's own labels already
+    do."""
+    from src.orchestrator.projects import fold_project
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "RAMstein"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Foldpinseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:f01dp1n1")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:f01dp1n1")
+    # no on_disk_path on the dupe — fold_project's _contradicting_properties refuses a
+    # fold across two genuinely differing property values, and the point here is the
+    # PIN normalization, not re-proving that guard (test_projects.py already does).
+    dupe = await _mk_project(actions, "RAMstein")
+    survivor = await _mk_project(actions, "ramstein",
+                                 on_disk_path=_git_repo(tmp_path, "ramstein-repo",
+                                                        "https://github.com/x/ramstein.git"))
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, survivor, "governs", "test", datetime.now(UTC), 0.9)
+    t = await actions.create_or_find_object("Thread", "thread:foldpin0001", "test")
+    await actions.create_link(t, survivor, "in_repo", "agent:f01dp1n1",
+                              datetime.now(UTC), 0.9)
+
+    out = await fold_project(actions, dupe="RAMstein", into="ramstein",
+                             evidence="operator confirmed the same repo", actor="agent:test")
+    assert out["folded"] == "repo:RAMstein"
+    assert dupe  # the dupe id is still valid to reference, just merged now
+
+    ev = await project_identity_evidence(actions.pool, seat_id=seat["seat_id"])
+
+    assert list(ev["candidates"]) == ["ramstein"], (
+        "the pin's stale label surfaced as its own candidate instead of normalizing")
+    c = ev["candidates"]["ramstein"]
+    assert c["pin_match"] is True
+    assert c["declared_charter"] is True
+    assert c["remote_agrees"] is True
+    assert ev["agreement"] == "single-candidate"
+    assert "pin_merge_confession" not in ev
+
+
 async def test_self_authored_reports_existence_only_never_content(
     actions: Actions, tmp_path,
 ) -> None:

@@ -481,12 +481,24 @@ async def _move_project_estate(
     _PROJECT_ESTATE_LINK_TYPES edge on `dupe_oid` re-points to `into_oid` (idempotent —
     a link already live to `into_oid` is never duplicated); `agent_mounts.project` is
     re-addressed the same way. Never calls merge_objects — that stays each caller's own
-    decision about whether a merge should happen at all."""
+    decision about whether a merge should happen at all.
+
+    A MOVE, NOT A DECLARATION (decision 540007ca — the ramstein write-attribution
+    specimen): the re-pointed edge carries over the ORIGINAL edge's own `source_id`,
+    `confidence`, and `evidence_class` rather than being stamped as a fresh SELF_DECLARED
+    assertion by whoever ran the fold. The prior version passed `actor`/`_CONF`/`_EC`
+    into `create_link`, which silently reattributed every moved edge to the fold's own
+    actor — a MOVE was being written as a DECLARATION, and every reader keyed on
+    `source_id` (write-attribution's own lineage filter chief among them) lost the
+    original writer permanently, with no way for any read-side fix to recover it after
+    the fact. `actor` is passed to `invalidate_link` only, where it correctly records WHO
+    performed the fold — that act really is the fold's own, unlike the edge's authorship."""
     moved: dict[str, int] = {}
     for link_type in _PROJECT_ESTATE_LINK_TYPES:
         rows = await actions.pool.fetch(
-            "SELECT from_id AS oid FROM links WHERE to_id=$1 AND type=$2 "
-            "AND (valid_until IS NULL OR valid_until > now())", dupe_oid, link_type)
+            "SELECT from_id AS oid, source_id, confidence, evidence_class FROM links "
+            "WHERE to_id=$1 AND type=$2 AND (valid_until IS NULL OR valid_until > now())",
+            dupe_oid, link_type)
         n = 0
         for r in rows:
             exists = await actions.pool.fetchval(
@@ -495,8 +507,14 @@ async def _move_project_estate(
                 r["oid"], into_oid, link_type)
             await actions.invalidate_link(r["oid"], dupe_oid, link_type, actor, now)
             if not exists:
-                await actions.create_link(r["oid"], into_oid, link_type, actor, now, _CONF,
-                                          evidence_class=_EC)
+                # source_id/confidence/evidence_class carry the ORIGINAL writer's belief
+                # attribution forward; `actor` (the fold's own executor) is passed
+                # separately so the audit trail still records who performed THIS write —
+                # the two are different questions and this is the only line where the
+                # fold's actor belongs at all.
+                await actions.create_link(
+                    r["oid"], into_oid, link_type, r["source_id"], now, r["confidence"],
+                    evidence_class=r["evidence_class"], actor=actor)
             n += 1
         if n:
             moved[link_type] = n
