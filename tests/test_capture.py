@@ -29,6 +29,7 @@ from src.orchestrator.capture import (
     held_work_overlap,
     link_repo,
     measurement_smell,
+    mint_bears_on,
     open_held_work,
     open_thread,
     prior_art_from_hits,
@@ -3789,6 +3790,200 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
         assert matched[earlier_one["id"]] == "true"
         assert matched["not-a-real-decision-xyz"] == "false"
         assert len(mixed["rediscovers"]) == 1
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_mint_bears_on_cites_a_thread_without_touching_its_status(
+    actions: Actions,
+) -> None:
+    """THE MEASURER'S MOMENT HAS A VERB (thread 898840dc, decision e123b9fa): `mint_bears_on`
+    mints the SAME `answers` edge `resolves=` mints, but by construction — a separate
+    function, never threaded through record_decision's own atomic transaction — it cannot
+    touch `status`. Idempotent: a second mint of the same pair returns False and creates no
+    duplicate edge (the receipt-honesty law, 42176e16: an already-linked pair must never
+    look identical to a fresh one)."""
+    thread_id = await open_thread(
+        actions, "a stale board row bears_on will cite without closing", kind="obligation")
+    decision_id = await record_decision(actions, "a fresh finding that speaks to that row")
+
+    minted = await mint_bears_on(actions, decision_id, thread_id)
+    assert minted is True
+    edge = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+        decision_id, thread_id)
+    assert edge == 1
+    status = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='status' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", thread_id)
+    assert status is None or status == "open"  # never resolved by bears_on
+
+    again = await mint_bears_on(actions, decision_id, thread_id)
+    assert again is False
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+        decision_id, thread_id)
+    assert count == 1
+
+
+async def test_open_obligation_thread_ids_keeps_only_open_obligation_rows(
+    actions: Actions,
+) -> None:
+    """The Thread-widening in UNIFIED_PRIOR_ART_KINDS only means anything for OPEN,
+    kind='obligation' rows — a resolved obligation, or an open non-obligation thread,
+    must not surface as "prior art" (that would be noise, not the routing nudge the
+    widening exists for)."""
+    from src.orchestrator.capture import _open_obligation_thread_ids
+
+    open_obligation = await open_thread(actions, "genuinely open board row", kind="obligation")
+    resolved_obligation = await open_thread(
+        actions, "an obligation someone already closed", kind="obligation")
+    await resolve_thread(actions, str(resolved_obligation), because="done")
+    open_non_obligation = await open_thread(
+        actions, "an ordinary open thread, not a board row", kind=None)
+
+    kept = await _open_obligation_thread_ids(
+        actions.pool, [open_obligation, resolved_obligation, open_non_obligation])
+    assert kept == {open_obligation}
+
+
+async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
+    actions: Actions,
+) -> None:
+    """MCP-level: `bears_on` resolves the same addressing-law, best-effort way as
+    `confirms`/`rediscovers` (a bad ref is reported, never fatal), echoes the matched
+    thread's own summary (same reason `resolves` echoes it — a valid id naming the WRONG
+    thread is only catchable by the caller reading it), and — the whole point — the thread
+    stays open afterward, unlike `resolves`."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bearson1", session="bearson1", project="bearson-land", model=None,
+        cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        stale_row = await open_thread(
+            actions, "THE ROW BEARS_ON WILL CITE, MCP-LEVEL", kind="obligation")
+        out = await rd_tool(
+            "a fresh measurement that speaks to the stale row without settling it",
+            kind="decision", bears_on=[str(stale_row)[:8]], ctx=ctx)
+        assert out["bears_on"][0]["id"] == str(stale_row)[:8]
+        assert out["bears_on"][0]["new_link"] is True
+        resolution = out["bears_on_resolution"][0]
+        assert resolution["matched"] == "true"
+        assert resolution["summary"] == "THE ROW BEARS_ON WILL CITE, MCP-LEVEL"
+        status = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            stale_row)
+        assert status is None or status == "open"
+
+        # idempotent
+        again = await rd_tool(
+            "a fresh measurement that speaks to the stale row without settling it",
+            kind="decision", bears_on=[str(stale_row)[:8]], ctx=ctx)
+        assert again["bears_on"][0]["new_link"] is False
+
+        # a bad ref among a good one is reported, never fatal to the rest
+        mixed = await rd_tool(
+            "a second decision, one real citation and one fake", kind="decision",
+            bears_on=[str(stale_row)[:8], "not-a-real-thread-xyz"], ctx=ctx)
+        matched = {r["ref"]: r["matched"] for r in mixed["bears_on_resolution"]}
+        assert matched[str(stale_row)[:8]] == "true"
+        assert matched["not-a-real-thread-xyz"] == "false"
+        assert len(mixed["bears_on"]) == 1
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_bears_on_nudge(
+    actions: Actions,
+) -> None:
+    """THE END-TO-END PROOF, same discipline as the Practice widening's own test
+    (test_unified_prior_art_check_surfaces_a_practice_via_the_statement_field): embedding
+    the thread's OWN short id in the later decision's rationale routes it through the
+    id-token door (compositions.py's "an id token embedded in a longer query" leg), which
+    is cross-door-corroborated by construction — deterministic regardless of whether the
+    semantic embedder is configured in this test environment, unlike relying on lexical/
+    semantic rank alone. Must flag `bears_on=[...]` rather than `resolves=[...]` — this
+    decision merely SPEAKS TO the row, it does not presume to settle it."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bearson2", session="bearson2", project="bearson-land-2", model=None,
+        cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        stale_row = await open_thread(
+            actions, "MEASURER'S-MOMENT ACCEPTANCE ROW: text describes a world that no "
+                     "longer exists", kind="obligation")
+        out = await rd_tool(
+            "a fresh measurement that speaks to a stale row", kind="decision",
+            rationale=f"re-measuring stale row {str(stale_row)[:8]} and finding it "
+                      "already answered", ctx=ctx)
+        assert "prior_art" in out
+        assert any(h["type"] == "Thread" for h in out["prior_art"])
+        assert "prior_art_flag" in out
+        assert "bears_on=" in out["prior_art_flag"]
+        assert "resolves=" not in out["prior_art_flag"].split("—")[0]  # not presumed as fact
+        assert out["prior_art_polarity"] == "bears_on"
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_unified_prior_art_check_ignores_a_resolved_thread_with_the_same_words(
+    actions: Actions,
+) -> None:
+    """The Thread widening must not resurrect a CLOSED row as "prior art" — a resolved
+    obligation sharing a decision's exact wording is not the routing gap 898840dc names,
+    it is ordinary, already-settled overlap. Falls through to no prior_art at all (nothing
+    else in this fixture-only graph matches)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bearson3", session="bearson3", project="bearson-land-3", model=None,
+        cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        closed_row_summary = ("A ROW ALREADY RESOLVED BEFORE THIS DECISION EVER RAN, "
+                              "UNIQUE WORDS ZQXJVBK")
+        closed = await open_thread(actions, closed_row_summary, kind="obligation")
+        await resolve_thread(actions, str(closed), because="already done")
+        out = await rd_tool(
+            closed_row_summary, kind="decision",
+            rationale="citing the closed row's own words, ZQXJVBK", ctx=ctx)
+        threads_in_prior = [h for h in out.get("prior_art", []) if h["type"] == "Thread"]
+        assert threads_in_prior == []
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)

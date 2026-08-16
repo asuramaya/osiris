@@ -4716,6 +4716,7 @@ async def record_decision(
     obsoletes: list[str] | None = None,
     confirms: list[str] | None = None, refutes: str | None = None,
     implements: str | None = None, rediscovers: list[str] | None = None,
+    bears_on: list[str] | None = None,
     ack_prior_art: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
@@ -4775,9 +4776,14 @@ async def record_decision(
     `rediscovers_resolution` rather than aborting the rest. WHAT IT DOES NOT DO: it records a
     rediscovery, it does not prevent one — catching one before it's written down is a
     retrieval-quality question, deliberately not this parameter's job (task #163 piece 3).
+    `bears_on` = open board Thread(s) this decision SPEAKS TO without settling ("the
+    measurer's moment has a verb", thread 898840dc). Same addressing law as `resolves`;
+    mints the SAME `answers` edge but BY CONSTRUCTION nothing else — no status write. Use
+    `resolves` to settle a row, `bears_on` to merely inform it. Resolves like `confirms`
+    (a miss reported, never fatal); receipt carries `new_link` per thread plus its summary.
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/rediscovers/confirms/grounds already answers it, pass True to record the
-    dismissal as a graph event instead of a shrug that leaves no trace.
+    implements/rediscovers/confirms/grounds/bears_on already answers it, pass True to
+    record the dismissal as a graph event instead of a shrug that leaves no trace.
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
     confirming your text is now the CURRENT value (a different assertion can silently win
     the tie-break on the same object despite a success response). A `false` entry names
@@ -4882,6 +4888,25 @@ async def record_decision(
             continue
         rediscover_ids.append(rdid)
         rediscover_receipt.append({"ref": ref, "matched": "true", "id": str(rdid)[:8]})
+    # bears_on resolves the same best-effort way as confirms/rediscovers — one bad ref
+    # must not veto the threads that DID match (thread 898840dc). Same addressing law as
+    # resolves/supersedes (require_identifier=True): a citation act refuses rather than
+    # guesses. The thread's OWN summary is echoed here too, same reason resolves echoes
+    # it — a valid id naming the WRONG thread is only catchable by the caller reading it.
+    bears_on_ids: list[uuid.UUID] = []
+    bears_on_receipt: list[dict[str, str]] = []
+    for ref in bears_on or []:
+        bid = await capture._find_thread(pool, ref, require_identifier=True)
+        if bid is None:
+            bears_on_receipt.append({"ref": ref, "matched": "false",
+                                     "note": "matched no thread — quote its UUID, "
+                                             "canonical, or 8-char short id (no longer a "
+                                             "prose match)"})
+            continue
+        bsumm = await capture._thread_summary(pool, bid)
+        bears_on_ids.append(bid)
+        bears_on_receipt.append({"ref": ref, "matched": "true", "id": str(bid)[:8],
+                                 "summary": bsumm or ""})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
@@ -4970,8 +4995,17 @@ async def record_decision(
                    "args": {"q": f"{summary} {rationale or ''}"[:300], "limit": 15,
                             "caller": actor}},
             None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
+        hits = search_out["items"]["hits"]
+        # UNIFIED_PRIOR_ART_KINDS' Thread widening (898840dc/e123b9fa) only means anything
+        # for OPEN, kind='obligation' rows — filtered on the RAW hits (full ids), before
+        # prior_art_from_hits truncates `id` to an 8-char short id below.
+        thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
+        if thread_hit_ids:
+            keep = await capture._open_obligation_thread_ids(pool, thread_hit_ids)
+            hits = [h for h in hits
+                    if h.get("type") != "Thread" or uuid.UUID(h["id"]) in keep]
         prior = capture.prior_art_from_hits(
-            search_out["items"]["hits"], exclude={d} | ({old} if old else set()),
+            hits, exclude={d} | ({old} if old else set()),
             kinds=capture.UNIFIED_PRIOR_ART_KINDS)
     except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure or
                         # hang (TimeoutError is an Exception subclass, caught here too)
@@ -5014,6 +5048,21 @@ async def record_decision(
                     f"a dead Superstition ({top['id']}) already covers this ground — check "
                     "you're not reviving a workaround its own fix already killed "
                     "(acknowledge with ack_prior_art=True if this is intentional/unrelated)")
+            elif top_kind == "Thread":
+                # THE MEASURER'S MOMENT (898840dc/e123b9fa): the nudge fires unprompted,
+                # inheriting THE THAW's own proven behavior rather than being a new
+                # detector — see UNIFIED_PRIOR_ART_KINDS' own comment. Deliberately never
+                # suggests resolves= here: this decision merely SPOKE TO the row in
+                # passing (that's how it surfaced as prior art at all); whether it also
+                # SETTLES the row is the caller's own judgment to make, not this flag's
+                # to presume.
+                out["prior_art_flag"] = (
+                    f"this appears to speak to open thread {top['id']} — pass "
+                    f"bears_on=['{top['id']}'] to link it without closing it (bears_on "
+                    "cites, it never resolves — use resolves=[...] instead if this ruling "
+                    "actually SETTLES the row), or acknowledge it (ack_prior_art=True) if "
+                    "coincidental")
+                out["prior_art_polarity"] = "bears_on"
             else:
                 out["prior_art_flag"] = (
                     f"a standing ruling ({top['id']}) covers this ground — supersede it "
@@ -5067,6 +5116,18 @@ async def record_decision(
         out["rediscovers"] = rediscovered
     if rediscover_receipt:
         out["rediscovers_resolution"] = rediscover_receipt
+    if bears_on_ids:
+        # BY CONSTRUCTION, not by discipline (Thoth's own no-auto-act ruling, DM 4701):
+        # mint_bears_on only ever touches `links`, never threaded through record_decision's
+        # own atomic transaction the way resolves/supersedes are — there is no code path
+        # here that can reach a thread's `status`.
+        cited = []
+        for bid in bears_on_ids:
+            minted = await capture.mint_bears_on(Actions(pool), d, bid, actor)
+            cited.append({"id": str(bid)[:8], "new_link": minted})
+        out["bears_on"] = cited
+    if bears_on_receipt:
+        out["bears_on_resolution"] = bears_on_receipt
     if refute_id is not None:
         converted = await capture.refute_practice(
             Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)
