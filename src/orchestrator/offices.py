@@ -297,6 +297,38 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
             "reason": reason, "path": str(p), "backup": str(backup)}
 
 
+async def correct_own_pin_value(
+    pool: asyncpg.Pool, agent_id: str, key: str, value: str, *, reason: str,
+    office_root: Path | None = None,
+) -> dict[str, Any]:
+    """THE SELF-SCOPED DOOR onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
+    function takes an arbitrary filesystem `path`, which is exactly the wrong shape for a
+    seat-facing surface — an MCP caller has no path to hand it that isn't either a guess or a
+    trust exercise. This composes `correct_pin_value` with `held_seat` (the SAME lookup
+    `correct_house` uses) so a caller names only WHAT to correct, never WHERE: the seat's own
+    office, resolved off its `handle`, exactly like `establish_office`/`write_model_pin`
+    already do (`_DEFAULT_OFFICE_ROOT / handle.lower()`) — never `identity.cwd`, which can be
+    a shared root other seats climb to (#146's lesson), and never a directory-basename guess
+    (13af22fc's phantom `repo:seats` defect came from exactly that shape).
+
+    Refuses on a caller holding no seat — a pin correction is a seat's own act, never
+    performed on another's behalf and never inferred. `reason` stays required and non-empty;
+    enforced by `correct_pin_value` itself, unchanged here. `office_root` exists only as a
+    test seam, same convention as `establish_office`."""
+    from src.orchestrator.seats import held_seat
+
+    bound = await held_seat(pool, agent_id)
+    if bound is None:
+        return {"error": f"{agent_id} holds no seat — correcting a pin is a seat's own act, "
+                         "never done on another's behalf"}
+    root = office_root or _DEFAULT_OFFICE_ROOT
+    office = root / bound["handle"].lower()
+    result = correct_pin_value(str(office), key, value, reason=reason)
+    if not result.get("error"):
+        result["seat_id"] = bound["seat_id"]
+    return result
+
+
 def revert_pin_write(path: str) -> dict[str, Any]:
     """The reversibility half of `write_pin_additions`'s constraint 3: restore `path/.osiris`
     from the backup it took immediately before its most recent real write. Refuses (an error

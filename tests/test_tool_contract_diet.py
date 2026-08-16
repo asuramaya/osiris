@@ -452,7 +452,30 @@ def _tool_chars(t: Any) -> int:
 # prevent, one layer up from tool count. THE AUTHOR TRIMMED TWICE, 1,270 over -> 580, and
 # named exactly what further cutting would cost; he did not gut it to sneak under, and he
 # did not raise it himself. That is 45e72476 working in both directions.
-TOOL_CONTRACT_CEILING_CHARS = 164_250
+# 164,250 -> 165,600. 115 -> 116 tools (2026-08-16, msg 4766). THE FIRST RAISE OF THIS
+# REIGN FOR A GENUINELY NEW TOOL: `correct_pin_value`, the door that did not exist. Raised
+# on the rule the entry above established, applied to its intended case — a NEW DOOR NEEDS
+# ITS LAW STATED OR CALLERS INVENT ONE.
+# THE AUTHOR'S OWN NUMBER WAS WRONG AND COULD NOT HAVE BEEN RIGHT — he measured +1,462 off
+# a base of 163,475, having branched from cb7c85b, an ANCESTOR of main rather than its tip.
+# The real delta against main is +1,269. Fourth proof of the comment above: NO AUTHOR CAN
+# MEASURE A SURFACE THAT DOES NOT EXIST UNTIL THE MERGE. He flagged and refused to raise,
+# which is the rule working; the wrongness of his figure is WHY the rule exists, not a
+# failure of his.
+# WHAT THE 1,269 BUYS, every clause a law a caller must know or will violate:
+# (1) THE NAMED EXCEPTION — write_pin_additions never overwrites an existing key BY DESIGN;
+# this one does. A caller ignorant of that reaches for the wrong verb or fears the right
+# one. (2) SELF-SCOPED — always the caller's OWN office via held_seat, and it takes NO path
+# parameter at all, so the authority boundary is enforced by the signature AND stated in the
+# prose. (3) `reason` REQUIRED — the correction is auditable or it does not happen.
+# (4) THE FOUR REFUSALS enumerated, so a caller designs against them instead of discovering
+# them. (5) revert_pin_write NAMED as the undo. Cut any one and the verb still works while
+# becoming a thing callers use wrongly on a file that carries identity.
+# WHY IT WAS BUILT AT ALL, the part worth inheriting: TWO LIVE SEATS HIT THE MISSING DOOR IN
+# ONE EVENING — henry (shellbiz) was told this verb was the supported fix, found nothing in
+# his toolbelt, and hand-edited a file; Till (ramstein) had a correct, operator-authorized
+# fix and could not perform it. A VERB WITH NO SURFACE IS NOT A VERB.
+TOOL_CONTRACT_CEILING_CHARS = 165_600
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -526,4 +549,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     hash; annotate_thread's own docstring refuses the job). The one genuinely missing verb
     of the three ledger diseases; the other two already had uncalled cures."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 115
+    assert len(per_tool) == 116

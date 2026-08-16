@@ -3232,6 +3232,60 @@ async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
     assert after["project"] == "newhouse"                    # RESOLUTION moved, not just the row
 
 
+async def test_correct_pin_value_mcp_wrapper_targets_the_callers_own_office(
+    actions: Actions, tmp_path, monkeypatch,
+) -> None:
+    """msg 4761, obligation 114f7ac9 — the MCP tool that gives `offices.correct_pin_value`
+    a reachable surface, always self-scoped to the CALLER's own office (never a path the
+    caller supplies)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", tmp_path)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    claimed = await claim_name(actions, "agent:cpvwrap1a", "CpvwrapHead", source="test")
+    assert claimed.get("error") is None
+    office = tmp_path / "cpvwraphead"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    ident = AgentIdentity(agent_id="agent:cpvwrap1a", session="cpvwrap1", project="tony",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.correct_pin_value(
+            "project", "cultural-infrastructure", "task #152", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out["written"] is True
+    assert out["seat_id"] == claimed["seat_id"]
+    assert (office / ".osiris").read_text() == 'project = "cultural-infrastructure"\n'
+
+
+async def test_correct_pin_value_mcp_wrapper_refuses_an_unmounted_caller(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    out = await srv.correct_pin_value("project", "x", "x", ctx=ctx)
+    assert "mount first" in out["error"]
+
+
 async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
     actions: Actions,
 ) -> None:
