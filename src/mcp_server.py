@@ -3833,6 +3833,29 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
 
 
 @mcp.tool()
+async def correct_pin_value(key: str, value: str, reason: str,
+                            ctx: Context | None = None) -> dict[str, Any]:
+    """Correct an EXISTING key in your own seat's `.osiris` pin (msg 4761, obligation
+    114f7ac9) — the door that was missing: `offices.correct_pin_value` (the raw rewrite) had
+    no MCP surface at all, so a caller told to use it could only hand-edit the file. THE
+    NAMED EXCEPTION to additive-only pin writes (write_pin_additions never overwrites an
+    existing key, by design) — this one does, for a specific, already-diagnosed correction.
+    SELF-SCOPED like `correct_house`: always targets YOUR OWN seat's office (resolved off
+    `held_seat`, never a path you supply), never another seat's. `reason` is required and
+    non-empty — a correction with no stated reason is the silent overwrite this verb exists
+    to prevent. Refuses on: no held seat; `key` not already declared (use write_pin_additions
+    for a genuinely missing one); invalid TOML; an empty reason. `revert_pin_write` is the
+    undo, same backup discipline."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a pin correction is a seat's own act",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    from src.orchestrator.offices import correct_own_pin_value as _correct_own_pin_value
+    return await _correct_own_pin_value(pool, ident.agent_id, key, value, reason=reason)
+
+
+@mcp.tool()
 async def retire_seat(seat_id: str, reason: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
     """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge

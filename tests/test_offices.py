@@ -10,6 +10,7 @@ from pathlib import Path
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.offices import (
+    correct_own_pin_value,
     correct_pin_value,
     establish_office,
     plan_pin_migration,
@@ -618,3 +619,90 @@ def test_revert_pin_write_refuses_when_no_backup_exists(tmp_path: Path) -> None:
     out = revert_pin_write(str(office))
     assert "error" in out
     assert "no backup" in out["error"]
+
+
+# ═══ correct_own_pin_value — the self-scoped MCP door onto correct_pin_value (msg 4761,
+# obligation 114f7ac9): a caller names WHAT to correct, never WHERE — resolved off held_seat,
+# never identity.cwd or a directory-basename guess. ═══
+
+async def test_correct_own_pin_value_resolves_the_callers_own_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov1owner", "CovOwner", source="test")
+    assert claimed.get("error") is None
+    office = tmp_path / "covowner"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov1owner", "project", "cultural-infrastructure",
+        reason="task #152", office_root=tmp_path)
+    assert out["written"] is True
+    assert out["seat_id"] == claimed["seat_id"]
+    text = (office / ".osiris").read_text()
+    assert 'project = "cultural-infrastructure"' in text
+
+
+async def test_correct_own_pin_value_refuses_a_caller_with_no_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov2unseated", "project", "x", reason="x", office_root=tmp_path)
+    assert "holds no seat" in out["error"]
+
+
+async def test_correct_own_pin_value_never_touches_a_different_seats_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The constraint that matters most: this door must not become a path traversal onto
+    another seat's pin just because a caller happens to know its handle."""
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov3self0", "CovSelf", source="test")
+    other_office = tmp_path / "covother"
+    other_office.mkdir()
+    (other_office / ".osiris").write_text('project = "someone-elses"\n')
+    self_office = tmp_path / "covself"
+    self_office.mkdir()
+    (self_office / ".osiris").write_text('project = "tony"\n')
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov3self0", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path)
+    assert out["written"] is True
+    assert (self_office / ".osiris").read_text() == 'project = "cultural-infrastructure"\n'
+    assert (other_office / ".osiris").read_text() == 'project = "someone-elses"\n'  # untouched
+
+
+async def test_correct_own_pin_value_propagates_an_empty_reason_refusal(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov4noreas", "CovNoreas", source="test")
+    office = tmp_path / "covnoreas"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov4noreas", "project", "cultural-infrastructure",
+        reason="  ", office_root=tmp_path)
+    assert "silent overwrite" in out["error"]
+    assert (office / ".osiris").read_text() == 'project = "tony"\n'  # nothing written
+
+
+async def test_correct_own_pin_value_propagates_a_missing_key_refusal(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov5nokey", "CovNokey", source="test")
+    office = tmp_path / "covnokey"
+    office.mkdir()
+    (office / ".osiris").write_text('seat = "covnokey"\n')
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov5nokey", "project", "x", reason="x", office_root=tmp_path)
+    assert "not declared" in out["error"]
