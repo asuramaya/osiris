@@ -475,7 +475,22 @@ def _tool_chars(t: Any) -> int:
 # ONE EVENING — henry (shellbiz) was told this verb was the supported fix, found nothing in
 # his toolbelt, and hand-edited a file; Till (ramstein) had a correct, operator-authorized
 # fix and could not perform it. A VERB WITH NO SURFACE IS NOT A VERB.
-TOOL_CONTRACT_CEILING_CHARS = 165_600
+#
+# 165,600 -> 166,900. 116 -> 117 tools (2026-08-16, Thoth LXXVI, one merge wave of four
+# branches). TWO CONTRIBUTIONS, ONE MEASUREMENT: `list_assertions` (Sekhmet, dcfca4c) — the
+# read door retire_assertion's `superseded_id` always needed and nothing ever exposed; the
+# assertion row id was already IN current_assertions (SELECT a.*) and no reader had ever
+# selected it, a pure SURFACE gap. Fifth-disease specimen (382067d9: authorized but
+# unexecutable) closed by the smallest honest verb. Plus send()'s new paragraph (Seshat,
+# e111e3b) stating that a DM or ask-graded broadcast now carries `prior_art` — the read-side
+# hop the operator asked for by name ("why is read-the-graph a mail instruction and not
+# architecture"), and a caller who does not know the receipt carries it will not look.
+# THE AUTHORS' NUMBERS WERE WRONG AGAIN, AND SUMMED WRONG: +860 and +345 = +1,205; the real
+# delta at the merged tip is +1,286. FIFTH PROOF of the comment above — this time neither
+# author branched stale (both off 166f205, main's tip at the time); the surface still could
+# not be measured until BOTH landed on one tree. Each flagged and refused to raise. The rule
+# held; the integrator measured.
+TOOL_CONTRACT_CEILING_CHARS = 166_900
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -549,4 +564,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     hash; annotate_thread's own docstring refuses the job). The one genuinely missing verb
     of the three ledger diseases; the other two already had uncalled cures."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 116
+    assert len(per_tool) == 117
