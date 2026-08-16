@@ -7,6 +7,7 @@ from src.actions.core import Actions
 from src.orchestrator.capture import (
     amend_decision,
     annotate_thread,
+    mint_bears_on,
     open_thread,
     record_decision,
 )
@@ -151,6 +152,55 @@ async def test_recall_decision_addenda_is_an_empty_list_not_an_absent_key(
     did = await record_decision(actions, "never amended", kind="ruling", source="agent:me")
     out = await recall(actions.pool, str(did))
     assert out["addenda"] == []
+
+
+# ═══════════ bears_on's own read-back (898840dc, Thoth msg 4828) ═══════════
+# mint_bears_on() mints an `answers` edge from a Decision INTO a Thread without closing
+# it — before this fix, nothing ever read that edge back onto the thread's own surface.
+
+async def test_recall_surfaces_decisions_that_bear_on_a_thread_oldest_first(
+    actions: Actions,
+) -> None:
+    tid = await open_thread(actions, "a stale row two decisions will speak to",
+                            source="agent:me")
+    d1 = await record_decision(actions, "first finding that bears on it", kind="ruling",
+                               source="agent:a")
+    d2 = await record_decision(actions, "second finding that bears on it", kind="ruling",
+                               source="agent:b")
+    await mint_bears_on(actions, d1, tid)
+    await mint_bears_on(actions, d2, tid)
+
+    out = await recall(actions.pool, str(tid))
+
+    assert [b["id"] for b in out["bears_on_from"]] == [str(d1)[:8], str(d2)[:8]]
+    assert out["bears_on_from"][0]["summary"] == "first finding that bears on it"
+    # the row itself must stay open — bears_on is cite-only, never a close, by construction
+    assert out["status"] == "open"
+
+
+async def test_recall_bears_on_from_is_an_empty_list_not_an_absent_key(
+    actions: Actions,
+) -> None:
+    tid = await open_thread(actions, "never cited by anything", source="agent:me")
+    out = await recall(actions.pool, str(tid))
+    assert out["bears_on_from"] == []
+
+
+async def test_recall_bears_on_from_excludes_a_retracted_answers_edge(
+    actions: Actions,
+) -> None:
+    """A live edge only — an unmerge/retraction of the citing Decision must not go on
+    claiming it still speaks to this row."""
+    tid = await open_thread(actions, "a row whose citation gets retracted", source="agent:me")
+    d1 = await record_decision(actions, "a finding later retracted", kind="ruling",
+                               source="agent:a")
+    await mint_bears_on(actions, d1, tid)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=now() WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+        d1, tid)
+
+    out = await recall(actions.pool, str(tid))
+    assert out["bears_on_from"] == []
 
 
 async def test_recall_addendum_observed_at_survives_real_json_serialization(
