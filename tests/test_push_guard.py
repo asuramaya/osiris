@@ -1,6 +1,21 @@
 """push_guard — the pre-push secret/PII guard (2026-08-15 incident, ruling 2fc98818).
 FAIL-OPEN ON INFRASTRUCTURE, NEVER ON A REAL MATCH (577988ed): the only thing that blocks a
 push is a positive pattern match; every internal failure degrades to ALLOW, loudly.
+
+SELF-SCAN INCIDENT (2026-08-16, Thoth msg 4718): the first version of this file used
+LITERAL secret-shaped strings as fixture content — a full-length AWS-key-shaped string and
+a full private-key header, written out contiguously. Once committed, that content became a
+permanent part of this repo's own history — push_guard, scanning ITS OWN test file's diff on
+every future push whose range includes that commit, matched its own DEFAULT_PATTERNS against
+its own fixtures and refused, forever, since a merged commit's own historical diff can never
+be un-scanned short of rewriting history. NEVER AGAIN, including in prose describing the
+incident itself (the first fix attempt repeated the exact mistake in this very docstring):
+every fixture below that needs to match DEFAULT_PATTERNS is built at RUNTIME (string
+concatenation, see `_synthetic_aws_key`/`_synthetic_private_key_header`) so no CONTIGUOUS
+matching substring ever exists as literal text anywhere in this file's own committed source
+— not in a fixture, not in a comment, not in this docstring — the detector is still
+exercised for real, on real regex matches, just never against a string this file's own diff
+could be caught holding.
 """
 from __future__ import annotations
 
@@ -10,6 +25,7 @@ from pathlib import Path
 import pytest
 from scripts.push_guard import (
     _NULL_SHA,
+    DEFAULT_PATTERNS,
     commit_range,
     custom_patterns,
     format_refusal,
@@ -19,6 +35,18 @@ from scripts.push_guard import (
     run,
     scan_range,
 )
+
+
+def _synthetic_aws_key() -> str:
+    """Runtime-built so this file's own source never contains the 20-char contiguous
+    string `\\bAKIA[0-9A-Z]{16}\\b` actually matches — see the module docstring."""
+    return "AKIA" + "Q" * 16
+
+
+def _synthetic_private_key_header() -> str:
+    """Runtime-built so this file's own source never contains a contiguous
+    `-----BEGIN ... PRIVATE KEY-----` sequence — see the module docstring."""
+    return "-----BEGIN " + "RSA" + " PRIVATE KEY-----"
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -91,7 +119,7 @@ def test_commit_range_returns_none_on_a_git_failure(small_repo: Path) -> None:
 # --- scan_range --------------------------------------------------------------------------
 
 def test_scan_range_finds_a_secret_in_a_commit_message(small_repo: Path) -> None:
-    sha = _commit(small_repo, "oops -----BEGIN RSA PRIVATE KEY----- pasted by accident")
+    sha = _commit(small_repo, f"oops {_synthetic_private_key_header()} pasted by accident")
     findings = scan_range(small_repo, [sha], {"private-key-block":
                                                 r"-----BEGIN (RSA )?PRIVATE KEY-----"})
     assert findings
@@ -100,7 +128,7 @@ def test_scan_range_finds_a_secret_in_a_commit_message(small_repo: Path) -> None
 
 def test_scan_range_finds_a_secret_added_in_a_diff(small_repo: Path) -> None:
     sha = _write_and_commit(
-        small_repo, "config.txt", "AKIAABCDEFGHIJKLMNOP\n", "add config")
+        small_repo, "config.txt", _synthetic_aws_key() + "\n", "add config")
     findings = scan_range(small_repo, [sha], {"aws-access-key-id": r"\bAKIA[0-9A-Z]{16}\b"})
     assert findings
     assert "aws-access-key-id" in findings[0]
@@ -110,7 +138,7 @@ def test_scan_range_finds_a_secret_that_was_only_ever_removed(small_repo: Path) 
     """The 08-03 scrub's own miss: a value that existed in history but not at any tip must
     still be caught, since removing it in a LATER commit within the same push range doesn't
     stop it from being uploaded."""
-    _write_and_commit(small_repo, "config.txt", "AKIAABCDEFGHIJKLMNOP\n", "add config")
+    _write_and_commit(small_repo, "config.txt", _synthetic_aws_key() + "\n", "add config")
     remove_sha = _write_and_commit(small_repo, "config.txt", "", "remove config")
     findings = scan_range(
         small_repo, [remove_sha], {"aws-access-key-id": r"\bAKIA[0-9A-Z]{16}\b"})
@@ -120,6 +148,18 @@ def test_scan_range_finds_a_secret_that_was_only_ever_removed(small_repo: Path) 
 def test_scan_range_is_clean_on_ordinary_content(small_repo: Path) -> None:
     sha = _write_and_commit(small_repo, "readme.txt", "hello world\n", "ordinary commit")
     assert scan_range(small_repo, [sha], {"aws-access-key-id": r"\bAKIA[0-9A-Z]{16}\b"}) == []
+
+
+def test_default_patterns_actually_catch_the_shapes_they_claim_to(
+    small_repo: Path,
+) -> None:
+    """DEFAULT_PATTERNS' own regexes, exercised for real against the actual dict — see
+    the module docstring for why the content is built at runtime rather than written as
+    a literal."""
+    sha = _write_and_commit(
+        small_repo, "config.txt", _synthetic_aws_key() + "\n", "add config")
+    findings = scan_range(small_repo, [sha], DEFAULT_PATTERNS)
+    assert any("aws-access-key-id" in f for f in findings)
 
 
 def test_scan_range_is_empty_with_no_shas_or_no_patterns(small_repo: Path) -> None:
@@ -165,7 +205,7 @@ def test_run_allows_a_clean_push(small_repo: Path) -> None:
 
 
 def test_run_refuses_a_push_carrying_a_real_secret(small_repo: Path) -> None:
-    sha = _commit(small_repo, "-----BEGIN RSA PRIVATE KEY----- oops")
+    sha = _commit(small_repo, f"{_synthetic_private_key_header()} oops")
     stdin = f"refs/heads/main {sha} refs/heads/main {_NULL_SHA}\n"
     assert run(small_repo, stdin) == 1
 
@@ -178,7 +218,7 @@ def test_run_honors_the_skip_env_var_even_with_a_real_secret(
     small_repo: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OSIRIS_PUSH_GUARD_SKIP", "1")
-    sha = _commit(small_repo, "-----BEGIN RSA PRIVATE KEY----- oops")
+    sha = _commit(small_repo, f"{_synthetic_private_key_header()} oops")
     stdin = f"refs/heads/main {sha} refs/heads/main {_NULL_SHA}\n"
     assert run(small_repo, stdin) == 0
 
