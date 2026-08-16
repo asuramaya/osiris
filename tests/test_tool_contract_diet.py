@@ -439,7 +439,20 @@ def _tool_chars(t: Any) -> int:
 # defect family this house spent the week closing — and the field is worthless if the
 # docstring does not say the caller may read it. Prose that makes a new honesty field
 # LEGIBLE is load-bearing; prose that re-explains an unchanged one is the diet's target.
-TOOL_CONTRACT_CEILING_CHARS = 163_650
+# 163,650 -> 164,250 (2026-08-16, msg 4712). TOOL COUNT UNCHANGED at 115 — +580 chars on
+# record_decision, already the heaviest tool, for ONE new parameter: `bears_on`. Raised on
+# the rule written into the entry above, applied to a harder case: this is a NEW DOOR, and
+# a door needs its LAW stated or callers invent one. Two things in that prose are load-
+# bearing and I told the author to write them before he wrote them: the ADDRESSING LAW
+# (uuid/canonical/8-char only, never a prose match — the same law resolves/supersedes
+# follow, because an addressing act must name its target exactly or refuse), and the
+# RECEIPT-HONESTY contract (the echoed thread summary that makes a mis-citation visible in
+# the same turn, and new_link=false on an already-linked pair). Cut either and the field
+# still works while becoming unreadable — which is the failure this whole file exists to
+# prevent, one layer up from tool count. THE AUTHOR TRIMMED TWICE, 1,270 over -> 580, and
+# named exactly what further cutting would cost; he did not gut it to sneak under, and he
+# did not raise it himself. That is 45e72476 working in both directions.
+TOOL_CONTRACT_CEILING_CHARS = 164_250
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
