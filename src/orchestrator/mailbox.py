@@ -689,7 +689,8 @@ async def read_inbox(
     from src.orchestrator.agents import _generation
 
     q = ("SELECT m.id, m.from_agent, m.from_project, m.to_agent, m.body, m.created_at, "
-         "m.reply_to, m.thread_id, m.grade, COALESCE(r.deliveries,0) AS deliveries "
+         "m.reply_to, m.thread_id, m.grade, m.prior_art, COALESCE(r.deliveries,0) "
+         "AS deliveries "
          "FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER + " ORDER BY m.created_at LIMIT $limit")
@@ -711,7 +712,11 @@ async def read_inbox(
          **({"dm": True} if r["to_agent"] is not None else {}),
          **({"grade": r["grade"]} if r["grade"] else {}),
          **({"reply_to": r["reply_to"]} if r["reply_to"] is not None else {}),
-         **({"redelivered": True} if r["deliveries"] > 0 else {})}
+         **({"redelivered": True} if r["deliveries"] > 0 else {}),
+         # THE READ-SIDE PRIOR-ART HOP (obligation a6198075): computed ONCE at send()
+         # time (see mcp_server.py's send()), never re-run here — a reader sees the same
+         # hits the sender already saw, no second search on the read path.
+         **({"prior_art": r["prior_art"]} if r["prior_art"] else {})}
         for r in rows
     ]
 
