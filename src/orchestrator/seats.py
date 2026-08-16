@@ -1055,6 +1055,25 @@ async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
         "ORDER BY l.first_seen DESC LIMIT 1", seat_id)
 
 
+async def seats_managed_by(pool: asyncpg.Pool, seat_id: str) -> list[str]:
+    """The WORKER Seats `seat_id` itself manages — the reverse of `manager_of_seat`, which
+    only ever answers worker->manager. Nothing in this house could previously ask "does this
+    seat manage anyone" without walking the whole fleet by hand (msg 4761/4798's own
+    scoping: THE ONE non-inferred signal a manager-authored-code flag could ever use is
+    exactly this question). Active `managed_by` edges only (never a retired or superseded
+    one) — an empty list means genuinely unmanaged-by, not merely un-checked, and is the
+    correct read for "this is not a manager seat." Ordered by `first_seen` for a stable,
+    reproducible listing; no house-derivation, no chain-walk — a single-hop reverse lookup,
+    same shape as `manager_of_seat`'s own single-hop forward one."""
+    rows = await pool.fetch(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='managed_by' "
+        "AND f.type='Seat' AND f.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.first_seen ASC", seat_id)
+    return [r["canonical"] for r in rows]
+
+
 async def _managed_by_source(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """The `managed_by` edge's OWN source_id for `seat_id`'s active manager link, or None
     when unmanaged — a second read alongside manager_of_seat's (same row) so derive_house
