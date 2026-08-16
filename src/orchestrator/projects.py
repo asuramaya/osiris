@@ -225,18 +225,37 @@ async def _contradicting_properties(
     """Task #102's mark-not-resolve primitive (dossier.py's `agreement` field,
     compositions.py's `contradicted` triage bucket), reused here as a REFUSAL SIGNAL
     instead of a display marker: for every property name either object currently
-    carries, does the union of both objects' current values disagree? Same
-    `count(DISTINCT value) > 1` logic as both siblings above, scoped here to exactly
-    two candidate objects rather than a type census or one object's own multi-source
-    set. `name`/`tag` are excluded — a label difference is a fold's own PREMISE (two
-    tags for one referent is exactly the operator's "SAME data, DIFFERENT tags ->
-    merge is correct" case), never a sign these are two different things; every OTHER
-    property disagreeing is the opposite case ("SAME tag, DIFFERENT data") the operator
-    named as the one merge must never cross."""
+    carries, does each object's own BELIEF (its winning value — the same
+    `confidence DESC, observed_at DESC` resolution every other belief-read site in this
+    codebase already uses, e.g. `trace_evidence`'s `believes`) disagree between the two
+    objects? `name`/`tag` are excluded — a label difference is a fold's own PREMISE (two
+    tags for one referent is exactly the operator's "SAME data, DIFFERENT tags -> merge
+    is correct" case), never a sign these are two different things; every OTHER property
+    disagreeing is the opposite case ("SAME tag, DIFFERENT data") the operator named as
+    the one merge must never cross.
+
+    BELIEF-RESOLVED, NOT RAW (Sekhmet's ramstein trace, decision 9ae4feee; obligation
+    114f7ac9's sibling fork, resolved (B)): `current_assertions` is every un-superseded
+    assertion — and `assert_property` only supersedes WITHIN the same source
+    (actions/core.py's own advisory lock is keyed on object+name+SOURCE), so a stale
+    assertion from a DIFFERENT source than the one that later corrected it stays live in
+    that view forever. The old raw `GROUP BY name HAVING count(DISTINCT value) > 1`
+    query saw that stale cross-source row as a second "current" value even on a SINGLE
+    object with no real disagreement at all — merge()'s gate was comparing "has anyone
+    ever asserted something different" (raw), not "do these two objects currently
+    disagree" (belief). A corrector (assert_project_property, etc.) that WINS on
+    confidence/recency must be able to unblock a fold without a second, unexposed act
+    (retiring the loser assertion by row id — no read verb surfaces one) just to make the
+    old row stop counting."""
     rows = await pool.fetch(
-        "SELECT name FROM current_assertions "
-        "WHERE object_id = ANY($1::uuid[]) AND name NOT IN ('name', 'tag') "
-        "GROUP BY name HAVING count(DISTINCT (value #>> '{}')) > 1",
+        "WITH belief AS ("
+        "  SELECT DISTINCT ON (object_id, name) object_id, name, "
+        "    value #>> '{}' AS v "
+        "  FROM current_assertions "
+        "  WHERE object_id = ANY($1::uuid[]) AND name NOT IN ('name', 'tag') "
+        "  ORDER BY object_id, name, confidence DESC, observed_at DESC"
+        ") "
+        "SELECT name FROM belief GROUP BY name HAVING count(DISTINCT v) > 1",
         [a_id, b_id])
     return sorted(r["name"] for r in rows)
 

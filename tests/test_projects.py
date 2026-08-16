@@ -372,6 +372,35 @@ async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
     assert row["status"] == "active"
 
 
+async def test_fold_project_ignores_a_superseded_cross_source_assertion(
+    actions: Actions,
+) -> None:
+    """Sekhmet's ramstein trace (decision 9ae4feee, obligation 114f7ac9's sibling fork,
+    resolved (B)): `assert_property` only supersedes WITHIN the same source, so a stale
+    disk-census assertion from one source stays live in `current_assertions` forever
+    after a later, DIFFERENT-source correction wins belief on confidence/recency. The old
+    raw `count(DISTINCT value)` gate saw that stale row as a second "current" value and
+    refused the fold even though both objects genuinely agree once belief is resolved —
+    a real correction must not be permanently blocked by an unexposed, uncleared row."""
+    await _stub_project(actions, "repo:cs1", "cs1")
+    await _stub_project(actions, "repo:cs2", "cs2")
+    cs1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cs1'")
+    cs2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cs2'")
+    # a stale disk-census from an OLD, low-confidence source — never superseded on its
+    # own row (assert_property only supersedes same-source), but destined to LOSE belief.
+    await actions.assert_property(cs1_id, "on_disk_path", "/stale/wrong", "census:old",
+                                  NOW - timedelta(days=30), 0.5)
+    # the correction, a DIFFERENT source, wins on both confidence and recency.
+    await actions.assert_property(cs1_id, "on_disk_path", "/real/path", "agent:sekhmet",
+                                  NOW, 0.95)
+    await actions.assert_property(cs2_id, "on_disk_path", "/real/path", "agent:sekhmet",
+                                  NOW, 0.95)
+
+    out = await fold_project(actions, dupe="cs1", into="cs2", evidence="ramstein twin",
+                             actor="agent:test")
+    assert "folded" in out, out
+
+
 async def test_fold_project_does_not_refuse_on_a_differing_name(actions: Actions) -> None:
     """Two different `name` properties is the fold's own PREMISE (two tags, one referent)
     — never treated as a conflict, unlike a genuinely differing OTHER property."""
