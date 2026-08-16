@@ -234,6 +234,23 @@ async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
     )
 
 
+async def _resolve_repo_by_remote(pool: asyncpg.Pool, remote_url: str) -> list[uuid.UUID]:
+    """Active SoftwareProjects whose CURRENT `remote_url` assertion matches — CREATE-SHAPE's
+    location fallback (census_trees, obligation e5b0ece4/decision fa0eb021), used ONLY after
+    a name lookup (`_resolve_repo`) finds nothing. Never an identity signal on its own: a
+    fork whose origin was never repointed shares its parent's remote_url too (#144 Rule 2,
+    the local-git-fork-detection blind spot), which is exactly why a caller here must treat
+    more than one hit as AMBIGUOUS and refuse rather than pick — this function reports the
+    candidate set, it never chooses among them."""
+    rows = await pool.fetch(
+        "SELECT o.id FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "AND a.name='remote_url' AND a.value #>> '{}' = $1)",
+        remote_url,
+    )
+    return [r["id"] for r in rows]
+
+
 async def _mint_or_find_repo(
     actions: Actions, repo: str, observed: datetime,
     *, source: str = _SOURCE, evidence_class: str = _EC, confidence: float = _CONF,
