@@ -619,14 +619,37 @@ UNIFIED_PRIOR_ART_KINDS = frozenset({"Decision", "Practice", "Superstition", "Th
 
 
 async def _open_obligation_thread_ids(
-    pool: asyncpg.Pool, thread_ids: list[uuid.UUID],
+    pool: asyncpg.Pool, thread_ids: list[uuid.UUID], *, repo: str | None = None,
 ) -> set[uuid.UUID]:
-    """Which of these Thread ids are CURRENTLY status='open' AND kind='obligation' — the
-    only Thread shape UNIFIED_PRIOR_ART_KINDS' widening means to surface. Call BEFORE
-    prior_art_from_hits (which truncates `id` to an 8-char short id and so can no longer
-    query precisely) on the raw search() hits, not after. One batched query over the
-    caller's candidate ids (in practice at most ~15, search()'s own limit) — never a
-    per-row round trip, and a no-op (empty query skipped) when no Thread hit is present."""
+    """Which of these Thread ids are the Thread shape UNIFIED_PRIOR_ART_KINDS' widening
+    means to surface. Call BEFORE prior_art_from_hits (which truncates `id` to an 8-char
+    short id and so can no longer query precisely) on the raw search() hits, not after.
+
+    TWO ADMISSION PATHS, measured not guessed (decision 518a21b6, Thoth's ruling DM 4726):
+    (1) status='open' AND kind='obligation' — the modern convention, admitted regardless
+    of repo. (2) status='open' AND NO `kind` property at all AND `repo` is given AND the
+    Thread shares that SAME `in_repo` project — an older row predating the convention
+    (the 00f6a18d shape), admitted ONLY within its own project's scope.
+
+    REPO SCOPE, NOT KIND'S BARE ABSENCE, is the discriminator, because a kindless Thread's
+    absence-of-kind says nothing about whether it is a board row at all: measured fleet-
+    wide, 73% of the 92 open, kind-less Threads live OUTSIDE osiris — real, legitimate
+    work for other projects (pokex watch-rendering bugs, xxit's iPhone pager, a repo:code
+    thread that is a HUMAN CAREER DECISION, not software work). Admitting those as "prior
+    art" on an osiris ruling would be noise dressed as coverage. Within osiris alone the
+    same population reads 24-of-25 clean — the SAME field, kind's mere absence, means two
+    different things depending on which project you ask it in, and repo scope is what
+    separates them.
+
+    `repo=None` ADMITS NOTHING under path (2) — never, by design, an implicit fleet-wide
+    fallback (Thoth's explicit ruling: 'do not let an absent repo silently become
+    fleet-wide; that is the exact hole this ruling exists to close'). A record_decision
+    call with no `repo` gets ONLY the modern-convention path, same as before this change.
+
+    One batched query for (1) over the caller's candidate ids (in practice at most ~15,
+    search()'s own limit); a SECOND batched query for (2), only when `repo` is given AND
+    at least one kindless-but-open candidate remains — never a per-row round trip, and a
+    no-op (both queries skipped) when no Thread hit is present."""
     if not thread_ids:
         return set()
     rows = await pool.fetch(
@@ -638,8 +661,23 @@ async def _open_obligation_thread_ids(
     by_id: dict[uuid.UUID, dict[str, str]] = {}
     for r in rows:
         by_id.setdefault(r["object_id"], {})[r["name"]] = r["v"]
-    return {tid for tid, props in by_id.items()
+    kept = {tid for tid, props in by_id.items()
             if props.get("status", "open") == "open" and props.get("kind") == "obligation"}
+    if repo:
+        kindless_open = [tid for tid, props in by_id.items()
+                         if tid not in kept and props.get("status", "open") == "open"
+                         and "kind" not in props]
+        # _resolve_repo, not a raw canonical string match — the SAME resolver link_repo
+        # uses to attach a Thread to its project in the first place, so this admits by
+        # the identical identity link_repo would have written, not a re-derived guess.
+        proj = await _resolve_repo(pool, repo) if kindless_open else None
+        if proj is not None:
+            same_repo = await pool.fetch(
+                "SELECT from_id FROM links WHERE from_id = ANY($1::uuid[]) "
+                "AND to_id=$2 AND type='in_repo'",
+                kindless_open, proj)
+            kept |= {r["from_id"] for r in same_repo}
+    return kept
 
 
 def prior_art_from_hits(

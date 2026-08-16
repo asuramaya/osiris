@@ -4996,12 +4996,14 @@ async def record_decision(
                             "caller": actor}},
             None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
         hits = search_out["items"]["hits"]
-        # UNIFIED_PRIOR_ART_KINDS' Thread widening (898840dc/e123b9fa) only means anything
-        # for OPEN, kind='obligation' rows — filtered on the RAW hits (full ids), before
-        # prior_art_from_hits truncates `id` to an 8-char short id below.
+        # UNIFIED_PRIOR_ART_KINDS' Thread widening (898840dc/e123b9fa, repo-scoped per
+        # 518a21b6/Thoth's ruling DM 4726) only means anything for OPEN, kind='obligation'
+        # rows fleet-wide, or an older kindless row sharing THIS call's own `repo` — never
+        # a kindless row admitted with no repo at all. Filtered on the RAW hits (full
+        # ids), before prior_art_from_hits truncates `id` to an 8-char short id below.
         thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
         if thread_hit_ids:
-            keep = await capture._open_obligation_thread_ids(pool, thread_hit_ids)
+            keep = await capture._open_obligation_thread_ids(pool, thread_hit_ids, repo=repo)
             hits = [h for h in hits
                     if h.get("type") != "Thread" or uuid.UUID(h["id"]) in keep]
         prior = capture.prior_art_from_hits(
