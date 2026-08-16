@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.projects import (
@@ -267,6 +268,39 @@ async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> Non
     mount_project = await actions.pool.fetchval(
         "SELECT project FROM agent_mounts WHERE job_dir='/j/fold1'")
     assert mount_project == "into1"
+
+
+async def test_fold_project_carries_the_original_writers_attribution_forward(
+    actions: Actions,
+) -> None:
+    """Decision 540007ca (the ramstein write-attribution specimen): a moved edge's
+    source_id/confidence/evidence_class must survive the estate move UNCHANGED — the
+    prior version stamped every re-pointed edge with the fold's own actor and a fresh
+    SELF_DECLARED evidence class, silently destroying the original writer's attribution
+    with no way for any reader-side fix to recover it afterward. The fold's own actor
+    belongs on the audit trail (create_link's `actor=`), never on the edge's belief."""
+    await _stub_project(actions, "repo:dupe1b", "dupe1b")
+    await _stub_project(actions, "repo:into1b", "into1b")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupe1b'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:into1b'")
+    commit = await actions.create_or_find_object("Commit", "commit:foldc1b", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "agent:original-writer", NOW, 0.73)
+
+    await fold_project(actions, dupe="dupe1b", into="into1b",
+                       evidence="both mint the same repo, confirmed by the operator",
+                       actor="agent:fold-executor")
+
+    row = await actions.pool.fetchrow(
+        "SELECT source_id, confidence, evidence_class FROM links "
+        "WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", commit, into_id)
+    assert row is not None
+    assert row["source_id"] == "agent:original-writer", (
+        "the moved edge's source_id was reattributed to the fold's own actor")
+    assert row["confidence"] == pytest.approx(0.73)  # links.confidence is a `real` column
+    assert row["evidence_class"] is None  # the original edge never carried one either
 
 
 async def test_fold_project_is_idempotent_on_an_edge_already_live_to_into(

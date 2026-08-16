@@ -154,6 +154,56 @@ async def _live_label(pool: asyncpg.Pool, oid: Any, canonical: str) -> str:
     return str(name) if name else str(canonical).removeprefix("repo:")
 
 
+async def _normalize_project_label_through_merge(
+    pool: asyncpg.Pool, label: str,
+) -> tuple[str, str | None]:
+    """Resolve a project label through `merged_into` to its current survivor's live
+    label (obligation a980aff2, henry->shellbiz): a label that has since been FOLDED into
+    another must compare as the SURVIVOR, the same live label `_write_attribution`'s own
+    in_repo-edge lookup already reports for the write side — otherwise every fold produces
+    a permanent false 'disagrees' for any caller comparing against it. Walks with
+    `Actions.resolve_object_id` (actions/core.py) — the SAME chain-walk every other
+    merge-aware reader already trusts, not a re-derivation.
+
+    MOVED HERE FROM agents.py (decision 540007ca's sibling finding), NOT REWRITTEN: this
+    module already hosts `_live_label`, the label-resolution primitive every candidate in
+    this file goes through, and by the time a THIRD caller needed the same "resolve
+    through the fold" logic (project_identity_evidence's own `pin`, this module),
+    keeping a second private copy in agents.py would have been the disease one level up
+    from the one being fixed — three call sites is the threshold past which "just copy
+    it" stops being cheaper than a shared home. Behavior is verbatim: same cycle guard,
+    same confess-don't-guess refusal, only the parameter narrowed from `Actions` to
+    `asyncpg.Pool` (this module's own convention — every sibling function here takes
+    `pool` directly) with a throwaway `Actions(pool)` built locally for the one call that
+    needs `resolve_object_id`.
+
+    Never guesses: the label names its own SoftwareProject by EXACT canonical only
+    (case-insensitive, matching `_resolve_or_mint_project`'s own lookup) — no string
+    similarity, no directory-name fallback (13af22fc's phantom-repo defect). A label that
+    names no object, or one that's already live (not merged), returns itself unchanged,
+    second element None. A chain too deep to resolve (a cycle) is NEVER silently picked
+    through — the original label comes back untouched alongside a confession string for
+    the caller to surface, never a guessed winner (this house names disagreement, it
+    never crowns a side)."""
+    from src.actions.core import ActionError, Actions
+
+    row = await pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' "
+        "AND lower(canonical) = lower($1)", f"repo:{label}")
+    if row is None:
+        return label, None
+    try:
+        winner = await Actions(pool).resolve_object_id(row["id"])
+    except ActionError:
+        return label, (f"merge chain for {label!r} could not be resolved (broken/cyclic "
+                       "merged_into edge) — compared unnormalized rather than guessing a "
+                       "winner")
+    if winner == row["id"]:
+        return label, None
+    canon = await pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
+    return await _live_label(pool, winner, canon), None
+
+
 async def _declared_charter(pool: asyncpg.Pool, seat_id: str, seat_oid: Any,
                             bases: list[str]) -> list[str]:
     """governs targets, checked from BOTH origins (module docstring) — live display
@@ -231,9 +281,24 @@ async def project_identity_evidence(
     bases = await _seat_lineage_bases(pool, seat_oid)
     charter = await _declared_charter(pool, seat_id, seat_oid, bases)
     pin = None
+    pin_merge_confession: str | None = None
     if office:
         from src.orchestrator.agents import read_project_label
         pin = read_project_label(office)
+        if pin:
+            # NORMALIZE THROUGH merged_into (decision 540007ca's sibling finding,
+            # confirmed independently by Till): a pin naming a label that has since been
+            # FOLDED into another must compare as the SURVIVOR, or it shows up as its OWN
+            # stale candidate — pin_match true only against itself, declared_charter/
+            # remote_agrees reading the LOSER's own stale properties, "agreement" landing
+            # on 'disagree' even after the operator corrected the pin. Degrades to the
+            # raw pin on any failure (577988ed — a diagnostic refinement must never be
+            # the reason this read goes blind).
+            try:
+                pin, pin_merge_confession = await _normalize_project_label_through_merge(
+                    pool, pin)
+            except Exception:  # noqa: BLE001 — see note above
+                pass
     self_authored = _self_authored(office)
     write_attr = await _write_attribution(pool, bases)
 
@@ -286,6 +351,7 @@ async def project_identity_evidence(
         "self_authored": self_authored,
         "candidates": candidates,
         "agreement": agreement,
+        **({"pin_merge_confession": pin_merge_confession} if pin_merge_confession else {}),
     }
 
 
