@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from src.actions.core import Actions
+from src.orchestrator.capture import record_decision
 from src.orchestrator.mailbox import (
     OPERATOR_ADDR,
     ack_messages,
@@ -1514,3 +1515,122 @@ async def test_send_refusal_suppresses_the_hint_when_it_would_lead_to_the_same_r
                            to_project="GhostProject", body="meant this as a DM")
     assert "did you mean" not in str(exc_info.value)
     assert "no such project" in str(exc_info.value)
+
+
+# ═══ THE READ-SIDE PRIOR-ART HOP (obligation a6198075) — send()'s own dispatch-time
+# reuse of record_decision's write-time prior-art search: a DM or an 'ask'-graded
+# broadcast runs the same check, on BOTH the sender's receipt and the reader's inbox. ═══
+
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_send_dm_surfaces_prior_art_on_senders_receipt_and_readers_inbox(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    standing = await record_decision(
+        actions,
+        "RULING — the kaboomquartz throttle must never fire below the cgroup's own "
+        "memory.high watermark, per the operator's direct instruction 2026-08-01.",
+        kind="ruling", repo="osiris", source="agent:standing-law")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:sender-1", session="sender001", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.send(
+            "dispatching a build for the kaboomquartz throttle memory.high watermark "
+            "issue", to_agent="agent:worker-1", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    prior_ids = {p["id"] for p in out.get("prior_art", [])}
+    assert str(standing)[:8] in prior_ids, out
+    assert "prior_art_flag" in out
+
+    row = await actions.pool.fetchrow(
+        "SELECT prior_art FROM fleet_messages WHERE id=$1", out["sent"])
+    assert row is not None and row["prior_art"]
+    persisted_ids = {p["id"] for p in row["prior_art"]}
+    assert str(standing)[:8] in persisted_ids
+
+    inbox_msgs = await read_inbox(actions.pool, "osiris", reader_agent="agent:worker-1")
+    delivered = next(m for m in inbox_msgs if m["id"] == out["sent"])
+    assert "prior_art" in delivered
+    assert str(standing)[:8] in {p["id"] for p in delivered["prior_art"]}
+
+
+async def test_send_skips_prior_art_surfacing_on_an_ungraded_broadcast(
+    actions: Actions,
+) -> None:
+    """The hop fires on a DM or an 'ask'-graded broadcast only — an ordinary, ungraded
+    broadcast is not the shape it exists to protect (nobody is being asked to act) and
+    must not pay the search cost."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await record_decision(
+        actions, "RULING — the flibbergast register resets on every warm boot, verbatim.",
+        kind="ruling", repo="osiris", source="agent:standing-law2")
+    await _seed(actions.pool, "osiris")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:sender-2", session="sender002", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.send("the flibbergast register resets on every warm boot",
+                             to="osiris", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "prior_art" not in out
+    row = await actions.pool.fetchrow(
+        "SELECT prior_art FROM fleet_messages WHERE id=$1", out["sent"])
+    assert row is not None and row["prior_art"] is None
+
+
+async def test_send_surfaces_prior_art_on_an_ask_graded_broadcast(
+    actions: Actions,
+) -> None:
+    """The second trigger shape: not a DM, but graded 'ask' — a coordinator dispatching a
+    task to a whole project, not one agent, must get the same nudge."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    standing = await record_decision(
+        actions,
+        "RULING — the zylophage cache must be invalidated on every merged_into write, "
+        "per the operator's direct 2026-08-05 instruction.",
+        kind="ruling", repo="osiris", source="agent:standing-law3")
+    await _seed(actions.pool, "osiris")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:sender-3", session="sender003", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.send(
+            "please check the zylophage cache invalidation on every merged_into write",
+            to="osiris", grade="ask", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    prior_ids = {p["id"] for p in out.get("prior_art", [])}
+    assert str(standing)[:8] in prior_ids, out

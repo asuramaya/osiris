@@ -3271,7 +3271,12 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     NEVER prose inference from `body` — only a ref named HERE is touched. Each ref must
     resolve to EXACTLY ONE Thread or the whole send refuses (ValueError, nothing written);
     requires a resolved single addressee — ownership has nowhere to land on a broadcast.
-    The receipt's `threads_stamped` names what actually transferred."""
+    The receipt's `threads_stamped` names what actually transferred.
+    THE READ-SIDE PRIOR-ART HOP (obligation a6198075): a DM, or a broadcast graded 'ask',
+    runs the SAME search-based check record_decision already runs at write time, against
+    `body` — a hit is a nudge, never a refusal, and appears BOTH on your own receipt
+    (`prior_art`) and on the delivered message the reader sees in inbox(), so dispatching
+    a redundant ask depends on neither side remembering to check first."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -3367,6 +3372,28 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             out["crossed"] = (f"{crossed} unread message(s) in THIS thread are already "
                               "waiting in your inbox — your note may have crossed theirs; "
                               "inbox() before assuming your view is current")
+    # THE READ-SIDE PRIOR-ART HOP (obligation a6198075): fires on a DM or an 'ask'-graded
+    # broadcast — the two shapes that cost a reader a turn if the graph already answered
+    # this. Skipped on a dedup hit (res["id"] then names an EXISTING message that may
+    # already carry its own prior_art from its original send; recomputing would waste the
+    # search and risks clobbering a real prior result with a fresh, possibly-empty one).
+    # `_surface_prior_art` is the SAME fail-open, 15s-bounded search record_decision runs
+    # at write time — a hit is a nudge on BOTH sides, never a refusal (577988ed).
+    if not res["dedup"] and (grade == "ask" or res["to_agent"]):
+        prior = await _surface_prior_art(pool, body, repo=ident.project, actor=actor)
+        if prior:
+            out["prior_art"] = prior
+            top = prior[0]
+            out["prior_art_flag"] = (
+                f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
+                "worth reading before dispatching/answering as if it's new")
+            try:
+                await pool.execute(
+                    "UPDATE fleet_messages SET prior_art=$1 WHERE id=$2", prior, res["id"])
+            except Exception:  # noqa: BLE001 — persistence for the READER's copy is a
+                                # bonus; the send already committed and the sender's own
+                                # receipt above already carries the hits regardless
+                pass
     return out
 
 
@@ -4730,6 +4757,38 @@ async def bootstrap(cwd: str, ctx: Context | None = None) -> dict[str, Any]:
 _PRIOR_ART_SEARCH_TIMEOUT_S = 15.0
 
 
+async def _surface_prior_art(
+    pool: asyncpg.Pool, text: str, *, exclude: set[uuid.UUID] | None = None,
+    repo: str | None = None, actor: str | None = None,
+) -> list[dict[str, Any]]:
+    """THE READ-SIDE HOP (obligation a6198075, operator's own critique: "why does 'read
+    the graph before rederiving' have to be a mail instruction, why is that not
+    architecture?"). record_decision/record_practice already run this exact search at
+    WRITE time (thread 44635c42/ruling 1e6d7367) — extracted here, unchanged, so a
+    caller that isn't a write (send(), currently) can run the SAME search rather than a
+    second matcher. Same 15s timeout + fail-open (a search hiccup or hang returns []
+    rather than blocking the caller) as both write-time callers. Same Thread-kind
+    widening: a Thread hit only counts as prior art when it's an OPEN kind='obligation'
+    row, or a kindless legacy row sharing this call's own `repo` (capture.
+    _open_obligation_thread_ids) — never a resolved thread (nothing to warn against
+    re-doing) and never a kindless row admitted with no repo at all."""
+    try:
+        search_out = await asyncio.wait_for(comp.run_spec(
+            pool, {"op": "function", "name": "search",
+                   "args": {"q": text[:300], "limit": 15, "caller": actor}},
+            None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
+        hits = search_out["items"]["hits"]
+        thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
+        if thread_hit_ids:
+            keep = await capture._open_obligation_thread_ids(pool, thread_hit_ids, repo=repo)
+            hits = [h for h in hits
+                    if h.get("type") != "Thread" or uuid.UUID(h["id"]) in keep]
+        return capture.prior_art_from_hits(
+            hits, exclude=exclude or set(), kinds=capture.UNIFIED_PRIOR_ART_KINDS)
+    except Exception:  # noqa: BLE001 — never block the caller on a search-side failure/hang
+        return []
+
+
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
@@ -5006,35 +5065,17 @@ async def record_decision(
              "positive (task #117) — the summaries shared enough boilerplate to score "
              "above the similarity bar without describing the same thing."))
     # PRIOR-ART SURFACING (thread 44635c42, task #67; UNIFIED across {Decisions, Practices,
-    # Superstitions} by THE THAW, ruling 1e6d7367): before a ruling stands, name what
-    # standing law/technique already covers this ground — search is the same fused engine
-    # `search()` exposes, topical (lexical + semantic) rather than lexical-only, since a
-    # contradicting ruling rarely reuses its predecessor's exact wording (the canonical
-    # failure: 636a8648 minted in direct contradiction of naming-v3/a882b334 with zero
-    # friction). Fail-open: a search hiccup must never block recording the decision itself.
-    try:
-        search_out = await asyncio.wait_for(comp.run_spec(
-            pool, {"op": "function", "name": "search",
-                   "args": {"q": f"{summary} {rationale or ''}"[:300], "limit": 15,
-                            "caller": actor}},
-            None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
-        hits = search_out["items"]["hits"]
-        # UNIFIED_PRIOR_ART_KINDS' Thread widening (898840dc/e123b9fa, repo-scoped per
-        # 518a21b6/Thoth's ruling DM 4726) only means anything for OPEN, kind='obligation'
-        # rows fleet-wide, or an older kindless row sharing THIS call's own `repo` — never
-        # a kindless row admitted with no repo at all. Filtered on the RAW hits (full
-        # ids), before prior_art_from_hits truncates `id` to an 8-char short id below.
-        thread_hit_ids = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Thread"]
-        if thread_hit_ids:
-            keep = await capture._open_obligation_thread_ids(pool, thread_hit_ids, repo=repo)
-            hits = [h for h in hits
-                    if h.get("type") != "Thread" or uuid.UUID(h["id"]) in keep]
-        prior = capture.prior_art_from_hits(
-            hits, exclude={d} | ({old} if old else set()),
-            kinds=capture.UNIFIED_PRIOR_ART_KINDS)
-    except Exception:  # noqa: BLE001 — never block a ruling on a search-side failure or
-                        # hang (TimeoutError is an Exception subclass, caught here too)
-        prior = []
+    # Superstitions, open obligation Threads} by THE THAW, ruling 1e6d7367): before a
+    # ruling stands, name what standing law/technique already covers this ground — search
+    # is the same fused engine `search()` exposes, topical (lexical + semantic) rather
+    # than lexical-only, since a contradicting ruling rarely reuses its predecessor's
+    # exact wording (the canonical failure: 636a8648 minted in direct contradiction of
+    # naming-v3/a882b334 with zero friction). `_surface_prior_art` (fail-open, 15s bound)
+    # is the shared write/read-time engine — record_practice and send()'s dispatch-time
+    # hop (obligation a6198075) both run the identical search, not a second matcher.
+    prior = await _surface_prior_art(
+        pool, f"{summary} {rationale or ''}",
+        exclude={d} | ({old} if old else set()), repo=repo, actor=actor)
     strong = capture.prior_art_is_strong(prior)
     if prior:
         out["prior_art"] = prior
@@ -5248,17 +5289,8 @@ async def record_practice(
                            "confirmed": await capture.practice_confirmed_count(pool, p)}
     if receipt:
         out["witnesses_resolution"] = receipt
-    try:
-        search_out = await asyncio.wait_for(comp.run_spec(
-            pool, {"op": "function", "name": "search",
-                   "args": {"q": f"{statement} {failure_prevented or ''}"[:300], "limit": 15,
-                            "caller": actor}},
-            None, name="search", caller=actor), timeout=_PRIOR_ART_SEARCH_TIMEOUT_S)
-        prior = capture.prior_art_from_hits(
-            search_out["items"]["hits"], exclude={p}, kinds=capture.UNIFIED_PRIOR_ART_KINDS)
-    except Exception:  # noqa: BLE001 — never block a record on a search-side failure or
-                        # hang (TimeoutError is an Exception subclass, caught here too)
-        prior = []
+    prior = await _surface_prior_art(
+        pool, f"{statement} {failure_prevented or ''}", exclude={p}, repo=repo, actor=actor)
     strong = capture.prior_art_is_strong(prior)
     if prior:
         out["prior_art"] = prior
