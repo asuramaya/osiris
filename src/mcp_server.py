@@ -70,6 +70,7 @@ from src.orchestrator.agents import (
     resolve_identity,
     seat_bearings,
     seat_label,
+    write_attribution_banner,
 )
 from src.orchestrator.budget import fit
 from src.orchestrator.console import get_console as _get_console
@@ -2180,12 +2181,9 @@ async def mount(
                 if ident.project else None)
     # RULE 1 OF de3dfc18 (task #144): confessed, never acted on — "if it picks, it is
     # wrong, however good the pick" (Thoth, msg 3854). A disagreement is worth a look, not
-    # an override.
-    wa_warn = (
-        f"⚠ this lineage's own writes mostly land in {ident.write_attribution_top!r} "
-        f"({ident.write_attribution_total} in_repo edge(s) checked), but this session "
-        f"resolved project={ident.project!r} — worth a look; nothing was overridden."
-        if ident.write_attribution_agreement == "disagrees" else None)
+    # an override. write_attribution_banner (agents.py) also guards against the stale-
+    # comparison specimen Thoth LXXVI caught live — see its own docstring.
+    wa_warn = write_attribution_banner(ident)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            "model": ident.model or "unknown",
            **({"co_agents": co_agents} if co_agents else {}),

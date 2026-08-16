@@ -981,7 +981,24 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
       NO .osiris ANYWHERE — write one.
       FOUND, VALID, NEVER DECLARES `project` (the heinrich shape: a deliberately-written
         file answering a different question) — add the missing key, keep the rest.
-      COULD NOT BE READ (broken TOML) — fix the syntax error named in the message."""
+      COULD NOT BE READ (broken TOML) — fix the syntax error named in the message.
+
+    THE "SILENT FOR THE BARE ROOT" CLAIM ABOVE WAS ONLY HALF TRUE (Thoth LXXVI's live
+    catch on his own mount): `project_pin_missing` already excludes the bare root
+    (resolve_identity's own `not bare_root` guard), but the THIRD message above — "FOUND,
+    VALID, NEVER DECLARES project" — fired unconditionally whenever a real `.osiris` file
+    exists with no `project` key, with no such carve-out. The container's own pin at
+    ~/.osiris/seats/.osiris IS exactly such a file: it deliberately declares
+    `kind = "container"` and nothing else (ruling 719ed5b1) — not broken, not an
+    oversight, the SANCTIONED non-project case — so the banner both misdiagnosed a
+    correct-by-design file as an error AND named a mechanism ("fell back to a BASENAME
+    GUESS") that never ran here (the bare root's own project stays None, per
+    resolve_identity's `bare_root` branch; by the time this banner would have rendered,
+    `ident.project` is whatever a SEATED session's later house-resolution set it to —
+    unrelated to any basename guess at all). A container-kind pin gets no banner: this is
+    the healthy case, not a gap to warn about."""
+    if is_bare_office_root(ident.cwd) or read_tree_kind(ident.cwd) == "container":
+        return None
     if ident.project_pin_cwd_missing:
         return (
             f"⚠ {ident.cwd} DOES NOT EXIST ON DISK — nothing can be read here, and no "
@@ -1013,6 +1030,36 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
             "root) with `project = \"...\"`, or pass project explicitly."
         )
     return None
+
+
+def write_attribution_banner(ident: AgentIdentity) -> str | None:
+    """RULE 1 OF de3dfc18 (task #144): confessed, never acted on — "if it picks, it is
+    wrong, however good the pick" (Thoth, msg 3854). Warns when this lineage's own
+    majority in_repo target disagrees with the project this session resolved; never
+    overrides `project`.
+
+    STALE-COMPARISON GUARD (Thoth LXXVI's live catch, mcp_server.py's own render site,
+    moved here to be testable the same way project_pin_banner is): `write_attribution_
+    agreement` is stamped by register_agent, which runs BEFORE `_resolve_project_seat_
+    first` — by that function's own docstring, DELIBERATELY, so the write gate still
+    asserts a not-yet-seated session's fresh cwd-derived project unclobbered. For a
+    SEATED session, that means the flag can be set against the PRE-seat-override project
+    (e.g. None, or a bare-root basename guess), while `ident.project` by the time this
+    banner renders is already the POST-override, final value — so the stored flag can say
+    "disagrees" even though the two values THIS message would display are equal (both
+    "osiris", the container root's own live specimen). Re-checking the LIVE values here
+    is the fix: the graph property still records the honest pre-override comparison (a
+    real historical signal, untouched); this banner must never show itself agreeing with
+    itself."""
+    if ident.write_attribution_agreement != "disagrees":
+        return None
+    if ident.write_attribution_top == ident.project:
+        return None
+    return (
+        f"⚠ this lineage's own writes mostly land in {ident.write_attribution_top!r} "
+        f"({ident.write_attribution_total} in_repo edge(s) checked), but this session "
+        f"resolved project={ident.project!r} — worth a look; nothing was overridden."
+    )
 
 
 def resolve_identity(
