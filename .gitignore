@@ -28,3 +28,11 @@ scratchpad/
 *.pdf
 .claude/worktrees/
 backups/
+
+# Osiris project pin, and the .bak a pin rewrite leaves behind. Untracked-and-
+# unignored is the hazard: one `git add -A` publishes a seat's identity to a
+# public remote. THIS repo's pin is benign (project = "osiris"), but the CLASS
+# is not — other repos' pins carry seat handles. Fixable from the repo side in
+# one line, needing no change to osiris itself (henry I, shellbiz dfc8a4c).
+.osiris
+.osiris.bak
