@@ -609,7 +609,37 @@ _PRIOR_ART_KINDS = frozenset({"Decision"})
 # THE THAW (ruling 1e6d7367): the unified check widens past Decision-only, Imhotep's own
 # deliberately-left-open plug (decision 5640f234) — every write-path caller that wants the
 # fuller corpus passes this instead of the (still-default, backward-compatible) bare set.
-UNIFIED_PRIOR_ART_KINDS = frozenset({"Decision", "Practice", "Superstition"})
+# Thread added by 898840dc/e123b9fa ("the measurer's moment has no verb"): a fresh decision
+# that topically matches an OPEN board row should surface the row, unprompted, the same way
+# a matching Practice or standing Decision already does — see _open_obligation_thread_ids
+# for the extra status/kind filter this Thread inclusion needs (a resolved/retracted or
+# non-board Thread showing up as "prior art" would be noise, not the routing nudge this
+# exists for).
+UNIFIED_PRIOR_ART_KINDS = frozenset({"Decision", "Practice", "Superstition", "Thread"})
+
+
+async def _open_obligation_thread_ids(
+    pool: asyncpg.Pool, thread_ids: list[uuid.UUID],
+) -> set[uuid.UUID]:
+    """Which of these Thread ids are CURRENTLY status='open' AND kind='obligation' — the
+    only Thread shape UNIFIED_PRIOR_ART_KINDS' widening means to surface. Call BEFORE
+    prior_art_from_hits (which truncates `id` to an 8-char short id and so can no longer
+    query precisely) on the raw search() hits, not after. One batched query over the
+    caller's candidate ids (in practice at most ~15, search()'s own limit) — never a
+    per-row round trip, and a no-op (empty query skipped) when no Thread hit is present."""
+    if not thread_ids:
+        return set()
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (object_id, name) object_id, name, value #>> '{}' AS v "
+        "FROM current_assertions WHERE object_id = ANY($1::uuid[]) "
+        "AND name IN ('status', 'kind') "
+        "ORDER BY object_id, name, confidence DESC, observed_at DESC",
+        thread_ids)
+    by_id: dict[uuid.UUID, dict[str, str]] = {}
+    for r in rows:
+        by_id.setdefault(r["object_id"], {})[r["name"]] = r["v"]
+    return {tid for tid, props in by_id.items()
+            if props.get("status", "open") == "open" and props.get("kind") == "obligation"}
 
 
 def prior_art_from_hits(
@@ -1818,6 +1848,39 @@ async def mint_rediscovers(
     if exists:
         return False
     await actions.create_link(from_decision, to_decision, "rediscovers", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_bears_on(
+    actions: Actions, decision_id: uuid.UUID, thread_id: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """THE MEASURER'S MOMENT HAS A VERB NOW (thread 898840dc, decision e123b9fa): route a
+    fresh Decision back to the stale board row it speaks to, WITHOUT closing it. Mints the
+    identical `answers` edge record_decision(resolves=...) mints — same link type, same
+    dedup-checked existence check — through a route that is BY CONSTRUCTION incapable of
+    acting on the row: this function touches only the `links` table, never `status` or any
+    other property, and is called from the MCP wrapper only, never threaded through
+    record_decision's own atomic transaction the way `resolves`/`supersedes` are. That
+    separation is deliberate, not an oversight — Thoth's own no-auto-act ruling (DM 4701):
+    "every specimen we have was found by someone reading and judging; a verb that acts on
+    a row is how we lose the ones that were right." `resolves=` stays the close-and-cite
+    verb for a ruling that SETTLES its question; this is the cite-only verb for a finding
+    that merely speaks to one — a stale row's text going wrong, an already-answered
+    measurement nobody routed back, anything short of "and therefore this row is done."
+
+    Idempotent: returns whether a NEW link was minted. THE RECEIPT-HONESTY LAW (42176e16,
+    Thoth's own warning — "you will be the fifth specimen if you skip it"): an
+    already-linked pair must never render as a bare, indistinguishable success. The MCP
+    wrapper reports this boolean per thread, same shape rediscovers/confirms already use
+    (`new_link`), so a caller can tell "your citation landed" from "already linked,
+    nothing needed" in the same turn."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+        decision_id, thread_id)
+    if exists:
+        return False
+    await actions.create_link(decision_id, thread_id, "answers", source,
                               datetime.now(UTC), _CONF, evidence_class=_EC)
     return True
 
