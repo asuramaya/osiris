@@ -1306,14 +1306,35 @@ async def misfiled_by_lineage(
     mirroring filed_under_check) OR the genuinely clean case (nothing misfiled AND the
     chain terminated within `max_hops`, i.e. an answer this function actually stands
     behind) — a clean answer earned by a complete walk is still allowed to render as
-    silence; an INCOMPLETE walk never is, however clean it happens to look."""
+    silence; an INCOMPLETE walk never is, however clean it happens to look.
+
+    NORMALIZES `project` THROUGH merged_into (decision 6b4d185e — the sibling gap to
+    filed_under_check's own, same file this function mirrors): `filed_project` reads off
+    LIVE `in_repo` edges, already re-pointed to a fold's survivor by
+    `_move_project_estate`, but the caller's own `project` may still name a label that has
+    since been FOLDED — comparing raw strings then reports every one of that lineage's own
+    correctly-filed writes as 'misfiled' forever after the fold. Degrades to the raw label
+    on any failure (577988ed — same law as filed_under_check).
+
+    COMPOUNDING GAP, SAME AS filed_under_check's OWN (caught by actually running a fold
+    against this function): the `in_repo` join below carried no `valid_until` filter, so
+    a folded project's invalidated pre-fold edge stayed visible alongside its live
+    re-pointed replacement, reporting the SAME write as both correctly- and incorrectly-
+    filed at once. Fixed in the same pass — label normalization alone cannot reconcile
+    that, the edge set itself had to be live-only first."""
     if not project:
         return None
+    try:
+        from src.orchestrator.project_identity import _normalize_project_label_through_merge
+        project, _confession = await _normalize_project_label_through_merge(pool, project)
+    except Exception:  # noqa: BLE001 — see note above
+        pass
     ancestors, complete = await _lineage_ancestors(pool, agent_id, max_hops=max_hops)
     try:
         rows = await pool.fetch(
             "SELECT DISTINCT o.id, p.canonical AS filed_project FROM objects o "
             "JOIN links l ON l.from_id = o.id AND l.type = 'in_repo' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
             "JOIN objects p ON p.id = l.to_id AND p.type = 'SoftwareProject' "
             "WHERE o.type IN ('Decision', 'Thread') AND EXISTS ("
             "  SELECT 1 FROM assertions a WHERE a.object_id = o.id "

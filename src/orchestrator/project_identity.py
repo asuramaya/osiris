@@ -137,7 +137,9 @@ async def _seat_lineage_bases(pool: asyncpg.Pool, seat_oid: Any) -> list[str]:
     return sorted({_generation(str(r["canonical"]))[0] for r in rows})
 
 
-async def _live_label(pool: asyncpg.Pool, oid: Any, canonical: str) -> str:
+async def _live_label(
+    pool: asyncpg.Pool | asyncpg.Connection, oid: Any, canonical: str,
+) -> str:
     """A SoftwareProject's CURRENT display label — its live `name` property when one
     exists, falling back to the canonical's own bare form only for an object that never
     got a `name` asserted at all. Every candidate key in this module goes through this:
@@ -147,7 +149,10 @@ async def _live_label(pool: asyncpg.Pool, oid: Any, canonical: str) -> str:
     rename. Caught live: re-running this tool against deckard/metron right after
     renaming xxit->handlingtheloop still reported 'xxit' with the remote 'disagreeing',
     when the rename had already made them agree — the read-back that was supposed to
-    CONFIRM the rename would have reported it as still broken."""
+    CONFIRM the rename would have reported it as still broken.
+
+    Type widened to accept a raw `asyncpg.Connection` too (decision 6b4d185e's fourth/
+    fifth callers) — same `fetchval` surface either way, one implementation for both."""
     name = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", oid)
@@ -155,15 +160,13 @@ async def _live_label(pool: asyncpg.Pool, oid: Any, canonical: str) -> str:
 
 
 async def _normalize_project_label_through_merge(
-    pool: asyncpg.Pool, label: str,
+    conn_or_pool: asyncpg.Pool | asyncpg.Connection, label: str,
 ) -> tuple[str, str | None]:
     """Resolve a project label through `merged_into` to its current survivor's live
     label (obligation a980aff2, henry->shellbiz): a label that has since been FOLDED into
     another must compare as the SURVIVOR, the same live label `_write_attribution`'s own
     in_repo-edge lookup already reports for the write side — otherwise every fold produces
-    a permanent false 'disagrees' for any caller comparing against it. Walks with
-    `Actions.resolve_object_id` (actions/core.py) — the SAME chain-walk every other
-    merge-aware reader already trusts, not a re-derivation.
+    a permanent false 'disagrees' for any caller comparing against it.
 
     MOVED HERE FROM agents.py (decision 540007ca's sibling finding), NOT REWRITTEN: this
     module already hosts `_live_label`, the label-resolution primitive every candidate in
@@ -171,11 +174,18 @@ async def _normalize_project_label_through_merge(
     through the fold" logic (project_identity_evidence's own `pin`, this module),
     keeping a second private copy in agents.py would have been the disease one level up
     from the one being fixed — three call sites is the threshold past which "just copy
-    it" stops being cheaper than a shared home. Behavior is verbatim: same cycle guard,
-    same confess-don't-guess refusal, only the parameter narrowed from `Actions` to
-    `asyncpg.Pool` (this module's own convention — every sibling function here takes
-    `pool` directly) with a throwaway `Actions(pool)` built locally for the one call that
-    needs `resolve_object_id`.
+    it" stops being cheaper than a shared home.
+
+    WIDENED FOR A FOURTH AND FIFTH CALLER (decision 6b4d185e — settle.py's
+    filed_under_check, agents.py's misfiled_by_lineage), NOT A SIXTH COPY: the chain-walk
+    itself is now inlined here rather than delegated to `Actions.resolve_object_id`,
+    because filed_under_check's own `conn_or_pool` accepts EITHER an `asyncpg.Pool` (the
+    /settle MCP tool) OR a raw `asyncpg.Connection` (the Stop hook, which cannot hold a
+    pool across its ~1s budget, module docstring) — `Actions` requires a real Pool to
+    `.acquire()` from, so wrapping a bare Connection in one would break the hook's own
+    caller. Both types expose the same `fetch`/`fetchval` surface this walk needs, so one
+    implementation genuinely serves every caller. Behavior is otherwise verbatim: same
+    100-iteration cycle guard, same confess-don't-guess refusal.
 
     Never guesses: the label names its own SoftwareProject by EXACT canonical only
     (case-insensitive, matching `_resolve_or_mint_project`'s own lookup) — no string
@@ -185,23 +195,27 @@ async def _normalize_project_label_through_merge(
     through — the original label comes back untouched alongside a confession string for
     the caller to surface, never a guessed winner (this house names disagreement, it
     never crowns a side)."""
-    from src.actions.core import ActionError, Actions
-
-    row = await pool.fetchrow(
+    row = await conn_or_pool.fetchrow(
         "SELECT id, canonical FROM objects WHERE type='SoftwareProject' "
         "AND lower(canonical) = lower($1)", f"repo:{label}")
     if row is None:
         return label, None
-    try:
-        winner = await Actions(pool).resolve_object_id(row["id"])
-    except ActionError:
+    current = row["id"]
+    for _ in range(100):
+        nxt = await conn_or_pool.fetchval("SELECT merged_into FROM objects WHERE id=$1",
+                                          current)
+        if nxt is None:
+            winner = current
+            break
+        current = nxt
+    else:
         return label, (f"merge chain for {label!r} could not be resolved (broken/cyclic "
                        "merged_into edge) — compared unnormalized rather than guessing a "
                        "winner")
     if winner == row["id"]:
         return label, None
-    canon = await pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
-    return await _live_label(pool, winner, canon), None
+    canon = await conn_or_pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
+    return await _live_label(conn_or_pool, winner, canon), None
 
 
 async def _declared_charter(pool: asyncpg.Pool, seat_id: str, seat_oid: Any,
