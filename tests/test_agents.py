@@ -534,6 +534,68 @@ def test_project_pin_banner_names_a_deleted_cwd_distinctly(tmp_path: Path) -> No
     assert str(ghost) in banner
 
 
+def test_project_pin_banner_is_silent_for_a_declared_container_pin(tmp_path: Path) -> None:
+    """Thoth LXXVI's live catch on his own mount: every mount at ~/.osiris/seats got the
+    'NEVER DECLARES project' banner even though that pin deliberately declares
+    `kind = "container"` (ruling 719ed5b1) and answers a DIFFERENT question on purpose —
+    the sanctioned non-project case, not an oversight. The banner's own "fell back to a
+    BASENAME GUESS" text was doubly wrong: no basename guess runs for a bare root at all
+    (resolve_identity's own bare_root branch keeps project None there), and by the time a
+    SEATED session's project shows in the rendered message it's the seat's own house
+    resolution, unrelated to any guess. A container-kind pin — declared here explicitly,
+    not just the hardcoded bare-office-root path — gets no banner at all."""
+    from src.orchestrator.agents import project_pin_banner
+
+    container = tmp_path / "seats"
+    container.mkdir()
+    (container / ".osiris").write_text('kind = "container"\n')
+    ident = resolve_identity(cwd=str(container), job_dir="/j/jobs/container0001")
+    assert ident.project_pin_path == str(container / ".osiris")  # the file WAS found
+    assert project_pin_banner(ident) is None
+
+
+def test_write_attribution_banner_fires_on_a_genuine_disagreement() -> None:
+    from src.orchestrator.agents import write_attribution_banner
+
+    ident = AgentIdentity(agent_id="agent:wa01", session="wa01", project="newproj",
+                          model=None, cwd="/x", write_attribution_agreement="disagrees",
+                          write_attribution_top="oldproj", write_attribution_total=4)
+    banner = write_attribution_banner(ident)
+    assert banner is not None
+    assert "oldproj" in banner and "newproj" in banner
+
+
+def test_write_attribution_banner_silent_when_agreement_says_so() -> None:
+    from src.orchestrator.agents import write_attribution_banner
+
+    confirms = AgentIdentity(agent_id="agent:wa02", session="wa02", project="proj",
+                             model=None, cwd="/x", write_attribution_agreement="confirms",
+                             write_attribution_top="proj", write_attribution_total=1)
+    assert write_attribution_banner(confirms) is None
+
+    no_signal = AgentIdentity(agent_id="agent:wa03", session="wa03", project=None,
+                              model=None, cwd="/x", write_attribution_agreement="no-signal")
+    assert write_attribution_banner(no_signal) is None
+
+
+def test_write_attribution_banner_ignores_a_stale_disagreement_flag(
+) -> None:
+    """Thoth LXXVI's live catch on his own mount: `write_attribution_agreement` is
+    stamped by register_agent BEFORE `_resolve_project_seat_first` runs (deliberately —
+    see that function's own docstring), so a SEATED session's flag can be "disagrees"
+    against the PRE-seat-override project even though `ident.project` is already the
+    POST-override, final value by the time this banner would render. The stored flag
+    said "disagrees"; the two values THIS message would show are equal ("osiris" and
+    "osiris") — the banner must stay silent rather than show itself agreeing with itself."""
+    from src.orchestrator.agents import write_attribution_banner
+
+    ident = AgentIdentity(agent_id="agent:wa04", session="wa04", project="osiris",
+                          model=None, cwd="/home/x/.osiris/seats",
+                          write_attribution_agreement="disagrees",
+                          write_attribution_top="osiris", write_attribution_total=6)
+    assert write_attribution_banner(ident) is None
+
+
 def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     tmp_path: Path,
 ) -> None:
