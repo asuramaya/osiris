@@ -12,6 +12,7 @@ from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.projects import (
     assert_project_property,
+    casefold_auto_merge_candidates,
     correct_project_name,
     find_case_variant_projects,
     fold_project,
@@ -1215,6 +1216,57 @@ async def test_normalize_project_casing_refuses_on_a_pin_missing_the_key(
     assert "is not declared" in out["pin_failures"][0]["error"]
 
 
+async def test_normalize_project_casing_dry_run_writes_nothing(
+    actions: Actions, tmp_path,
+) -> None:
+    """execute=False (#108 piece 2's own requirement): every precondition runs, proves
+    green, but no fold/rename/pin write happens — a plan is returned instead."""
+    await _stub_project(actions, "repo:DryRun", "DryRun")
+    await _stub_project(actions, "repo:dryrun", "dryrun")
+    seat_path = _write_pin(tmp_path / "dryrunseat", "DryRun")
+    out = await normalize_project_casing(
+        actions, populated="DryRun", phantom="dryrun", correct_case="dryrun",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(seat_path,),
+        execute=False)
+    assert out["plan"] == {
+        "would_fold": "repo:dryrun", "into": "repo:DryRun",
+        "would_rename": "repo:DryRun", "new_name": "dryrun",
+        "would_write_pins": [seat_path], "pins_already_correct": [],
+    }
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:dryrun'")
+    assert row["status"] == "active", "the dupe must NOT have been folded"
+    name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='name' WHERE o.canonical='repo:DryRun'")
+    assert name == "DryRun", "the rename must NOT have happened"
+    import tomllib
+    assert tomllib.loads(Path(seat_path, ".osiris").read_text())["project"] == "DryRun", (
+        "the pin must NOT have been rewritten")
+
+
+async def test_normalize_project_casing_dry_run_still_refuses_on_a_real_precondition(
+    actions: Actions,
+) -> None:
+    """A preview must never be optimistic about a merge that would actually refuse —
+    the same contradiction gate fires identically in either mode."""
+    await _stub_project(actions, "repo:DryConflict", "DryConflict")
+    await actions.assert_property(
+        (await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical='repo:DryConflict'")),
+        "on_disk_path", "/one/path", "test", NOW, 0.9)
+    await _stub_project(actions, "repo:dryconflict", "dryconflict")
+    await actions.assert_property(
+        (await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical='repo:dryconflict'")),
+        "on_disk_path", "/other/path", "test", NOW, 0.9)
+    out = await normalize_project_casing(
+        actions, populated="DryConflict", phantom="dryconflict",
+        correct_case="dryconflict", evidence="op confirmed", actor="agent:test",
+        execute=False)
+    assert "error" in out and "contradicting values" in out["error"]
+
+
 async def test_normalize_project_casing_refuses_blank_evidence(actions: Actions) -> None:
     await _stub_project(actions, "repo:be1", "be1")
     await _stub_project(actions, "repo:be2", "be2")
@@ -1286,3 +1338,135 @@ async def test_normalize_project_casing_multiple_pins_mixed_state(
     assert out["pins_already_correct"] == [already]
     assert len(out["pins_written"]) == 1
     assert out["pins_written"][0]["path"] == str(Path(needs_write) / ".osiris")
+
+
+# ═══ casefold_auto_merge_candidates — #108 piece 2 (obligation 5f7dfebb) ═══════════════
+# the cheap, deterministic, no-model-arbitration blocking signal. NOT a new merge
+# mechanism — every write it can cause is normalize_project_casing's own.
+
+
+async def _link_it(actions: Actions, oid) -> None:
+    """Gives a SoftwareProject a real live link, the phantom-vs-populated signal
+    casefold_auto_merge_candidates keys on."""
+    t = await actions.create_or_find_object("Thread", f"thread:link-{oid}", "test")
+    await actions.create_link(t, oid, "in_repo", "agent:test", NOW, 0.9)
+
+
+async def test_casefold_auto_merge_finds_a_clean_pair_and_defaults_to_dry_run(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:CleanTwin", "CleanTwin")
+    await _stub_project(actions, "repo:cleantwin", "cleantwin")
+    populated_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:CleanTwin'")
+    await _link_it(actions, populated_id)
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["executed"] is False  # dry-run is the default, unlike its own primitive
+    assert len(out["candidates"]) == 1
+    c = out["candidates"][0]
+    assert c["populated"] == "repo:CleanTwin" and c["phantom"] == "repo:cleantwin"
+    assert c["correct_case"] == "cleantwin"
+    assert "plan" in c["result"]  # nothing written — the preview only
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:cleantwin'")
+    assert row["status"] == "active", "a dry run must never fold anything"
+
+
+async def test_casefold_auto_merge_executes_when_told_to(actions: Actions) -> None:
+    await _stub_project(actions, "repo:ExecTwin", "ExecTwin")
+    await _stub_project(actions, "repo:exectwin", "exectwin")
+    populated_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:ExecTwin'")
+    await _link_it(actions, populated_id)
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test", execute=True)
+    assert out["executed"] is True
+    assert out["candidates"][0]["result"]["renamed"] == "repo:ExecTwin"
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE canonical='repo:exectwin'")
+    assert row["status"] == "merged"
+
+
+async def test_casefold_auto_merge_never_folds_a_path_shaped_basename_collision(
+    actions: Actions,
+) -> None:
+    """Thoth's own explicit warning (msg 4815): coldspot/kast/rotten-apple are NOT case
+    twins — a path-shaped canonical colliding with a bare one on BASENAME alone, the
+    #107 disease. Grouping by the full case-folded canonical (never just the basename)
+    keeps this structurally unreachable, not merely policy."""
+    await _stub_project(actions, "repo:/home/x/code/REPOS/pathcase", "pathcase")
+    await _stub_project(actions, "repo:pathcase", "pathcase")
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert out["skipped"] == []  # never even grouped together — not a silent skip either
+
+
+async def test_casefold_auto_merge_skips_a_three_way_collision_loudly(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:ThreeWay", "ThreeWay")
+    await _stub_project(actions, "repo:threeway", "threeway")
+    await _stub_project(actions, "repo:THREEWAY", "THREEWAY")
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "not a clean pair" in out["skipped"][0]["reason"]
+
+
+async def test_casefold_auto_merge_skips_when_both_sides_are_populated(
+    actions: Actions,
+) -> None:
+    """Both sides carrying real graph presence is a genuine two-different-things
+    possibility, never guessed here — the same discrimination fold_project's own
+    contradiction gate holds one layer down, applied before that gate even runs."""
+    await _stub_project(actions, "repo:BothPop", "BothPop")
+    await _stub_project(actions, "repo:bothpop", "bothpop")
+    a_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:BothPop'")
+    b_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:bothpop'")
+    await _link_it(actions, a_id)
+    await _link_it(actions, b_id)
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "both sides carry live links" in out["skipped"][0]["reason"]
+
+
+async def test_casefold_auto_merge_skips_when_neither_side_is_populated(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:NeitherPop", "NeitherPop")
+    await _stub_project(actions, "repo:neitherpop", "neitherpop")
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "neither side carries any live links" in out["skipped"][0]["reason"]
+
+
+async def test_casefold_auto_merge_skips_when_neither_side_is_lowercase(
+    actions: Actions,
+) -> None:
+    """LOWERCASE IS LAW needs a clear winner — two mixed-case spellings of the same
+    label give it none, a human question, never guessed."""
+    await _stub_project(actions, "repo:MixedOne", "MixedOne")
+    await _stub_project(actions, "repo:MIXEDone", "MIXEDone")
+    a_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:MixedOne'")
+    await _link_it(actions, a_id)
+
+    out = await casefold_auto_merge_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "no single fully-lowercase spelling" in out["skipped"][0]["reason"]

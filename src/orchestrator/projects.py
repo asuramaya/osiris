@@ -753,6 +753,7 @@ def _peek_pin_value(path: str, key: str) -> dict[str, Any]:
 async def normalize_project_casing(
     actions: Actions, *, populated: str, phantom: str, correct_case: str, evidence: str,
     actor: str, seat_pin_paths: tuple[str, ...] = (), pin_key: str = "project",
+    execute: bool = True,
 ) -> dict[str, Any]:
     """THE COMPOSITION operator ruling d02f2cdd asked for (thread 3ed5b3d2) — the
     TWIN-COLLAPSE shape specifically: two SoftwareProject objects already exist under
@@ -826,6 +827,15 @@ async def normalize_project_casing(
     which side is actually populated, same trust boundary `fold_project` itself already
     carries for dupe/into.
 
+    `execute=False` (obligation 5f7dfebb piece 2, casefold auto-merge's own dry-run
+    requirement — Thoth's instruction: "build it as a verb + dry-run first"): runs EVERY
+    precondition above unchanged — every check is already read-only, proven before any
+    write — and returns `{"plan": {...}}` naming exactly what WOULD happen, without
+    calling fold_project/rename_project/correct_pin_value at all. Same refusal shape
+    either way: a precondition failure returns the identical `{"error": ...}` whether
+    executing or previewing, since nothing has been written yet in either case. Default
+    stays `True` (execute) so every existing caller is unchanged.
+
     Refuses LOUDLY, nothing written, on: blank populated/phantom/correct_case/evidence;
     populated==phantom; either not resolving to an ACTIVE SoftwareProject; either
     already merged; a genuine cross-object contradiction on any non-name/tag property
@@ -898,6 +908,13 @@ async def normalize_project_casing(
                          "than none",
                 "pin_failures": pin_failures}
 
+    if not execute:
+        return {"plan": {
+            "would_fold": phantom_row["canonical"], "into": populated_row["canonical"],
+            "would_rename": populated_row["canonical"], "new_name": correct_case,
+            "would_write_pins": pins_ok, "pins_already_correct": pins_already_correct,
+        }}
+
     fold_result = await fold_project(
         actions, dupe=phantom_row["canonical"], into=populated_row["canonical"],
         evidence=evidence, actor=actor)
@@ -950,3 +967,101 @@ async def normalize_project_casing(
                       "deliberate, separate act, never auto-invoked here); the failed "
                       "pin(s) above still need hand correction either way.")
     return out
+
+
+async def casefold_auto_merge_candidates(
+    actions: Actions, *, evidence: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """#108 PIECE 2 (obligation 5f7dfebb, operator ruling d02f2cdd — "LOWERCASE IS LAW"
+    — and the standing instruction "capitalization merging should be automatic not
+    bottlenecked by me"): the cheap, deterministic, no-model-arbitration blocking signal
+    graph1000x §IV.D calls for, ahead of piece 3's model layer. NOT A NEW MERGE
+    MECHANISM — this is entirely a CANDIDATE FINDER that composes with
+    `normalize_project_casing` (thread 3ed5b3d2's own primitive, already ships the
+    reversible atomic-or-refused five-thing move); every write this function can ever
+    cause is `normalize_project_casing`'s, never a re-derivation of fold/rename/pin logic
+    here.
+
+    THE DISCRIMINATION THOTH NAMED EXPLICITLY (msg 4815): "coldspot/kast/rotten-apple may
+    NOT be case twins; do not fold those." Measured live tonight (triage buckets,
+    SoftwareProject/active, 58 objects): those three ARE `duplicate_suspect`, but each
+    pair is a PATH-SHAPED canonical colliding with a BARE one on basename alone
+    (`repo:/home/x/code/REPOS/coldspot` vs `repo:coldspot`) — the #107 disease, a
+    DIFFERENT gap this function must never touch. Grouping by the FULL case-folded
+    `canonical` (not triage's own basename grouping) is what keeps this structurally
+    correct: two canonicals differing ONLY in letter case group together; a path-shaped
+    canonical never case-folds equal to a bare one no matter how their basenames match.
+    Confirmed empirically the same way: the live population today groups into ZERO
+    genuine case-twin pairs (ramstein's own twin was folded earlier tonight, by hand,
+    before this verb existed) — this is reported honestly as `candidates: []`, never
+    padded or assumed stale.
+
+    THREE WAYS A GROUP IS SKIPPED, ALL NAMED LOUDLY IN `skipped`, NEVER A SILENT DROP
+    (Thoth's own constraint, item (d)): more than 2 members sharing one case-folded
+    canonical (an N-way collision, not a clean pair — a human question); BOTH sides
+    carrying live links (both populated — a genuine two-different-things possibility,
+    exactly the case fold_project's own contradiction gate exists to catch one layer
+    down, never guessed here); NEITHER side matching a fully-lowercase spelling (no clear
+    LOWERCASE-IS-LAW winner between two mixed-case spellings — a human call). Only a
+    pair with EXACTLY one populated (nonzero live link count) side, one phantom (zero)
+    side, and exactly one of the two spelled fully lowercase becomes a candidate.
+
+    `execute=False` IS THE DEFAULT (unlike `normalize_project_casing`'s own default) —
+    THIS function's whole purpose is the dry-run-first population survey Thoth asked
+    for; a caller wanting the live auto-merge must pass `execute=True` explicitly, an
+    intentional asymmetry from its underlying primitive. Every candidate is still run
+    through `normalize_project_casing` even in preview mode (its own `execute=False`
+    proves every real precondition — contradiction, pin preflight — the SAME way the
+    live path would, so a dry-run report is never optimistic about a merge that would
+    actually refuse).
+
+    NO TRIGGER SITE WIRED (Thoth's own item (c) — his call, not this build's): this is
+    the verb only. Nothing calls it yet."""
+    rows = await actions.pool.fetch(
+        "SELECT lower(canonical) AS key, array_agg(id) AS ids, "
+        "array_agg(canonical) AS canonicals FROM objects "
+        "WHERE type='SoftwareProject' AND status='active' "
+        "GROUP BY lower(canonical) HAVING count(*) > 1")
+    candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        ids, canonicals = row["ids"], row["canonicals"]
+        if len(ids) > 2:
+            skipped.append({"canonicals": canonicals,
+                            "reason": f"{len(ids)} active projects share this case-"
+                            "folded canonical, not a clean pair — a human question"})
+            continue
+        oid_a, oid_b = ids
+        can_a, can_b = canonicals
+        link_a = await actions.pool.fetchval(
+            "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
+            "AND (valid_until IS NULL OR valid_until > now())", oid_a)
+        link_b = await actions.pool.fetchval(
+            "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
+            "AND (valid_until IS NULL OR valid_until > now())", oid_b)
+        if bool(link_a) == bool(link_b):
+            skipped.append({"canonicals": canonicals,
+                            "reason": f"both sides carry live links ({link_a}, {link_b}) "
+                            "— genuinely ambiguous which is the phantom, never guessed"
+                            if link_a and link_b else
+                            "neither side carries any live links — no populated side to "
+                            "fold the other into, never guessed"})
+            continue
+        populated_can, phantom_can = (can_a, can_b) if link_a else (can_b, can_a)
+        bare_a = str(can_a).removeprefix("repo:")
+        bare_b = str(can_b).removeprefix("repo:")
+        lower_a, lower_b = bare_a == bare_a.lower(), bare_b == bare_b.lower()
+        if lower_a == lower_b:
+            skipped.append({"canonicals": canonicals,
+                            "reason": "no single fully-lowercase spelling between the "
+                            "two — LOWERCASE IS LAW has no clear winner to apply, a "
+                            "human question"})
+            continue
+        correct_case = (bare_a if lower_a else bare_b)
+        result = await normalize_project_casing(
+            actions, populated=populated_can.removeprefix("repo:"),
+            phantom=phantom_can.removeprefix("repo:"), correct_case=correct_case,
+            evidence=evidence, actor=actor, execute=execute)
+        candidates.append({"populated": populated_can, "phantom": phantom_can,
+                           "correct_case": correct_case, "result": result})
+    return {"executed": execute, "candidates": candidates, "skipped": skipped}
