@@ -5,6 +5,7 @@ seat of the same name)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
@@ -13,6 +14,7 @@ from src.orchestrator.projects import (
     correct_project_name,
     find_case_variant_projects,
     fold_project,
+    normalize_project_casing,
     reconcile_project_fold,
     retire_project,
     unfold_project,
@@ -982,3 +984,242 @@ async def test_reconcile_refuses_unknown_and_ambiguous_refs(actions: Actions) ->
     ambiguous = await reconcile_project_fold(actions, dupe="realdupe2", into="realinto2",
                                              actor="agent:test")
     assert "ambiguous" in ambiguous["error"]
+
+
+# ═══ normalize_project_casing (operator ruling d02f2cdd, thread 3ed5b3d2) — the
+# twin-collapse composition: fold_project + correct_pin_value, atomic-or-refused. Never
+# executed against a real specimen (RAMstein/ramstein, bytebye/byebyte) — every test here
+# builds fixtures and proves the verb on those, exactly as instructed.
+
+def _write_pin(tmp_path_factory_dir, project_value: str) -> str:
+    """A real `.osiris` file on disk under a fresh directory, project= as its one key —
+    the shape `_peek_pin_value`/`correct_pin_value` both read."""
+    d = tmp_path_factory_dir
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".osiris").write_text(f'project = "{project_value}"\n')
+    return str(d)
+
+
+async def test_normalize_project_casing_folds_and_corrects_the_pin(
+    actions: Actions, tmp_path,
+) -> None:
+    await _stub_project(actions, "repo:RAMstein", "RAMstein")
+    await _stub_project(actions, "repo:ramstein", "ramstein")
+    populated_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:RAMstein'")
+    agent = await actions.create_or_find_object("Agent", "agent:normcase1", "test")
+    await actions.create_link(agent, populated_id, "works_in", "test", NOW, 0.9)
+
+    seat_path = _write_pin(tmp_path / "till", "RAMstein")
+    out = await normalize_project_casing(
+        actions, populated="RAMstein", phantom="ramstein", correct_case="ramstein",
+        evidence="operator confirmed: same repo, wrong case", actor="agent:test",
+        seat_pin_paths=(seat_path,))
+
+    assert out["folded"] == "repo:ramstein" and out["into"] == "repo:RAMstein"
+    assert out["renamed"] == "repo:RAMstein"
+    assert out["old_name"] == "RAMstein" and out["new_name"] == "ramstein"
+    assert out["edges_moved"] == {}  # the PHANTOM had nothing to move
+    assert len(out["pins_written"]) == 1
+    assert out["pins_written"][0]["path"] == str(Path(seat_path) / ".osiris")
+    assert out["pins_written"][0]["written"] is True
+    assert out["pins_written"][0]["old_value"] == "RAMstein"
+    assert out["pins_written"][0]["new_value"] == "ramstein"
+    assert out["pins_already_correct"] == []
+    assert "pin_write_failed" not in out
+
+    populated_row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:RAMstein'")
+    assert populated_row["status"] == "active", "the POPULATED object survives, never merged"
+    phantom_row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:ramstein'")
+    assert phantom_row["status"] == "merged", "the empty PHANTOM is what gets retired"
+    pin_text = (Path(seat_path) / ".osiris").read_text()
+    assert 'project = "ramstein"' in pin_text
+    # the populated object's own works_in edge stays on ITS OWN id — never moved,
+    # because it was never the one being retired
+    live_edge = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", agent, populated_id)
+    assert live_edge == 1
+
+
+async def test_normalize_project_casing_preserves_the_populated_objects_own_properties(
+    actions: Actions,
+) -> None:
+    """THE FINDING THAT CHANGED THIS FUNCTION'S DIRECTION (Sekhmet's trace, thread 4710):
+    fold_project's own merge never copies properties, and current_assertions never
+    follows merged_into. Folding the wrong way would silently discard on_disk_path/
+    remote_url. This proves the chosen direction actually keeps them."""
+    await _stub_project(actions, "repo:PropCase", "PropCase")
+    await _stub_project(actions, "repo:propcase", "propcase")
+    populated_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:PropCase'")
+    await actions.assert_property(populated_id, "on_disk_path", "/srv/git/PropCase",
+                                  "disk-census", NOW, 0.9)
+    await actions.assert_property(populated_id, "remote_url",
+                                  "git@github.com:x/PropCase.git", "disk-census", NOW, 0.9)
+
+    await normalize_project_casing(
+        actions, populated="PropCase", phantom="propcase", correct_case="propcase",
+        evidence="op confirmed", actor="agent:test")
+
+    on_disk = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='on_disk_path'", populated_id)
+    remote = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='remote_url'", populated_id)
+    assert on_disk == "/srv/git/PropCase"
+    assert remote == "git@github.com:x/PropCase.git"
+
+
+async def test_normalize_project_casing_skips_an_already_correct_pin(
+    actions: Actions, tmp_path,
+) -> None:
+    await _stub_project(actions, "repo:RAMstein2", "RAMstein2")
+    await _stub_project(actions, "repo:ramstein2", "ramstein2")
+    seat_path = _write_pin(tmp_path / "already", "ramstein2")
+    out = await normalize_project_casing(
+        actions, populated="RAMstein2", phantom="ramstein2", correct_case="ramstein2",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(seat_path,))
+    assert out["pins_already_correct"] == [seat_path]
+    assert out["pins_written"] == []
+
+
+async def test_normalize_project_casing_works_with_no_pins_named(actions: Actions) -> None:
+    await _stub_project(actions, "repo:NoPin", "NoPin")
+    await _stub_project(actions, "repo:nopin", "nopin")
+    out = await normalize_project_casing(
+        actions, populated="NoPin", phantom="nopin", correct_case="nopin",
+        evidence="op confirmed", actor="agent:test")
+    assert out["renamed"] == "repo:NoPin"
+    assert out["pins_written"] == [] and out["pins_already_correct"] == []
+
+
+async def test_normalize_project_casing_refuses_wholesale_on_a_missing_pin_file(
+    actions: Actions, tmp_path,
+) -> None:
+    """A partial normalization is worse than none — the whole operation refuses, and
+    NOTHING is written, not even the graph side."""
+    await _stub_project(actions, "repo:RAMstein3", "RAMstein3")
+    await _stub_project(actions, "repo:ramstein3", "ramstein3")
+    missing_path = str(tmp_path / "does-not-exist")
+    out = await normalize_project_casing(
+        actions, populated="RAMstein3", phantom="ramstein3", correct_case="ramstein3",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(missing_path,))
+    assert "pin_failures" in out
+    assert out["pin_failures"][0]["path"] == missing_path
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:RAMstein3'")
+    assert row["status"] == "active", "the graph side must NOT have written anything"
+    name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='name' WHERE o.canonical='repo:RAMstein3'")
+    assert name == "RAMstein3", "not even the rename must have happened"
+
+
+async def test_normalize_project_casing_refuses_on_invalid_toml(
+    actions: Actions, tmp_path,
+) -> None:
+    await _stub_project(actions, "repo:RAMstein4", "RAMstein4")
+    await _stub_project(actions, "repo:ramstein4", "ramstein4")
+    bad = tmp_path / "badtoml"
+    bad.mkdir()
+    (bad / ".osiris").write_text("this is not valid toml {{{")
+    out = await normalize_project_casing(
+        actions, populated="RAMstein4", phantom="ramstein4", correct_case="ramstein4",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(str(bad),))
+    assert "pin_failures" in out
+    assert "not valid TOML" in out["pin_failures"][0]["error"]
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:RAMstein4'")
+    assert row["status"] == "active"
+
+
+async def test_normalize_project_casing_refuses_on_a_pin_missing_the_key(
+    actions: Actions, tmp_path,
+) -> None:
+    await _stub_project(actions, "repo:RAMstein5", "RAMstein5")
+    await _stub_project(actions, "repo:ramstein5", "ramstein5")
+    d = tmp_path / "nokey"
+    d.mkdir()
+    (d / ".osiris").write_text('handle = "till"\n')
+    out = await normalize_project_casing(
+        actions, populated="RAMstein5", phantom="ramstein5", correct_case="ramstein5",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(str(d),))
+    assert "pin_failures" in out
+    assert "is not declared" in out["pin_failures"][0]["error"]
+
+
+async def test_normalize_project_casing_refuses_blank_evidence(actions: Actions) -> None:
+    await _stub_project(actions, "repo:be1", "be1")
+    await _stub_project(actions, "repo:be2", "be2")
+    out = await normalize_project_casing(
+        actions, populated="be1", phantom="be2", correct_case="be2", evidence="",
+        actor="agent:test")
+    assert "evidence is required" in out["error"]
+
+
+async def test_normalize_project_casing_refuses_same_label(actions: Actions) -> None:
+    await _stub_project(actions, "repo:same1", "same1")
+    out = await normalize_project_casing(
+        actions, populated="same1", phantom="same1", correct_case="same1", evidence="x",
+        actor="agent:test")
+    assert "nothing to normalize" in out["error"]
+
+
+async def test_normalize_project_casing_refuses_an_unknown_side(actions: Actions) -> None:
+    await _stub_project(actions, "repo:known1", "known1")
+    out = await normalize_project_casing(
+        actions, populated="known1", phantom="ghost-project", correct_case="known1",
+        evidence="x", actor="agent:test")
+    assert "unknown SoftwareProject" in out["error"]
+    assert "ghost-project" in out["error"]
+
+
+async def test_normalize_project_casing_refuses_when_phantom_already_merged(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:am1", "am1")
+    await _stub_project(actions, "repo:am2", "am2")
+    await _stub_project(actions, "repo:am3", "am3")
+    await fold_project(actions, dupe="am1", into="am2", evidence="x", actor="agent:test")
+    out = await normalize_project_casing(
+        actions, populated="am3", phantom="am1", correct_case="am3", evidence="x",
+        actor="agent:test")
+    assert "already folded" in out["error"]
+
+
+async def test_normalize_project_casing_refuses_a_genuine_cross_object_contradiction(
+    actions: Actions,
+) -> None:
+    """Reuses fold_project's own guard verbatim — must never drift from what a bare
+    fold_project call would decide."""
+    await _stub_project(actions, "repo:ncc1", "ncc1")
+    await _stub_project(actions, "repo:ncc2", "ncc2")
+    ncc1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:ncc1'")
+    ncc2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:ncc2'")
+    await actions.assert_property(ncc1_id, "language", "python", "agent:alice", NOW, 0.9)
+    await actions.assert_property(ncc2_id, "language", "go", "agent:bob", NOW, 0.9)
+    out = await normalize_project_casing(
+        actions, populated="ncc1", phantom="ncc2", correct_case="ncc1", evidence="x",
+        actor="agent:test")
+    assert "contradicting values" in out["error"] and out["contradicted_on"] == ["language"]
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:ncc1'")
+    assert row["status"] == "active"
+
+
+async def test_normalize_project_casing_multiple_pins_mixed_state(
+    actions: Actions, tmp_path,
+) -> None:
+    await _stub_project(actions, "repo:MultiCase", "MultiCase")
+    await _stub_project(actions, "repo:multicase", "multicase")
+    already = _write_pin(tmp_path / "already2", "multicase")
+    needs_write = _write_pin(tmp_path / "needs2", "MultiCase")
+    out = await normalize_project_casing(
+        actions, populated="MultiCase", phantom="multicase", correct_case="multicase",
+        evidence="op confirmed", actor="agent:test", seat_pin_paths=(already, needs_write))
+    assert out["pins_already_correct"] == [already]
+    assert len(out["pins_written"]) == 1
+    assert out["pins_written"][0]["path"] == str(Path(needs_write) / ".osiris")

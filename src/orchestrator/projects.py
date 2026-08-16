@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -686,3 +687,229 @@ async def correct_project_name(
            "was": distinct_raw, "vote": dict(counts),
            "because": because or "case/whitespace-only correction, self-proved",
            **prior_art_bits}
+
+
+# --- normalize_project_casing (operator ruling d02f2cdd, thread 3ed5b3d2) ----------------
+
+def _peek_pin_value(path: str, key: str) -> dict[str, Any]:
+    """Read-only preflight for ONE seat's `.osiris` pin — same TOML parsing
+    `correct_pin_value` itself uses, never writes, never advances any state. Returns
+    `{"ok": True, "value": <current>}` when the file is valid TOML and carries `key`,
+    or `{"ok": False, "error": ...}` naming EXACTLY what's wrong (missing file, invalid
+    TOML, missing key) — `normalize_project_casing`'s own precondition check calls this
+    for every named seat BEFORE writing anything anywhere, so a bad path is refused
+    up front rather than discovered mid-write with the graph side already moved."""
+    import tomllib
+
+    p = Path(path) / ".osiris"
+    if not p.is_file():
+        return {"ok": False, "error": f"{p} does not exist"}
+    try:
+        existing = tomllib.loads(p.read_text())
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
+        return {"ok": False, "error": f"{p} is not valid TOML ({type(exc).__name__}: {exc})"}
+    if key not in existing:
+        return {"ok": False, "error": f"{key!r} is not declared in {p}"}
+    return {"ok": True, "value": existing[key]}
+
+
+async def normalize_project_casing(
+    actions: Actions, *, populated: str, phantom: str, correct_case: str, evidence: str,
+    actor: str, seat_pin_paths: tuple[str, ...] = (), pin_key: str = "project",
+) -> dict[str, Any]:
+    """THE COMPOSITION operator ruling d02f2cdd asked for (thread 3ed5b3d2) — the
+    TWIN-COLLAPSE shape specifically: two SoftwareProject objects already exist under
+    case-variant canonicals (RAMstein/ramstein, bytebye/byebyte), one populated, one an
+    empty phantom (agent_count 0). NOT A SIXTH DOOR: every real write here is
+    `fold_project` (already moves the exact edge set Alfred enumerated —
+    `_PROJECT_ESTATE_LINK_TYPES` = in_repo/works_in/governs/informs, read from its own
+    code, not assumed from its docstring), `rename_project` (the display-name fix, same
+    object, same id — never re-derived here either), and `correct_pin_value` (the one
+    piece no graph verb reaches, by design — a seat's `.osiris` pin is a local file, not
+    a graph object). This function is the hallway between three existing rooms, not a
+    fourth room.
+
+    DIRECTION MATTERS, AND GETTING IT WRONG SILENTLY DESTROYS DATA — the finding that
+    changed this function's own first draft: `Actions.merge_objects` NEVER copies
+    property assertions from the retired object onto the survivor (its own docstring:
+    "assertions are never rewritten... leave assertions in place"), and
+    `current_assertions` is scoped strictly by `object_id`, never following
+    `merged_into` — confirmed by reading both, not assumed. So folding the POPULATED
+    object (real `on_disk_path`/`remote_url`/etc.) INTO the empty PHANTOM would silently
+    discard every one of the populated object's own properties, keeping only what
+    `_PROJECT_ESTATE_LINK_TYPES` moves (links, never properties). This function always
+    folds the OTHER way — `phantom` is retired INTO `populated` (which has nothing to
+    lose; it was empty), and ONLY THEN does `rename_project` fix `populated`'s own
+    `name` to `correct_case` IN PLACE, same object, same id, every property untouched
+    throughout. `populated`'s canonical never changes (rename_project's own guarantee)
+    — only its display `name` does.
+
+    ATOMIC OR REFUSED — THE INVERTED RULE (577988ed inverts here, per the operator's own
+    standing line and Thoth's explicit instruction: a partial rename is strictly WORSE
+    than none, because it destroys the one signal — agent_count 0 — that currently tells
+    the populated project apart from its phantom twin). EVERY precondition for EVERY
+    step is checked BEFORE any write happens anywhere: `fold_project`'s own guards
+    (both active, neither already merged, no contradicting non-name property) via the
+    SAME `_resolve_project_ref`/`_contradicting_properties` fold_project itself uses —
+    never re-derived, so this can never drift from what a bare fold_project call would
+    decide — AND every named seat pin (`_peek_pin_value`, read-only) must exist, parse
+    as valid TOML, and already declare `pin_key`. A pin already correct (its OWN current
+    value equals `correct_case`) is not a failure — nothing to write for that seat,
+    named in the receipt's `pins_already_correct`. ANY OTHER precondition failure
+    anywhere — the fold's own guards OR a single unreadable/missing/keyless pin —
+    REFUSES THE WHOLE OPERATION before a single write, naming exactly what failed.
+
+    CROSS-DOMAIN HONESTY: the graph writes (fold, then rename — two separate
+    transactions, since each verb owns its own) and each pin file (a separate local
+    filesystem write) cannot share one atomic commit — no verb in this codebase can
+    promise that, and this one does not pretend to. What it DOES promise: every
+    precondition is proven BEFORE the first write, so the only way a partial state can
+    occur is a genuine race between the preflight check and the write itself —
+    vanishingly unlikely for a one-seat-at-a-time correction, but reported LOUDLY rather
+    than silently if it happens: the receipt's `rename_failed`/`pin_write_failed` keys
+    name exactly what's left inconsistent, and `unfold_project` is named as the recovery
+    path for the fold half, never auto-invoked (a rollback is its own deliberate act,
+    same law ack_handoff/every other reversal in this codebase already holds).
+
+    SEAT-PIN REACH IS LOCAL-BOX ONLY, named not hidden (the same limit `push_guard`'s
+    own reach question surfaced two lanes ago): `seat_pin_paths` must be filesystem
+    paths reachable from wherever this call runs. This function does not discover which
+    seats need correcting — that is a separate, harder question (which seats exist,
+    which box each one's `.osiris` actually lives on) deliberately left to the caller,
+    matching correct_pin_value's own existing calling convention rather than inventing
+    auto-discovery this pass.
+
+    NAMED, NOT CLOSED, RESIDUAL (Sekhmet's own trace, thread 4710): `on_disk_path`/
+    `remote_url` are real SoftwareProject properties (census_trees/Rule 2), never in
+    Alfred's own five-thing enumeration, and this function's DIRECTION CHOICE is what
+    keeps them safe (the populated survivor's own properties are simply never touched)
+    — but that is a consequence of the direction, not a property this function proves.
+    A caller who accidentally names the EMPTY object as `populated` would not be caught
+    here; the property-preservation guarantee rests on the caller correctly identifying
+    which side is actually populated, same trust boundary `fold_project` itself already
+    carries for dupe/into.
+
+    Refuses LOUDLY, nothing written, on: blank populated/phantom/correct_case/evidence;
+    populated==phantom; either not resolving to an ACTIVE SoftwareProject; either
+    already merged; a genuine cross-object contradiction on any non-name/tag property
+    (fold_project's own guard, reused verbatim); or ANY named seat pin failing its
+    preflight read."""
+    from src.orchestrator.offices import correct_pin_value
+    from src.orchestrator.project_identity import rename_project
+
+    populated = (populated or "").strip()
+    phantom = (phantom or "").strip()
+    correct_case = (correct_case or "").strip()
+    evidence = (evidence or "").strip()
+    if not evidence:
+        return {"error": "evidence is required — a fold without evidence is an "
+                         "auto-merge wearing a signature"}
+    if not populated or not phantom or not correct_case:
+        return {"error": "normalize_project_casing needs populated, phantom, and "
+                         "correct_case"}
+    if populated == phantom:
+        return {"error": "populated and phantom name the same project — nothing to "
+                         "normalize"}
+
+    populated_row, populated_err = await _resolve_project_ref(
+        actions.pool, populated, verb="normalize_project_casing")
+    if populated_err:
+        return populated_err
+    phantom_row, phantom_err = await _resolve_project_ref(
+        actions.pool, phantom, verb="normalize_project_casing")
+    if phantom_err:
+        return phantom_err
+    if populated_row is None or phantom_row is None:
+        missing = [label for label, row in
+                  ((populated, populated_row), (phantom, phantom_row)) if row is None]
+        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)} — "
+                         "normalize_project_casing never invents either side; both twins "
+                         "must already exist"}
+    if phantom_row["status"] == "merged":
+        return {"error": f"{phantom_row['canonical']} is already folded — nothing to do"}
+    if populated_row["status"] != "active":
+        return {"error": f"{populated_row['canonical']} is {populated_row['status']}, "
+                         "not active"}
+    if phantom_row["status"] != "active":
+        return {"error": f"{phantom_row['canonical']} is {phantom_row['status']}, "
+                         "not active"}
+    conflicts = await _contradicting_properties(
+        actions.pool, phantom_row["id"], populated_row["id"])
+    if conflicts:
+        return {"error": f"{phantom_row['canonical']} and {populated_row['canonical']} "
+                         f"carry contradicting values on: {', '.join(conflicts)} — this "
+                         "may be two different projects, not one under two names; "
+                         "normalize_project_casing refuses rather than destroy the "
+                         "disagreement, exactly as fold_project would",
+                "contradicted_on": conflicts}
+
+    pins_ok: list[str] = []
+    pins_already_correct: list[str] = []
+    pin_failures: list[dict[str, Any]] = []
+    for pin_path in seat_pin_paths:
+        peek = _peek_pin_value(pin_path, pin_key)
+        if not peek["ok"]:
+            pin_failures.append({"path": pin_path, "error": peek["error"]})
+            continue
+        if peek["value"] == correct_case:
+            pins_already_correct.append(pin_path)
+        else:
+            pins_ok.append(pin_path)
+    if pin_failures:
+        return {"error": "one or more seat pins failed preflight — REFUSING THE WHOLE "
+                         "OPERATION before any write, a partial normalization is worse "
+                         "than none",
+                "pin_failures": pin_failures}
+
+    fold_result = await fold_project(
+        actions, dupe=phantom_row["canonical"], into=populated_row["canonical"],
+        evidence=evidence, actor=actor)
+    if fold_result.get("error"):
+        # every precondition above was proven immediately before this call — a refusal
+        # here would mean the graph changed between the check and the write (a real
+        # race, not a bug in the check), and NOTHING has been written anywhere yet, so
+        # the operation is still cleanly all-nothing.
+        return {"error": f"fold_project itself refused despite passing every "
+                         f"precondition above (a concurrent write, most likely): "
+                         f"{fold_result['error']}"}
+
+    rename_result = await rename_project(
+        actions, project=populated_row["canonical"], new_name=correct_case,
+        because=evidence, actor=actor)
+    if rename_result.get("error"):
+        return {"error": rename_result["error"], "folded": fold_result["folded"],
+               "into": fold_result["into"],
+               "note": "THE FOLD SUCCEEDED BUT THE RENAME THAT WAS SUPPOSED TO FOLLOW IT "
+                       "REFUSED — a genuine race (the graph changed between the "
+                       "precondition check and this call), not a design gap. The twin "
+                       "is already retired; only the display NAME is still wrong. "
+                       f"Recover with rename_project directly once the cause is clear: "
+                       f"{rename_result['error']}"}
+
+    pin_writes: list[dict[str, Any]] = []
+    pin_write_failed: list[dict[str, Any]] = []
+    for pin_path in pins_ok:
+        result = correct_pin_value(
+            pin_path, pin_key, correct_case,
+            reason=f"normalize_project_casing: {evidence}")
+        if result.get("error"):
+            pin_write_failed.append({"path": pin_path, "error": result["error"]})
+        else:
+            pin_writes.append({"path": pin_path, **result})
+
+    out: dict[str, Any] = {
+        "folded": fold_result["folded"], "into": fold_result["into"],
+        "edges_moved": fold_result["edges_moved"], "mounts_moved": fold_result["mounts_moved"],
+        "renamed": rename_result["project"], "old_name": rename_result["old_name"],
+        "new_name": rename_result["new_name"],
+        "pins_written": pin_writes, "pins_already_correct": pins_already_correct,
+    }
+    if pin_write_failed:
+        out["pin_write_failed"] = pin_write_failed
+        out["note"] = ("THE GRAPH SIDE (FOLD + RENAME) SUCCEEDED BUT AT LEAST ONE PIN "
+                      "WRITE FAILED AFTER PASSING PREFLIGHT — a genuine race, not a "
+                      "design gap; this is a PARTIAL STATE, reported loudly rather than "
+                      "silently. Recovery: unfold_project reverses the fold half (a "
+                      "deliberate, separate act, never auto-invoked here); the failed "
+                      "pin(s) above still need hand correction either way.")
+    return out
