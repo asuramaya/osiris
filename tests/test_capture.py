@@ -3848,6 +3848,36 @@ async def test_open_obligation_thread_ids_keeps_only_open_obligation_rows(
     assert kept == {open_obligation}
 
 
+async def test_open_obligation_thread_ids_admits_a_kindless_row_only_within_its_own_repo(
+    actions: Actions,
+) -> None:
+    """THE REPO-SCOPE RULING (decision 518a21b6, Thoth's DM 4726): a kindless Thread
+    predating the kind='obligation' convention is admitted ONLY when it shares the SAME
+    `repo=` project as the record_decision call itself — never on kind's bare absence
+    alone (measured: 73% of the fleet-wide kindless population is unrelated-project
+    noise). No `repo=` argument at all admits NOTHING under this path, ever — the ruling's
+    own explicit constraint against an absent repo silently becoming fleet-wide."""
+    from src.orchestrator.capture import _open_obligation_thread_ids
+
+    same_repo_kindless = await open_thread(
+        actions, "an old board row, no kind, same project", repo="thaw-land-repo")
+    other_repo_kindless = await open_thread(
+        actions, "an old row in a DIFFERENT project, unrelated debt", repo="pokex-style-repo")
+    no_repo_kindless = await open_thread(
+        actions, "an old row filed under no project at all")
+
+    # scoped by the matching repo: only the same-project row is admitted
+    kept = await _open_obligation_thread_ids(
+        actions.pool, [same_repo_kindless, other_repo_kindless, no_repo_kindless],
+        repo="thaw-land-repo")
+    assert kept == {same_repo_kindless}
+
+    # no repo= at all: admits nothing under this path, not even the previously-admitted one
+    kept_no_repo = await _open_obligation_thread_ids(
+        actions.pool, [same_repo_kindless, other_repo_kindless, no_repo_kindless])
+    assert kept_no_repo == set()
+
+
 async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
     actions: Actions,
 ) -> None:
