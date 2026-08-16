@@ -2123,6 +2123,71 @@ async def test_write_attribution_degrades_when_the_check_itself_fails(
     assert written == "survives"
 
 
+async def test_write_attribution_normalizes_through_merged_into(actions: Actions) -> None:
+    """OBLIGATION a980aff2 (henry->shellbiz): a seat's own `.osiris` pin can go on naming
+    a label that has since been FOLDED into another project — the write side already
+    tracks the survivor (`_write_attribution` reads the LIVE in_repo edge, healed onto
+    shellbiz by the fold), so comparing the pin's raw string against it compares
+    yesterday's name to today's. Must confirm, not permanently false-fire 'disagrees' on
+    every mount from here on."""
+    now = datetime.now(UTC)
+    base = "agent:wa6fold00"
+    await actions.create_or_find_object("Agent", base, "test")
+    henry = await actions.create_or_find_object("SoftwareProject", "repo:henry", "test")
+    shellbiz = await actions.create_or_find_object("SoftwareProject", "repo:shellbiz", "test")
+    await actions.merge_objects(shellbiz, henry, "henry folded into shellbiz", "test")
+    thread = await actions.create_or_find_object("Thread", "thread:wa6fold01", "test")
+    await actions.create_link(thread, shellbiz, "in_repo", base, now, 0.9)
+
+    ident = AgentIdentity(agent_id=base, session="wa6fold00", project="henry",
+                          model="claude-fable-5", cwd=None, model_method="job_dir",
+                          model_observed_at=now)
+    await register_agent(actions, ident, actor="test")
+
+    assert ident.write_attribution_agreement == "confirms", (
+        "the pin still says 'henry', but henry IS shellbiz now (merged_into) — the raw-"
+        "string comparison must not false-fire 'disagrees' on a folded project")
+    assert ident.write_attribution_top == "shellbiz"
+    assert ident.project == "henry", "normalization is for the COMPARISON only"
+
+
+async def test_write_attribution_confesses_a_broken_merge_chain_without_picking_a_winner(
+    actions: Actions,
+) -> None:
+    """A cyclic/broken merged_into chain must never be silently resolved to a guessed
+    winner — CONFESS in the durable disagreement note and fall through to the raw,
+    unnormalized comparison instead (this house names disagreement, it never crowns a
+    side)."""
+    now = datetime.now(UTC)
+    base = "agent:wa7cycl00"
+    await actions.create_or_find_object("Agent", base, "test")
+    a_proj = await actions.create_or_find_object("SoftwareProject", "repo:cycla", "test")
+    b_proj = await actions.create_or_find_object("SoftwareProject", "repo:cyclb", "test")
+    # a cycle no real merge_objects call can produce (self-merge is refused) — forced
+    # directly to exercise the chain-too-deep guard Actions.resolve_object_id already has.
+    await actions.pool.execute(
+        "UPDATE objects SET status='merged', merged_into=$1 WHERE id=$2", b_proj, a_proj)
+    await actions.pool.execute(
+        "UPDATE objects SET status='merged', merged_into=$1 WHERE id=$2", a_proj, b_proj)
+    thread = await actions.create_or_find_object("Thread", "thread:wa7cycl01", "test")
+    await actions.create_link(thread, b_proj, "in_repo", base, now, 0.9)
+
+    ident = AgentIdentity(agent_id=base, session="wa7cycl00", project="cycla",
+                          model="claude-fable-5", cwd=None, model_method="job_dir",
+                          model_observed_at=now)
+    a = await register_agent(actions, ident, actor="test")   # must not raise
+
+    assert ident.write_attribution_agreement == "disagrees"
+    assert ident.write_attribution_top == "cyclb"
+    assert ident.project == "cycla", "a broken chain must never override the resolved project"
+    row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS v FROM current_assertions "
+        "WHERE object_id=$1 AND name='write_attribution_disagreement'", a)
+    assert row is not None
+    assert "could not be resolved" in row["v"], (
+        "the broken chain must be CONFESSED in the receipt, not silently swallowed")
+
+
 async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Actions) -> None:
     """The one-time repair for the 906/907 edges that already existed before the write-
     side fixes landed — a genuinely OLD-shaped leak (an ancestor's edge, never moved,
