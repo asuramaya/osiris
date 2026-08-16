@@ -194,10 +194,34 @@ async def _normalize_project_label_through_merge(
     second element None. A chain too deep to resolve (a cycle) is NEVER silently picked
     through — the original label comes back untouched alongside a confession string for
     the caller to surface, never a guessed winner (this house names disagreement, it
-    never crowns a side)."""
+    never crowns a side).
+
+    EXACT MATCH FIRST, CASE-INSENSITIVE ONLY AS A REFUSAL-GATED FALLBACK (a real bug
+    caught tonight by a deployed suite going intermittently red — Thoth's own catch): a
+    case-insensitive-only lookup here is AMBIGUOUS whenever two case-variant objects
+    coexist for the same label, exactly the RAMstein/ramstein shape this whole reign has
+    been about. With no `ORDER BY`, `.fetchrow()` on such a query nondeterministically
+    returns EITHER object — sometimes the dupe (chain-walks correctly), sometimes the
+    survivor itself (whose own merged_into is None, so the walk trivially returns
+    unchanged, silently no-op'ing the very normalization this function exists to do).
+    Exact canonical match is deterministic and resolves this specimen outright; the
+    case-insensitive fallback only fires when nothing matches exactly, and only trusts it
+    when it resolves to exactly one candidate — an ambiguous fallback confesses rather
+    than picks, the same doctrine `_resolve_software_project`'s own AmbiguousProjectRef
+    already holds."""
+    target_canon = f"repo:{label}"
     row = await conn_or_pool.fetchrow(
         "SELECT id, canonical FROM objects WHERE type='SoftwareProject' "
-        "AND lower(canonical) = lower($1)", f"repo:{label}")
+        "AND canonical=$1", target_canon)
+    if row is None:
+        candidates = await conn_or_pool.fetch(
+            "SELECT id, canonical FROM objects WHERE type='SoftwareProject' "
+            "AND lower(canonical)=lower($1)", target_canon)
+        if len(candidates) > 1:
+            return label, (f"'{label}' matches {len(candidates)} SoftwareProjects that "
+                           "differ only by case — compared unnormalized rather than "
+                           "guessing which one this label means")
+        row = candidates[0] if candidates else None
     if row is None:
         return label, None
     current = row["id"]

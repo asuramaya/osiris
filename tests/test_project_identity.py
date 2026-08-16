@@ -318,6 +318,46 @@ async def test_pin_naming_a_folded_label_normalizes_to_the_survivor(
     assert "pin_merge_confession" not in ev
 
 
+async def test_normalize_project_label_matches_exactly_not_case_insensitively(
+    actions: Actions,
+) -> None:
+    """Thoth's live catch, decided by a deployed suite going intermittently red: the
+    label lookup used to be `lower(canonical) = lower($1)` with no ORDER BY — AMBIGUOUS
+    whenever a case-variant survivor coexists with the dupe it was folded into (the exact
+    RAMstein/ramstein shape), so `.fetchrow()` nondeterministically returned EITHER
+    object. Landing on the survivor itself made the chain-walk a silent no-op (its own
+    merged_into is None), returning the label unchanged instead of normalizing — no
+    exception, no confession, just a wrong answer some of the time. Exact-match-first
+    makes this deterministic regardless of the two objects' physical row order."""
+    from src.orchestrator.project_identity import _normalize_project_label_through_merge
+    from src.orchestrator.projects import fold_project
+
+    await actions.create_or_find_object("SoftwareProject", "repo:RAMstein", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    await fold_project(actions, dupe="RAMstein", into="ramstein",
+                       evidence="operator confirmed the same repo", actor="agent:test")
+
+    label, confession = await _normalize_project_label_through_merge(actions.pool, "RAMstein")
+    assert label == "ramstein"
+    assert confession is None
+
+
+async def test_normalize_project_label_refuses_a_genuine_case_ambiguity(
+    actions: Actions,
+) -> None:
+    """A label that resolves to more than one case-variant object with NEITHER an exact
+    match must confess, never guess which one it means — the same AmbiguousProjectRef
+    doctrine `_resolve_software_project` already holds."""
+    from src.orchestrator.project_identity import _normalize_project_label_through_merge
+
+    await actions.create_or_find_object("SoftwareProject", "repo:MixedCase", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:mixedcase", "test")
+
+    label, confession = await _normalize_project_label_through_merge(actions.pool, "MIXEDCASE")
+    assert label == "MIXEDCASE"  # unchanged — never a guessed winner
+    assert confession is not None and "differ only by case" in confession
+
+
 async def test_self_authored_reports_existence_only_never_content(
     actions: Actions, tmp_path,
 ) -> None:
