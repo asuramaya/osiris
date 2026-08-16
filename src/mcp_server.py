@@ -4338,6 +4338,20 @@ async def retire_agent(agent_id: str, because: str, override_live: bool = False,
 
 
 @mcp.tool()
+async def list_assertions(ref: str, name: str) -> dict[str, Any]:
+    """READ-ONLY. THE DOOR retire_assertion's own `superseded_id` NEEDS AND NOTHING ELSE
+    EXPOSED (382067d9, the fifth-ledger-disease specimen — a verb with a surface whose
+    required argument nothing could obtain): every CURRENT assertion of `name` on the
+    object `ref` resolves to, each carrying its own row `id` — the exact value
+    retire_assertion's `superseded_id` wants. dossier()/trace_evidence() both resolve
+    through the belief-winner or a flat value list; neither ever surfaced this id. No
+    write, no ranking beyond confidence/recency, no bulk scope — the smallest surface
+    that unblocks a targeted, per-row retire_assertion call."""
+    from src.orchestrator.retirement import list_assertions as _list_assertions
+    return await _list_assertions(Actions(await _pool_get()), ref=ref, name=name)
+
+
+@mcp.tool()
 async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
                            ctx: Context | None = None) -> dict[str, Any]:
     """THE CROSS-SOURCE SUPERSEDE (thread 52911d2a, found diagnosing b9aa7326) — retires

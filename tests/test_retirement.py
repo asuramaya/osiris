@@ -10,9 +10,58 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.retirement import retire_assertion
+from src.orchestrator.retirement import list_assertions, retire_assertion
 
 NOW = datetime(2026, 7, 27, tzinfo=UTC)
+
+
+async def test_list_assertions_requires_name(actions: Actions) -> None:
+    await actions.create_or_find_object("Agent", "agent:x", "test")
+    out = await list_assertions(actions, ref="agent:x", name="  ")
+    assert "error" in out
+
+
+async def test_list_assertions_unknown_ref_is_an_honest_error(actions: Actions) -> None:
+    out = await list_assertions(actions, ref="agent:does-not-exist", name="house")
+    assert "error" in out
+
+
+async def test_list_assertions_empty_when_the_property_was_never_asserted(
+    actions: Actions,
+) -> None:
+    await actions.create_or_find_object("Agent", "agent:x", "test")
+    out = await list_assertions(actions, ref="agent:x", name="never-asserted")
+    assert out["assertions"] == []
+
+
+async def test_list_assertions_exposes_the_id_retire_assertion_needs(actions: Actions) -> None:
+    """The exact 382067d9 gap: two CURRENT contradicting values, and retire_assertion's
+    superseded_id can only come from somewhere that names the row, not just the value."""
+    obj = await actions.create_or_find_object("Agent", "agent:ad1a1cb0-g40-xxiv", "test")
+    wrong = await actions.assert_property(
+        obj, "seat_generation", "2", "agent:ad1a1cb0-g40-xxiv", NOW, 0.9,
+        evidence_class="self_declared")
+    right = await actions.assert_property(
+        obj, "seat_generation", "58", "agent:aad6603a-iv", NOW, 0.9,
+        evidence_class="self_declared")
+
+    out = await list_assertions(actions, ref="agent:ad1a1cb0-g40-xxiv", name="seat_generation")
+    ids = {a["id"]: a["value"] for a in out["assertions"]}
+    assert ids == {wrong: "2", right: "58"}
+
+    # and it is exactly what retire_assertion accepts, end to end
+    retired = await retire_assertion(
+        actions, ref="agent:ad1a1cb0-g40-xxiv", name="seat_generation",
+        superseded_id=wrong, value="58", because="closing the loop",
+        actor="agent:c38f8f3b-vi")
+    assert retired["retired"]["id"] == wrong
+
+    # retire_assertion always ASSERTS its own new row rather than deleting anything
+    # (append-only) — the wrong VALUE is gone, but a second "58" (the corrector's own
+    # stamp) now sits beside the original one; both current, neither wrong.
+    after = await list_assertions(actions, ref="agent:ad1a1cb0-g40-xxiv", name="seat_generation")
+    assert {a["value"] for a in after["assertions"]} == {"58"}
+    assert wrong not in {a["id"] for a in after["assertions"]}
 
 
 async def test_requires_because(actions: Actions) -> None:
