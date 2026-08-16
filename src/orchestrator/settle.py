@@ -151,13 +151,37 @@ async def filed_under_check(
     every DISTINCT project canonical (bare name) a Decision or Thread this session authored
     is `in_repo` of; a write with NO `in_repo` link at all (an unfiled thread, Alfred V's
     own shape) is invisible to this specific check by construction — it names WHERE writes
-    went, not whether every write went somewhere."""
+    went, not whether every write went somewhere.
+
+    NORMALIZES `project` THROUGH merged_into (decision 6b4d185e, thread aa6b52af — open
+    since before tonight, naming this exact gap): `went_to` reads off LIVE `in_repo`
+    edges, which `_move_project_estate` already re-points to a fold's survivor, but
+    `project` (the mounted identity's own filed-under label) may still name a label that
+    has since been FOLDED into another — comparing raw strings then false-fires
+    'incoherent' forever after the fold, even though both sides mean the same project.
+    Degrades to the raw label on any failure (577988ed — a diagnostic refinement must
+    never be the reason this check goes blind; still report-only regardless).
+
+    COMPOUNDING GAP FOUND WHILE VERIFYING THE ABOVE, FIXED IN THE SAME PASS (caught by
+    actually running a fold against this function, not by reading it): the `in_repo` join
+    below carried NO `valid_until` filter, so a folded project's INVALIDATED pre-fold edge
+    still counted alongside its live re-pointed replacement — `went_to` reported BOTH the
+    old and new label, which no amount of label normalization alone can reconcile
+    (`_write_attribution`'s own healed-edge fix, a while back, is the exact same shape).
+    Without this, the normalization fix above is only half-effective."""
     if not project:
         return None
+    try:
+        from src.orchestrator.project_identity import _normalize_project_label_through_merge
+        project, _confession = await _normalize_project_label_through_merge(
+            conn_or_pool, project)
+    except Exception:  # noqa: BLE001 — see note above
+        pass
     try:
         rows = await conn_or_pool.fetch(
             "SELECT DISTINCT p.canonical AS project FROM objects o "
             "JOIN links l ON l.from_id = o.id AND l.type = 'in_repo' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
             "JOIN objects p ON p.id = l.to_id AND p.type = 'SoftwareProject' "
             "WHERE o.type IN ('Decision', 'Thread') AND EXISTS ("
             "  SELECT 1 FROM assertions a WHERE a.object_id = o.id "

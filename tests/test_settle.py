@@ -258,6 +258,30 @@ async def test_filed_under_check_names_every_distinct_project_written_to(
     assert out["coherent"] is False  # projB alone breaks coherence
 
 
+async def test_filed_under_check_normalizes_a_folded_filed_under_label(
+    actions: Actions,
+) -> None:
+    """Decision 6b4d185e / thread aa6b52af: a session filed under a label that has since
+    been FOLDED into another must not permanently false-fire 'incoherent' — went_to reads
+    off the LIVE (already re-pointed) in_repo edge, so it reports the survivor; the raw
+    `project` param must normalize the same way before comparing, or every write this
+    lineage ever made under the OLD name reads as a mismatch forever after the fold."""
+    from src.orchestrator.projects import fold_project
+
+    agent = "agent:fu06"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu06's ruling, filed under the pre-fold label",
+                          repo="RAMstein", source=agent)
+    await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    await fold_project(actions, dupe="RAMstein", into="ramstein",
+                       evidence="operator confirmed the same repo", actor="agent:test")
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="RAMstein")
+    assert out == {"filed_under": "ramstein", "writes_went_to": ["ramstein"],
+                   "coherent": True}
+
+
 # ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
 # TRAVERSABLE TRACE" — report-only, same discipline as filed_under_check above.
 
@@ -1299,6 +1323,28 @@ async def test_misfiled_by_lineage_never_hides_an_incomplete_chain_behind_a_clea
     assert out["misfiled_count"] == 0
     assert out["chain_hops_walked"] == 1
     assert out["chain_may_be_incomplete"] is True
+
+
+async def test_misfiled_by_lineage_normalizes_a_folded_project_and_ignores_healed_edges(
+    actions: Actions,
+) -> None:
+    """Decision 6b4d185e's fifth specimen: an ancestor's write, correctly filed under a
+    label that has since been FOLDED into another, must not report as 'misfiled' just
+    because the caller's own `project` still names the pre-fold label — and the fold's
+    own invalidated pre-fold edge must not double-count alongside its live replacement
+    (the same compounding gap fixed in filed_under_check, same pass)."""
+    from src.orchestrator.agents import misfiled_by_lineage
+    from src.orchestrator.projects import fold_project
+
+    await record_decision(actions, "mbl05's ruling, correctly filed under the pre-fold label",
+                          repo="RAMstein", source="agent:mbl05")
+    await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
+    await fold_project(actions, dupe="RAMstein", into="ramstein",
+                       evidence="operator confirmed the same repo", actor="agent:test")
+    await _succeed(actions, "agent:mbl05-ii", "agent:mbl05")
+
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl05-ii", "RAMstein")
+    assert out is None  # earned silence: the write is correctly filed once normalized
 
 
 async def test_orient_surfaces_misfiled_elsewhere_for_a_correctly_filed_successor(
