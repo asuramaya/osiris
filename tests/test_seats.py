@@ -2041,6 +2041,52 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
     assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None
 
 
+# ═══ SEATS_MANAGED_BY (msg 4761/4798, obligation f6a40441 — the reverse of manager_of_seat:
+# "does this seat manage anyone", the one non-inferred signal a manager-authored-code flag
+# could ever use) ═══════════════════════════════════════════════════════════════════════
+
+async def test_seats_managed_by_lists_every_active_worker(actions: Actions) -> None:
+    from src.orchestrator.seats import seats_managed_by
+
+    manager = await actions.create_or_find_object("Seat", "seat:smb1mgr0", "test")
+    w1 = await actions.create_or_find_object("Seat", "seat:smb1wk01", "test")
+    w2 = await actions.create_or_find_object("Seat", "seat:smb1wk02", "test")
+    await actions.create_link(w1, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(w2, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    out = await seats_managed_by(actions.pool, "seat:smb1mgr0")
+    assert out == ["seat:smb1wk01", "seat:smb1wk02"]
+
+
+async def test_seats_managed_by_empty_for_a_worker_seat(actions: Actions) -> None:
+    """The correct read for "not a manager": genuinely empty, not merely un-checked."""
+    from src.orchestrator.seats import seats_managed_by
+
+    manager = await actions.create_or_find_object("Seat", "seat:smb2mgr0", "test")
+    worker = await actions.create_or_find_object("Seat", "seat:smb2wk00", "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    assert await seats_managed_by(actions.pool, "seat:smb2wk00") == []
+
+
+async def test_seats_managed_by_ignores_a_detached_worker(actions: Actions) -> None:
+    """An INVALIDATED managed_by edge (detach_seat's own act) must not still count — this
+    reads live edges only, matching manager_of_seat's own valid_until guard."""
+    from src.orchestrator.seats import detach_seat, seats_managed_by
+
+    manager = await actions.create_or_find_object("Seat", "seat:smb3mgr0", "test")
+    worker = await actions.create_or_find_object("Seat", "seat:smb3wk00", "test")
+    await actions.create_link(worker, manager, "managed_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    assert await seats_managed_by(actions.pool, "seat:smb3mgr0") == ["seat:smb3wk00"]
+
+    await detach_seat(actions, "seat:smb3wk00", because="promoted", actor="test")
+    assert await seats_managed_by(actions.pool, "seat:smb3mgr0") == []
+
+
 # ═══ DETACH_SEAT (thread fad0dc14) — the toolkit hole: unpeer heals peer_of, nothing healed
 # managed_by before this. A coordinator is DEFINED by having no manager, so this is a
 # REMOVAL of the edge, never a repoint. ══════════════════════════════════════════════════
