@@ -546,7 +546,13 @@ def _tool_chars(t: Any) -> int:
 # every row where is_current=true yet a real supersedes FK already excludes it.
 # Seshat flagged, did not raise (matching the entry directly above). Measured
 # 174,600 -> 175,309, 122 -> 123.
-TOOL_CONTRACT_CEILING_CHARS = 174_600
+# 174,600 -> 175,400 (measured 175,309 exact). 122 -> 123 tools (2026-08-17, Thoth LXXVI
+# heir viii, merge of Seshat's f7ed043, thread 09bde57e). ONE NEW TOOL: stale_current_flags —
+# the read door onto "is_current=true rows a real supersedes FK already excludes"; its FIRST
+# LIVE MEASUREMENT: 123,914 of 267,305 (46.4%) stale, 99.97% pre-0047 git/git-tree ingest —
+# a migration-0047 backfill-completeness gap. Read-only, count + sample. Seshat flagged, did
+# not raise (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 175_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -635,4 +641,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
     same "list only, the bulk act is the operator's" shape as #150's own repairs."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 122
+    assert len(per_tool) == 123
