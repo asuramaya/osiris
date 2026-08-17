@@ -1153,10 +1153,17 @@ async def test_stage_a_sends_the_practice_confession_once_per_agent_practice_per
     # push the first confession's own created_at outside send_message's OWN identical-
     # body dedup window (600s default) — without this, a second identical send would be
     # silently deduped by that generic mechanism, and the test would prove nothing about
-    # THIS task's (agent, practice)-per-day dedup specifically. Still comfortably the
-    # same calendar day.
+    # THIS task's (agent, practice)-per-day dedup specifically. CLAMPED TO THE UTC DAY
+    # BOUNDARY: a bare `now() - 700s` crosses midnight for the first 11m40s of every UTC
+    # day, moving the first confession to YESTERDAY, so the per-day dedup correctly
+    # does not fire and the second send lands — the test then fails on a clock, not a
+    # defect (caught live 2026-08-17 00:07 UTC, deterministic in that window, green at
+    # 23:44). Inside that window the clamp leaves the row within send's own 600s
+    # window, so the assertion still holds — via the generic dedup rather than the
+    # per-day one — a weaker proof for ~12 minutes a day, never a false red.
     await actions.pool.execute(
-        "UPDATE fleet_messages SET created_at=now() - interval '700 seconds' "
+        "UPDATE fleet_messages SET created_at=greatest("
+        "  now() - interval '700 seconds', date_trunc('day', now()) + interval '1 second') "
         "WHERE id=(SELECT id FROM fleet_messages WHERE from_agent=$1 "
         "ORDER BY id DESC LIMIT 1)", worker_agent)
     await stophook._stage_a_async(
