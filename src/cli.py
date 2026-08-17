@@ -1094,6 +1094,39 @@ async def _composition_gaps(pool: asyncpg.Pool) -> list[str]:
     return notes
 
 
+async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
+    """#108 PIECE 2 WIRING (obligation 5f7dfebb, operator ruling 22d47acb + the standing
+    word "capitalization merging should be automatic not bottlenecked by me") — the ONE
+    trigger site casefold_auto_merge_candidates' own docstring said nobody had built yet.
+    A post-migration deploy step, not tied to the restart: this only ever touches the
+    graph (SoftwareProject casefold twins), never code or a running service, so it runs
+    once migrations are confirmed applied and well before anything restarts.
+
+    ALWAYS surveys (dry-run report, every candidate and every skip named — never a
+    silent drop, matching the underlying verb's own law). EXECUTES only when
+    OSIRIS_CASEFOLD_AUTOMERGE=1 is set — the deploy environment carries it (default ON
+    for deploys), a hand run of `osiris deploy` from an ordinary shell does not (default
+    OFF), exactly the asymmetry the dispatch asked for. Either way every candidate goes
+    through the SAME normalize_project_casing/merge() door with its own belief-gate —
+    this function never re-derives that logic, only decides whether to pass execute."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import casefold_auto_merge_candidates
+
+    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") == "1"
+    result = await casefold_auto_merge_candidates(
+        Actions(pool), evidence="osiris deploy: automatic casefold merge "
+        "(#108 piece 2, operator ruling 22d47acb/d02f2cdd)",
+        actor="osiris-deploy", execute=execute)
+    notes = [f"casefold auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+             f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
+    for c in result["candidates"]:
+        notes.append(f"  {c['phantom']} -> {c['populated']} (correct case "
+                     f"{c['correct_case']!r})")
+    for s in result["skipped"]:
+        notes.append(f"  SKIPPED: {s['canonicals']} — {s['reason']}")
+    return notes
+
+
 MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
 MigrateRunner = Callable[[Path], Awaitable[None]]
 
@@ -1336,6 +1369,9 @@ async def cmd_deploy(
         print(migration_note)
         if not migrated_ok:
             return 1
+
+        for note in await _run_casefold_automerge(pool):
+            print(note)
 
         tools_before = await list_tools()
 
