@@ -1426,11 +1426,13 @@ async def _casefold_twin(actions: Actions, upper: str, lower: str) -> None:
     await actions.create_link(t, populated, "in_repo", "agent:test", now, 0.9)
 
 
-async def test_cmd_deploy_casefold_automerge_dry_runs_by_default(
+async def test_cmd_deploy_casefold_automerge_executes_by_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#108 piece 2 wiring: the deploy step ALWAYS surveys and reports; a hand run with
-    no OSIRIS_CASEFOLD_AUTOMERGE set must never actually fold anything."""
+    """#108 piece 2 wiring, default flipped (operator's word: "automatic, not
+    bottlenecked by me" — `osiris deploy` is hand-invoked with no wrapper/cron to hang a
+    deploy-env-only flag on, so the flip IS the default): a run with no
+    OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE, not just survey."""
     monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
     await _casefold_twin(actions, "DeployTwinA", "deploytwina")
 
@@ -1446,18 +1448,20 @@ async def test_cmd_deploy_casefold_automerge_dry_runs_by_default(
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke)
     text = buf.getvalue()
-    assert "casefold auto-merge: dry-run — 1 candidate(s)" in text
+    assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in text
     assert "deploytwina -> repo:DeployTwinA" in text
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploytwina'")
-    assert row["status"] == "active", "a dry run must never fold anything"
+    assert row["status"] == "merged"
 
 
-async def test_cmd_deploy_casefold_automerge_executes_under_the_env_flag(
+async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "1")
+    """OSIRIS_CASEFOLD_AUTOMERGE=0 is the escape hatch — a dry-run-only deploy, the
+    inverse of the old opt-IN flag now that execute is the default."""
+    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "0")
     await _casefold_twin(actions, "DeployTwinB", "deploytwinb")
 
     import io
@@ -1471,11 +1475,11 @@ async def test_cmd_deploy_casefold_automerge_executes_under_the_env_flag(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke)
-    assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in buf.getvalue()
+    assert "casefold auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploytwinb'")
-    assert row["status"] == "merged"
+    assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
 
 
 # --- boot-status -------------------------------------------------------------------------------
