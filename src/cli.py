@@ -1595,6 +1595,53 @@ async def cmd_unmerge(
     return 0
 
 
+async def cmd_retention(
+    table: str, *, days: int | None, execute: bool, batch_size: int = 5000,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris retention outbox|audit-log [--days N] [--execute] [--batch-size N] — thread
+    e6fd3772 piece 1. COLD BY DEFAULT: without --execute this only COUNTS what's eligible
+    and writes nothing; --execute deletes in batches (default 5000 rows/statement),
+    looping until a batch comes back short. `table` selects which retention function
+    (src.orchestrator.retention) runs; each has its own default window (outbox 30 days,
+    audit_log 90) used when --days is omitted."""
+    from src.orchestrator.retention import audit_log_retention, outbox_retention
+
+    fn = {"outbox": outbox_retention, "audit-log": audit_log_retention}.get(table)
+    if fn is None:
+        print(f"osiris retention: unknown table {table!r} — outbox or audit-log",
+              file=sys.stderr)
+        return 1
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris retention: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        kwargs: dict[str, Any] = {"execute": execute, "batch_size": batch_size}
+        if days is not None:
+            kwargs["days"] = days
+        out = await fn(pool, **kwargs)
+    finally:
+        if owns_pool:
+            await pool.close()
+    print(json.dumps(out, indent=2, default=str))
+    if not execute:
+        print(f"osiris retention: dry run — {out['eligible']} row(s) eligible, "
+              "nothing deleted. Pass --execute to delete.", file=sys.stderr)
+    return 0
+
+
 # --- charter-for -------------------------------------------------------------------------------
 
 async def cmd_charter_for(
@@ -2295,6 +2342,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p_unmerge.add_argument("--execute", action="store_true",
                            help="apply the reversal plan instead of only showing it")
 
+    p_retention = sub.add_parser(
+        "retention", description=_d("Prune outbox/audit_log rows past their retention "
+            "window — dry run by default (counts only, writes nothing); pass --execute "
+            "to delete, in batches. Thread e6fd3772 piece 1."),
+        epilog="example, count only:\n"
+            "    osiris retention outbox\n"
+            "example, then delete:\n"
+            "    osiris retention outbox --execute")
+    p_retention.add_argument("table", choices=["outbox", "audit-log"],
+                             help="which table's retention to run")
+    p_retention.add_argument("--days", type=int, default=None,
+                             help="retention window in days (default: outbox 30, "
+                                  "audit-log 90)")
+    p_retention.add_argument("--execute", action="store_true",
+                             help="delete the eligible rows instead of only counting them")
+    p_retention.add_argument("--batch-size", type=int, default=5000,
+                             help="rows deleted per statement when --execute (default 5000)")
+
     # DEPRECATED (dispatch 3683): fold_project no longer exists as an MCP tool — see
     # cmd_fold_project's own docstring. Kept working, hidden from the front-door listing
     # (no help= means argparse's own choice listing never mentions it either) — never
@@ -2520,6 +2585,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "unmerge":
         return asyncio.run(cmd_unmerge(args.dupe, args.because, actor=args.actor,
                                        execute=args.execute))
+    if args.command == "retention":
+        return asyncio.run(cmd_retention(args.table, days=args.days, execute=args.execute,
+                                         batch_size=args.batch_size))
     if args.command == "fold-project":
         return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
                                             actor=args.actor))

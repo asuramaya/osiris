@@ -6,7 +6,7 @@ spawning a claude process is exactly what these tests must never risk doing by a
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -37,6 +37,7 @@ from src.cli import (
     cmd_mint_seat,
     cmd_new,
     cmd_rematerialize,
+    cmd_retention,
     cmd_seed,
     cmd_unmerge,
     commit_deployed_notes,
@@ -2172,6 +2173,46 @@ async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
         "SELECT status FROM objects WHERE canonical='repo:unmdupe1'")
     assert row["status"] == "merged"  # dry run: still merged, nothing executed
     assert '"execute": false' in buf.getvalue().lower() or "false" in buf.getvalue().lower()
+
+
+async def test_cmd_retention_dry_run_by_default(actions: Actions) -> None:
+    """Cold by default (thread e6fd3772 piece 1): no --execute counts only."""
+    import io
+    from contextlib import redirect_stdout
+
+    old = datetime.now(UTC) - timedelta(days=200)
+    await actions.pool.execute(
+        "INSERT INTO audit_log (action, actor, payload, created_at) "
+        "VALUES ('osiris_test_cli_retention', 'agent:test', '{}', $1)", old)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_retention("audit-log", days=90, execute=False, pool=actions.pool)
+    assert out == 0
+    assert '"executed": false' in buf.getvalue().lower()
+
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='osiris_test_cli_retention'")
+    assert n == 1, "a dry run must never delete anything"
+
+
+async def test_cmd_retention_execute_deletes(actions: Actions) -> None:
+    old = datetime.now(UTC) - timedelta(days=200)
+    await actions.pool.execute(
+        "INSERT INTO audit_log (action, actor, payload, created_at) "
+        "VALUES ('osiris_test_cli_retention2', 'agent:test', '{}', $1)", old)
+
+    out = await cmd_retention("audit-log", days=90, execute=True, pool=actions.pool)
+    assert out == 0
+
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='osiris_test_cli_retention2'")
+    assert n == 0
+
+
+async def test_cmd_retention_refuses_an_unknown_table(actions: Actions) -> None:
+    out = await cmd_retention("not-a-real-table", days=30, execute=False, pool=actions.pool)
+    assert out == 1
 
 
 async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
