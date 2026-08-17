@@ -906,6 +906,51 @@ async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> 
     assert nb2 is not None
 
 
+async def test_living_head_never_regresses_past_a_broken_mid_chain_link(
+    actions: Actions,
+) -> None:
+    """Live specimen (thread 20af2c95, msg 5052: Imhotep XX -> XXXI). A REAL succeeded_by
+    chain (i -> ii -> ... -> xx) advances many hops, then a LATER (not tied — a genuine
+    "seam-debounce" retraction at a later timestamp than the real pointer it invalidates)
+    retraction breaks the link at xx, so `lineage_head` correctly-per-its-own-rules stops
+    there. But xxxi is REAL and LIVE right now — a distinct generation further along the
+    SAME family, reachable only through the broken hop. The old `living_head` only ever
+    consulted the live-mount registry when the walk advanced ZERO hops (`head == canon`);
+    a walk that advanced past nineteen real hops before breaking looked identical to a
+    correctly-resolved head and skipped the safety net entirely. Fixed: the comparison is
+    now unconditional — living_head always takes whichever of {the walk's own answer, the
+    freshest live-mounted generation in the family} names the newer generation."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.orchestrator.mounts import save_mount
+
+    now = datetime.now(UTC)
+    base = await actions.create_or_find_object("Agent", "agent:77c0ffee", "test")
+    twenty = await actions.create_or_find_object("Agent", "agent:77c0ffee-xx", "test")
+    await actions.create_or_find_object("Agent", "agent:77c0ffee-xxi", "test")
+    # a real, single-hop chain i -> xx (one hop suffices to prove "walk advanced, then
+    # broke" — the live specimen's own 19 hops aren't needed to exercise the same gap)
+    await actions.assert_property(base, "succeeded_by", "agent:77c0ffee-xx", "test", now,
+                                  0.9, evidence_class="self_declared")
+    # the real pointer onward, EARLIER...
+    await actions.assert_property(twenty, "succeeded_by", "agent:77c0ffee-xxi",
+                                  "agent:77c0ffee-xxi", now, 0.6,
+                                  evidence_class="direct_observation")
+    # ...then a LATER retraction breaks it — not a tie, genuinely more recent, so it
+    # legitimately wins under lineage_head's own newest-wins rule and the walk stops at xx
+    later = now + timedelta(minutes=9)
+    await actions.assert_property(twenty, "succeeded_by", "", "seam-debounce", later, 0.6,
+                                  evidence_class="direct_observation")
+    # xxxi is real, and its own mount is the freshest thing in this family right now —
+    # the chain to it is broken (never asserted from xx or xxi), only liveness proves it
+    await actions.create_or_find_object("Agent", "agent:77c0ffee-xxxi", "test")
+    await save_mount(actions.pool, job_dir="/jobs/77c0ffee31", agent_id="agent:77c0ffee-xxxi",
+                     project="p", cwd="/w/p", model=None, session_key=None)
+
+    assert await living_head(actions.pool, "agent:77c0ffee") == "agent:77c0ffee-xxxi", (
+        "head resolution must never name a generation older than one with a live mount")
+
+
 # --- wakeable_identity (thread 28842543): wake's own question, distinct from delivery ---
 
 async def test_wakeable_identity_finds_the_live_body_past_a_phantom_successor(
