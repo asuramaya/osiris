@@ -205,7 +205,11 @@ def drill(newest_dump: str) -> str | None:
     string or None. Heavy (~2 min) — timer runs pass --drill; ad-hoc runs may skip."""
     name = "osiris-preflight-drill"
     try:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
+        # -v (not just -f): postgres:16 declares an anonymous VOLUME for its data dir —
+        # `docker rm -f` alone drops the container but leaves that volume orphaned, links=0,
+        # forever (Cupid's field report, network, msg 4938: 11GB across 4 weekly Mondays,
+        # tracking the growing dump size, ~180GB/year on the operator's laptop unfixed).
+        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=30)
         subprocess.run(["docker", "run", "-d", "--name", name, "-e", "POSTGRES_USER=osiris",
                         "-e", "POSTGRES_PASSWORD=osiris", "-e", "POSTGRES_DB=osiris",
                         "postgres:16"], capture_output=True, timeout=60, check=True)
@@ -229,7 +233,7 @@ def drill(newest_dump: str) -> str | None:
     except Exception as e:  # noqa: BLE001
         return f"restore drill failed: {e}"
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
+        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=30)
 
 
 async def brief_operator(fails: list[str]) -> None:
