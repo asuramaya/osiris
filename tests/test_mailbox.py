@@ -321,6 +321,51 @@ async def test_send_tool_echoes_seat_and_lineage_head_and_honors_require_seat(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_send_mcp_wrapper_surfaces_the_redirect_and_reads_listener_off_the_head(
+    actions: Actions,
+) -> None:
+    """THE RECEIPT INVARIANT AT THE MCP BOUNDARY (ruling 7d6815bb, Ra XXXVI's specimen
+    thread e93c2470): a DM to a stale ancestor id must never let a caller believe `seat`
+    names something dead beside a `listener` reading something else's pulse — every field on
+    this receipt is now sourced from the SAME identity (the delivering head), and the
+    divergence from the addressed id is named explicitly in `redirect`, not left for the
+    caller to reconstruct by comparing fields by hand."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name, mint_heir
+    from src.orchestrator.mounts import save_mount
+
+    ancestor = "agent:dead0099"
+    a = await actions.create_or_find_object("Agent", ancestor, ancestor)
+    await claim_name(actions, ancestor, "Anubis", source=ancestor)
+    heir, _ = await mint_heir(actions, ancestor, a, because="test-succession",
+                              succession=None)
+    # the HEIR is the one that's actually live — a real mount row, not the ancestor
+    await save_mount(actions.pool, job_dir="/j/heir-live", agent_id=heir, project="alpha",
+                     cwd="/w", model=None, session_key=None)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:boss", session="boss0002", project="alpha", model=None, cwd=None)
+    try:
+        out = await srv.send("ship it", to_agent=ancestor, ctx=ctx)
+        assert out["dm_to"] == ancestor                # sent to exactly the id named
+        assert out["seat"] == "Anubis II"               # the HEAD's own current handle
+        assert out["lineage_head"] == heir
+        assert out["listener"]["live"] is True          # the head's pulse, not the ancestor's
+        assert out["redirect"] == {"addressed": ancestor, "addressed_seat": "Anubis I",
+                                   "delivered": heir, "delivered_seat": "Anubis II"}
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_reply_to_unknown_message_is_an_error(actions: Actions) -> None:
     with pytest.raises(ValueError, match="does not exist"):
         await send_message(actions.pool, from_agent="agent:x", from_project="a",
@@ -440,8 +485,14 @@ async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
     skips resolve_handle's seat resolution entirely, so an ancestor id superseded by mint_heir
     was never caught. The echo makes it visible WITHOUT auto-redirecting the address (reaching
     an explicit id remains an act of intent — resolve_seat's grave rule, test_a_grave_is_never_
-    a_delivery_target): `seat` alone would look fine (the ancestor still carries its own old
-    handle); `lineage_head` is what actually exposes the staleness."""
+    a_delivery_target): `to_agent` stays exactly the id named.
+
+    UPDATED FOR THE RECEIPT INVARIANT (ruling 7d6815bb, Ra XXXVI's specimen thread e93c2470):
+    `seat` used to echo the ANCESTOR's own old handle ("Ptah I") beside a `lineage_head`
+    naming the current one — one receipt composing an identity fact about a retired
+    generation with (elsewhere) a liveness fact about the live one. `seat` is now ALWAYS
+    derived from `lineage_head` (the delivering head) when one resolves — the ancestor's own
+    handle only survives in the explicit `redirect` block, never as the bare `seat` field."""
     from src.orchestrator.agents import claim_name, mint_heir
 
     ancestor = "agent:dead0001"
@@ -453,9 +504,11 @@ async def test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head(
     dm = await send_message(actions.pool, from_agent="agent:boss", from_project="alpha",
                             to_agent=ancestor, body="ship it")
     assert dm["to_agent"] == ancestor          # sent exactly to the id named — no silent redirect
-    assert dm["seat"] == "Ptah I"              # the ancestor still carries its own old handle
-    assert dm["lineage_head"] == heir          # ...but the echo reveals it is NOT current
+    assert dm["seat"] == "Ptah II"             # the HEAD's own current handle, not the ancestor's
+    assert dm["lineage_head"] == heir          # ...and the echo still reveals it is not current
     assert dm["lineage_head"] != dm["to_agent"]
+    assert dm["redirect"] == {"addressed": ancestor, "addressed_seat": "Ptah I",
+                              "delivered": heir, "delivered_seat": "Ptah II"}
 
 
 async def test_replying_to_a_dm_whose_sender_superseded_itself_since_sending(
@@ -1634,3 +1687,105 @@ async def test_send_surfaces_prior_art_on_an_ask_graded_broadcast(
 
     prior_ids = {p["id"] for p in out.get("prior_art", [])}
     assert str(standing)[:8] in prior_ids, out
+
+
+# ═══ THE RECEIPT INVARIANT (ruling 7d6815bb) — a contract test over every DM receipt shape
+# the suite can produce: `seat` always matches the DELIVERING HEAD's own claimed handle,
+# `listener.live` always reads the head's liveness, and a redirect is EXPLICIT whenever the
+# addressed id and the head diverge. Ra XXXVI's specimen (thread e93c2470) is the acceptance.
+
+async def _dm_receipt_contract(
+    actions: Actions, to_agent: str, *, from_agent: str = "agent:auditor",
+) -> dict:
+    """One real send_message call, checked against the SAME independent read the invariant
+    promises never to diverge from — agent_seat(lineage_head) computed HERE, fresh, never
+    trusted from the receipt's own fields, so a passing assert means the receipt agrees
+    with the graph, not merely with itself."""
+    from src.orchestrator.agents import agent_seat
+
+    out = await send_message(actions.pool, from_agent=from_agent, from_project="alpha",
+                             to_agent=to_agent, body="contract check")
+    head = out.get("lineage_head")
+    if head:
+        assert out["seat"] == await agent_seat(actions.pool, head), out
+    return out
+
+
+async def test_contract_a_fresh_claimed_agent_receipt_matches_its_own_seat(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    target = "agent:contract01"
+    await actions.create_or_find_object("Agent", target, target)
+    await claim_name(actions, target, "Contractor", source=target)
+    out = await _dm_receipt_contract(actions, target)
+    assert out["lineage_head"] == target
+    assert out["seat"] == "Contractor I"
+    assert "redirect" not in out  # addressed == delivered: nothing to redirect
+
+
+async def test_contract_a_superseded_ancestor_receipt_matches_the_head_not_the_address(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import claim_name, mint_heir
+
+    ancestor = "agent:contract02"
+    a = await actions.create_or_find_object("Agent", ancestor, ancestor)
+    await claim_name(actions, ancestor, "Contractee", source=ancestor)
+    heir, _ = await mint_heir(actions, ancestor, a, because="test-succession", succession=None)
+    out = await _dm_receipt_contract(actions, ancestor)
+    assert out["lineage_head"] == heir
+    assert out["seat"] == "Contractee II"        # the HEAD's seat, never the ancestor's "I"
+    assert out["redirect"]["addressed"] == ancestor
+    assert out["redirect"]["delivered"] == heir
+    assert out["redirect"]["addressed_seat"] == "Contractee I"
+    assert out["redirect"]["delivered_seat"] == out["seat"]
+
+
+async def test_contract_listener_liveness_reads_the_head_even_when_only_the_head_is_mounted(
+    actions: Actions,
+) -> None:
+    """The specimen's own shape: the ancestor id has NO mount row at all (it is retired,
+    nothing to probe), the head has a real one — `listener.live` must read the head's
+    pulse, never report the ancestor as dead-and-therefore-everyone-dead."""
+    from src.orchestrator.agents import claim_name, mint_heir
+    from src.orchestrator.mounts import save_mount
+
+    ancestor = "agent:contract03"
+    a = await actions.create_or_find_object("Agent", ancestor, ancestor)
+    await claim_name(actions, ancestor, "Liveprobe", source=ancestor)
+    heir, _ = await mint_heir(actions, ancestor, a, because="test-succession", succession=None)
+    await save_mount(actions.pool, job_dir="/j/contract03-heir", agent_id=heir,
+                     project="alpha", cwd="/w", model=None, session_key=None)
+    out = await _dm_receipt_contract(actions, ancestor)
+    assert out["lineage_head"] == heir
+
+
+# ═══ THE STATIC CHECK — nothing in the mail-receipt surface builds a `seat` key from the
+# addressed id directly; every assignment routes through `lineage` (the resolved head) or
+# `gate_seat` (the require_seat gate's own, deliberately-distinct, addressed-id question).
+
+def test_static_check_no_seat_field_is_built_from_the_bare_addressed_id() -> None:
+    """A grep-shaped guard, not a type check: `agent_seat(pool, to_a)` assigned directly to
+    a variable literally named `seat` is exactly the regression this thread exists to catch
+    (it is what the bug WAS). `gate_seat` is the one sanctioned exception — a distinct
+    question (does the addressed id itself hold a seat), never echoed as the receipt's own
+    `seat` field. If this ever fires, read why: either a genuine new need for the addressed
+    id's own seat (name it something other than `seat`), or the regression itself."""
+    import re
+    from pathlib import Path
+
+    src = Path("src/orchestrator/mailbox.py").read_text()
+    # every bare `seat = ` assignment (word-boundary anchored — NOT `gate_seat = ` or any
+    # other suffix match) must cite `lineage` as its source, or be the guarded default
+    # (`seat: str | None = None`) — never a raw `to_a`-derived call.
+    assignments = re.findall(r"(?<![\w.])seat = (.+)$", src, re.MULTILINE)
+    assert assignments, "no `seat = ` assignment found at all — did the code move?"
+    for rhs in assignments:
+        assert "to_a" not in rhs or "lineage" in rhs, (
+            f"suspicious `seat = {rhs}` in mailbox.py — this is the e93c2470 regression "
+            "shape: every seat assignment must be traceable to `lineage` (the resolved "
+            "head), never a bare `to_a`-derived call. `gate_seat` (require_seat's own, "
+            "deliberately addressed-id-derived variable) is unaffected by this check — it "
+            "is never named `seat`.")

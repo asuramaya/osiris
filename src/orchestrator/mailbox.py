@@ -458,6 +458,7 @@ async def send_message(
     seat: str | None = None
     lineage: str | None = None
     holder: str | None = None
+    redirect: dict[str, Any] | None = None
     if to_a and to_a.startswith("seat:"):
         # a SEAT address: the receipt names the seat's handle and its CURRENT holder (whose
         # lineage head is the live truth a dispatcher wants); a vacant seat is not a grave —
@@ -487,13 +488,26 @@ async def send_message(
                     f"lineage head is {why} — no eligible living head exists, so this DM "
                     "would park on a phantom lane forever. Check fleet() for who actually "
                     "lives, or broadcast to the project room instead.")
-        seat = await agent_seat(pool, to_a)
-        if require_seat and seat is None:
+        gate_seat = await agent_seat(pool, to_a)
+        if require_seat and gate_seat is None:
             raise ValueError(
                 f"require_seat: '{requested or to_a}' resolved to {to_a}, which holds no "
                 "CLAIMED seat (no handle asserted) — refusing to dispatch blind. Check "
                 "fleet() for who actually holds a seat, or pass require_seat=False to send "
                 "anyway.")
+        # THE RECEIPT'S OWN SEAT FIELD (ruling 7d6815bb, Ra XXXVI's specimen thread
+        # e93c2470): a DM to a stale/retired ancestor id used to echo THAT ancestor's own
+        # claimed handle ("Ptah VI") beside a `listener` reading the HEAD's liveness (via
+        # agent_liveness's own lineage walk) — one receipt composing an identity fact about
+        # one generation with a liveness fact about another. `seat` here is now ALWAYS
+        # derived from `lineage` (the delivering head) when one resolves — `gate_seat`
+        # above stays the require_seat gate's own question ("does the id AS ADDRESSED hold
+        # a claimed seat", legitimately about to_a, untouched). A divergence is surfaced
+        # EXPLICITLY as `redirect`, never silently substituted.
+        seat = await agent_seat(pool, lineage) if lineage else gate_seat
+        if lineage and lineage != to_a:
+            redirect = {"addressed": to_a, "addressed_seat": gate_seat,
+                       "delivered": lineage, "delivered_seat": seat}
     # OWNERSHIP STAMPED AT DISPATCH (Phase 1c): resolved BEFORE any write, same law as the
     # require_seat gate just above — an ambiguous or unknown thread ref must refuse loudly,
     # never park a message whose ownership claim silently didn't land.
@@ -556,6 +570,7 @@ async def send_message(
                 "thread_id": dup["thread_id"], "dedup": True,
                 **({"seat": seat, "lineage_head": lineage} if to_a else {}),
                 **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
+                **({"redirect": redirect} if redirect else {}),
                 **({"folded_from": folded_from} if folded_from else {}),
                 **({"redirected_from": redirected_from} if redirected_from else {}),
                 **({"threads_stamped": stamped} if stamped else {})}
@@ -568,6 +583,7 @@ async def send_message(
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
+            **({"redirect": redirect} if redirect else {}),
             **({"folded_from": folded_from} if folded_from else {}),
             **({"redirected_from": redirected_from} if redirected_from else {}),
             **({"threads_stamped": stamped} if stamped else {})}
