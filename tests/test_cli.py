@@ -1415,6 +1415,69 @@ async def test_cmd_deploy_refuses_when_migration_fails_and_never_restarts(
     assert "REFUSED" in buf.getvalue()
 
 
+async def _casefold_twin(actions: Actions, upper: str, lower: str) -> None:
+    """A minimal casefold-twin pair: `upper` populated (a real live link), `lower` the
+    phantom — the exact shape casefold_auto_merge_candidates keys on."""
+    now = datetime.now(UTC)
+    populated = await actions.create_or_find_object("SoftwareProject", f"repo:{upper}", "test")
+    await actions.assert_property(populated, "name", upper, "test", now, 0.9)
+    await actions.create_or_find_object("SoftwareProject", f"repo:{lower}", "test")
+    t = await actions.create_or_find_object("Thread", f"thread:deploy-casefold-{upper}", "test")
+    await actions.create_link(t, populated, "in_repo", "agent:test", now, 0.9)
+
+
+async def test_cmd_deploy_casefold_automerge_dry_runs_by_default(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#108 piece 2 wiring: the deploy step ALWAYS surveys and reports; a hand run with
+    no OSIRIS_CASEFOLD_AUTOMERGE set must never actually fold anything."""
+    monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
+    await _casefold_twin(actions, "DeployTwinA", "deploytwina")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
+    text = buf.getvalue()
+    assert "casefold auto-merge: dry-run — 1 candidate(s)" in text
+    assert "deploytwina -> repo:DeployTwinA" in text
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploytwina'")
+    assert row["status"] == "active", "a dry run must never fold anything"
+
+
+async def test_cmd_deploy_casefold_automerge_executes_under_the_env_flag(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "1")
+    await _casefold_twin(actions, "DeployTwinB", "deploytwinb")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
+    assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in buf.getvalue()
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploytwinb'")
+    assert row["status"] == "merged"
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
