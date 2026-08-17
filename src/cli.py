@@ -1990,24 +1990,22 @@ async def cmd_bootstrap(
     caller did not set DATABASE_URL themselves (about to hit the fallback) AND has not
     set OSIRIS_ALLOW_LIVE=1, this refuses loudly instead of writing to production by
     accident. An explicit DATABASE_URL (including one a deployed unit's own environment
-    already carries) always wins and is never blocked."""
+    already carries) always wins and is never blocked.
+
+    THE CHECK ITSELF NOW LIVES IN `dev_env.refuse_silent_live_db` (thread 86d562e0's own
+    CLASS fix, not just this one door) — reused verbatim here, never a second copy."""
     from src.actions.core import Actions
     from src.orchestrator.bootstrap import bootstrap_project
 
     owns_pool = pool is None
     if pool is None:
-        import os
-
-        from src.config.dev_env import apply_dev_fallback
+        from src.config.dev_env import apply_dev_fallback, refuse_silent_live_db
         from src.config.settings import get_settings
         from src.db.pool import create_pool
 
-        if not os.environ.get("DATABASE_URL") and os.environ.get("OSIRIS_ALLOW_LIVE") != "1":
-            print("osiris bootstrap: refusing — no DATABASE_URL is set, and this box's own "
-                  "dev fallback points at the SAME database every deployed service uses "
-                  "(no isolated dev instance exists here). Set DATABASE_URL to a scratch "
-                  "instance, or OSIRIS_ALLOW_LIVE=1 to confirm you mean the real graph.",
-                  file=sys.stderr)
+        refusal = refuse_silent_live_db("osiris bootstrap")
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
             return 1
         apply_dev_fallback()
         settings = get_settings()

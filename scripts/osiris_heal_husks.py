@@ -15,6 +15,7 @@ import json
 import sys
 
 from src.actions.core import Actions
+from src.config.dev_env import refuse_silent_live_db
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.orchestrator.heal import HUSKS_2026_07_14, heal_husks
@@ -24,6 +25,13 @@ async def main() -> None:
     argv = sys.argv[1:]
     apply = "--apply" in argv
     husks = [a for a in argv if not a.startswith("--")] or HUSKS_2026_07_14
+    # thread 86d562e0: get_settings().database_url's class default silently targets
+    # 127.0.0.1:5432 — inert only by accident today, no real guard. Refuse a silent
+    # one-off run rather than trust that accident.
+    refusal = refuse_silent_live_db("osiris_heal_husks")
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
     pool = await create_pool(get_settings().database_url)
     try:
         out = await heal_husks(Actions(pool), husks, apply=apply)

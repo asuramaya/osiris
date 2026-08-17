@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 
 from src.actions.core import Actions
+from src.config.dev_env import refuse_silent_live_db
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.orchestrator.greatfold import (
@@ -51,6 +53,13 @@ async def _main() -> None:
     p_vis.add_argument("--actor", default=ACTOR)
     args = ap.parse_args()
 
+    # thread 86d562e0: get_settings().database_url's class default silently targets
+    # 127.0.0.1:5432 — inert only by accident today, no real guard. Refuse a silent
+    # one-off run rather than trust that accident.
+    refusal = refuse_silent_live_db("great_fold")
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
     # the HOUSE pool, never bare asyncpg: its jsonb codecs are what Actions' event
     # writes encode through — the bare pool refuses the first kernel write
     pool = await create_pool(get_settings().database_url, min_size=1, max_size=4)

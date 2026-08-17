@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from typing import Any
 
 import asyncpg
 from src.actions.core import Actions
+from src.config.dev_env import refuse_silent_live_db
 from src.db.pool import create_pool
 from src.orchestrator.agents import _CONF, _EC, _generation, _lineage_head, mint_heir
 from src.parsers.base import EvidenceClass
@@ -115,6 +117,12 @@ async def head_of(actions: Actions, root: str) -> tuple[str, int]:
 
 
 async def run(apply: bool) -> None:
+    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
+    # instance exists on this box — refuse a silent one-off run against it.
+    refusal = refuse_silent_live_db("backfill_generations")
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
     pool = await create_pool(DSN, min_size=1, max_size=2)
     actions = Actions(pool)
     total_minted = planned = 0
