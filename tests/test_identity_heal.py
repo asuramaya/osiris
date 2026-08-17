@@ -11,6 +11,7 @@ from src.actions.core import Actions
 from src.orchestrator.identity_heal import (
     heal_contradicting_property,
     reconcile_seat_identity,
+    reconcile_seat_identity_third_party,
 )
 from src.parsers.base import EvidenceClass
 
@@ -285,6 +286,140 @@ async def test_the_mcp_tool_wrapper_refuses_an_unmounted_caller(actions: Actions
     srv._pool = actions.pool
     try:
         out = await srv.reconcile_seat_identity(ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
+# ═══ reconcile_seat_identity_third_party — decision f78b41c8's own gap: #157's four rows
+# belong to OTHER seats, unreachable by the self-service verb. Mirrors resync_seat_house_
+# third_party's own precedent exactly (not self-scoped, `because` mandatory).
+
+async def test_third_party_refuses_an_empty_because(actions: Actions) -> None:
+    seat = await _seat_with_house(
+        actions, "seat:tp1noreas", founding="old", founding_source="agent:a",
+        founding_age_days=3, winning="new", winning_source="agent:b")
+    out = await reconcile_seat_identity_third_party(
+        actions, seat_id="seat:tp1noreas", agent_id=None, because="   ", actor="coordinator")
+    assert "silent overwrite" in out["error"]
+    # nothing touched — the contradiction survives untouched
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 AND name='house'",
+        seat)
+    assert {r["v"] for r in rows} == {"old", "new"}
+
+
+async def test_third_party_heals_a_seat_that_is_not_the_caller(actions: Actions) -> None:
+    """The whole point: the caller (a coordinator) is not the seat being healed."""
+    await _seat_with_house(
+        actions, "seat:tp2other", founding="stale", founding_source="agent:x",
+        founding_age_days=7, winning="fresh", winning_source="agent:y")
+    out = await reconcile_seat_identity_third_party(
+        actions, seat_id="seat:tp2other", agent_id=None, because="#157 batch correction",
+        actor="agent:coordinator")
+    assert out["healed"]["house"]["healed"] is True
+    assert out["healed"]["house"]["winner"] == "fresh"
+
+
+async def test_third_party_reason_lands_in_the_retired_assertions_own_because_text(
+    actions: Actions,
+) -> None:
+    await _seat_with_house(
+        actions, "seat:tp3reasn", founding="old", founding_source="agent:a",
+        founding_age_days=3, winning="new", winning_source="agent:b")
+    out = await reconcile_seat_identity_third_party(
+        actions, seat_id="seat:tp3reasn", agent_id=None,
+        because="#157 batch correction, operator-authorized", actor="agent:coordinator")
+    lost_id = out["healed"]["house"]["superseded"][0]["id"]
+    row = await actions.pool.fetchrow("SELECT * FROM assertions WHERE id=$1", lost_id)
+    assert row is not None  # sanity: the loser row itself still exists, event-sourced
+    # `because` rides into the audit trail (supersede_assertion's own _audit call), not a
+    # column on assertions — the reason text is there, attributed to the coordinator
+    audit = await actions.pool.fetchrow(
+        "SELECT payload, actor FROM audit_log WHERE action='supersede_assertion' "
+        "AND payload->>'superseded_id' = $1 ORDER BY id DESC LIMIT 1", str(lost_id))
+    assert "#157 batch correction, operator-authorized" in audit["payload"]["because"]
+    assert audit["actor"] == "agent:coordinator"
+
+
+async def test_third_party_refuses_an_unknown_seat(actions: Actions) -> None:
+    out = await reconcile_seat_identity_third_party(
+        actions, seat_id="seat:tp4ghost", agent_id=None, because="x", actor="agent:coordinator")
+    assert "no active seat matches" in out["error"]
+
+
+async def test_contract_self_service_and_third_party_produce_identical_graph_writes(
+    actions: Actions,
+) -> None:
+    """The dispatch's own acceptance criteria: self-service and third-party heal the SAME
+    row identically — same winner, same superseded set, same resulting current_assertions
+    state — the only difference is the `because` text riding into the audit trail."""
+    seat_a = await _seat_with_house(
+        actions, "seat:cc1self0", founding="old", founding_source="agent:a",
+        founding_age_days=5, winning="new", winning_source="agent:b")
+    seat_b = await _seat_with_house(
+        actions, "seat:cc2third", founding="old", founding_source="agent:a",
+        founding_age_days=5, winning="new", winning_source="agent:b")
+
+    self_out = await reconcile_seat_identity(
+        actions, seat_id="seat:cc1self0", agent_id=None, actor="agent:self")
+    third_out = await reconcile_seat_identity_third_party(
+        actions, seat_id="seat:cc2third", agent_id=None, because="parity check",
+        actor="agent:coordinator")
+
+    assert self_out["healed"]["house"]["healed"] == third_out["healed"]["house"]["healed"]
+    assert self_out["healed"]["house"]["winner"] == third_out["healed"]["house"]["winner"]
+    assert (len(self_out["healed"]["house"]["superseded"])
+           == len(third_out["healed"]["house"]["superseded"]))
+
+    rows_a = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 AND name='house'",
+        seat_a)
+    rows_b = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 AND name='house'",
+        seat_b)
+    assert {r["v"] for r in rows_a} == {r["v"] for r in rows_b} == {"new"}
+
+
+async def test_the_third_party_mcp_tool_wrapper_heals_any_named_seat(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _seat_with_house(
+        actions, "seat:tp5mcpwr", founding="old", founding_source="agent:a",
+        founding_age_days=3, winning="new", winning_source="agent:b")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ident = AgentIdentity(agent_id="agent:coordmcp", session="coord01", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.reconcile_seat_identity_third_party(
+            seat_id="seat:tp5mcpwr", because="#157 batch", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out["seat_id"] == "seat:tp5mcpwr"
+    assert out["healed"]["house"]["healed"] is True
+
+
+async def test_the_third_party_mcp_tool_refuses_an_unmounted_caller(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.reconcile_seat_identity_third_party(
+            seat_id="seat:whatever", because="x", ctx=None)
     finally:
         srv._pool = saved_pool
     assert "mount first" in out["error"]
