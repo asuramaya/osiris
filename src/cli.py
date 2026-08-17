@@ -1976,16 +1976,39 @@ async def cmd_bootstrap(
     operator authority by construction — see `_CONSOLE_ACTOR`'s own comment). `--project`
     is CLI-only (declared in CLI_ONLY_PARAMS): bootstrap_project itself takes this
     override, the MCP tool's own wrapper simply never exposes it — a gap on that side,
-    not an inconsistency to paper over here."""
+    not an inconsistency to paper over here.
+
+    THE LIVE-DB GUARD (9b9ba394, found live 2026-08-16 — this exact command wrote a
+    real, if small, specimen into the shared fleet graph during its own verification):
+    on this box `apply_dev_fallback()`'s "dev" DSN and every deployed service's own
+    DATABASE_URL are the SAME database (`dev_env.py`'s own docstring assumes a
+    separate `/etc/osiris/osiris.env` prod file that does not exist here — confirmed
+    absent) — there is no isolated instance to fall back to. Unlike `merge`/`mint-seat`/
+    `deploy`/etc. (deliberate operator acts a bare terminal call is SUPPOSED to run
+    against the real graph), `bootstrap` is the one CLI door whose ordinary use includes
+    exploratory/scratch runs — exactly the shape that produced the specimen. So: if the
+    caller did not set DATABASE_URL themselves (about to hit the fallback) AND has not
+    set OSIRIS_ALLOW_LIVE=1, this refuses loudly instead of writing to production by
+    accident. An explicit DATABASE_URL (including one a deployed unit's own environment
+    already carries) always wins and is never blocked."""
     from src.actions.core import Actions
     from src.orchestrator.bootstrap import bootstrap_project
 
     owns_pool = pool is None
     if pool is None:
+        import os
+
         from src.config.dev_env import apply_dev_fallback
         from src.config.settings import get_settings
         from src.db.pool import create_pool
 
+        if not os.environ.get("DATABASE_URL") and os.environ.get("OSIRIS_ALLOW_LIVE") != "1":
+            print("osiris bootstrap: refusing — no DATABASE_URL is set, and this box's own "
+                  "dev fallback points at the SAME database every deployed service uses "
+                  "(no isolated dev instance exists here). Set DATABASE_URL to a scratch "
+                  "instance, or OSIRIS_ALLOW_LIVE=1 to confirm you mean the real graph.",
+                  file=sys.stderr)
+            return 1
         apply_dev_fallback()
         settings = get_settings()
         try:

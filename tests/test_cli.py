@@ -2142,3 +2142,54 @@ async def test_cmd_bootstrap_ingests_memory_and_registers_the_project(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
         "repo:some-project")
     assert row is not None
+
+
+async def test_cmd_bootstrap_refuses_the_live_db_fallback_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """9b9ba394's own specimen: this exact command wrote a real project into the shared
+    fleet graph because apply_dev_fallback()'s "dev" DSN and every deployed service's
+    own DATABASE_URL are the SAME database on this box. No `pool=` passed here (the
+    real no-pool path this guard sits in front of) — neither DATABASE_URL nor
+    OSIRIS_ALLOW_LIVE set, so this must refuse before ever touching create_pool."""
+    import io
+    from contextlib import redirect_stderr
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OSIRIS_ALLOW_LIVE", raising=False)
+
+    project_dir = tmp_path / "some-project"
+    project_dir.mkdir()
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_bootstrap(str(project_dir), project=None, actor="console")
+
+    assert out == 1
+    assert "refusing" in buf.getvalue()
+    assert "OSIRIS_ALLOW_LIVE" in buf.getvalue()
+
+
+async def test_cmd_bootstrap_proceeds_when_database_url_is_already_set(
+    actions: Actions, pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit DATABASE_URL (a deployed unit's own environment, or a caller who set
+    one deliberately) is never blocked — the guard only fires on the SILENT fallback.
+    `actions` (unused directly) forces the Type catalog to be seeded on this same
+    database before cmd_bootstrap opens its OWN pool against the same DSN."""
+    import io
+    from contextlib import redirect_stdout
+
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.delenv("OSIRIS_ALLOW_LIVE", raising=False)
+
+    project_dir = tmp_path / "some-project"
+    project_dir.mkdir()
+    (project_dir / "CLAUDE.md").write_text("# CLAUDE.md\n\n## 2026-08-16\nEntry.\n")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_bootstrap(str(project_dir), project=None, actor="console")
+
+    assert out == 0
+    assert "project=some-project" in buf.getvalue()
