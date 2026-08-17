@@ -13,7 +13,6 @@ from typing import Any
 
 import phonenumbers
 from phonenumbers import PhoneNumberType as _T
-from phonenumbers import carrier, geocoder
 
 from src.parsers.base import InputObject
 
@@ -34,6 +33,19 @@ async def fetch_phone_meta(input_object: InputObject) -> dict[str, Any]:
     raising, so a bare national number that never got a region just yields no
     enrichment instead of crashing the cascade.
     """
+    # LAZY, ON PURPOSE (thread e6fd3772 piece 2, measured): `phonenumbers.geocoder`/`carrier`
+    # each drag in their own bundled geodata tables (data1.py alone is multi-megabyte
+    # source, slow to parse and heavy to hold resident) the instant they're imported —
+    # cost paid at MODULE IMPORT, not at first real lookup, if hoisted to the top of this
+    # file. This connector is only reached from `src.connectors.registry`'s own eager,
+    # module-level CONNECTORS dict — so a top-level import here meant every process that
+    # ever imports the registry (including osiris-mcp's read-only `orient()` path, via
+    # `monitor.scheduled_jobs()`'s lazy `from src.workers.arq_worker import WorkerSettings`)
+    # paid the full geodata cost just to REGISTER this function, never mind call it. A
+    # traced live specimen: orient() blocked 15s+ and grew RSS by several hundred MB on
+    # the first call in a fresh process, entirely inside this import chain.
+    from phonenumbers import carrier, geocoder
+
     raw = input_object.canonical
     try:
         num = phonenumbers.parse(raw, None)  # None region => must be E.164 (has +)

@@ -21,6 +21,7 @@ from typing import Any
 from arq import cron
 from arq.connections import RedisSettings
 
+from src import memprofile
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.connectors.registry import CONNECTORS
@@ -57,6 +58,8 @@ from src.orchestrator.resource_lease import reap_stale as reap_stale_leases
 from src.orchestrator.runner import reap_stale_runs
 from src.orchestrator.trigger import trigger_mail_tick
 from src.orchestrator.watchers import make_form_d_watcher
+
+memprofile.maybe_start()  # inert unless OSIRIS_PROFILE_MEMORY is set — thread e6fd3772
 
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _log = logging.getLogger("osiris.worker")
