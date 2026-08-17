@@ -527,7 +527,13 @@ def _tool_chars(t: Any) -> int:
 # captured by mount()/automount() but never threaded into identity_reading, the actual
 # resolver; Ptah VII's bridge-fork specimen). Load-bearing under 7d6815bb: a caller has to
 # be told a third state exists to branch on it. Imhotep flagged, did not raise (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 171_450
+# 171,450 -> 173,000. 120 -> 121 tools (2026-08-17, Thoth LXXVI heir viii, merge of Seshat's
+# 335bbfc, #157). ONE NEW TOOL: reconcile_seat_identity_third_party — mechanism 3 (fe8ec7ff)
+# had only a self-service half; #157's four rows are OTHER seats' identities and the self-
+# scoped verb refuses by construction (Seshat f78b41c8). Mirrors resync_seat_house_third_party
+# exactly; `because` mandatory; contract test proves identical writes to the self-service
+# path. Measured +1,821 chars at the merged tip; Seshat flagged, did not raise (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 173_000
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -616,4 +622,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
     same "list only, the bulk act is the operator's" shape as #150's own repairs."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 120
+    assert len(per_tool) == 121
