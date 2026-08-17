@@ -552,7 +552,15 @@ def _tool_chars(t: Any) -> int:
 # LIVE MEASUREMENT: 123,914 of 267,305 (46.4%) stale, 99.97% pre-0047 git/git-tree ingest —
 # a migration-0047 backfill-completeness gap. Read-only, count + sample. Seshat flagged, did
 # not raise (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 175_400
+# 175,400 -> 176,400 (measured 176,307 exact). 123 -> 124 tools (2026-08-17, Thoth LXXVI
+# heir viii, thread 09bde57e piece (c)+(d)). ONE NEW TOOL: repair_stale_current_flags — the
+# backfill for stale_current_flags' own population: dry_run=True default (list-only, safe
+# unmounted), dry_run=False is the operator's own mounted call, batched + idempotent UPDATE
+# on assertions.is_current, same #150 "list-only default, execute is the operator's" shape.
+# Load-bearing (piece (d) is the whole point of measuring the population in the first
+# place) but matching the immediately preceding precedent's own judgment call: Seshat
+# flagged, did not raise (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 176_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -641,4 +649,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
     same "list only, the bulk act is the operator's" shape as #150's own repairs."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 123
+    assert len(per_tool) == 124

@@ -4509,6 +4509,30 @@ async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def repair_stale_current_flags(
+    dry_run: bool = True, limit: int = 500, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE BACKFILL for stale_current_flags' own population (thread 09bde57e). `dry_run=True`
+    (default): list-only, names how many rows WOULD flip and their ids, writes nothing —
+    safe to call unmounted-curious. `dry_run=False` is the operator's own call, never
+    automatic: flips `is_current=false` on up to `limit` stale rows in one batched UPDATE,
+    oldest-observed first. Batched because the live population is five figures (123,914 at
+    last count, d8225e71) — walk it in repeated calls, not one UPDATE touching all of it.
+    Idempotent: a row already flipped drops out on its own, so re-running after a partial
+    run or a failure is always safe."""
+    if not dry_run:
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a write to the kernel's own materialization is "
+                             "a mind's act, and the graph must know whose", "why": _anchorless(ctx)}
+        actor = ident.agent_id
+    else:
+        actor = None
+    from src.orchestrator.retirement import repair_stale_current_flags as _repair
+    return await _repair(Actions(await _pool_get()), dry_run=dry_run, limit=limit, actor=actor)
+
+
+@mcp.tool()
 async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
                            ctx: Context | None = None) -> dict[str, Any]:
     """THE CROSS-SOURCE SUPERSEDE (thread 52911d2a, found diagnosing b9aa7326) — retires

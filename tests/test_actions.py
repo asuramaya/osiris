@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re as _re
 from datetime import UTC, datetime
 
 import pytest
@@ -71,6 +72,127 @@ async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
         "SELECT id, is_current FROM assertions WHERE id = ANY($1::bigint[])",
         [first, other_source, second])}
     assert rows == {first: False, other_source: True, second: True}
+
+
+# ═══ the is_current invariant (thread 09bde57e, piece c): every write path that sets
+# assertions.supersedes flips the target's is_current=false in the SAME transaction, so no
+# LIVE write can ever leave a fresh stale flag. khepri's own specimen (2696774 supersedes
+# 2676719, is_current still true on the superseded row) and the 123,914-row population it
+# led to measuring (d8225e71) are BOTH from before this flip discipline existed — a
+# migration-time backfill-completeness gap, not a hole in the two paths below. This suite
+# proves the two paths hold the invariant live, and that nothing else in the codebase writes
+# `supersedes` without them. ═══
+
+
+def test_static_check_only_two_sites_write_the_supersedes_column() -> None:
+    """A THIRD insert path into assertions.supersedes, added later without this discipline,
+    is exactly how a fresh stale-flag population gets born again. Grep the whole src tree —
+    if this ever finds a third site, the invariant needs a new flip, not a wider allowlist."""
+    import pathlib
+
+    sites: list[str] = []
+    for path in pathlib.Path("src").rglob("*.py"):
+        src = path.read_text()
+        for m in _re.finditer(r"INSERT INTO assertions\b", src):
+            # column list may be split across adjacent string literals (line-wrapped
+            # SQL) — look for `supersedes` anywhere before the matching VALUES clause
+            window = src[m.start():m.start() + 400]
+            values_at = window.find("VALUES")
+            column_text = window[:values_at] if values_at != -1 else window
+            if _re.search(r"\bsupersedes\b", column_text):
+                sites.append(f"{path}:{src.count(chr(10), 0, m.start()) + 1}")
+    assert len(sites) == 2, (
+        f"expected exactly assert_property + supersede_assertion, found {sites!r} — a new "
+        "site must flip is_current in the SAME transaction as its INSERT, per this file's "
+        "own two precedents, before it's added to this allowlist")
+    assert all(s.startswith("src/actions/core.py:") for s in sites)
+
+
+async def test_contract_assert_property_leaves_zero_stale_flags(
+    actions: Actions, case_id: str,
+) -> None:
+    """End-to-end: after a same-source supersede, stale_current_flags (the thread 09bde57e
+    read door) must report zero for this row — the flip is real, not just is_current itself
+    correct in isolation."""
+    from src.orchestrator.retirement import stale_current_flags
+
+    obj = await actions.create_or_find_object("Domain", "flip1.com", "analyst:test", case_id)
+    first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+    await actions.assert_property(obj, "registrar", "Namecheap", "helper:rdap", NOW, 0.9)
+
+    out = await stale_current_flags(actions)
+    assert first not in {s["stale_id"] for s in out["sample"]}
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes=a.id "
+        "WHERE a.id=$1 AND a.is_current", first) == 0
+
+
+async def test_contract_supersede_assertion_leaves_zero_stale_flags(
+    actions: Actions, case_id: str,
+) -> None:
+    """Same contract, the cross-source path (supersede_assertion) — the other of exactly two
+    live writers of assertions.supersedes."""
+    from src.orchestrator.retirement import stale_current_flags
+
+    obj = await actions.create_or_find_object("Domain", "flip2.com", "analyst:test", case_id)
+    wrong = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:self", NOW, 0.9)
+    await actions.assert_property(obj, "registrar", "Namecheap", "helper:peer", NOW, 0.9)
+    await actions.supersede_assertion(
+        obj, "registrar", wrong, "Namecheap", "helper:correction", NOW, 0.9,
+        "peer correction", evidence_class="self_declared")
+
+    out = await stale_current_flags(actions)
+    assert wrong not in {s["stale_id"] for s in out["sample"]}
+
+
+async def test_repair_stale_current_flags_heals_a_raw_written_gap(
+    actions: Actions, case_id: str,
+) -> None:
+    """The Actions-layer repair (thread 09bde57e, piece d) against exactly the shape a
+    pre-flip-discipline write (or any write outside the two allowlisted sites) leaves
+    behind: a real supersedes FK, is_current never flipped. Batched, idempotent — a second
+    call against an already-clean population repairs nothing."""
+    obj = await actions.create_or_find_object("Domain", "stale-repair.com", "analyst:test", case_id)
+    stale_id = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:self", NOW, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'registrar','\"Namecheap\"','helper:revert', "
+        "$2, 0.9, $3, 'self_declared')", obj, NOW, stale_id)
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", stale_id) is True
+
+    repaired = await actions.repair_stale_current_flags(limit=500, actor="analyst:test")
+    assert stale_id in repaired
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", stale_id) is False
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='repair_stale_current_flags'") == 1
+
+    # idempotent — nothing left to repair on a repeat call
+    again = await actions.repair_stale_current_flags(limit=500, actor="analyst:test")
+    assert stale_id not in again
+
+
+async def test_repair_stale_current_flags_respects_the_batch_limit(
+    actions: Actions, case_id: str,
+) -> None:
+    obj = await actions.create_or_find_object("Domain", "stale-batch.com", "analyst:test", case_id)
+    stale_ids = []
+    for i in range(3):
+        sid = await actions.assert_property(obj, f"prop{i}", "old", f"helper:src{i}", NOW, 0.9)
+        stale_ids.append(sid)
+        await actions.pool.execute(
+            "INSERT INTO assertions (object_id, name, value, source_id, observed_at, "
+            "confidence, supersedes, evidence_class) VALUES "
+            f"($1,'prop{i}','\"new\"','helper:revert', $2, 0.9, $3, 'self_declared')",
+            obj, NOW, sid)
+
+    repaired = await actions.repair_stale_current_flags(limit=1, actor="analyst:test")
+    assert len(repaired) == 1
+    still_stale = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes=a.id "
+        "WHERE a.is_current AND a.id = ANY($1::bigint[])", stale_ids)
+    assert still_stale == 2
 
 
 async def test_create_link(actions: Actions, case_id: str) -> None:

@@ -10,7 +10,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.retirement import list_assertions, retire_assertion, stale_current_flags
+from src.orchestrator.retirement import (
+    list_assertions,
+    repair_stale_current_flags,
+    retire_assertion,
+    stale_current_flags,
+)
 
 NOW = datetime(2026, 7, 27, tzinfo=UTC)
 
@@ -234,3 +239,99 @@ async def test_the_stale_current_flags_mcp_tool_wraps_the_orchestrator(
     finally:
         srv._pool = saved_pool
     assert "count" in out and "sample" in out
+
+
+# ═══ repair_stale_current_flags — thread 09bde57e piece (d), the backfill for the
+# population stale_current_flags measures (123,914 of 267,305 rows, d8225e71) ═══
+
+
+async def test_repair_dry_run_lists_without_writing(actions: Actions) -> None:
+    obj = await actions.create_or_find_object("Agent", "agent:dryrun", "test")
+    stale_id = await actions.assert_property(obj, "house", "old", "agent:mistake", NOW, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'house','\"new\"','agent:revert', $2, 0.9, "
+        "$3, 'self_declared')", obj, NOW, stale_id)
+
+    out = await repair_stale_current_flags(actions, dry_run=True)
+    assert out["dry_run"] is True
+    assert stale_id in out["sample_ids"]
+    assert out["would_repair"] >= 1
+    # nothing written — the row is still flagged current
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", stale_id) is True
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='repair_stale_current_flags'") == 0
+
+
+async def test_repair_dry_run_is_the_default(actions: Actions) -> None:
+    obj = await actions.create_or_find_object("Agent", "agent:defaultdry", "test")
+    stale_id = await actions.assert_property(obj, "house", "old", "agent:mistake", NOW, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'house','\"new\"','agent:revert', $2, 0.9, "
+        "$3, 'self_declared')", obj, NOW, stale_id)
+
+    out = await repair_stale_current_flags(actions)  # no dry_run kwarg at all
+    assert out["dry_run"] is True
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", stale_id) is True
+
+
+async def test_repair_execute_flips_the_flag_and_records_who(actions: Actions) -> None:
+    obj = await actions.create_or_find_object("Agent", "agent:execute", "test")
+    stale_id = await actions.assert_property(obj, "house", "old", "agent:mistake", NOW, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'house','\"new\"','agent:revert', $2, 0.9, "
+        "$3, 'self_declared')", obj, NOW, stale_id)
+
+    out = await repair_stale_current_flags(actions, dry_run=False, actor="agent:operator")
+    assert out["dry_run"] is False
+    assert stale_id in out["repaired_ids"]
+    assert out["total_stale_remaining"] == out["total_stale_before"] - out["repaired"]
+    assert await actions.pool.fetchval(
+        "SELECT is_current FROM assertions WHERE id=$1", stale_id) is False
+    assert await actions.pool.fetchval(
+        "SELECT actor FROM audit_log WHERE action='repair_stale_current_flags' "
+        "ORDER BY id DESC LIMIT 1") == "agent:operator"
+
+
+async def test_repair_execute_is_idempotent(actions: Actions) -> None:
+    obj = await actions.create_or_find_object("Agent", "agent:idempotent", "test")
+    stale_id = await actions.assert_property(obj, "house", "old", "agent:mistake", NOW, 0.9)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'house','\"new\"','agent:revert', $2, 0.9, "
+        "$3, 'self_declared')", obj, NOW, stale_id)
+
+    first = await repair_stale_current_flags(actions, dry_run=False, actor="agent:operator")
+    assert stale_id in first["repaired_ids"]
+    second = await repair_stale_current_flags(actions, dry_run=False, actor="agent:operator")
+    assert stale_id not in second["repaired_ids"]
+    assert second["repaired"] == 0
+
+
+async def test_the_repair_mcp_tool_refuses_an_unmounted_execute(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.repair_stale_current_flags(dry_run=False)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+
+
+async def test_the_repair_mcp_tool_allows_an_unmounted_dry_run(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.repair_stale_current_flags(dry_run=True)
+    finally:
+        srv._pool = saved_pool
+    assert "error" not in out
+    assert out["dry_run"] is True
