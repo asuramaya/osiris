@@ -960,6 +960,25 @@ async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> No
     assert d["status"] == "no-live-body"
 
 
+async def test_wake_gate_preflight_reports_queued_live_when_only_last_active_fresh(
+    actions: Actions,
+) -> None:
+    """Ra XXXV's specimen (msg 4901, threads 94dc4aae + 27917f1f): a mind can be live by
+    the SAME registry fleet() trusts (fresh last_active testimony, ruling 70493925) while
+    carrying NO agent_mounts row at all — wakeable_identity (agent_mounts-only) finds
+    nothing, but that lookup miss is not evidence the mind never mounted. Must report the
+    honest 'live, but no session resolved' outcome, never the false-absence 'never-mounted'."""
+    a = await actions.create_or_find_object("Agent", "agent:liveonly01", "fleet-observer")
+    fresh = datetime.now(UTC).isoformat()
+    await actions.assert_property(a, "last_active", fresh, "fleet-observer", NOW, 0.9,
+                                  evidence_class="self_declared")
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:liveonly01", settings=_settings(enabled=True))
+    assert d["mode"] == "queued-live-unresolved"
+    assert d["status"] == "queued"
+    assert "has never mounted" not in d["detail"]
+
+
 async def test_wake_preflight_mcp_tool_resolves_a_seat_and_never_touches_dispatch(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2848,6 +2867,30 @@ async def test_dispatch_dm_never_mounted_is_distinct_from_no_anchor(
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
     assert d["mode"] == "never-mounted"
     assert "never mounted" in d["detail"]
+
+
+async def test_dispatch_dm_reports_queued_live_not_never_mounted_when_only_last_active_fresh(
+    actions: Actions,
+) -> None:
+    """The dispatch_dm sibling of Ra's specimen: a live-by-last_active addressee with no
+    agent_mounts row must never earn the manager's 'escalate, worker is gone' receipt
+    (60bc15db's exact shape) — it queues, an outcome, not a failure."""
+    a = await actions.create_or_find_object("Agent", "agent:liveonly02", "fleet-observer")
+    fresh = datetime.now(UTC).isoformat()
+    await actions.assert_property(a, "last_active", fresh, "fleet-observer", NOW, 0.9,
+                                  evidence_class="self_declared")
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
+                             to_agent="agent:liveonly02", body="hello?")
+    msg_id = int(out["id"])
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a live-but-unresolved addressee is never spawned/nudged")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:liveonly02", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=True),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "queued-live-unresolved"
+    assert "has never mounted" not in d["detail"]
 
 
 def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
