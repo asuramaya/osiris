@@ -150,6 +150,32 @@ async def test_heal_is_reversible_via_the_retired_assertions_own_id(actions: Act
     assert superseding_row["supersedes"] == lost_id
 
 
+async def test_heal_reports_healed_false_when_the_only_write_actually_failed(
+    actions: Actions, monkeypatch,
+) -> None:
+    """RECEIPT HONESTY (khepri's own live specimen, #157's fourth row): current_assertions
+    can list a row as current while a real `supersedes` FK already excludes it (an is_current
+    backfill gap, a DIFFERENT and deeper defect than this mechanism repairs) — retire_
+    assertion correctly REFUSES it ("already superseded"), and `healed` must read False over
+    a batch where every attempted write actually failed, never True over a receipt that is
+    all errors. A success-shaped response inviting a caller to skip the one field that says
+    otherwise is exactly the class of bug correct_house's own `was` field exists to prevent."""
+    seat = await _seat_with_house(
+        actions, "seat:hc7reterr", founding="old", founding_source="agent:a",
+        founding_age_days=3, winning="new", winning_source="agent:b")
+
+    async def _always_refuses(actions, **kw):
+        return {"error": "assertion is already superseded — nothing to retire"}
+
+    monkeypatch.setattr(
+        "src.orchestrator.identity_heal.retire_assertion", _always_refuses)
+    out = await heal_contradicting_property(
+        actions, object_id=seat, name="house", actor="test-heal")
+    assert out["healed"] is False
+    assert out["reason"] == "every contradicting row refused retirement"
+    assert out["superseded"][0]["error"] is not None
+
+
 async def test_heal_never_touches_a_non_identity_property(actions: Actions) -> None:
     """#102's agreement marks stay for everything that is not seat identity — this
     mechanism is scoped to 'house'/'project' ONLY, never generalised. Calling it with any

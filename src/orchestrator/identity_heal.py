@@ -82,6 +82,15 @@ async def heal_contradicting_property(
     if not superseded:
         return {"healed": False, "reason": "every current row already agrees",
                 "current": len(rows), "value": winner["value"]}
+    # RECEIPT HONESTY: a `superseded` entry can be an ERROR (retire_assertion refused —
+    # e.g. "already superseded", the exact shape of a current_assertions/is_current
+    # inconsistency this mechanism cannot itself repair) — `healed` must never read True
+    # over a batch where every attempted write actually failed. A partial success (some
+    # rows really retired, one refused) still reports healed=True; the per-row `error` key
+    # is how a caller tells which rows actually moved.
+    if all("error" in s for s in superseded):
+        return {"healed": False, "reason": "every contradicting row refused retirement",
+                "winner": winner["value"], "superseded": superseded}
     return {"healed": True, "winner": winner["value"], "superseded": superseded}
 
 
