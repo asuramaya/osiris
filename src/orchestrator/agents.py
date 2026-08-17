@@ -1721,21 +1721,30 @@ async def _fold_zero_turn_ancestors(
             break  # a real mind lived here — nothing to fold
         do = EvidenceClass.DIRECT_OBSERVATION
         conf = confidence_for(do)
-        for k, v in (("false_mint", True), ("retired", True),
-                     ("retired_by", _PHANTOM_FOLD_SRC),
-                     ("false_mint_because",
-                      "zero-turn generation folded at supersession (ruling d3531cd8) — "
-                      "minted but never acted upon before the next seam")):
-            await actions.assert_property(cur_oid, k, v, _PHANTOM_FOLD_SRC, now, conf,
-                                          evidence_class=do.value)
-        await actions.assert_property(grand_oid, "succeeded_by", "", _PHANTOM_FOLD_SRC, now,
-                                      conf, evidence_class=do.value)
-        await actions.pool.execute(
-            "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
-            grandancestor, cur_id)
+        # ATOMIC (decision ee012ebc's own fix, applied here too — thread 685d24a0):
+        # these four writes either all land or none do. Before this fix they were four
+        # independent unguarded statements — the SAME half-heal shape _debounce_
+        # roundtrip's own interruption produced, just with a smaller blast radius (this
+        # walk only ever touches the NOT-YET-SUPERSEDED head, so an interruption here
+        # can't produce the dangerous stale-ancestor-rebind shape a LATER interruption
+        # elsewhere could) — but the class is worth closing everywhere it appears, not
+        # only where it was first found.
         from src.orchestrator.seats import follow_binding
-        await follow_binding(actions, ancestor_oid=cur_oid, heir=grandancestor,
-                             heir_oid=grand_oid, now=now)
+        async with actions.atomic() as a:
+            for k, v in (("false_mint", True), ("retired", True),
+                         ("retired_by", _PHANTOM_FOLD_SRC),
+                         ("false_mint_because",
+                          "zero-turn generation folded at supersession (ruling d3531cd8) — "
+                          "minted but never acted upon before the next seam")):
+                await a.assert_property(cur_oid, k, v, _PHANTOM_FOLD_SRC, now, conf,
+                                        evidence_class=do.value)
+            await a.assert_property(grand_oid, "succeeded_by", "", _PHANTOM_FOLD_SRC, now,
+                                    conf, evidence_class=do.value)
+            await a.execute(
+                "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+                grandancestor, cur_id)
+            await follow_binding(a, ancestor_oid=cur_oid, heir=grandancestor,
+                                 heir_oid=grand_oid, now=now)
         cur_id, cur_oid = grandancestor, grand_oid
     return cur_id, cur_oid
 

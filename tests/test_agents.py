@@ -3763,6 +3763,33 @@ async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_excepti
     assert await _succeeded_by(actions, "agent:hh0003") == phantom
 
 
+async def test_fold_zero_turn_ancestors_heal_is_atomic_under_a_forced_mid_heal_exception(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """thread 685d24a0: the same fix applied to _fold_zero_turn_ancestors' own heal —
+    force the exception at the LAST write (follow_binding, after the flag stamps AND
+    the pointer unwind have already been issued inside the SAME atomic() block) and
+    prove NOTHING landed."""
+    import src.orchestrator.seats as seats_mod
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0004", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0004", root, because="compaction",
+                                           succession=None)
+
+    async def _boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("forced mid-heal failure")
+
+    monkeypatch.setattr(seats_mod, "follow_binding", _boom)
+
+    with pytest.raises(RuntimeError, match="forced mid-heal failure"):
+        await _fold_zero_turn_ancestors(actions, phantom, phantom_oid, datetime.now(UTC))
+
+    # NOTHING landed — not the flag, not the pointer unwind, not the estate move
+    assert await _false_mint(actions, phantom) is None
+    assert await _succeeded_by(actions, "agent:hh0004") == phantom
+
+
 # ═══════════ THE BOUNDED CHAIN-WALK (thread e749036e, msg 1398) ═══════════
 
 async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions) -> None:
