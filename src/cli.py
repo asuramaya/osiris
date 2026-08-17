@@ -1103,16 +1103,17 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
     once migrations are confirmed applied and well before anything restarts.
 
     ALWAYS surveys (dry-run report, every candidate and every skip named — never a
-    silent drop, matching the underlying verb's own law). EXECUTES only when
-    OSIRIS_CASEFOLD_AUTOMERGE=1 is set — the deploy environment carries it (default ON
-    for deploys), a hand run of `osiris deploy` from an ordinary shell does not (default
-    OFF), exactly the asymmetry the dispatch asked for. Either way every candidate goes
-    through the SAME normalize_project_casing/merge() door with its own belief-gate —
-    this function never re-derives that logic, only decides whether to pass execute."""
+    silent drop, matching the underlying verb's own law). EXECUTES BY DEFAULT — the
+    operator's own word: "automatic, not bottlenecked by me". `osiris deploy` is hand-
+    invoked with no wrapper/cron to hang a "set it in the deploy env" on, so the flip is
+    the default itself: OSIRIS_CASEFOLD_AUTOMERGE=0 opts a run OUT (any other value,
+    including unset, executes). Either way every candidate goes through the SAME
+    normalize_project_casing/merge() door with its own belief-gate — this function never
+    re-derives that logic, only decides whether to pass execute."""
     from src.actions.core import Actions
     from src.orchestrator.projects import casefold_auto_merge_candidates
 
-    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") == "1"
+    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
     result = await casefold_auto_merge_candidates(
         Actions(pool), evidence="osiris deploy: automatic casefold merge "
         "(#108 piece 2, operator ruling 22d47acb/d02f2cdd)",
