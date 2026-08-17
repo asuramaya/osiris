@@ -13,6 +13,12 @@ Type=simple
 User=osiris
 WorkingDirectory=/opt/osiris
 EnvironmentFile=/etc/osiris/osiris.env
+# THE ONE REAL WORKER (decision 8a830336): the boot-time deploy-guard checks in
+# arq_worker.startup() only run when this is set — an ad hoc/local/test `arq` invocation
+# leaves it unset and stays silent, never confessing a spurious "UNREVIEWED BOOT" against
+# the shared graph. Inline here (not in the EnvironmentFile) so it can never be dropped by
+# an unrelated edit to the shared env file, same reasoning as PATH below in the dev unit.
+Environment=OSIRIS_WORKER_ROLE=primary
 ExecStart=/opt/osiris/.venv/bin/arq src.workers.arq_worker.WorkerSettings
 Restart=always
 RestartSec=2

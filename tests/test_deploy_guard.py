@@ -339,7 +339,7 @@ async def test_reboot_alarm_opens_one_durable_thread_and_briefs_the_desk(
 ) -> None:
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'aaa' was never recorded by `osiris deploy`",
-        service="osiris-worker")
+        running_head="aaa", service="osiris-worker")
     thread = await actions.pool.fetchrow(
         "SELECT a.value #>> '{}' AS summary, a.source_id FROM current_assertions a "
         "JOIN objects o ON o.id = a.object_id "
@@ -356,7 +356,27 @@ async def test_reboot_alarm_opens_one_durable_thread_and_briefs_the_desk(
 async def test_reboot_alarm_is_idempotent_on_the_same_drift_text(actions: Actions) -> None:
     for _ in range(3):
         await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
-                                    service="osiris-worker")
+                                    running_head="aaa", service="osiris-worker")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%aaa%'")
+    assert count == 1
+
+
+async def test_reboot_alarm_dedups_on_running_head_alone_across_different_watermarks(
+    actions: Actions,
+) -> None:
+    """Decision 8a830336 — the 76-thread specimen: the SAME unreviewed commit confessing
+    against a DIFFERENT `last_deployed` watermark each restart (a normal thing to happen
+    across several real deploys) must still converge on ONE Thread, not one per distinct
+    drift text. Only `running_head` is the canonical identity now."""
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'aaa' was never recorded (last recorded deploy: 'old1')",
+        running_head="aaa", service="osiris-worker")
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'aaa' was never recorded (last recorded deploy: 'old2')",
+        running_head="aaa", service="osiris-worker")
     count = await actions.pool.fetchval(
         "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
@@ -370,9 +390,9 @@ async def test_two_services_confessing_the_same_unreviewed_head_converge_on_one_
     """Same lesson as thread 35c425f9, applied from the start: osiris-mcp and osiris-worker
     both booting on the identical unrecorded HEAD must not fork into two Threads."""
     await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
-                                service="osiris-mcp")
+                                running_head="aaa", service="osiris-mcp")
     await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
-                                service="osiris-worker")
+                                running_head="aaa", service="osiris-worker")
     # count(DISTINCT o.id) — see the schema-drift version of this test for why a plain
     # count(*) would double-count one object's two-source testimony as two objects.
     count = await actions.pool.fetchval(
@@ -392,11 +412,12 @@ async def test_reboot_alarm_survives_the_desk_being_unreachable(
         raise RuntimeError("mailbox down")
 
     monkeypatch.setattr(mailbox, "send_message", _boom)
-    await alarm_unreviewed_boot(actions.pool, "drift-during-outage", service="osiris-worker")
+    await alarm_unreviewed_boot(actions.pool, "drift-during-outage", running_head="bbb",
+                                service="osiris-worker")
     thread = await actions.pool.fetchval(
         "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
-        "AND a.value #>> '{}' ILIKE '%drift-during-outage%'")
+        "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%bbb%'")
     assert thread == 1
 
 
@@ -428,6 +449,57 @@ def test_worker_startup_imports_the_reboot_guard_too() -> None:
 
     src_text = inspect.getsource(arq_worker.startup)
     assert "check_unreviewed_boot" in src_text and "alarm_unreviewed_boot" in src_text
+
+
+# --- THE ONE REAL WORKER GATE (decision 8a830336): osiris_worker_role, mirroring
+# osiris_mcp_transport's own non-inferred shape — an ad hoc/local `arq` invocation left it
+# unset and confessed truthfully but uselessly against the shared graph, 76 times fleet-wide,
+# because arq_worker.startup() had no equivalent to mcp_server.main()'s own transport gate. ---
+
+async def test_worker_startup_gate_mints_nothing_without_the_role_var(
+    actions: Actions, redis_url: str, pg_dsn: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+    from src.workers.arq_worker import shutdown, startup
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)  # guaranteed mismatch
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    monkeypatch.delenv("OSIRIS_WORKER_ROLE", raising=False)
+    ctx: dict[str, Any] = {}
+    await startup(ctx)
+    try:
+        count = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type = 'Thread'")
+        assert count == 0
+    finally:
+        await shutdown(ctx)
+
+
+async def test_worker_startup_gate_runs_and_dedups_with_the_role_var_set(
+    actions: Actions, redis_url: str, pg_dsn: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The var present is what the real osiris-worker.service unit sets — the guard must
+    actually run (mints one Thread), same claim `test_mcp_boot_check_alarms_on_an_unrecorded_
+    head` already carries for the sibling service."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+    from src.workers.arq_worker import shutdown, startup
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("REDIS_URL", redis_url)
+    monkeypatch.setenv("OSIRIS_WORKER_ROLE", "primary")
+    ctx: dict[str, Any] = {}
+    await startup(ctx)
+    try:
+        thread = await actions.pool.fetchval(
+            "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
+            "WHERE o.type = 'Thread' AND a.name = 'summary' "
+            "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%'")
+        assert thread == 1
+    finally:
+        await shutdown(ctx)
 
 
 # --- the ref-race detector (thread 771366d1: two agents moved main/composer out from under

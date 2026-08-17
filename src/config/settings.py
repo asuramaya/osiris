@@ -97,6 +97,15 @@ class Settings(BaseSettings):
     osiris_mcp_transport: str = "stdio"
     osiris_mcp_host: str = "127.0.0.1"
     osiris_mcp_port: int = 8790
+    # THE ONE REAL arq WORKER (decision 8a830336 — 76 spurious "UNREVIEWED BOOT" threads
+    # traced to this): unlike osiris_mcp_transport above, arq_worker.startup() had NO signal
+    # distinguishing the one systemd-managed worker from any ad hoc local `arq` invocation
+    # (a seat running scripts/stranger_test/run.sh's worker line from their own worktree,
+    # inheriting the shared DATABASE_URL) — every such boot confessed truthfully but
+    # uselessly against the real graph. Mirrors osiris_mcp_transport's own non-inferred
+    # shape exactly: "primary" set ONLY in the real osiris-worker.service unit; empty (the
+    # default) everywhere else, including every local/manual/test invocation.
+    osiris_worker_role: str = ""
     # The shared server's pool: ONE pool for the whole fleet (min_size stays 1 so it's cheap
     # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
     # per-agent 10 × 56 = 560 that would have exhausted it.

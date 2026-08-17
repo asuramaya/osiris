@@ -98,24 +98,40 @@ async def startup(ctx: dict[str, Any]) -> None:
     reaped = await reap_decommissioned_jobs(pool)
     if reaped:
         _log.warning("decommissioned organs reaped from telemetry: %s", ", ".join(reaped))
-    # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
-    # deploy_guard's own module docstring for why. Wrapped defensively here too, on top of
-    # check_schema_drift's own internal fail-open: nothing in this path may ever block a boot.
-    try:
-        drift = await check_schema_drift(pool)
-        if drift:
-            await alarm_schema_drift(pool, drift, service="osiris-worker")
-    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
-        _log.warning("deploy_guard check failed at worker boot: %r", exc)
-    # THE REBOOT-IS-A-DEPLOY GUARD (thread 489a39d0): a SEPARATE try/except from the schema
-    # check above — a bug in one guard must never suppress the other, same isolation the
-    # rest of this module already gives each independent boot-time check.
-    try:
-        reboot_drift = await check_unreviewed_boot(pool)
-        if reboot_drift:
-            await alarm_unreviewed_boot(pool, reboot_drift, service="osiris-worker")
-    except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
-        _log.warning("deploy_guard reboot check failed at worker boot: %r", exc)
+    # THE ONE REAL WORKER GATE (decision 8a830336): unlike mcp_server.main() (which only
+    # runs its own boot-time guards under OSIRIS_MCP_TRANSPORT=streamable-http/sse, never
+    # the per-session stdio path), this startup() ran BOTH deploy-guard checks below
+    # unconditionally, on ANY arq boot from anywhere — including an ad hoc local `arq`
+    # invocation (scripts/stranger_test/run.sh's own worker line is a live, documented
+    # example) run from a seat's own worktree against the real shared DATABASE_URL. That
+    # confessed truthfully but uselessly, 76 times fleet-wide by the time it was measured.
+    # `osiris_worker_role` mirrors `osiris_mcp_transport`'s own non-inferred shape exactly:
+    # "primary" is set ONLY in the real osiris-worker.service unit (deploy/osiris-worker.
+    # service, and the live hand-installed dev unit once updated) — never inferred from
+    # cwd or branch ancestry, which is exactly the guessing #113 was refused for tonight.
+    if settings.osiris_worker_role == "primary":
+        # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
+        # deploy_guard's own module docstring for why. Wrapped defensively here too, on top
+        # of check_schema_drift's own internal fail-open: nothing here may ever block a boot.
+        try:
+            drift = await check_schema_drift(pool)
+            if drift:
+                await alarm_schema_drift(pool, drift, service="osiris-worker")
+        except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+            _log.warning("deploy_guard check failed at worker boot: %r", exc)
+        # THE REBOOT-IS-A-DEPLOY GUARD (thread 489a39d0): a SEPARATE try/except from the
+        # schema check above — a bug in one guard must never suppress the other, same
+        # isolation the rest of this module already gives each independent boot-time check.
+        try:
+            reboot_drift = await check_unreviewed_boot(pool)
+            if reboot_drift:
+                from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
+
+                running_head = _git_head(_REPO_ROOT) or "unknown"
+                await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
+                                           service="osiris-worker")
+        except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
+            _log.warning("deploy_guard reboot check failed at worker boot: %r", exc)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:

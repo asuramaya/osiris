@@ -276,12 +276,23 @@ async def check_diverged_since_last_deploy(
         return None
 
 
-async def alarm_unreviewed_boot(pool: asyncpg.Pool, drift: str, *, service: str) -> None:
+async def alarm_unreviewed_boot(
+    pool: asyncpg.Pool, drift: str, *, running_head: str, service: str,
+) -> None:
     """LOUD, never a refusal, never blocking — the reboot-is-a-deploy confession (thread
     489a39d0). Same shape as `alarm_schema_drift`, including the same lesson already applied
     there: `service` stays OUT of the Thread summary (the canonical-identity text) so two
     services confessing the same unreviewed HEAD converge on one Thread, not two — it still
-    survives per-observation via the log line, the operator DM, and `source`."""
+    survives per-observation via the log line, the operator DM, and `source`.
+
+    DEDUPS ON `running_head` ALONE, not the full `drift` text (decision 8a830336): `drift`
+    also embeds `last_deployed`, which changes on every SUBSEQUENT successful `osiris
+    deploy` — so the SAME unreviewed commit confessing across several restarts, with a
+    different watermark each time, used to mint a fresh Thread per restart instead of
+    converging on one. `running_head` alone is the actual fact worth deduping on: 'this
+    exact commit is still unreviewed', regardless of what the ledger said it was compared
+    against at the moment of each confession. `drift`'s fuller context (both shas) still
+    reaches the log line and the operator brief, same as `service` does."""
     from src.actions.core import Actions
     from src.orchestrator.capture import open_thread
     from src.orchestrator.mailbox import send_message
@@ -290,10 +301,11 @@ async def alarm_unreviewed_boot(pool: asyncpg.Pool, drift: str, *, service: str)
     actions = Actions(pool)
     await open_thread(
         actions,
-        f"UNREVIEWED BOOT: {drift}. A service came up on code that never went through "
-        "`osiris deploy` — most likely a raw service restart or a machine reboot picking up "
-        "the working tree as-is, bypassing the dirty-tree guard and migration gate. Nothing "
-        "was blocked; review what's actually running before trusting it, then run `osiris "
+        f"UNREVIEWED BOOT: running HEAD {running_head!r} was never recorded by `osiris "
+        "deploy`. A service came up on code that never went through `osiris deploy` — "
+        "most likely a raw service restart or a machine reboot picking up the working "
+        "tree as-is, bypassing the dirty-tree guard and migration gate. Nothing was "
+        "blocked; review what's actually running before trusting it, then run `osiris "
         "deploy` so the ledger and reality agree again.",
         kind="obligation", arc="Fleet-Hygiene", severity="alarm", source=f"boot:{service}",
     )
