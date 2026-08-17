@@ -1588,6 +1588,51 @@ async def _last_anchored_stamp(
 _PHANTOM_FOLD_SRC = "phantom-fold"
 
 
+_HALF_HEAL_SRC = "half-heal-detect"
+
+
+async def _heal_completed(actions: Actions, grandancestor: str, phantom: str) -> bool:
+    """Was `grandancestor`'s succeeded_by pointer actually unwound after `phantom` was
+    flagged false_mint, or did the heal's multi-write sequence (flag stamps, pointer
+    unwind, follow_binding, mount-row update — four separate unguarded writes) stop
+    partway? A flag alone is not proof of completion — decision ee012ebc found three
+    live specimens each stamped false_mint weeks earlier with the ancestor's succeeded_by
+    still pointing straight at the phantom, the interruption permanently invisible to
+    any reader that treats the flag itself as the answer."""
+    current = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Agent' "
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        grandancestor)
+    return bool(current != phantom)
+
+
+async def _report_half_healed_phantom(
+    actions: Actions, phantom: str, grandancestor: str,
+) -> None:
+    """A flagged-but-incomplete heal (decision ee012ebc): false_mint landed, the pointer
+    unwind never did. NEVER auto-completed here, on purpose — real generations may have
+    been minted on top of the phantom since the interruption (exactly what happened to
+    the three specimens this class was first found from), and finishing the unwind now
+    would run follow_binding against whatever seat CURRENTLY holds the live head,
+    rebinding it backward onto a stale ancestor and stranding every real mind and every
+    seat-addressed message since. Surfaced for a human's own judgment via the standard
+    obligation door, idempotent on the summary so a repeat sighting (this walk runs at
+    every mint) converges on one Thread rather than paging every caller who passes
+    through here."""
+    logger.warning(
+        "half-healed phantom detected: %s (ancestor %s's succeeded_by never restored)",
+        phantom, grandancestor)
+    from src.orchestrator.capture import open_thread
+    await open_thread(
+        actions,
+        f"HALF-HEALED PHANTOM: {phantom} was flagged false_mint but its ancestor "
+        f"{grandancestor}'s succeeded_by was never unwound — an interrupted heal "
+        f"(decision ee012ebc). Do not auto-complete: a real successor may already be "
+        f"live past {phantom}. A human must judge whether/how to reconcile.",
+        kind="obligation", owner="operator", source=_HALF_HEAL_SRC)
+
+
 async def _fold_zero_turn_ancestors(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, now: datetime,
 ) -> tuple[str, uuid.UUID]:
@@ -1626,8 +1671,13 @@ async def _fold_zero_turn_ancestors(
     until the chain lands on either a REAL (witnessed) ancestor, the lineage root, or a
     hop outside the window. A root (no succeeded_from of its own — nothing minted it) is
     NEVER folded; it has nothing to fold into. Idempotent: an already-folded phantom
-    (false_mint already true) halts immediately, unchanged — safe to re-run the fleet
-    sweep below as often as wanted."""
+    (false_mint already true AND the ancestor's succeeded_by pointer actually unwound)
+    halts immediately, unchanged — safe to re-run the fleet sweep below as often as
+    wanted. A phantom flagged false_mint WITHOUT the pointer unwind (an interrupted heal
+    — decision ee012ebc) is NOT treated as done: it is reported via
+    _report_half_healed_phantom and the walk still halts there, but never silently, and
+    never auto-completed (see that helper's own docstring for why finishing it here
+    would be unsafe, not merely overdue)."""
     cur_id, cur_oid = ancestor_id, ancestor_oid
     for _ in range(64):
         meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
@@ -1636,7 +1686,11 @@ async def _fold_zero_turn_ancestors(
             "AND name IN ('succeeded_from', 'minted_because', 'false_mint') "
             "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
         if meta.get("false_mint", (None, None))[0] == "true":
-            break  # already folded — nothing further to do from here
+            grandancestor, _ = meta.get("succeeded_from", (None, None))
+            if grandancestor and not await _heal_completed(actions, grandancestor, cur_id):
+                await _report_half_healed_phantom(actions, cur_id, grandancestor)
+            break  # a flagged row's own branch stops here either way — complete or
+                   # half, this walk never proceeds past it
         if "minted_because" not in meta:
             break  # a root — nothing minted it, nothing to fold
         grandancestor, _ = meta.get("succeeded_from", (None, None))
@@ -2143,7 +2197,11 @@ async def fold_existing_zero_turn_phantoms(actions: Actions) -> list[dict[str, A
     every ALREADY-SUPERSEDED, ALREADY-MINTED Agent (has succeeded_from AND succeeded_by, so
     a live descendant exists) that isn't already false_mint, folding each one exactly the
     live path would have. Safe to run repeatedly — an already-folded phantom carries
-    false_mint and is excluded by construction. Returns what it folded, for the record."""
+    false_mint and is excluded by construction; a HALF-folded one (flagged but never
+    unwound — decision ee012ebc) is reported, not re-attempted, and open_thread's own
+    idempotency keeps repeat sightings from paging more than once. Returns what it
+    folded, for the record — a half-healed sighting is NOT counted here, only in the
+    obligation it opens."""
     # A GENEROUS pre-filter, deliberately: every minted (non-root) Agent, live head included
     # — correctness rests on _fold_zero_turn_ancestors's own agent_has_acted gate, not on
     # this query, so a live head with real acts (or an already-folded phantom, whose walk
@@ -2284,35 +2342,45 @@ async def _debounce_roundtrip(
         return None
     do = EvidenceClass.DIRECT_OBSERVATION
     conf = confidence_for(do)
-    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC),
-                 ("false_mint_because",
-                  "model round-trip within the debounce window, no witnessed act — "
-                  "settings churn, not a death (Soundwave's grievance, b813e389)")):
-        await actions.assert_property(cur_oid, k, v, _DEBOUNCE_SRC, now, conf,
-                                      evidence_class=do.value)
-    # unwind the head-walk (the old pointer stays in history — compensating, never deleted)
-    await actions.assert_property(ancestor_oid, "succeeded_by", "", _DEBOUNCE_SRC, now, conf,
-                                  evidence_class=do.value)
-    # the estate returns: unread DMs re-address to the restored mind; read state needs no
-    # unwind (the heir's copied rows are inert once the heir is retired)
-    await actions.pool.execute(
-        "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
-        ancestor, cur)
-    # ...and so does THE BINDING (the seat world's estate, 5cef856b): mint_heir moved the
-    # holds link to the transient heir; a heal that leaves it there strands every
-    # seat-addressed DM on a false mint the read predicate still honors. The binding
-    # follows the head — and after a heal, the head IS the restored ancestor.
+    # ATOMIC (decision ee012ebc): these six writes either all land or none do. Before
+    # this fix they were six independent unguarded statements — a crash/interruption
+    # partway left the flag stamped but the pointer never unwound, a half-healed phantom
+    # permanently invisible to any reader that treats the flag alone as "done" (the exact
+    # shape three live specimens were found in, weeks later, with real generations
+    # already minted on top — completing that heal retroactively would have rebound the
+    # CURRENT live seat backward onto a stale ancestor). One transaction closes the gap:
+    # after this, false_mint=="true" is proof of completion again, not merely of an
+    # attempt.
     from src.orchestrator.seats import follow_binding
-    await follow_binding(actions, ancestor_oid=cur_oid, heir=ancestor,
-                         heir_oid=ancestor_oid, now=now)
-    if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
-        await actions.pool.execute(
-            "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
-            job_dir, ancestor, observed)
-    else:  # the register path: any row naming the healed heir follows the restored mind
-        await actions.pool.execute(
-            "UPDATE agent_mounts SET agent_id=$2, model=$3 WHERE agent_id=$1",
-            cur, ancestor, observed)
+    async with actions.atomic() as a:
+        for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC),
+                     ("false_mint_because",
+                      "model round-trip within the debounce window, no witnessed act — "
+                      "settings churn, not a death (Soundwave's grievance, b813e389)")):
+            await a.assert_property(cur_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                    evidence_class=do.value)
+        # unwind the head-walk (the old pointer stays in history — compensating, never deleted)
+        await a.assert_property(ancestor_oid, "succeeded_by", "", _DEBOUNCE_SRC, now, conf,
+                                evidence_class=do.value)
+        # the estate returns: unread DMs re-address to the restored mind; read state needs no
+        # unwind (the heir's copied rows are inert once the heir is retired)
+        await a.execute(
+            "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
+            ancestor, cur)
+        # ...and so does THE BINDING (the seat world's estate, 5cef856b): mint_heir moved the
+        # holds link to the transient heir; a heal that leaves it there strands every
+        # seat-addressed DM on a false mint the read predicate still honors. The binding
+        # follows the head — and after a heal, the head IS the restored ancestor.
+        await follow_binding(a, ancestor_oid=cur_oid, heir=ancestor,
+                             heir_oid=ancestor_oid, now=now)
+        if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
+            await a.execute(
+                "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() "
+                "WHERE job_dir=$1", job_dir, ancestor, observed)
+        else:  # the register path: any row naming the healed heir follows the restored mind
+            await a.execute(
+                "UPDATE agent_mounts SET agent_id=$2, model=$3 WHERE agent_id=$1",
+                cur, ancestor, observed)
     return {"healed": cur, "restored": ancestor,
             "seam": f"{seam} → {observed} (round-trip within "
                     f"{_SEAM_DEBOUNCE_SECS // 60}m, no act — debounced, not a death)"}
