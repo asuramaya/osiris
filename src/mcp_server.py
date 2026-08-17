@@ -4405,6 +4405,24 @@ async def retire_agent(agent_id: str, because: str, override_live: bool = False,
 
 
 @mcp.tool()
+async def backfill_agent_project_links(
+    actor: str, dry_run: bool = True, only_bases: list[str] | None = None,
+) -> dict[str, Any]:
+    """THE MISSING DOOR onto `backfill_agent_project_links` (thread 20af2c95): the write-
+    side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs onto its
+    heir) shipped 2026-08-04, but the one-time repair for edges already stranded on off-
+    head generations before then had no reachable surface — importable only (382067d9).
+    `dry_run=True` (default) plans only — which off-head agents would give up which edges,
+    to which living head — no write. `dry_run=False` writes via the same
+    `move_agent_project_links` the write-side fix already uses. `only_bases` scopes a
+    write to specific lineages; omitted, every off-head agent in scope moves. Executing
+    the write is the operator's own call, same class as #150's repairs."""
+    from src.orchestrator.agents import backfill_agent_project_links as _backfill
+    return await _backfill(Actions(await _pool_get()), actor=actor, dry_run=dry_run,
+                           only_bases=set(only_bases) if only_bases else None)
+
+
+@mcp.tool()
 async def list_assertions(ref: str, name: str) -> dict[str, Any]:
     """READ-ONLY. THE DOOR retire_assertion's own `superseded_id` NEEDS AND NOTHING ELSE
     EXPOSED (382067d9, the fifth-ledger-disease specimen — a verb with a surface whose
