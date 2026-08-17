@@ -318,6 +318,12 @@ async def correct_agent_house(
         was["project"] = await house_of(actions.pool, agent_id)
         await actions.assert_property(row["id"], "project", project, actor, now, _CONF,
                                       evidence_class=_EC)
+        # SELF-HEAL AT WRITE TIME (fe8ec7ff mechanism 3a, ruling df646654): a correction is
+        # exactly the moment a cross-source contradiction either gets created or gets a
+        # chance to heal — never leave the new value sitting beside a stale one.
+        from src.orchestrator.identity_heal import heal_contradicting_property
+        await heal_contradicting_property(actions, object_id=row["id"], name="project",
+                                          actor=actor)
         corrected["project"] = project
         prior_art_bits = await property_prior_art(
             actions.pool, subject_canonical=agent_id, field="project",

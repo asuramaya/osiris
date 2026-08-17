@@ -3079,30 +3079,31 @@ async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) ->
 async def test_correct_house_names_when_it_corrected_nothing(actions: Actions) -> None:
     """The fourth 42176e16 specimen, Alfred's own catch: a call whose `new_house` already
     matches `was` still writes (harmless, append-only) but corrects nothing — `was`
-    alone reads identically to a real correction. `already_correct` says so plainly, and
-    `still_contradicted` names any OTHER source's value this call did NOT touch (decision
-    7a46db36: declaring is not the missing step, invalidating is, and this verb still
-    doesn't do it)."""
+    alone reads identically to a real correction. `already_correct` says so plainly.
+
+    UPDATED FOR fe8ec7ff mechanism 3a (self-heal at write time, ruling df646654): a stale,
+    outvoted contradicting value from a different source no longer survives a correction —
+    correct_house now heals it in the same call, so `still_contradicted` reads empty right
+    after the write instead of naming a row a human would once have had to invalidate by
+    hand (decision 7a46db36's own gap, closed here)."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import correct_house
 
     claimed = await claim_name(actions, "agent:ch5alrdy", "Alfred5", source="test")
     assert claimed.get("error") is None
-    # a stale, OUTVOTED contradicting value from a different source, sitting untouched
+    # a stale, OUTVOTED contradicting value from a different source
     seat_obj = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_obj, "house", "stalehouse", "some-other-agent",
                                   datetime.now(UTC) - timedelta(days=21), 0.9,
                                   evidence_class="self_declared")
     first = await correct_house(actions, "agent:ch5alrdy", "alfred5", source="test")
     assert first["already_correct"] is False
-    assert first["still_contradicted"] == [
-        {"value": "stalehouse", "source": "some-other-agent",
-         "observed_at": first["still_contradicted"][0]["observed_at"]}]
+    assert first["still_contradicted"] == []  # healed, not merely reported
 
     again = await correct_house(actions, "agent:ch5alrdy", "alfred5", source="test")
     assert again["was"] == "alfred5" and again["house"] == "alfred5"
     assert again["already_correct"] is True  # the real catch — was == house, nothing to fix
-    assert again["still_contradicted"][0]["value"] == "stalehouse"  # still sitting there
+    assert again["still_contradicted"] == []  # stays healed
 
 
 async def test_correct_house_surfaces_prior_art_never_refuses_on_it(
@@ -3194,12 +3195,13 @@ async def test_resync_seat_house_third_party_is_a_noop_when_already_correct(
                    "still_contradicted": []}
 
 
-async def test_resync_seat_house_third_party_names_a_lingering_different_source(
+async def test_resync_seat_house_third_party_heals_a_lingering_different_source(
     actions: Actions,
 ) -> None:
-    """A different source's contradicting value survives BOTH a real write and a no-op —
-    neither branch invalidates it, and `still_contradicted` says so honestly instead of
-    a clean receipt implying the seat is now fully consistent."""
+    """UPDATED FOR fe8ec7ff mechanism 3a (self-heal at write time, ruling df646654): a
+    different source's contradicting value used to survive a real write forever, reported
+    but never invalidated — a real WRITE branch now heals it in the same call, so
+    `still_contradicted` reads empty right after."""
     from src.orchestrator.seats import resync_seat_house_third_party
 
     seat = await actions.create_or_find_object("Seat", "seat:rs5linger", "test")
@@ -3210,9 +3212,7 @@ async def test_resync_seat_house_third_party_names_a_lingering_different_source(
         actions, "seat:rs5linger", "handlingtheloop", source="test",
         reason="rename never propagated")
     assert out["written"] is True
-    assert out["still_contradicted"] == [
-        {"value": "xxit", "source": "some-other-agent",
-         "observed_at": out["still_contradicted"][0]["observed_at"]}]
+    assert out["still_contradicted"] == []  # healed, not merely reported
 
 async def test_resync_seat_house_third_party_refuses_an_empty_reason(
     actions: Actions,

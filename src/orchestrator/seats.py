@@ -1861,6 +1861,11 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
     await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
                                   _CONF, evidence_class=_EC)
+    # SELF-HEAL AT WRITE TIME (fe8ec7ff mechanism 3a): a deliberate declaration is exactly
+    # the moment a cross-source contradiction either gets created or gets a chance to heal —
+    # never leave the new value sitting BESIDE a stale one for a human to notice later.
+    from src.orchestrator.identity_heal import heal_contradicting_property
+    await heal_contradicting_property(actions, object_id=seat_obj, name="house", actor=source)
     from src.orchestrator.capture import property_prior_art
 
     prior_art_bits = await property_prior_art(
@@ -1911,6 +1916,10 @@ async def resync_seat_house_third_party(
     if written:
         await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
                                       _CONF, evidence_class=_EC)
+        # SELF-HEAL AT WRITE TIME (fe8ec7ff mechanism 3a) — same reasoning as correct_house.
+        from src.orchestrator.identity_heal import heal_contradicting_property
+        await heal_contradicting_property(actions, object_id=seat_obj, name="house",
+                                          actor=source)
     # read AFTER any write, so `still_contradicted` reflects the state this call actually
     # leaves behind (a same-source prior value is superseded by the write above and drops
     # out here; a different-source value survives untouched either way).

@@ -3847,6 +3847,34 @@ async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> d
 
 
 @mcp.tool()
+async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
+    """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
+    self-healing over manual cleanup) — the self-service replacement for #157's own repair,
+    which used to need an operator-authorized retire_assertion call per stale row. Heals a
+    cross-source CONTRADICTION (more than one current value from different sources) on
+    exactly two properties, both single-valued by nature and never generalised: your Seat's
+    `house` and your own Agent's `project`. Newest-declared-wins, the same tiebreak the read
+    path already applies — this only makes that rule stick instead of leaving the loser
+    sitting beside the winner forever, both technically "current". Reversible: every healed
+    row's own id is in the receipt, same as any retire_assertion call.
+
+    SELF-SCOPED, like correct_house — always your OWN held seat and your OWN agent identity,
+    never an argument naming someone else's. No sign-off required: this is exactly the class
+    of repair the operator ruled no agent should ever need to escalate for."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — reconcile_seat_identity is a seat's own act",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(await _pool_get(), ident.agent_id)
+    if bound is None:
+        return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
+    from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
+    return await _reconcile(Actions(await _pool_get()), seat_id=bound["seat_id"],
+                            agent_id=ident.agent_id, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain
