@@ -174,6 +174,33 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+def _pin_backup_path(p: Path) -> Path:
+    """Where a `.osiris` pin's own backup belongs — NEVER inside a tracked git working tree
+    (obligation 27ae4f89). A SEAT-OFFICE pin (~/.osiris/seats/<handle>, ruling ed5f5ce2)
+    already sits outside version control — its backup stays beside it, unchanged, exactly
+    the original behavior. A REPO-side pin lives INSIDE a git working tree, so a backup
+    beside it is a tracked-file hazard: nothing stops a caller's own `git add -A` or
+    `git commit -a` from picking up an untracked, unignored `.osiris.bak` sitting right next
+    to a real `.osiris` pin. For that case the backup goes inside the repo's OWN `.git`
+    metadata instead — the real directory for an ordinary repo root, or the worktree's own
+    PRIVATE gitdir (resolved from the `gitdir: <path>` one-line gitlink file every worktree
+    checkout carries in place of a real `.git` directory) for a worktree — never staged by
+    any git command, because git never walks its own `.git` contents as working-tree files.
+    `revert_pin_write` calls this SAME function to find what `write_pin_additions`/
+    `correct_pin_value` actually wrote, so the undo keeps working regardless of which branch
+    fired at write time."""
+    git_path = p.parent / ".git"
+    if git_path.is_dir():
+        return git_path / "osiris-pin.bak"
+    if git_path.is_file():
+        line = git_path.read_text().strip()
+        if line.startswith("gitdir:"):
+            real = Path(line.split(":", 1)[1].strip())
+            if real.is_dir():
+                return real / "osiris-pin.bak"
+    return p.with_name(".osiris.bak")
+
+
 def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
     """THE WRITER — ruling 719ed5b1's five-key schema, applying one `plan_pin_migration` entry's
     `changes` at a time (Thoth's own staged rollout, msg 3929: her office alone first, then the
@@ -229,7 +256,8 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
         return {"written": False, "added": [], "skipped": skipped, "discarded": discarded,
                 "path": str(p)}
 
-    backup = p.with_name(".osiris.bak")
+    backup = _pin_backup_path(p)
+    backup.parent.mkdir(parents=True, exist_ok=True)
     backup.write_text(existing_text)
     new_lines = [f"{k} = {json.dumps(v)}" for k, v in sorted(to_add.items())]
     sep = "\n" if existing_text and not existing_text.endswith("\n") else ""
@@ -278,7 +306,8 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
         return {"error": "a correction with no reason is exactly the silent overwrite "
                          "719ed5b1 rules against — refusing"}
 
-    backup = p.with_name(".osiris.bak")
+    backup = _pin_backup_path(p)
+    backup.parent.mkdir(parents=True, exist_ok=True)
     backup.write_text(existing_text)
     lines = existing_text.splitlines(keepends=True)
     rewritten = False
@@ -336,7 +365,7 @@ def revert_pin_write(path: str) -> dict[str, Any]:
     An EMPTY backup means the file didn't exist before that write: revert DELETES the current
     file, restoring true absence, rather than leaving a stray empty `.osiris` behind."""
     p = Path(path) / ".osiris"
-    backup = p.with_name(".osiris.bak")
+    backup = _pin_backup_path(p)
     if not backup.is_file():
         return {"error": f"no backup at {backup} — nothing to revert to"}
     content = backup.read_text()
