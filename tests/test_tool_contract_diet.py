@@ -639,6 +639,10 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     its heir) has shipped and been tested since 2026-08-04, but the one-time repair for
     edges already stranded on off-head generations before that fix landed had no reachable
     door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
-    same "list only, the bulk act is the operator's" shape as #150's own repairs."""
+    same "list only, the bulk act is the operator's" shape as #150's own repairs.
+    123 -> 126 (2026-08-17, thread 5126, operator ruling df646654/fe8ec7ff — chronohorn's
+    own wave): uningested_trees (the census door onto discover_trees, existing/tested/
+    zero-callers until now), ingest_project + ingest_project_third_party (self-service and
+    coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 123
+    assert len(per_tool) == 126

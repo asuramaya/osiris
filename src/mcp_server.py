@@ -3964,6 +3964,62 @@ async def reconcile_seat_identity_third_party(
 
 
 @mcp.tool()
+async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
+    """THE CENSUS (thread 5126) — door onto discover_trees. One row per active
+    SoftwareProject: `tree`, `path`, `watched`, `commits`, `activity`, `last_ingested_at`,
+    `reason` (why `commits==0`: no path, unwatched, never ticked, or ticked-and-empty),
+    `blind` (a path is known but unwatched). `only_gaps=True` (default) narrows to
+    `commits==0`; False for the full census."""
+    from src.config.settings import get_settings
+    from src.orchestrator.neighborhoods import discover_trees
+    settings = get_settings()
+    watched = [w.strip() for w in settings.osiris_dev_repos.split(",") if w.strip()]
+    rows = await discover_trees(await _pool_get(), watched=watched)
+    if only_gaps:
+        rows = [r for r in rows if r["commits"] == 0]
+    return {"count": len(rows), "trees": rows}
+
+
+@mcp.tool()
+async def ingest_project(
+    project: str | None = None, dry_run: bool = True, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """SELF-SERVICE (thread 5126) — land YOUR OWN project's git history and close the
+    threads it witnesses, one call, same authority shape as reconcile_seat_identity.
+    `project` omitted resolves to your mounted pin; refuses cleanly if none is pinned.
+    `dry_run=True` (default) writes NOTHING — the receipt names what would land (commits
+    on disk vs already graphed) plus a closure preview over what's already graphed.
+    `dry_run=False` actually ingests, then closes."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — ingest_project is a seat's own act",
+                "why": _anchorless(ctx)}
+    target = project or ident.project
+    if not target:
+        return {"error": "no project given and none pinned — mount with a project, or pass "
+                         "one explicitly for ingest_project_third_party instead"}
+    from src.orchestrator.tree_ingest import ingest_project as _ingest_project
+    return await _ingest_project(Actions(await _pool_get()), project=target, dry_run=dry_run,
+                                 actor=ident.agent_id)
+
+
+@mcp.tool()
+async def ingest_project_third_party(
+    project: str, because: str, dry_run: bool = True, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THIRD-PARTY SIBLING of ingest_project — same shape as reconcile_seat_identity_
+    third_party: `project` names ANY tree; `because` is REQUIRED (empty refuses); does not
+    check caller authority beyond being mounted. Otherwise identical, same receipt."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — an ingest is a mind's act, and the graph must know "
+                         "whose", "why": _anchorless(ctx)}
+    from src.orchestrator.tree_ingest import ingest_project_third_party as _ingest_third_party
+    return await _ingest_third_party(Actions(await _pool_get()), project=project,
+                                     because=because, dry_run=dry_run, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain

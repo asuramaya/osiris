@@ -322,6 +322,15 @@ class Settings(BaseSettings):
     # (an interrupted heal from the older, now-atomic _debounce_roundtrip) is reported via
     # an obligation, never auto-completed, regardless of this switch.
     osiris_phantom_heal_enabled: bool = False
+    # THE TREE-INGEST ALARM'S OWN SWITCH (thread 5126, operator ruling df646654/fe8ec7ff:
+    # self-healing over manual bug-chasing) — same law as the switches above: a mechanism
+    # that acts on a schedule earns its own kill switch, never inherits one. OFF by default.
+    # When on, a 15-min tick runs discover_trees fleet-wide and, for each tree its owning
+    # Seat has never been alarmed about in the last 24h, sends that Seat a graded 'ask' —
+    # it never ingests anything itself; ingest_project is the owning seat's own act, always
+    # a deliberate second call. A tree with no governing Seat is reported in the tick's
+    # return value, never mailed to no one.
+    osiris_tree_ingest_alarm_enabled: bool = False
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a
