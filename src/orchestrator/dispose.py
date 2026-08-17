@@ -66,8 +66,18 @@ DROP_CLASSES: dict[str, str] = {
 }
 
 _MINER_ORIGIN = (
+    # SCOPED TO THREAD OBJECTS (thread 72e45258, measured: orient() -> candidates(limit=0) ->
+    # this CTE was the single largest cost in orient()'s own profile, 5.45s of 6.87s total —
+    # NOT compositions.py's _eval, which the earlier single-snapshot trace had misattributed
+    # it to). Unscoped, `DISTINCT ON (a.object_id) ... FROM assertions` sorted the WHOLE
+    # `assertions` table — 3,119,632 rows fleet-wide — to answer a question every one of this
+    # CTE's four call sites only ever asks about Thread objects (each joins `origin` under an
+    # outer `o.type='Thread'` filter; none reads a non-Thread row from it). Threads carry only
+    # 25,841 of those assertions (0.8%). Scoping the CTE's own FROM clause to exactly that
+    # population is a pure narrowing — identical rows out, ~99% less to sort to get them.
     "WITH origin AS (SELECT DISTINCT ON (a.object_id) a.object_id, a.source_id, "
     "                a.evidence_class ec FROM assertions a "
+    "                WHERE a.object_id IN (SELECT id FROM objects WHERE type='Thread') "
     "                ORDER BY a.object_id, a.observed_at, a.id) "
 )
 
@@ -102,7 +112,10 @@ async def candidates(
         scope = ("JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
                  "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 ")
         args.append(project if project.startswith("repo:") else f"repo:{project}")
-    rows = await pool.fetch(
+    # ORIENT'S OWN CALL SHAPE (limit=0, count-only — mcp_server.py's "your_pile" glance):
+    # a LIMIT 0 fetch still runs the full query, correlated summary subquery included, only
+    # to discard every row it returns — pure waste for a caller that never reads `candidates`.
+    rows = [] if limit == 0 else await pool.fetch(
         _MINER_ORIGIN +
         "SELECT o.id, o.created_at, "
         # the winner-resolution ordering (test_sql_hygiene): confidence THEN recency. Without
