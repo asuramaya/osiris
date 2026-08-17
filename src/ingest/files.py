@@ -115,9 +115,22 @@ async def ingest_files(
 ) -> dict[str, Any]:
     """Ingest a repo's tracked-file tree as `File` nodes (metadata only) linked `in_repo` the
     SoftwareProject, each carrying its `role`/`ext`. Idempotent: objects dedup on canonical,
-    and the in_repo link is deduped (the gitlog lesson — re-ingest must not inflate edges)."""
+    and the in_repo link is deduped (the gitlog lesson — re-ingest must not inflate edges).
+
+    `name` is a git-derived directory basename (never caller text), but still runs through
+    task #107's choke point (capture.py's `_validate_repo_name`) before minting — same law
+    as every other SoftwareProject mint site, belt-and-suspenders against a genuinely
+    degenerate basename (an empty toplevel, a stray punctuation-only directory) rather than
+    trusting derivation alone. Returns `{"error": ...}` instead of raising: this runs from
+    the pulse daemon's own unattended tick (pulse.py), where an uncaught exception would
+    take down monitoring for every OTHER repo in the same pass, not just this one."""
     top = _git(path, "rev-parse", "--show-toplevel").strip()
     name = Path(top).name
+    from src.orchestrator.capture import _validate_repo_name
+    try:
+        _validate_repo_name(name, name)
+    except ValueError as exc:
+        return {"error": str(exc)}
     now = datetime.now(UTC)
     repo = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source_id,
                                                case_id)

@@ -123,8 +123,20 @@ async def bootstrap_project(
     FIXED 2026-08-03 (Thoth's Tier 1 dispatch off the silent-authority census, decision
     497a066a): every write used to be hardcoded "ref:osiris" regardless of who actually
     called bootstrap — worse than anonymous, a bad injection read as deliberate system
-    canon and could not be traced back to a caller even after the fact."""
+    canon and could not be traced back to a caller even after the fact.
+
+    `project`, when explicit, goes through task #107's choke point (capture.py's
+    `_validate_repo_name`, reused verbatim rather than re-validated here — same law as
+    lineage.py's register_spawn/register_swarm): a path-shaped or otherwise malformed
+    caller-supplied name refuses BEFORE any object is touched. The `project or root.name`
+    default (`_plan`'s own fallback) is a directory basename, not caller text, so it never
+    needs this — the guard only ever fires on an EXPLICIT `project=` argument."""
     project, log_specs, essays = _plan(path, project)
+    from src.orchestrator.capture import _validate_repo_name
+    try:
+        _validate_repo_name(project, project)
+    except ValueError as exc:
+        return {"error": str(exc)}
     now = datetime.now(UTC)
 
     proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
