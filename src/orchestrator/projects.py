@@ -604,6 +604,122 @@ async def reconcile_project_fold(
            "edges_moved": moved, "mounts_moved": mounts_moved}
 
 
+# --- restore_attribution (thread 3f7969a3, operator ruling — self-healing, not a --------
+# --- one-off osiris-applied bandaid) -----------------------------------------------------
+
+async def restore_attribution(
+    actions: Actions, *, project: str, actor: str, dry_run: bool = True,
+    because: str | None = None,
+) -> dict[str, Any]:
+    """Repair the HISTORICAL damage the old `_move_project_estate` left before its own
+    write-time bug was fixed (decision 540007ca, commit 383d548): every fold performed
+    with that code stamped a moved works_in/governs/informs/in_repo edge with the fold's
+    OWN actor as `source_id` and a fresh SELF_DECLARED `evidence_class`, discarding the
+    original writer — a MOVE recorded as a fresh DECLARATION. `invalidate_link` only
+    stamps `valid_until`, never touches a row's own data, so the pre-fold row still
+    carries the correct `source_id`/`confidence`/`evidence_class` untouched — no
+    object_events archaeology needed, this is a straightforward re-derivation from
+    evidence already on the record.
+
+    SELF-SERVICE SCOPE: resolves every SoftwareProject whose `merged_into` points at
+    `project` (its own merged-in dupes) and repairs damage from THOSE folds only — never
+    reaches into an unrelated project's history uninvited. A third party repairing
+    ANOTHER project's history on the operator's behalf uses the same verb; `because` is
+    the audit trail either way once `dry_run=False`, same gate `reconcile_seat_identity_
+    third_party` uses for an unrequested correction.
+
+    DETECTS damage by matching an INVALIDATED pre-fold row (`to_id`=dupe, `valid_until`
+    set) against its LIVE post-fold sibling (same `from_id`/`type`, `to_id`=into,
+    `valid_until IS NULL`): a live row whose `source_id` equals the fold's OWN recorded
+    actor (read off the `merge` object_event, never guessed) rather than the pre-fold
+    row's original `source_id` is exactly the buggy code's signature. A live row already
+    carrying the pre-fold `source_id` is left alone — already correct, or already
+    repaired; safe to run twice. A pre-fold row with nothing live to match (moved
+    elsewhere, or dropped by `_move_project_estate`'s own de-dup) is skipped, never
+    guessed at.
+
+    DRY RUN IS THE DEFAULT: returns the plan (what would be invalidated + recreated, per
+    edge) without writing. `dry_run=False` refuses a blank `because` — mutating
+    historical edge attribution is a deliberate act on the record, never silent.
+
+    Refuses LOUDLY on: blank `project`; an ambiguous bare label (never guesses which);
+    `project` not resolving to a SoftwareProject; `dry_run=False` with a blank
+    `because`."""
+    project = (project or "").strip()
+    if not project:
+        return {"error": "restore_attribution needs a project"}
+    try:
+        into_row = await _resolve_software_project(actions.pool, project)
+    except AmbiguousProjectRef as amb:
+        return {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+                         f"SoftwareProjects answer to it: {', '.join(amb.candidates)}. "
+                         "Name the exact one (canonical or id) — restore_attribution "
+                         "never guesses which."}
+    if into_row is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    if not dry_run and not (because or "").strip():
+        return {"error": "restoring historical attribution without a because is an "
+                         "un-audited reversal — cite the evidence/ruling that "
+                         "authorizes it (the operator's own word, per 3f7969a3)"}
+
+    dupes = await actions.pool.fetch(
+        "SELECT id, canonical FROM objects WHERE merged_into=$1 AND type='SoftwareProject'",
+        into_row["id"])
+
+    plan: list[dict[str, Any]] = []
+    for dupe in dupes:
+        fold_ev = await actions.pool.fetchrow(
+            "SELECT actor FROM object_events WHERE event_type='merge' AND related_id=$1 "
+            "ORDER BY created_at DESC LIMIT 1", dupe["id"])
+        fold_actor = fold_ev["actor"] if fold_ev else None
+        for link_type in _PROJECT_ESTATE_LINK_TYPES:
+            prefold_rows = await actions.pool.fetch(
+                "SELECT from_id, source_id, confidence, evidence_class FROM links "
+                "WHERE to_id=$1 AND type=$2 AND valid_until IS NOT NULL",
+                dupe["id"], link_type)
+            for pf in prefold_rows:
+                live = await actions.pool.fetchrow(
+                    "SELECT source_id, evidence_class FROM links WHERE from_id=$1 "
+                    "AND to_id=$2 AND type=$3 AND (valid_until IS NULL OR valid_until > now())",
+                    pf["from_id"], into_row["id"], link_type)
+                if live is None or live["source_id"] == pf["source_id"]:
+                    continue
+                if fold_actor is not None and live["source_id"] != fold_actor:
+                    continue
+                obj_canon = await actions.pool.fetchval(
+                    "SELECT canonical FROM objects WHERE id=$1", pf["from_id"])
+                plan.append({
+                    "edge": f"{link_type} {obj_canon} → {into_row['canonical']}",
+                    "from_id": str(pf["from_id"]), "type": link_type,
+                    "wrong_source_id": live["source_id"],
+                    "restore_source_id": pf["source_id"],
+                    "restore_confidence": pf["confidence"],
+                    "restore_evidence_class": pf["evidence_class"],
+                    "via_dupe": dupe["canonical"],
+                })
+
+    report: dict[str, Any] = {
+        "project": into_row["canonical"], "dry_run": dry_run,
+        "dupes_examined": [d["canonical"] for d in dupes],
+        "edges_to_restore": len(plan), "plan": plan,
+    }
+    if dry_run or not plan:
+        return report
+
+    now = datetime.now(UTC)
+    restored = 0
+    for item in plan:
+        from_id = uuid.UUID(item["from_id"])
+        await actions.invalidate_link(from_id, into_row["id"], item["type"], actor, now)
+        await actions.create_link(
+            from_id, into_row["id"], item["type"], item["restore_source_id"], now,
+            item["restore_confidence"], evidence_class=item["restore_evidence_class"],
+            actor=actor)
+        restored += 1
+    report.update({"restored": restored, "because": because})
+    return report
+
+
 # --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) ------------
 
 async def find_case_variant_projects(pool: asyncpg.Pool) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from src.orchestrator.projects import (
     normalize_project_casing,
     reconcile_project_fold,
     remote_url_duplicate_candidates,
+    restore_attribution,
     retire_project,
     unfold_project,
 )
@@ -1641,3 +1642,165 @@ async def test_remote_url_automerge_skips_a_genuine_contradiction(
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/conflicted'")
     assert row["status"] == "active"
+
+
+# --- restore_attribution (thread 3f7969a3, operator ruling) ------------------------------
+
+async def _buggy_fold_edge(
+    actions: Actions, from_id, dupe_id, into_id, link_type: str, *, original_source: str,
+    fold_actor: str, when: datetime,
+) -> None:
+    """Replicates the OLD `_move_project_estate` (pre-383d548): invalidate the pre-fold
+    row, then re-create it on `into_id` stamped with the FOLD'S OWN actor instead of the
+    original writer — exactly the damage restore_attribution exists to repair."""
+    await actions.create_link(from_id, dupe_id, link_type, original_source, when, 0.73)
+    await actions.invalidate_link(from_id, dupe_id, link_type, fold_actor, when)
+    await actions.create_link(from_id, into_id, link_type, fold_actor, when, 0.85,
+                              evidence_class="SELF_DECLARED")
+
+
+async def _healed_fold_edge(
+    actions: Actions, from_id, dupe_id, into_id, link_type: str, *, original_source: str,
+    when: datetime,
+) -> None:
+    """A fold that already carried the original writer's attribution forward correctly
+    (the FIXED `_move_project_estate`, or a prior restore_attribution run) — must be left
+    alone."""
+    await actions.create_link(from_id, dupe_id, link_type, original_source, when, 0.73)
+    await actions.invalidate_link(from_id, dupe_id, link_type, original_source, when)
+    await actions.create_link(from_id, into_id, link_type, original_source, when, 0.73)
+
+
+async def test_restore_attribution_dry_run_finds_exactly_the_damaged_edges(
+    actions: Actions,
+) -> None:
+    """The contract test: a fixture with 74 buggy-stamped edges plus a handful of
+    controls (already-healed, orphaned, independently-reattributed-by-a-real-third-party,
+    and an unrelated project's own edge) restores EXACTLY the 74 and touches nothing
+    else."""
+    await _stub_project(actions, "repo:dupe3", "dupe3")
+    await _stub_project(actions, "repo:into3", "into3")
+    await _stub_project(actions, "repo:other3", "other3")
+    dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:dupe3'")
+    into_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:into3'")
+    other_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:other3'")
+    fold_actor = "agent:fold-executor"
+    when = NOW - timedelta(days=1)
+
+    damaged_commits = []
+    for i in range(74):
+        c = await actions.create_or_find_object("Commit", f"commit:damaged-{i}", "test")
+        await _buggy_fold_edge(actions, c, dupe_id, into_id, "in_repo",
+                               original_source=f"agent:writer-{i}", fold_actor=fold_actor,
+                               when=when)
+        damaged_commits.append(c)
+
+    healed = await actions.create_or_find_object("Commit", "commit:already-healed", "test")
+    await _healed_fold_edge(actions, healed, dupe_id, into_id, "in_repo",
+                            original_source="agent:writer-healed", when=when)
+
+    orphaned = await actions.create_or_find_object("Commit", "commit:orphaned", "test")
+    await actions.create_link(orphaned, dupe_id, "in_repo", "agent:writer-orphaned", when, 0.73)
+    await actions.invalidate_link(orphaned, dupe_id, "in_repo", fold_actor, when)
+    # never re-created live on into_id — nothing to restore, must not error or invent one
+
+    reattributed = await actions.create_or_find_object("Commit", "commit:reattributed", "test")
+    await _buggy_fold_edge(actions, reattributed, dupe_id, into_id, "in_repo",
+                           original_source="agent:writer-reattr", fold_actor=fold_actor,
+                           when=when)
+    # a REAL third party (not the fold's own actor) later re-attributed it independently —
+    # restore_attribution must never overwrite a genuine post-fold correction
+    await actions.invalidate_link(reattributed, into_id, "in_repo", "agent:third-party", NOW)
+    await actions.create_link(reattributed, into_id, "in_repo", "agent:third-party", NOW, 0.9)
+
+    unrelated = await actions.create_or_find_object("Commit", "commit:unrelated", "test")
+    await actions.create_link(unrelated, other_id, "in_repo", "agent:writer-unrelated", when,
+                              0.73)
+
+    await actions.merge_objects(into_id, dupe_id, justification="ramstein-shaped fixture",
+                                actor=fold_actor)
+
+    out = await restore_attribution(actions, project="into3", actor="agent:restorer",
+                                    dry_run=True)
+    assert out["dry_run"] is True
+    assert out["edges_to_restore"] == 74
+    restored_from_ids = {item["from_id"] for item in out["plan"]}
+    assert restored_from_ids == {str(c) for c in damaged_commits}
+
+    # dry run must write nothing
+    for c in damaged_commits[:3]:
+        row = await actions.pool.fetchrow(
+            "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+            "AND (valid_until IS NULL OR valid_until > now())", c, into_id)
+        assert row["source_id"] == fold_actor, "dry_run wrote a change"
+
+    out2 = await restore_attribution(actions, project="into3", actor="agent:restorer",
+                                     dry_run=False, because="operator ruling on 3f7969a3")
+    assert out2["restored"] == 74
+
+    for i, c in enumerate(damaged_commits):
+        row = await actions.pool.fetchrow(
+            "SELECT source_id, confidence, evidence_class FROM links "
+            "WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+            "AND (valid_until IS NULL OR valid_until > now())", c, into_id)
+        assert row["source_id"] == f"agent:writer-{i}"
+        assert row["confidence"] == pytest.approx(0.73)
+        assert row["evidence_class"] is None
+
+    healed_row = await actions.pool.fetchrow(
+        "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", healed, into_id)
+    assert healed_row["source_id"] == "agent:writer-healed", "an already-correct edge changed"
+
+    reattr_row = await actions.pool.fetchrow(
+        "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", reattributed, into_id)
+    assert reattr_row["source_id"] == "agent:third-party", (
+        "a genuine post-fold third-party correction was overwritten")
+
+    unrelated_row = await actions.pool.fetchrow(
+        "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", unrelated, other_id)
+    assert unrelated_row["source_id"] == "agent:writer-unrelated", (
+        "an unrelated project's own edge was touched")
+
+    # idempotent: nothing left to restore on a second pass
+    out3 = await restore_attribution(actions, project="into3", actor="agent:restorer",
+                                     dry_run=True)
+    assert out3["edges_to_restore"] == 0
+
+
+async def test_restore_attribution_refuses_execute_without_because(actions: Actions) -> None:
+    await _stub_project(actions, "repo:dupe4", "dupe4")
+    await _stub_project(actions, "repo:into4", "into4")
+    dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:dupe4'")
+    into_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:into4'")
+    c = await actions.create_or_find_object("Commit", "commit:refuse4", "test")
+    await _buggy_fold_edge(actions, c, dupe_id, into_id, "in_repo",
+                           original_source="agent:writer-r4", fold_actor="agent:fold4",
+                           when=NOW - timedelta(days=1))
+    await actions.merge_objects(into_id, dupe_id, justification="fixture", actor="agent:fold4")
+
+    out = await restore_attribution(actions, project="into4", actor="agent:restorer",
+                                    dry_run=False, because="  ")
+    assert "un-audited reversal" in out["error"]
+    row = await actions.pool.fetchrow(
+        "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", c, into_id)
+    assert row["source_id"] == "agent:fold4", "damage was repaired despite the refusal"
+
+
+async def test_restore_attribution_refuses_unknown_project(actions: Actions) -> None:
+    out = await restore_attribution(actions, project="does-not-exist-5", actor="agent:test")
+    assert "no such SoftwareProject" in out["error"]
+
+
+async def test_restore_attribution_a_healthy_project_has_nothing_to_restore(
+    actions: Actions,
+) -> None:
+    """Never merged, never damaged — restore_attribution must report zero, not error."""
+    await _stub_project(actions, "repo:lonely6", "lonely6")
+    out = await restore_attribution(actions, project="lonely6", actor="agent:test")
+    assert out["edges_to_restore"] == 0
+    assert out["dupes_examined"] == []

@@ -1939,7 +1939,7 @@ async def invalidate_works_in(
             "still_working_in": remaining, "because": because}
 
 
-async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID:
+async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID | None:
     """Find-or-create a SoftwareProject CASE-INSENSITIVELY on its bare label (thread
     69911d0c): both mint_heir and register_agent used to call
     `create_or_find_object("SoftwareProject", f"repo:{label}", ...)` directly, a LITERAL,
@@ -1962,7 +1962,24 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     arbitrate which one is "real" — that is fold_project's deliberate, evidence-gated job
     (thread 689d22a2), not a mint-time guess. Falls through to the literal, unchanged
     lookup so an already-ambiguous population is never silently collapsed onto a random
-    pick."""
+    pick.
+
+    REFUSES TO MINT (OR REUSE) A DEGENERATE BARE LABEL (thread 05793d4a — repo:?, minted
+    2026-07-18, name='?', no commits, no genuine identity): task #107's own capture.py
+    `_validate_repo_name` was declared "the single choke point" for every legitimate
+    SoftwareProject mint, but was never actually wired into THIS path (nor mint_heir's,
+    ingest_files', bootstrap's, or correct_project_name's own mints) — 4 of 5 live mint
+    sites bypassed it entirely, which is exactly how a bare '?' got through. Reuses that
+    SAME regex here rather than inventing a second, possibly-diverging definition. Returns
+    None rather than raising: this runs deep inside ordinary mount/succession traffic,
+    where a caller-side exception would be a much louder failure than a malformed label
+    deserves — the caller simply has nothing to link works_in to this turn, same as an
+    honestly-None project already does. Existing degenerate objects (repo:? itself) are
+    never reused either — a caller landing here with the same garbage label a second time
+    must not keep growing its edge count."""
+    from src.orchestrator.capture import _REPO_NAME_RE
+    if not _REPO_NAME_RE.fullmatch(project):
+        return None
     matches = await actions.pool.fetch(
         "SELECT canonical FROM objects WHERE type='SoftwareProject' AND status='active' "
         "AND lower(canonical) = lower($1)", f"repo:{project}")
@@ -2141,7 +2158,8 @@ async def mint_heir(
     if house and not moved and not upcoming_project and not chartered:
         await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
         proj = await _resolve_or_mint_project(actions, house, heir)
-        await _link_once(actions, a, proj, "works_in", heir, now)
+        if proj is not None:
+            await _link_once(actions, a, proj, "works_in", heir, now)
     # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
     # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
     inherited = await actions.pool.fetchval(
@@ -2850,18 +2868,19 @@ async def register_agent(
         # dropped — still recorded, so nothing is hidden from history or from
         # project_identity_evidence's own audit — but at DERIVED-tier confidence, so a
         # routine, uninformed mount can never outrank a declared rename on recency alone.
-        existing_name = await actions.pool.fetchval(
-            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-            "AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
-        if (existing_name is None
-                or existing_name.strip().casefold() == identity.project.strip().casefold()):
-            await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
-                                          evidence_class=_EC)
-        else:
-            do = EvidenceClass.DERIVED
-            await actions.assert_property(proj, "name", identity.project, src, now,
-                                          confidence_for(do), evidence_class=do.value)
-        await _link_once(actions, a, proj, "works_in", src, now)
+        if proj is not None:
+            existing_name = await actions.pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+                "AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+            if (existing_name is None
+                    or existing_name.strip().casefold() == identity.project.strip().casefold()):
+                await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
+                                              evidence_class=_EC)
+            else:
+                do = EvidenceClass.DERIVED
+                await actions.assert_property(proj, "name", identity.project, src, now,
+                                              confidence_for(do), evidence_class=do.value)
+            await _link_once(actions, a, proj, "works_in", src, now)
     if identity.cwd:  # the repo path — lets the trigger-hook resolve a project → where to wake
         await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
     principal = await actions.create_or_find_object("Person", f"principal:{actor}", src)
