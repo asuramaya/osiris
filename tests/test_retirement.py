@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.retirement import list_assertions, retire_assertion
+from src.orchestrator.retirement import list_assertions, retire_assertion, stale_current_flags
 
 NOW = datetime(2026, 7, 27, tzinfo=UTC)
 
@@ -156,3 +156,81 @@ async def test_the_mcp_tool_wraps_the_orchestrator(actions: Actions) -> None:
     finally:
         srv._pool = saved_pool
     assert "error" in out
+
+
+# ═══ stale_current_flags — the read door (thread 09bde57e, khepri's own live specimen:
+# a real supersedes FK exists but is_current was never flipped for the row it excludes) ═══
+
+async def test_stale_current_flags_is_empty_on_a_clean_supersession(actions: Actions) -> None:
+    """The ordinary, correctly-flipped shape (via assert_property's own same-source
+    supersession, or retire_assertion) must NEVER show up here."""
+    obj = await actions.create_or_find_object("Agent", "agent:clean01", "test")
+    await actions.assert_property(obj, "house", "old", "agent:clean01", NOW, 0.9)
+    await actions.assert_property(obj, "house", "new", "agent:clean01", NOW, 0.9)
+    out = await stale_current_flags(actions)
+    ids = {s["stale_id"] for s in out["sample"]}
+    old_id = await actions.pool.fetchval(
+        "SELECT id FROM assertions WHERE object_id=$1 AND value #>> '{}' = 'old'", obj)
+    assert old_id not in ids
+
+
+async def test_stale_current_flags_surfaces_a_row_whose_flip_never_landed(
+    actions: Actions,
+) -> None:
+    """Reproduces khepri's own live specimen directly: a real `supersedes` FK exists (a raw
+    INSERT bypassing the code path that would have flipped `is_current` in the same
+    transaction — exactly the historical-write shape suspected for pre-fix rows) while the
+    superseded row's own `is_current` stays true. `count` names the TRUE total; `sample`
+    carries this exact row with both sides' provenance."""
+    obj = await actions.create_or_find_object("Agent", "agent:stale01", "test")
+    stale_id = await actions.assert_property(obj, "house", "cultural-infrastructure",
+                                             "agent:mistake", NOW, 0.9)
+    # bypass Actions entirely — a raw INSERT with a real supersedes FK but no is_current flip,
+    # the exact shape a pre-0047-fix write (or any write outside the two flipping call
+    # sites) leaves behind
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, confidence, "
+        "supersedes, evidence_class) VALUES ($1,'house','\"tony\"','agent:revert', $2, 0.9, "
+        "$3, 'self_declared')", obj, NOW, stale_id)
+
+    out = await stale_current_flags(actions)
+    hit = next((s for s in out["sample"] if s["stale_id"] == stale_id), None)
+    assert hit is not None, out
+    assert hit["value"] == "cultural-infrastructure"
+    assert hit["superseding_source"] == "agent:revert"
+    assert out["count"] >= 1
+
+
+async def test_stale_current_flags_count_is_never_capped_by_the_sample_limit(
+    actions: Actions,
+) -> None:
+    """`count` must report the TRUE population size even when `sample` is capped small —
+    a caller measuring the live population must never be told a bounded sample's own size
+    is the whole truth."""
+    obj = await actions.create_or_find_object("Agent", "agent:manystale", "test")
+    for i in range(3):
+        stale_id = await actions.assert_property(
+            obj, f"prop{i}", "old", f"agent:src{i}", NOW, 0.9)
+        await actions.pool.execute(
+            "INSERT INTO assertions (object_id, name, value, source_id, observed_at, "
+            "confidence, supersedes, evidence_class) VALUES "
+            f"($1,'prop{i}','\"new\"','agent:revert', $2, 0.9, $3, 'self_declared')",
+            obj, NOW, stale_id)
+
+    out = await stale_current_flags(actions, limit=1)
+    assert len(out["sample"]) == 1
+    assert out["count"] >= 3
+
+
+async def test_the_stale_current_flags_mcp_tool_wraps_the_orchestrator(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.stale_current_flags(limit=5)
+    finally:
+        srv._pool = saved_pool
+    assert "count" in out and "sample" in out

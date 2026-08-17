@@ -541,6 +541,11 @@ def _tool_chars(t: Any) -> int:
 # finds it; refuses to overwrite a live transcript (mtime newer than last ingest) unless force.
 # CLI + MCP parity by construction. Imhotep flagged, did not raise (45e72476). Exact number
 # measured at the merged tip and written below.
+# ONE NEW TOOL: stale_current_flags (thread 09bde57e) — the read door for the
+# is_current/supersedes kernel-integrity gap khepri's own live specimen surfaced:
+# every row where is_current=true yet a real supersedes FK already excludes it.
+# Seshat flagged, did not raise (matching the entry directly above). Measured
+# 174,600 -> 175,309, 122 -> 123.
 TOOL_CONTRACT_CEILING_CHARS = 174_600
 
 

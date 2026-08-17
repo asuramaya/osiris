@@ -4499,6 +4499,19 @@ async def list_assertions(ref: str, name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
+    """THE READ DOOR (thread 09bde57e): every assertion row where `is_current=true`
+    (migration 0047's maintained flag) YET a real `supersedes` FK already points at it from
+    another assertion — a stale flag current_assertions is still trusting. This is a kernel-
+    integrity read, not a per-object lookup like list_assertions: `count` is the TRUE total
+    population (never capped); `sample` is bounded by `limit`, oldest-observed first. Pure
+    read — finds the anomaly, fixes nothing; see obligation 09bde57e for the backfill this
+    surfaces the need for."""
+    from src.orchestrator.retirement import stale_current_flags as _stale_current_flags
+    return await _stale_current_flags(Actions(await _pool_get()), limit=limit)
+
+
+@mcp.tool()
 async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
                            ctx: Context | None = None) -> dict[str, Any]:
     """THE CROSS-SOURCE SUPERSEDE (thread 52911d2a, found diagnosing b9aa7326) — retires
