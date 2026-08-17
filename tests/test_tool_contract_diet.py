@@ -490,7 +490,27 @@ def _tool_chars(t: Any) -> int:
 # author branched stale (both off 166f205, main's tip at the time); the surface still could
 # not be measured until BOTH landed on one tree. Each flagged and refused to raise. The rule
 # held; the integrator measured.
-TOOL_CONTRACT_CEILING_CHARS = 166_900
+# SIXTH PROOF, same night: this author (Seshat) branched off cb7c85b — origin/main's tip,
+# NOT local main's real tip (b6e50a9, three merge waves ahead) — and measured 163,475 ->
+# 165,662, 115 -> 117 tools. Both numbers were wrong: the true prior ceiling was already
+# 166,900/117 (the entry above), so his own delta double-counted list_assertions, which
+# main already carried. Caught before merge (Thoth, msg 5000: "run git rev-parse main in
+# your worktree AND the repo, report both" — the two agreed; the real gap was origin/main
+# vs local main, not worktree staleness — only local main advances between milestone
+# pushes, per house convention). Rebased onto b6e50a9, the list_assertions cherry-pick
+# dropped as a duplicate, re-measured clean against the real tip: +1 tool only
+# (reconcile_seat_identity, fe8ec7ff mechanism 3b, ruling df646654 — the self-service
+# seat-identity heal replacing #157's four operator-authorized retire_assertion calls with
+# one self-scoped call per seat). Raised to the exact measured total below.
+# SEVENTH PROOF, same night: unwitnessed_spawns (obligation cabfb4b2, Ptah VII's rotten-
+# apple report) — the self-audit "what is executing under my identity that I did not
+# spawn," every live-registered spawned_by fact with no on-disk transcript ever confirming
+# it, per ruling 7d6815bb's standard. Measured against the real tip alongside the sixth
+# proof's own fix; +540 chars is the docstring's own honest caveat (Thoth's isSidechain
+# hypothesis, msg 5008, tested against Ptah's real transcript and found not to apply — zero
+# isSidechain:true lines anywhere in it — stated so a hit here is read as a lead, not a
+# verdict, the same lesson Ptah's own retraction (msg 4993) already taught once).
+TOOL_CONTRACT_CEILING_CHARS = 169_775
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -562,6 +582,15 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     114 -> 115 (2026-08-14, ruling e6277013/5273e0f3): correct_thread_summary — a Thread's
     summary could be TWINNED but never CORRECTED (open_thread is idempotent on the summary
     hash; annotate_thread's own docstring refuses the job). The one genuinely missing verb
-    of the three ledger diseases; the other two already had uncalled cures."""
+    of the three ledger diseases; the other two already had uncalled cures.
+    117 -> 118 (2026-08-17, fe8ec7ff mechanism 3b, ruling df646654 — self-healing over
+    manual cleanup): reconcile_seat_identity — heals a cross-source contradiction on a
+    seat's own house/project, self-scoped, no operator sign-off — what #157's four staged
+    retire_assertion calls become, one self-service call per seat.
+    118 -> 119 (2026-08-17, obligation cabfb4b2): unwitnessed_spawns — Ptah VII's rotten-
+    apple report (subagents spawned_by his own identity that he never spawned, invisible to
+    the operator). Every LIVE spawned_by fact with no transcript ever materializing on disk
+    to confirm it — "what is executing under my identity that I did not spawn," self-scoped
+    default, any identity nameable (a pure read, never gated)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 117
+    assert len(per_tool) == 119

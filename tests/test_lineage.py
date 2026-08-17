@@ -15,10 +15,12 @@ from pathlib import Path
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.lineage import (
+    register_spawn,
     register_swarm,
     resolve_parents,
     scan_subagents,
     sense_swarms,
+    unwitnessed_spawns,
 )
 from src.parsers.base import EvidenceClass
 
@@ -269,3 +271,119 @@ async def test_sense_swarms_skips_unchanged_trees(actions: Actions, tmp_path: Pa
     os.utime(victim, (later, later))
     third = await sense_swarms(actions, tmp_path)
     assert third["skipped_unchanged"] == 0 and third["agents"] > 0
+
+
+# ═══ unwitnessed_spawns — the self-audit (obligation cabfb4b2, Ptah VII's rotten-apple
+# report: three subagents spawned_by his own identity that he never spawned, no transcript
+# ever materializing anywhere on disk for any of them) ═══════════════════════════════════
+
+async def test_unwitnessed_spawns_flags_a_child_with_no_transcript_anywhere(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The Ptah shape: a live spawned_by edge minted via register_spawn (the LIVE path,
+    the same one _actor_for drives), with NO transcript ever appearing on disk for the
+    child — exactly the specimen unwitnessed_spawns exists to surface."""
+    await actions.create_or_find_object("Agent", "agent:parentxx", "test")
+    await register_spawn(actions, "ghost0001", parent_agent="agent:parentxx",
+                         project="demo", session="parentxx", witnessed=True)
+    hits = await unwitnessed_spawns(actions, "agent:parentxx", root=tmp_path)
+    assert len(hits) == 1
+    assert hits[0]["child"] == "agent:ghost0001"
+    assert hits[0]["transcript_found_on_disk"] is False
+
+
+async def test_unwitnessed_spawns_excludes_a_child_with_a_real_transcript_on_disk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A child register_swarm reconstructed FROM a real transcript never shows up here —
+    the on-disk file is exactly the corroboration this audit checks for."""
+    await actions.create_or_find_object("Agent", _ROOT, _ROOT)
+    await register_swarm(actions, _write_swarm(tmp_path))
+    hits = await unwitnessed_spawns(actions, _ROOT, root=tmp_path)
+    assert hits == []
+
+
+async def test_unwitnessed_spawns_is_empty_for_an_identity_with_no_children(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await actions.create_or_find_object("Agent", "agent:lonely0", "test")
+    assert await unwitnessed_spawns(actions, "agent:lonely0", root=tmp_path) == []
+
+
+async def test_unwitnessed_spawns_ignores_a_retracted_spawned_by_edge(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A live edge only — an unmerge/retraction must not go on flagging a child that is no
+    longer even claimed as this identity's own."""
+    await actions.create_or_find_object("Agent", "agent:parentyy", "test")
+    await register_spawn(actions, "ghost0002", parent_agent="agent:parentyy",
+                         project="demo", session="parentyy", witnessed=True)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=now() WHERE type='spawned_by' "
+        "AND from_id=(SELECT id FROM objects WHERE canonical='agent:ghost0002')")
+    assert await unwitnessed_spawns(actions, "agent:parentyy", root=tmp_path) == []
+
+
+async def test_the_mcp_tool_defaults_to_the_callers_own_identity(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await actions.create_or_find_object("Agent", "agent:mcpself0", "test")
+    await register_spawn(actions, "ghost0003", parent_agent="agent:mcpself0",
+                         project="demo", session="mcpself0", witnessed=True)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ident = AgentIdentity(agent_id="agent:mcpself0", session="mcpself0", project="demo",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.unwitnessed_spawns(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out["agent_id"] == "agent:mcpself0"
+    assert out["count"] == 1
+    assert out["unwitnessed"][0]["child"] == "agent:ghost0003"
+
+
+async def test_the_mcp_tool_can_audit_a_named_identity_without_being_mounted(
+    actions: Actions,
+) -> None:
+    """A pure read, never gated the way a write would be — the operator's own item (4):
+    checking SOMEONE ELSE'S identity needs no mount of your own."""
+    from src import mcp_server as srv
+
+    await actions.create_or_find_object("Agent", "agent:othermnd", "test")
+    await register_spawn(actions, "ghost0004", parent_agent="agent:othermnd",
+                         project="demo", session="othermnd", witnessed=True)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.unwitnessed_spawns(agent_id="agent:othermnd", ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert out["agent_id"] == "agent:othermnd"
+    assert out["count"] == 1
+
+
+async def test_the_mcp_tool_refuses_an_unmounted_caller_with_no_named_target(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.unwitnessed_spawns(ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]

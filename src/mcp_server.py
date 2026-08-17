@@ -3847,6 +3847,34 @@ async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> d
 
 
 @mcp.tool()
+async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
+    """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
+    self-healing over manual cleanup) — the self-service replacement for #157's own repair,
+    which used to need an operator-authorized retire_assertion call per stale row. Heals a
+    cross-source CONTRADICTION (more than one current value from different sources) on
+    exactly two properties, both single-valued by nature and never generalised: your Seat's
+    `house` and your own Agent's `project`. Newest-declared-wins, the same tiebreak the read
+    path already applies — this only makes that rule stick instead of leaving the loser
+    sitting beside the winner forever, both technically "current". Reversible: every healed
+    row's own id is in the receipt, same as any retire_assertion call.
+
+    SELF-SCOPED, like correct_house — always your OWN held seat and your OWN agent identity,
+    never an argument naming someone else's. No sign-off required: this is exactly the class
+    of repair the operator ruled no agent should ever need to escalate for."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — reconcile_seat_identity is a seat's own act",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(await _pool_get(), ident.agent_id)
+    if bound is None:
+        return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
+    from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
+    return await _reconcile(Actions(await _pool_get()), seat_id=bound["seat_id"],
+                            agent_id=ident.agent_id, actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain
@@ -4536,6 +4564,43 @@ async def file_subagents(project: str | None = None, dry_run: bool = True,
     from src.orchestrator.lineage import file_subagents as _file_subagents
     return await _file_subagents(Actions(await _pool_get()), project=project,
                                  dry_run=dry_run, actor=ident.agent_id)
+
+
+@mcp.tool()
+async def unwitnessed_spawns(agent_id: str | None = None,
+                             ctx: Context | None = None) -> dict[str, Any]:
+    """THE SELF-AUDIT (obligation cabfb4b2, Ptah VII's rotten-apple report): every LIVE
+    `spawned_by` child of `agent_id` for which NO `subagents/agent-<id>.jsonl` file has EVER
+    materialized anywhere on disk — "what is executing under my identity right now that I
+    did not spawn." Omit `agent_id` to audit YOUR OWN identity (a seat's own check); name
+    another to audit theirs (the operator's own check, or a peer's — a pure read, never
+    gated the way a write would be).
+
+    A HIT IS A LEAD, NOT A VERDICT — Ptah's own specimen retracted once already (msg 4993):
+    a subagent Ra spawned and briefed "you are Ptah" was correctly parented to Ra, not a
+    graph defect. Checked one live hypothesis (Thoth, msg 5008) against Ptah's real
+    transcript before shipping this docstring: whether a sidechain turn could be recorded
+    INLINE in the parent's own transcript (isSidechain=true) rather than as a separate
+    subagents/ file, which would make a hit here a false alarm. Zero `isSidechain:true`
+    lines exist anywhere in Ptah's own transcript — that specific escape hatch does not
+    explain his specimens, but a caller should not assume it can never apply elsewhere
+    without checking the same way. This tool reads; it never files or folds anything found
+    here — see obligation cabfb4b2 for the fix shape still pending live evidence."""
+    from pathlib import Path
+
+    from src.orchestrator.lineage import unwitnessed_spawns as _unwitnessed
+    target = agent_id
+    if target is None:
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first, or name an agent_id to audit someone else's",
+                    "why": _anchorless(ctx)}
+        target = ident.agent_id
+    st = get_settings()
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    hits = await _unwitnessed(Actions(await _pool_get()), target, root=root)
+    return {"agent_id": target, "unwitnessed": hits, "count": len(hits)}
 
 
 @mcp.tool()
