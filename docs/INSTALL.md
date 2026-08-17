@@ -66,15 +66,15 @@ is the actual failure signal.
 
 ## 5. Keep them alive (systemd user units)
 
-`deploy/` ships the unit files. On a single-operator box they install as **user** units —
-running as you, against your own instance (`deploy/osiris-pulse.service`'s header documents
-the pattern; the `/opt` system-unit form is in [`DEPLOY.md`](DEPLOY.md)):
+`deploy/user/` ships all four unit files. On a single-operator box they install as **user**
+units — running as you, against your own instance (the `/opt` system-unit form is in
+[`DEPLOY.md`](DEPLOY.md)). `osiris deploy` (re)installs these over
+`~/.config/systemd/user/` on every deploy after the first (thread e6fd3772 piece 3-infra); by
+hand, one time:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/osiris-console.service deploy/osiris-pulse.service ~/.config/systemd/user/
-# author osiris-worker + osiris-mcp user units from the deploy/ templates the same way:
-#   drop User=/EnvironmentFile=, inline the Environment= URLs, absolute venv paths
+cp deploy/user/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now osiris-console osiris-pulse osiris-worker osiris-mcp
 loginctl enable-linger "$USER"   # survive logout / reboot

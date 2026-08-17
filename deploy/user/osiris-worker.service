@@ -1,0 +1,46 @@
+# Osiris worker (Arq) — systemd USER unit for the single-operator dev box.
+#
+# The tripwire + cascade drain + reaper: drains the durable outbox, evaluates watches into
+# alerts, reaps orphaned runs, heartbeats liveness. Fate-isolated — a runaway crawl or OOM here
+# cannot touch the console; on restart it re-claims orphaned runs (the reaper) and resumes the
+# durable outbox (nothing lost, nothing double-emitted — atomic helper_runs claim).
+#
+# A USER unit like deploy/user/osiris-console.service (runs AS the operator, against the
+# operator's own dev instance — no /opt deploy, no system account), NOT the /opt system form
+# of deploy/osiris-worker.service. `osiris deploy` installs this file (thread e6fd3772 piece
+# 3-infra) — it is no longer hand-authored or hand-copied.
+[Unit]
+Description=Osiris worker (Arq: cascade drain, watch evaluator, reaper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/osiris
+# application_name identifies this daemon's own connections in pg_stat_activity — asyncpg
+# forwards any DSN query param it doesn't recognize straight into server_settings
+# (connect_utils.py), so no code change was needed.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-worker
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# THE ONE REAL WORKER (decision 8a830336): the boot-time deploy-guard checks in
+# arq_worker.startup() only run when this is set — an ad hoc/local/test `arq` invocation
+# leaves it unset and stays silent, never confessing a spurious "UNREVIEWED BOOT" against
+# the shared graph. Inline (never in a shared env file) so it can never be dropped by an
+# unrelated edit.
+Environment=OSIRIS_WORKER_ROLE=primary
+Environment=OSIRIS_PHANTOM_HEAL_ENABLED=1
+Environment=OSIRIS_SENSE_SESSIONS=%h/.claude/projects
+# The LLM provider is resolved with shutil.which('claude') at RUN time, and a user
+# unit does not inherit a login shell's PATH — so the session-miner's provider was a
+# coin flip on whatever PATH the user manager happened to carry. It lost silently for
+# 10 hours on 2026-07-12 (48/48 ticks: 'no LLM provider for session-sensing'). Pinned.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/code/osiris/.venv/bin/arq src.workers.arq_worker.WorkerSettings
+Restart=always
+RestartSec=5
+# Contain a runaway expansion here, not in the API (mirrors the system unit's cap; the dev box
+# has generous resources — 2G is ample for the drain/evaluate/reap crons).
+MemoryMax=2G
+
+[Install]
+WantedBy=default.target

@@ -1,7 +1,7 @@
 """Canonical dev-box env resolution (task #69, ruling 45b074bf) — ONE place for the fallback
 values every dev-facing systemd USER unit already inlines by hand (deploy/osiris-manager.
-service, deploy/osiris-console.service, deploy/osiris-pulse.service: DATABASE_URL=...:5601/
-osiris, REDIS_URL=...:6396/0) and half a dozen scripts re-hardcode ad hoc (scripts/
+service, deploy/user/osiris-console.service, deploy/user/osiris-pulse.service: DATABASE_URL=
+...:5601/osiris, REDIS_URL=...:6396/0) and half a dozen scripts re-hardcode ad hoc (scripts/
 osiris_fleet_glance.py, osiris_statusline.py, osiris_stophook.py, backfill_thread_arc.py,
 backfill_generations.py, backfill_seat_bindings.py all carry the identical literal
 independently — flagged as its own duplication debt, not fixed here, since none of them are

@@ -6,14 +6,10 @@
 # (deploy/osiris-mcp.service), never here; this surface only reads and renders, so a crash or a
 # kill takes down a window, never the truth. Restart=always self-heals a dead lens.
 #
-# A USER unit like deploy/osiris-pulse.service (runs AS the operator, against the operator's own
-# dev instance — no /opt deploy, no system account), NOT the /opt system form of
-# deploy/osiris-api.service. Install it the same way (see osiris-pulse.service's header):
-#   cp deploy/osiris-console.service ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now osiris-console
-# Adjust WorkingDirectory / the venv path / the URLs to your box. systemd user units do NOT
-# inherit your shell PATH, so ExecStart and the venv must be absolute.
+# A USER unit like deploy/user/osiris-pulse.service (runs AS the operator, against the
+# operator's own dev instance — no /opt deploy, no system account), NOT the /opt system form
+# of deploy/osiris-api.service. `osiris deploy` installs this file (thread e6fd3772 piece
+# 3-infra) — it is no longer hand-authored or hand-copied.
 [Unit]
 Description=Osiris console (read-only membrane lens + console; :8011)
 After=network-online.target
@@ -23,8 +19,10 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/code/osiris
 # Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
-# systemd Environment= overrides pydantic's .env.
-Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
+# systemd Environment= overrides pydantic's .env. application_name identifies this daemon's
+# own connections in pg_stat_activity — asyncpg forwards any DSN query param it doesn't
+# recognize straight into server_settings (connect_utils.py), so no code change was needed.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-console
 Environment=REDIS_URL=redis://127.0.0.1:6396/0
 # --factory: uvicorn calls create_app() (which builds its OWN pool + lifespan), the self-standing
 # form of the app; the module-level `app` is the same surface for the /opt system unit.
