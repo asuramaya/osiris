@@ -3876,6 +3876,36 @@ async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> d
 
 
 @mcp.tool()
+async def restore_attribution(
+    project: str, dry_run: bool = True, because: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """SELF-HEALING repair for the OLD `_move_project_estate` write-time bug (thread
+    3f7969a3, operator ruling: this has to be infra agents do themselves, not a one-off
+    osiris-applied bandaid) — fixed going forward (decision 540007ca, commit 383d548),
+    but every fold performed BEFORE that fix stamped a moved works_in/governs/informs/
+    in_repo edge with the fold's own actor as source_id, discarding the original writer.
+    `invalidate_link` never touches a row's own data, so the pre-fold row still carries
+    the correct source_id/confidence/evidence_class — this re-derives the live edge from
+    that evidence, already on the record, no archaeology needed.
+
+    Resolves `project`'s own merged-in dupes (every SoftwareProject whose `merged_into`
+    points here) and repairs only damage from THOSE folds. DRY RUN IS THE DEFAULT: returns
+    the plan without writing — review it, then call again with `dry_run=False`, which
+    REQUIRES a non-blank `because` (mutating historical attribution is a deliberate act
+    on the record, never silent). Safe to run twice: a live edge already carrying the
+    pre-fold source_id (correct, or already repaired) is left alone."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a restore is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.projects import restore_attribution as _restore_attribution
+    return await _restore_attribution(
+        Actions(await _pool_get()), project=project, actor=ident.agent_id,
+        dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
     """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
     self-healing over manual cleanup) — the self-service replacement for #157's own repair,
