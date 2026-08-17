@@ -358,6 +358,39 @@ class Actions:
             await self._outbox(conn, "property_added", object_id, case_id, {"name": name})
             return new_id
 
+    # --- 2c. repair_stale_current_flags (the migration-0047 backfill) -----
+
+    async def repair_stale_current_flags(
+        self, *, limit: int, actor: str,
+    ) -> list[int]:
+        """Heal the maintained `is_current` MATERIALIZATION (migration 0047) where a real
+        `supersedes` FK already excludes a row but the flip never landed (thread 09bde57e —
+        a migration-time backfill-completeness gap, not an ongoing write-path bug: both
+        writers of `supersedes` (assert_property above, supersede_assertion) flip it in the
+        SAME transaction as their INSERT, so no live path can leave a fresh gap).
+
+        Touches ONLY the flag, never an assertion's own content — the kernel itself
+        (constitution #3) is untouched, this repairs its projection, same class of act as
+        0047's own one-time backfill UPDATE. Batched (`limit`) and idempotent: a row already
+        flipped drops out of the WHERE clause, so re-running to walk a large population in
+        batches, or after a partial failure, is always safe. Returns the ids actually
+        flipped, oldest-observed first — empty when nothing (in this batch) was stale."""
+        async with self._tx() as conn:
+            rows = await conn.fetch(
+                "WITH batch AS ("
+                " SELECT a.id FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+                " WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1) "
+                "UPDATE assertions SET is_current=false WHERE id IN (SELECT id FROM batch) "
+                "RETURNING id",
+                limit,
+            )
+            repaired = sorted(cast(int, r["id"]) for r in rows)
+            await self._audit(
+                conn, "repair_stale_current_flags", actor, None,
+                {"repaired_count": len(repaired), "repaired_ids": repaired},
+            )
+            return repaired
+
     # --- 3. create_link --------------------------------------------------
 
     async def create_link(

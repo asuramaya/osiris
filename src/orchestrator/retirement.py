@@ -90,6 +90,40 @@ async def stale_current_flags(actions: Actions, *, limit: int = 50) -> dict[str,
     }
 
 
+async def repair_stale_current_flags(
+    actions: Actions, *, dry_run: bool = True, limit: int = 500, actor: str | None = None,
+) -> dict[str, Any]:
+    """THE BACKFILL for thread 09bde57e's own kernel gap — the compensating fix for exactly
+    the population `stale_current_flags` measures (123,914 of 267,305 rows at last count,
+    d8225e71): `assertions.is_current` is a maintained MATERIALIZATION of the append-only
+    kernel (migration 0047), not itself a kernel fact — flipping it here heals the
+    projection, touches no assertion's own content, and violates nothing in constitution #3.
+
+    `dry_run=True` (default, list-only): names how many rows WOULD flip and their ids,
+    writes nothing. `dry_run=False` is the operator's own call, never automatic — flips
+    `is_current=false` on up to `limit` stale rows in one batched UPDATE, oldest-observed
+    first. Batched because the live population is five figures; a single UPDATE touching all
+    of it at once is not the shape of a repair anyone should run unattended. Idempotent: a
+    repeat call only ever sees rows STILL stale — a row already flipped drops out of the
+    WHERE clause on its own, so re-running (to walk the full population in batches, or after
+    a partial failure) is always safe."""
+    pool = actions.pool
+    total_before = await pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+        "WHERE a.is_current")
+    if dry_run:
+        rows = await pool.fetch(
+            "SELECT a.id FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+            "WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1", limit)
+        ids = [r["id"] for r in rows]
+        return {"dry_run": True, "total_stale": total_before, "would_repair": len(ids),
+                "sample_ids": ids}
+    repaired = await actions.repair_stale_current_flags(limit=limit, actor=actor or "system")
+    return {"dry_run": False, "repaired": len(repaired), "repaired_ids": repaired,
+            "total_stale_before": total_before,
+            "total_stale_remaining": max(total_before - len(repaired), 0)}
+
+
 async def retire_assertion(
     actions: Actions, *, ref: str, name: str, superseded_id: int, value: Any,
     because: str, actor: str,
