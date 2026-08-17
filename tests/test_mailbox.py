@@ -21,6 +21,7 @@ from src.orchestrator.mailbox import (
     read_inbox,
     send_message,
     unread_count,
+    unread_counts,
 )
 
 R = "agent:reader"  # a representative reader for single-agent-project tests
@@ -53,6 +54,32 @@ async def test_reading_leases_rather_than_consumes(actions: Actions) -> None:
     assert await unread_count(p, "sibling-one", reader_agent=R, lease_secs=0) == 1
     again = await read_inbox(p, "sibling-one", reader_agent=R, lease_secs=0)
     assert len(again) == 1 and again[0]["redelivered"] is True
+
+
+async def test_unread_counts_matches_two_separate_unread_count_calls_on_a_mixed_mailbox(
+    actions: Actions,
+) -> None:
+    """Thread 72e45258's own residual: mount()/orient()/automount() all called `unread_count`
+    twice back to back (total, then grade='ask') — the same `_DELIVERABLE_TO_READER` predicate
+    scanned twice. `unread_counts` computes both in one pass via conditional aggregation; this
+    proves it against a MIXED mailbox (a broadcast, an ask-graded DM, an already-acked message)
+    that both counts land byte-identical to the two-call shape it replaces."""
+    p = actions.pool
+    await _seed(p, "mixedbox")
+    await send_message(p, from_agent="agent:x", from_project="a", to_project="mixedbox",
+                       body="fyi broadcast, no grade")
+    await send_message(p, from_agent="agent:y", from_project="a", to_agent=R,
+                       body="needs your act", grade="ask")
+    acked_res = await send_message(p, from_agent="agent:z", from_project="a", to_project="mixedbox",
+                                   body="already handled")
+    await ack_messages(p, "mixedbox", [acked_res["id"]], reader_agent=R)
+
+    old_total = await unread_count(p, "mixedbox", reader_agent=R)
+    old_ask = await unread_count(p, "mixedbox", reader_agent=R, grade="ask")
+    combined = await unread_counts(p, "mixedbox", reader_agent=R)
+
+    assert combined == {"total": old_total, "ask": old_ask}
+    assert combined == {"total": 2, "ask": 1}  # broadcast + DM live; acked settled; DM is the ask
 
 
 async def test_ack_settles_for_good(actions: Actions) -> None:
