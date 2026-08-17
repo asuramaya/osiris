@@ -36,6 +36,7 @@ from src.cli import (
     cmd_migrate,
     cmd_mint_seat,
     cmd_new,
+    cmd_rematerialize,
     cmd_seed,
     cmd_unmerge,
     commit_deployed_notes,
@@ -1881,6 +1882,58 @@ async def test_cli_parser_accepts_annotate_thread(actions: Actions) -> None:
     assert args.ref == "thread:abc12345"
     assert args.note == "a further observation"
     assert args.actor == "operator"
+
+
+# --- rematerialize: the soul store's own second door (task #51 piece 2) — calls the
+# SAME SoulStore.rematerialize_to_disk the MCP wrapper calls, guard untouched ------------------
+
+async def test_cmd_rematerialize_writes_and_reports(actions: Actions, tmp_path: Path) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.ingest.soul_store import SoulStore
+
+    source = tmp_path / "s" / "clidead01-session.jsonl"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"type": "user", "message": {"content": "hi"}}\n')
+    await SoulStore(actions.pool).ingest_path(str(source), "clidead01")
+
+    dest = tmp_path / "d" / "out.jsonl"
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_rematerialize("clidead01", dest=str(dest), pool=actions.pool)
+    assert out == 0
+    assert f"wrote {dest}" in buf.getvalue()
+    assert dest.read_text() == source.read_text()
+
+
+async def test_cmd_rematerialize_refuses_no_match(actions: Actions, tmp_path: Path) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_rematerialize("neverseen0", dest=str(tmp_path / "x.jsonl"),
+                                      pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+    assert not (tmp_path / "x.jsonl").exists()
+
+
+async def test_cli_parser_accepts_rematerialize(actions: Actions) -> None:
+    """argparse wiring: anchor_sid positional, --dest/--force optional."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["rematerialize", "deadbeef", "--dest", "/tmp/out.jsonl", "--force"])
+    assert args.command == "rematerialize"
+    assert args.anchor_sid == "deadbeef"
+    assert args.dest == "/tmp/out.jsonl"
+    assert args.force is True
+
+    bare = _build_parser().parse_args(["rematerialize", "cafef00d"])
+    assert bare.dest is None
+    assert bare.force is False
 
 
 # --- amend-decision: the fifth sanctioned second door (thread 2474) — calls the SAME

@@ -7,7 +7,9 @@ acceptance test this piece stands or falls on.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -159,3 +161,160 @@ async def test_ingest_via_discover_returns_zero_when_nothing_found(
 ) -> None:
     n = await store.ingest(cwd="/nowhere", job_dir="/x/jobs/deadbeef", root=tmp_path)
     assert n == 0
+
+
+# --- rematerialize_to_disk (task #51 piece 2) -------------------------------
+
+def _fixture_with_compaction_boundary() -> list[str]:
+    """A realistic mix including a compaction-summary line — the exact shape piece 2's
+    dispatch named: 1:1 must survive a compaction boundary untouched, no filtering."""
+    lines = []
+    for i in range(3):
+        ts = datetime(2026, 8, 17, 9, 0, i, tzinfo=UTC).isoformat()
+        lines.append(json.dumps({"type": "user" if i % 2 == 0 else "assistant",
+                                 "timestamp": ts, "message": {"content": f"turn {i}"}}))
+    lines.append(json.dumps({
+        "type": "user", "isCompactSummary": True,
+        "timestamp": datetime(2026, 8, 17, 9, 0, 3, tzinfo=UTC).isoformat(),
+        "message": {"content": "the whole history replayed, compacted"}}))
+    for i in range(4, 6):
+        ts = datetime(2026, 8, 17, 9, 0, i, tzinfo=UTC).isoformat()
+        lines.append(json.dumps({"type": "assistant", "timestamp": ts,
+                                 "message": {"content": f"turn {i}", "model": "claude-opus-5"}}))
+    return lines
+
+
+async def test_rematerialize_to_disk_is_byte_identical_across_a_compaction_boundary(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE CONTRACT TEST (piece 2's own acceptance bar): ingest -> rematerialize ->
+    sha256 equal, on a fixture including a compaction boundary — 1:1 means no
+    filtering, ever, not even around the one line type the OTHER store (harness_turns)
+    treats specially for its own token math."""
+    lines = _fixture_with_compaction_boundary()
+    source = _write_transcript(tmp_path / "source" / "c0mpac7d-session.jsonl", lines)
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    n = await store.ingest_path(str(source), "c0mpac7d")
+    assert n == len(lines)
+
+    dest = tmp_path / "recovered" / "c0mpac7d-session.jsonl"
+    receipt = await store.rematerialize_to_disk("c0mpac7d", dest=str(dest))
+    assert "error" not in receipt
+    assert receipt["lines"] == len(lines)
+    assert dest.read_bytes() == source.read_bytes()
+    assert hashlib.sha256(dest.read_bytes()).hexdigest() == source_sha
+    assert receipt["sha256"] == hashlib.sha256(dest.read_text().encode()).hexdigest()
+
+
+async def test_rematerialize_to_disk_defaults_dest_to_the_recorded_source_path(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """No `dest` given -> writes to soul_sessions' own recorded source_path, the
+    harness's projects-slug convention — so `claude --resume` on any host finds it
+    where a live session would have."""
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "orig" / "5ee7f0d5-session.jsonl", lines)
+    os.remove(source)  # the ORIGINAL is gone — this IS the "any host" scenario
+    # ingest normally via a temp copy, THEN delete it, to exercise the real path
+    tmp_copy = tmp_path / "tmp-ingest.jsonl"
+    _write_transcript(tmp_copy, lines)
+    await store.ingest_path(str(tmp_copy), "5ee7f0d5")
+    await store.pool.execute(
+        "UPDATE soul_sessions SET source_path=$1 WHERE harness='claude-code' "
+        "AND anchor_sid='5ee7f0d5'", str(source))
+
+    receipt = await store.rematerialize_to_disk("5ee7f0d5")
+    assert receipt["written"] == str(source)
+    assert source.exists()
+    assert source.read_text() == "\n".join(lines) + "\n"
+
+
+async def test_rematerialize_to_disk_refuses_a_live_transcript(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A destination modified more recently than the store's last ingest is a LIVE
+    transcript — refuse, name why, touch nothing."""
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "s" / "a11ce00b-session.jsonl", lines)
+    await store.ingest_path(str(source), "a11ce00b")
+
+    dest = tmp_path / "d" / "target.jsonl"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("someone else's newer content\n")
+    # force the dest's mtime strictly ahead of last_ingested_at
+    future = datetime.now(UTC).timestamp() + 3600
+    os.utime(dest, (future, future))
+
+    receipt = await store.rematerialize_to_disk("a11ce00b", dest=str(dest))
+    assert receipt.get("error", "").startswith("refused — a LIVE transcript")
+    assert dest.read_text() == "someone else's newer content\n"  # untouched
+
+
+async def test_rematerialize_to_disk_force_overwrites_a_live_transcript(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "s" / "1eaf1eaf-session.jsonl", lines)
+    await store.ingest_path(str(source), "1eaf1eaf")
+
+    dest = tmp_path / "d" / "target.jsonl"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("stale content\n")
+    future = datetime.now(UTC).timestamp() + 3600
+    os.utime(dest, (future, future))
+
+    receipt = await store.rematerialize_to_disk("1eaf1eaf", dest=str(dest), force=True)
+    assert "error" not in receipt
+    assert dest.read_text() == "\n".join(lines) + "\n"
+
+
+async def test_rematerialize_to_disk_writes_nothing_on_a_broken_chain(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A break is a NAMED state, never a silent partial file — the destination must not
+    even be CREATED when the chain fails verification."""
+    lines = _synthetic_lines(5)
+    source = _write_transcript(tmp_path / "s" / "b0e0be00-session.jsonl", lines)
+    await store.ingest_path(str(source), "b0e0be00")
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line='TAMPERED' WHERE harness='claude-code' "
+        "AND anchor_sid='b0e0be00' AND line_idx=2")
+
+    dest = tmp_path / "d" / "target.jsonl"
+    receipt = await store.rematerialize_to_disk("b0e0be00", dest=str(dest))
+    assert "error" in receipt
+    assert receipt["verified_through"] == 1
+    assert not dest.exists()
+
+
+async def test_rematerialize_to_disk_errors_when_nothing_ingested(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    receipt = await store.rematerialize_to_disk("neverseen", dest=str(tmp_path / "x.jsonl"))
+    assert "error" in receipt
+    assert not (tmp_path / "x.jsonl").exists()
+
+
+# --- the MCP tool wrapper (thin passthrough, same shape as correct_pin_value's own
+# self-scoped test in test_seats.py) -----------------------------------------------
+
+async def test_rematerialize_mcp_tool_wraps_the_same_verb(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines = _synthetic_lines(2)
+    source = _write_transcript(tmp_path / "s" / "mcptool1-session.jsonl", lines)
+    await SoulStore(actions.pool).ingest_path(str(source), "mcptool1")
+
+    dest = tmp_path / "d" / "out.jsonl"
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.rematerialize("mcptool1", dest=str(dest))
+    finally:
+        srv._pool = saved_pool
+    assert out["written"] == str(dest)
+    assert out["lines"] == 2
+    assert dest.read_text() == "\n".join(lines) + "\n"
