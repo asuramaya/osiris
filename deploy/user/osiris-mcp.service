@@ -1,0 +1,39 @@
+# Osiris MCP server — systemd USER unit for the single-operator dev box.
+#
+# The persistent, always-on MCP server — the fleet floodgate. Under streamable-http this is
+# ONE process the whole fleet of Claude instances connects to over HTTP, sharing a SINGLE
+# database pool (bounded connections no matter how many agents tap in).
+#
+# A USER unit like deploy/user/osiris-console.service (runs AS the operator, against the
+# operator's own dev instance — no /opt deploy, no system account), NOT the /opt system form
+# of deploy/osiris-mcp.service. `osiris deploy` installs this file (thread e6fd3772 piece 3-
+# infra) — it is no longer hand-authored or hand-copied.
+[Unit]
+Description=Osiris persistent MCP server (dev, streamable-http :8790)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/osiris
+# Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
+# systemd Environment= overrides pydantic's .env. application_name identifies this daemon's
+# own connections in pg_stat_activity — asyncpg forwards any DSN query param it doesn't
+# recognize straight into server_settings (connect_utils.py), so no code change was needed.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-mcp
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+Environment=OSIRIS_MCP_TRANSPORT=streamable-http
+Environment=OSIRIS_MCP_HOST=127.0.0.1
+Environment=OSIRIS_MCP_PORT=8790
+# The LLM provider is resolved with shutil.which('claude') at RUN time, and a user
+# unit does not inherit a login shell's PATH — so the session-miner's provider was a
+# coin flip on whatever PATH the user manager happened to carry. It lost silently for
+# 10 hours on 2026-07-12 (48/48 ticks: 'no LLM provider for session-sensing'). Pinned.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/code/osiris/.venv/bin/python -m src.mcp_server
+Restart=always
+RestartSec=5
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

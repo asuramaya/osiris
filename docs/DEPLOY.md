@@ -90,24 +90,25 @@ docker restart osiris-pg   # shared_buffers + maintenance_work_mem need this;
 The units above are **system** units (a service account, `/opt` deploy, `EnvironmentFile`).
 On the single-operator box where Osiris IS the operator's own workspace, the same processes
 install as **user** units — running as you, against your dev instance and the repos in your
-home dir. Two are relevant there:
+home dir. Four are relevant there, all sourced from `deploy/user/*.service`:
 
 | Unit | Process | Role |
 |------|---------|------|
+| `osiris-mcp` | `python -m src.mcp_server` | the fleet's shared MCP floodgate (streamable-http, one pool) |
 | `osiris-worker` | `arq …WorkerSettings` | the tripwire (evaluator + ticks), cascade drain, reaper — turns the kernel from a *lens* into a *tripwire* |
+| `osiris-console` | `uvicorn --factory create_app` | the read-only membrane lens + console |
 | `osiris-pulse` | `python -m src.orchestrator.pulse --watch N` | the developer-persona **heartbeat**: senses which repos' HEAD moved, re-ingests, re-runs the lenses, records the delta as findings (read back via the `pulse-digest` lens). Read-only on the repos. |
 
-`deploy/osiris-pulse.service` is the user-unit template (its header documents the install).
-Install both:
+**REPO-MANAGED** (thread e6fd3772 piece 3-infra): `osiris deploy` installs every
+`deploy/user/*.service` file over `~/.config/systemd/user/` and daemon-reloads only if
+something changed — none of these are hand-authored or hand-diverged from git any more. First
+install (one time; `osiris deploy` handles every deploy after this):
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/osiris-pulse.service ~/.config/systemd/user/
-# author ~/.config/systemd/user/osiris-worker.service from deploy/osiris-worker.service in the
-# same user-level form: drop User=/EnvironmentFile=, set WorkingDirectory=<repo>, put the DB/
-# Redis URLs inline as Environment=, and use the absolute venv arq (user units get no shell PATH).
+cp deploy/user/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now osiris-pulse osiris-worker
+systemctl --user enable --now osiris-mcp osiris-worker osiris-console osiris-pulse
 loginctl enable-linger "$USER"   # keep them running after logout / across reboots
 ```
 

@@ -834,6 +834,61 @@ DEPLOY_UNITS = ("osiris-mcp", "osiris-worker", "osiris-console")
 
 GitStatus = Callable[[Path], list[tuple[str, str]]]
 RestartServices = Callable[[list[str]], Awaitable[tuple[int, str]]]
+InstallUserUnits = Callable[[Path], Awaitable[list[str]]]
+
+
+def user_unit_sources(repo_root: Path) -> list[Path]:
+    """Every dev-box systemd USER unit `osiris deploy` owns — deploy/user/*.service (thread
+    e6fd3772 piece 3-infra). These were, before this, five hand-installed units this box's own
+    operator diverged by hand from deploy/{osiris-mcp,osiris-worker}.service (the /opt SYSTEM
+    templates, a different shape entirely: User=/EnvironmentFile=/opt paths) — nothing in git
+    was ever the box's actual running config. deploy/user/ is the single source of truth now;
+    a fresh name here is picked up automatically, same as `oneshot_deployed_scripts` above."""
+    d = repo_root / "deploy" / "user"
+    if not d.is_dir():
+        return []
+    return sorted(d.glob("*.service"))
+
+
+async def _real_install_user_units(repo_root: Path) -> list[str]:
+    """Copies deploy/user/*.service over ~/.config/systemd/user/ (creating the dir if this is
+    a fresh box) and daemon-reloads ONLY if something actually changed — an idle box's every
+    deploy should not spam a reload it doesn't need. The unit's own content is the source of
+    truth; nothing here renders or substitutes (systemd's own %h/%u specifiers do that at
+    activation time), so this is a straight byte-for-byte copy, diffed first.
+
+    A `repo_root` with no deploy/user/ (a test's own tmp_path, or a checkout that predates
+    this) touches NOTHING outside itself — no directory created, no real ~/.config read —
+    rather than silently mkdir-ing into the real caller's home on every such call."""
+    sources = user_unit_sources(repo_root)
+    if not sources:
+        return ["unit files: no deploy/user/ found — nothing to install"]
+    target_dir = Path.home() / ".config" / "systemd" / "user"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    notes: list[str] = []
+    changed: list[str] = []
+    for src in sources:
+        dest = target_dir / src.name
+        new_content = src.read_text()
+        old_content = dest.read_text() if dest.exists() else None
+        if old_content == new_content:
+            continue
+        dest.write_text(new_content)
+        changed.append(src.name)
+        notes.append(f"unit: {'updated' if old_content is not None else 'installed (new)'} "
+                      f"{src.name}")
+    if not changed:
+        notes.append("unit files: unchanged, no daemon-reload needed")
+        return notes
+    proc = await asyncio.create_subprocess_exec(
+        "systemctl", "--user", "daemon-reload",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        notes.append(f"systemctl --user daemon-reload FAILED: {out.decode(errors='replace')}")
+    else:
+        notes.append(f"systemctl --user daemon-reload: ok ({', '.join(changed)})")
+    return notes
 
 
 def _find_repo_root(start: Path | None = None) -> Path | None:
@@ -1325,6 +1380,7 @@ async def cmd_deploy(
     record_deploy: RecordDeploy = _real_record_deploy,
     wait_for_health: WaitForHealth = _wait_for_health,
     wait_for_smoke: WaitForSmoke = _wait_for_smoke,
+    install_units: InstallUserUnits = _real_install_user_units,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1337,7 +1393,10 @@ async def cmd_deploy(
     new code, then only reported the pending migration AFTER, a window where new code ran
     against the old schema); (3) restart osiris-mcp/worker/console; (4) run smoke,
     per-surface, with a bounded wait-for-up so a still-binding uvicorn never reads as a false
-    failure; (5) name any un-run seeder step by comparison, never by assumption. Also names
+    failure; (5) name any un-run seeder step by comparison, never by assumption. Just before
+    the restart, installs every deploy/user/*.service file over ~/.config/systemd/user/ and
+    daemon-reloads if anything changed (thread e6fd3772 piece 3-infra) — this box's dev-unit
+    config rides the deploy instead of a hand-authored divergence from deploy/. Also names
     (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
     reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
     6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
@@ -1402,6 +1461,9 @@ async def cmd_deploy(
         for note in await _run_casefold_automerge(pool):
             print(note)
         for note in await _run_remote_url_automerge(pool):
+            print(note)
+
+        for note in await install_units(root):
             print(note)
 
         tools_before = await list_tools()

@@ -8,24 +8,9 @@
 #
 # Why a USER unit (not a system unit like deploy/osiris-{api,worker}.service): this runs AS the
 # operator, against the operator's own dev instance and the repos in their home dir — no system
-# account, no /opt deploy. The worker (deploy/osiris-worker.service) installs the same way for
-# the single-operator dev box: copy it in, adjust User=/WorkingDirectory=/EnvironmentFile= to
-# the inline user-level form below.
-#
-# Install (both units):
-#   mkdir -p ~/.config/systemd/user
-#   cp deploy/osiris-pulse.service ~/.config/systemd/user/
-#   # author ~/.config/systemd/user/osiris-worker.service from deploy/osiris-worker.service,
-#   # replacing User=/EnvironmentFile= with the inline Environment= + WorkingDirectory below and
-#   # ExecStart=<venv>/bin/arq src.workers.arq_worker.WorkerSettings
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now osiris-pulse osiris-worker
-#   loginctl enable-linger "$USER"   # keep user units running after logout / across reboots
-#                                    # (needs privilege; skip if unavailable — units still run
-#                                    #  while you are logged in)
-#
-# Adjust WorkingDirectory / the venv path / the URLs / OSIRIS_DEV_REPOS to your box. systemd
-# user units do NOT inherit your shell PATH, so ExecStart and the venv must be absolute.
+# account, no /opt deploy. deploy/user/osiris-worker.service is the same-shaped sibling for the
+# arq worker. `osiris deploy` installs every deploy/user/*.service file (thread e6fd3772 piece
+# 3-infra) — none of these are hand-authored or hand-copied any more.
 [Unit]
 Description=Osiris heartbeat (developer-persona pulse; read-only over local repos)
 After=network-online.target
@@ -36,7 +21,10 @@ Type=simple
 WorkingDirectory=%h/code/osiris
 # Point at the dev instance (PG :5601 / Redis :6396), inline so the repo's .env is untouched;
 # systemd Environment= overrides pydantic's .env, which here only carries a non-DB key.
-Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris
+# application_name identifies this daemon's own connections in pg_stat_activity — asyncpg
+# forwards any DSN query param it doesn't recognize straight into server_settings
+# (connect_utils.py), so no code change was needed.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-pulse
 Environment=REDIS_URL=redis://127.0.0.1:6396/0
 # Repos the developer-pulse watches (read-only). Comma-separated absolute paths.
 # Leave empty to watch nothing. Example: %h/code/osiris,%h/code/other

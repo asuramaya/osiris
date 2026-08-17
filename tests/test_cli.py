@@ -19,6 +19,7 @@ from src.cli import (
     _collapse_resume_log,
     _composition_gaps,
     _find_repo_root,
+    _real_install_user_units,
     _wait_for_health,
     _wait_for_smoke,
     alembic_gap_note,
@@ -50,6 +51,7 @@ from src.cli import (
     match_session,
     oneshot_deployed_scripts,
     resolve_model,
+    user_unit_sources,
 )
 from src.orchestrator.seats import bind_holder, ensure_seat
 
@@ -1548,6 +1550,143 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/deployremoteb'")
     assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
+
+
+# --- dev-box systemd USER units are repo-managed (thread e6fd3772 piece 3-infra) ---------------
+# `osiris deploy` installs deploy/user/*.service over ~/.config/systemd/user/ before restarting
+# — these units were previously five hand-installed files this box's own operator diverged from
+# the /opt SYSTEM templates by hand; nothing in git was ever the box's actual running config.
+
+_REQUIRED_UNIT_ENV = {
+    "osiris-mcp.service": ["DATABASE_URL=", "application_name=osiris-mcp", "REDIS_URL="],
+    "osiris-worker.service": [
+        "DATABASE_URL=", "application_name=osiris-worker", "REDIS_URL=",
+        "OSIRIS_WORKER_ROLE=primary", "OSIRIS_PHANTOM_HEAL_ENABLED=1",
+    ],
+    "osiris-console.service": ["DATABASE_URL=", "application_name=osiris-console", "REDIS_URL="],
+    "osiris-pulse.service": ["DATABASE_URL=", "application_name=osiris-pulse", "REDIS_URL="],
+}
+
+
+def test_deploy_user_units_contract_every_required_env_line_present() -> None:
+    """Reads the REAL deploy/user/*.service files this repo ships (not a fixture standing in
+    for them) — a contract test in the literal sense: if a future edit drops
+    OSIRIS_WORKER_ROLE=primary or an application_name tag, this fails at the source of truth,
+    not at a copy of it."""
+    repo_root = _find_repo_root(Path(__file__).resolve().parent)
+    assert repo_root is not None
+    unit_dir = repo_root / "deploy" / "user"
+    present = {p.name for p in unit_dir.glob("*.service")}
+    assert present == set(_REQUIRED_UNIT_ENV), "a new/removed unit must update this contract too"
+    for name, required_substrings in _REQUIRED_UNIT_ENV.items():
+        text = (unit_dir / name).read_text()
+        for needle in required_substrings:
+            assert needle in text, f"{name} is missing {needle!r}"
+
+
+def test_user_unit_sources_discovers_the_real_deploy_user_dir() -> None:
+    repo_root = _find_repo_root(Path(__file__).resolve().parent)
+    assert repo_root is not None
+    names = {p.name for p in user_unit_sources(repo_root)}
+    assert names == set(_REQUIRED_UNIT_ENV)
+
+
+def test_user_unit_sources_missing_dir_is_empty(tmp_path: Path) -> None:
+    assert user_unit_sources(tmp_path) == []
+
+
+async def test_real_install_user_units_no_deploy_user_dir_touches_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default installer must never mkdir into a real caller's home when the repo it was
+    handed carries no deploy/user/ — this is what every OTHER cmd_deploy test in this file
+    relies on implicitly (none of them pass install_units, all of them pass repo_root=tmp_path)."""
+    fake_home = tmp_path / "not-a-real-home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    notes = await _real_install_user_units(tmp_path)
+
+    assert notes == ["unit files: no deploy/user/ found — nothing to install"]
+    assert not fake_home.exists()
+
+
+async def test_real_install_user_units_installs_new_files_and_reloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    src_dir = tmp_path / "repo" / "deploy" / "user"
+    src_dir.mkdir(parents=True)
+    (src_dir / "osiris-mcp.service").write_text("[Service]\nExecStart=/bin/true\n")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    reload_calls: list[list[str]] = []
+
+    async def _fake_exec(*args: str, **kwargs: Any) -> Any:
+        reload_calls.append(list(args))
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        return _Proc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    notes = await _real_install_user_units(tmp_path / "repo")
+
+    dest = fake_home / ".config" / "systemd" / "user" / "osiris-mcp.service"
+    assert dest.read_text() == "[Service]\nExecStart=/bin/true\n"
+    assert any("installed (new) osiris-mcp.service" in n for n in notes)
+    assert reload_calls == [["systemctl", "--user", "daemon-reload"]]
+
+
+async def test_real_install_user_units_unchanged_content_skips_daemon_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    src_dir = tmp_path / "repo" / "deploy" / "user"
+    src_dir.mkdir(parents=True)
+    (src_dir / "osiris-mcp.service").write_text("same\n")
+    dest_dir = fake_home / ".config" / "systemd" / "user"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / "osiris-mcp.service").write_text("same\n")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    async def _unreachable(*args: str, **kwargs: Any) -> Any:
+        raise AssertionError("daemon-reload must never fire when nothing changed")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _unreachable)
+
+    notes = await _real_install_user_units(tmp_path / "repo")
+    assert notes == ["unit files: unchanged, no daemon-reload needed"]
+
+
+async def test_cmd_deploy_calls_install_units_before_restarting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    order: list[str] = []
+
+    async def _install(repo_root: Path) -> list[str]:
+        order.append("install")
+        return ["unit: installed (new) osiris-mcp.service"]
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        order.append("restart")
+        return 0, "done"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, install_units=_install,
+                         wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
+    assert order == ["install", "restart"]
+    assert "unit: installed (new) osiris-mcp.service" in buf.getvalue()
 
 
 # --- boot-status -------------------------------------------------------------------------------
