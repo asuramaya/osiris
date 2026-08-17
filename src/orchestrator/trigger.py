@@ -995,6 +995,30 @@ def _gate_name(detail: str) -> str:
     return "unknown"
 
 
+async def _unresolved_wake_receipt(pool: asyncpg.Pool, target: str) -> dict[str, str]:
+    """THE LOOKUP-BEFORE-CLASSIFIER FIX (threads 94dc4aae + 27917f1f, Ra XXXV's specimen
+    msg 4901): `wakeable_identity` returning None means agent_mounts has no row matching
+    `target`'s lineage — it does NOT mean the mind never mounted. Before Ra's specimen,
+    that None fell straight into mode="never-mounted", a POSITIVE claim of absence
+    manufactured from a lookup miss, even while fleet()/job_for's own registry (agent_
+    liveness, the SAME freshest-of-mount-and-last_active signal fleet() renders as
+    live:true) showed the addressee live seconds ago. Consulted here, BEFORE the
+    classifier speaks: live → the honest word is 'could not resolve a session for a live
+    mind', an outcome (mail queues, reads at its own next turn), never a failure; dead →
+    'never mounted' remains true and is said plainly, unchanged from before this fix."""
+    from src.orchestrator import mounts
+
+    liveness = await mounts.agent_liveness(pool, target)
+    if liveness["live"]:
+        return {"mode": "queued-live-unresolved",
+                "detail": f"{target} is live (registry last seen {liveness['last_seen']}) "
+                          "but no resumable OS session could be resolved for it — "
+                          "could not resolve recipient session; the mail queues in the "
+                          "box and reads at its own next natural turn"}
+    return {"mode": "never-mounted",
+            "detail": f"{target} has never mounted — no session to resume"}
+
+
 async def wake_gate_preflight(
     pool: asyncpg.Pool, target: str, *, seat_id: str | None = None,
     settings: Settings | None = None,
@@ -1029,8 +1053,8 @@ async def wake_gate_preflight(
     st = settings or get_settings()
     wake_target = await wakeable_identity(pool, target)
     if wake_target is None:
-        return {"mode": "never-mounted", "status": "no-live-body",
-                "detail": f"{target} has never mounted — no session to resume"}
+        receipt = await _unresolved_wake_receipt(pool, target)
+        return {**receipt, "status": _WAKE_STATUS.get(receipt["mode"], "no-live-body")}
     if await _retired(pool, target):
         return {"mode": "retired", "status": "no-live-body",
                 "detail": f"{target} is retired — the trigger never reanimates a "
@@ -1313,8 +1337,7 @@ async def dispatch_dm(
     # which case `target` (the declared name) is still the honest thing to name below.
     wake_target = await wakeable_identity(pool, target)
     if wake_target is None:
-        return {"mode": "never-mounted",
-                "detail": f"{target} has never mounted — no session to resume"}
+        return await _unresolved_wake_receipt(pool, target)
     project = str(await pool.fetchval(
         "SELECT project FROM agent_mounts WHERE agent_id=$1 "
         "ORDER BY last_seen DESC LIMIT 1", wake_target))
@@ -1682,6 +1705,10 @@ _WAKE_STATUS = {
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",
     "never-mounted": "no-live-body",
+    # live by the SAME registry fleet() trusts, but no OS session could be resolved for
+    # it — an outcome (mail queues, reads at its own next turn), never a failure; must
+    # never collapse into "no-live-body", which is the false-absence class this fixes.
+    "queued-live-unresolved": "queued",
     "resume-refused-compaction": "refused-compaction",
     "resume-refused-ceiling": "refused-ceiling",
     "resume-refused-no-anchor": "refused-no-anchor",
