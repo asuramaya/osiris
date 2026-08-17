@@ -135,6 +135,22 @@ async def test_candidates_scope_to_ONE_project_because_that_is_all_a_seat_has_st
     assert (await candidates(actions.pool))["count"] == 2
 
 
+async def test_candidates_limit_zero_skips_the_rows_query_but_keeps_the_true_count(
+    actions: Actions,
+) -> None:
+    """Thread 72e45258 (measured): orient()'s own "your_pile" glance calls
+    candidates(limit=0) for the count alone and never reads `candidates` — the rows query
+    used to run anyway, correlated summary subquery included, purely to be discarded.
+    `count` must still be exact with the rows fetch skipped."""
+    await _mined(actions, "thread:mine1", "guess one", repo="osiris")
+    await _mined(actions, "thread:mine2", "guess two", repo="osiris")
+
+    out = await candidates(actions.pool, project="osiris", limit=0)
+
+    assert out["count"] == 2
+    assert out["candidates"] == []
+
+
 async def test_the_YIELD_is_the_adversary_s_LICENCE(actions: Actions) -> None:
     """admitted ÷ judged. The one number nobody was keeping — a producer whose telemetry counts
     what it MADE rather than what was USED is unfalsifiable, and will rot unnoticed. Osiris's own
