@@ -2419,6 +2419,38 @@ async def test_backfill_agent_project_links_scopes_to_only_bases(actions: Action
         "the un-scoped lineage must be left exactly as it was")
 
 
+async def test_backfill_agent_project_links_mcp_tool_wraps_the_orchestrator_dry_run_default(
+    actions: Actions,
+) -> None:
+    """The missing door itself (thread 20af2c95): the orchestrator function existed,
+    unit-tested, importable only — this proves the ACTUAL MCP tool reaches it, dry_run
+    defaulting True so a bare call never writes."""
+    from src import mcp_server as srv
+
+    now = datetime.now(UTC)
+    anc = await actions.create_or_find_object("Agent", "agent:bf4mcp0000", "test")
+    await actions.create_or_find_object("Agent", "agent:bf4mcp0000-ii", "test")
+    await actions.assert_property(anc, "succeeded_by", "agent:bf4mcp0000-ii", "test", now,
+                                  0.9, evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bf4proj", "test")
+    await actions.create_link(anc, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.backfill_agent_project_links(actor="test")
+        assert out["dry_run"] is True
+        item = next(p for p in out["plan"] if p["agent"] == "agent:bf4mcp0000")
+        assert item["would_move"] == 1
+        live_on_ancestor = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND type='works_in' "
+            "AND (valid_until IS NULL OR valid_until > now())", anc)
+        assert live_on_ancestor == 1, "a dry run must never write"
+    finally:
+        srv._pool = saved_pool
+
+
 # ═══ INVALIDATE_WORKS_IN (thread 8640a625, decision fce39baa) — the toolkit hole John
 # XVII's own specimen exposed: unpeer heals peer_of, detach_seat heals managed_by, nothing
 # healed works_in before this. Self-scoped identity hygiene, same posture as correct_house —

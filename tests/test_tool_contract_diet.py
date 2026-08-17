@@ -591,6 +591,12 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     apple report (subagents spawned_by his own identity that he never spawned, invisible to
     the operator). Every LIVE spawned_by fact with no transcript ever materializing on disk
     to confirm it — "what is executing under my identity that I did not spawn," self-scoped
-    default, any identity nameable (a pure read, never gated)."""
+    default, any identity nameable (a pure read, never gated).
+    119 -> 120 (2026-08-17, thread 20af2c95): backfill_agent_project_links — the write-side
+    edge-leak fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs onto
+    its heir) has shipped and been tested since 2026-08-04, but the one-time repair for
+    edges already stranded on off-head generations before that fix landed had no reachable
+    door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
+    same "list only, the bulk act is the operator's" shape as #150's own repairs."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 119
+    assert len(per_tool) == 120
