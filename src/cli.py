@@ -1396,7 +1396,11 @@ async def cmd_deploy(
     failure; (5) name any un-run seeder step by comparison, never by assumption. Just before
     the restart, installs every deploy/user/*.service file over ~/.config/systemd/user/ and
     daemon-reloads if anything changed (thread e6fd3772 piece 3-infra) — this box's dev-unit
-    config rides the deploy instead of a hand-authored divergence from deploy/. Also names
+    config rides the deploy instead of a hand-authored divergence from deploy/. REFUSES (before
+    restarting) if deploy/user/ carries files but install_units reports NOTHING — a live
+    specimen restarted onto a stale unit set while the deploy log showed zero `unit:` lines
+    and still exited 0; loud failure beats a quiet one restarting onto whatever was already
+    there. Also names
     (informationally, never gating) any dirty COMMIT-DEPLOYED script — a oneshot timer unit
     reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
     6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
@@ -1463,8 +1467,17 @@ async def cmd_deploy(
         for note in await _run_remote_url_automerge(pool):
             print(note)
 
-        for note in await install_units(root):
+        expects_unit_install = bool(user_unit_sources(root))
+        unit_notes = await install_units(root)
+        for note in unit_notes:
             print(note)
+        if expects_unit_install and not unit_notes:
+            print("osiris deploy: REFUSED — deploy/user/ carries unit files but install_units "
+                  "reported NOTHING (a silent no-op, thread e6fd3772 piece 3-infra's own "
+                  "specimen: a real deploy restarted onto a stale unit set while printing zero "
+                  "unit: lines). Refusing rather than restarting blind. NOTHING was restarted.",
+                  file=sys.stderr)
+            return 1
 
         tools_before = await list_tools()
 
