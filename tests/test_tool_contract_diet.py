@@ -510,7 +510,17 @@ def _tool_chars(t: Any) -> int:
 # hypothesis, msg 5008, tested against Ptah's real transcript and found not to apply — zero
 # isSidechain:true lines anywhere in it — stated so a hit here is read as a lead, not a
 # verdict, the same lesson Ptah's own retraction (msg 4993) already taught once).
-TOOL_CONTRACT_CEILING_CHARS = 169_775
+# 169,775 -> 171,100. 119 -> 120 tools (2026-08-17, Thoth LXXVI heir viii, merge wave of
+# four branches at 2212101). ONE NEW TOOL: backfill_agent_project_links (Sekhmet 2ac2344,
+# thread 20af2c95) — the one-time backfill for works_in/governs edges stranded on off-head
+# generations before the 08-04 write-side fix; existed and was unit-tested but had NO
+# reachable door (fifth-ledger-disease: authorized-but-unexecutable). dry_run=True default,
+# list-only; the bulk act stays the operator's, #150's shape. Sekhmet flagged "+~1.2k" and
+# did not raise (practice 45e72476); measured at the merged tip: +1,242 chars, exact. The
+# rest of the wave (Khnum's pytest live-DSN guard + remote_url duplicate auto-merge,
+# Imhotep's heal guardrails, Seshat's receipt invariant) added no tools and no chars —
+# Khnum's remote_url_duplicate_candidates is a deploy-time step, deliberately not a verb.
+TOOL_CONTRACT_CEILING_CHARS = 171_100
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
