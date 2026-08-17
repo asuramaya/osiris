@@ -6559,7 +6559,11 @@ async def _boot_check() -> None:
         try:
             reboot_drift = await check_unreviewed_boot(pool)
             if reboot_drift:
-                await alarm_unreviewed_boot(pool, reboot_drift, service="osiris-mcp")
+                from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
+
+                running_head = _git_head(_REPO_ROOT) or "unknown"
+                await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
+                                           service="osiris-mcp")
         finally:
             await pool.close()
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
