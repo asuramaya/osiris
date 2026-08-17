@@ -3317,7 +3317,17 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         out["dm_to"] = res["to_agent"]
         out["seat"] = res.get("seat")
         out["lineage_head"] = res.get("lineage_head")
-        out["listener"] = await mounts.agent_liveness(pool, res["to_agent"])
+        # THE RECEIPT INVARIANT (ruling 7d6815bb): `listener` reads the DELIVERING HEAD's
+        # liveness — agent_liveness(lineage_head or dm_to) is lineage-aware internally, but
+        # passing lineage_head explicitly when it resolved keeps this receipt's every field
+        # sourced from the SAME identity `seat` already is, never a mix of the addressed id
+        # and the head. `redirect` (mailbox.send_message's own new field), when present,
+        # names the divergence explicitly instead of leaving it to be inferred by comparing
+        # `dm_to` against `seat`/`lineage_head` by hand.
+        out["listener"] = await mounts.agent_liveness(
+            pool, res.get("lineage_head") or res["to_agent"])
+        if res.get("redirect"):
+            out["redirect"] = res["redirect"]
         # THE IMMEDIATE LEG (the background-session adapter, ruling 6c4d0b62): a DM's wake
         # fires ON ARRIVAL, never on a clock — this very call dispatches it, and the receipt
         # below is the PER-HOP truth (resumed / delivered / queued-* / pull-only), not a
