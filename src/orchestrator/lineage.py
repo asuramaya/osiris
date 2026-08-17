@@ -700,3 +700,71 @@ def _tree_mtime(subs_dir: Path) -> float | None:
 def _session_dirs(root: Path) -> list[Path]:
     """Every `<project>/<session-uuid>/` dir that has a `subagents/` child (pure IO)."""
     return [p.parent for p in root.expanduser().glob("*/*/subagents") if p.is_dir()]
+
+
+def _transcript_exists_for_handle(root: Path, handle: str) -> bool:
+    """Does ANY session anywhere under `root` carry a real `agent-<handle>.meta.json` for
+    this subagent — the on-disk corroboration `resolve_parents` uses to attribute a DISK-
+    reconstructed spawn, and which the LIVE path (register_spawn, called by mcp_server's
+    `_actor_for` the instant a hook stamps a call with a subagent_id) never checks at all
+    before minting a permanent `spawned_by` fact. Pure IO, bounded by one glob."""
+    try:
+        return next(root.expanduser().glob(f"*/*/subagents/agent-{handle}.meta.json"), None) \
+            is not None
+    except OSError:
+        return False
+
+
+async def unwitnessed_spawns(
+    actions: Actions, agent_id: str, *, root: Path,
+) -> list[dict[str, Any]]:
+    """THE READ Ptah's own fix-shape (4) asks for (obligation cabfb4b2): 'a seat — and the
+    operator — can enumerate what is executing under their identity right now that they did
+    not spawn.' Every LIVE `spawned_by` child of `agent_id` for which NO transcript/meta file
+    has EVER materialized anywhere under `root` — the exact shape of Ptah's three specimens
+    (three subagents parented to him, zero corresponding files on disk anywhere on the box).
+
+    THE ROOT-CAUSE GAP THIS SURFACES, not yet fixed: `_actor_for` (mcp_server.py) calls
+    register_spawn with `witnessed=True` UNCONDITIONALLY the moment a hook stamps a call
+    with a subagent_id — "a hook-stamped tool call IS an observed act" (ruling 708a972d) —
+    and register_spawn mints the `spawned_by` edge as a permanent fact on that signal alone,
+    with NO tool_use_id captured (unlike the disk-reconstruction path's `resolve_parents`,
+    which only ever attributes a parent it can find EMITTING that exact spawn call in a
+    real transcript). A connection whose cached identity is wrong — for whatever reason,
+    harness-side or otherwise — mints an unfalsifiable fact with total confidence and no
+    way to later reconcile it against the parent's own transcript, because the one thing
+    that WOULD let a later pass verify it (the tool_use_id) was never recorded. This read
+    is the audit that exists BECAUSE that gap exists, not a fix for it — the fix (recording
+    a verifiable signal at spawn time, or deferring the edge until a transcript actually
+    witnesses the child) is scoped, not built, pending confirmation from live evidence this
+    read alone cannot supply (which of two mechanisms handed the wrong connection its
+    identity — a question this function does not answer)."""
+    rows = await actions.pool.fetch(
+        "SELECT c.canonical, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "   AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS session, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS project, "
+        " (SELECT value#>>'{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "   AND a.name='last_active' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS last_active, "
+        " l.first_seen AS spawned_by_since "
+        "FROM links l JOIN objects p ON p.id=l.to_id JOIN objects c ON c.id=l.from_id "
+        "WHERE p.canonical=$1 AND l.type='spawned_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id)
+    handles = [(r["canonical"], r["canonical"].removeprefix("agent:")) for r in rows]
+    exists = await asyncio.gather(
+        *(asyncio.to_thread(_transcript_exists_for_handle, root, h) for _, h in handles))
+    out = []
+    for r, (canonical, _h), found in zip(rows, handles, exists, strict=True):
+        if found:
+            continue
+        out.append({
+            "child": canonical, "session": r["session"], "project": r["project"],
+            "last_active": r["last_active"],
+            "spawned_by_since": r["spawned_by_since"].isoformat(),
+            "transcript_found_on_disk": False,
+        })
+    return out

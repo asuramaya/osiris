@@ -502,7 +502,15 @@ def _tool_chars(t: Any) -> int:
 # (reconcile_seat_identity, fe8ec7ff mechanism 3b, ruling df646654 — the self-service
 # seat-identity heal replacing #157's four operator-authorized retire_assertion calls with
 # one self-scoped call per seat). Raised to the exact measured total below.
-TOOL_CONTRACT_CEILING_CHARS = 166_900
+# SEVENTH PROOF, same night: unwitnessed_spawns (obligation cabfb4b2, Ptah VII's rotten-
+# apple report) — the self-audit "what is executing under my identity that I did not
+# spawn," every live-registered spawned_by fact with no on-disk transcript ever confirming
+# it, per ruling 7d6815bb's standard. Measured against the real tip alongside the sixth
+# proof's own fix; +540 chars is the docstring's own honest caveat (Thoth's isSidechain
+# hypothesis, msg 5008, tested against Ptah's real transcript and found not to apply — zero
+# isSidechain:true lines anywhere in it — stated so a hit here is read as a lead, not a
+# verdict, the same lesson Ptah's own retraction (msg 4993) already taught once).
+TOOL_CONTRACT_CEILING_CHARS = 169_775
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -575,10 +583,14 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     summary could be TWINNED but never CORRECTED (open_thread is idempotent on the summary
     hash; annotate_thread's own docstring refuses the job). The one genuinely missing verb
     of the three ledger diseases; the other two already had uncalled cures.
-    115 -> 117 (2026-08-17): list_assertions — retire_assertion's own missing superseded_id
-    lookup, #157's diagnosis door. reconcile_seat_identity (fe8ec7ff mechanism 3b, ruling
-    df646654 — self-healing over manual cleanup): heals a cross-source contradiction on a
+    117 -> 118 (2026-08-17, fe8ec7ff mechanism 3b, ruling df646654 — self-healing over
+    manual cleanup): reconcile_seat_identity — heals a cross-source contradiction on a
     seat's own house/project, self-scoped, no operator sign-off — what #157's four staged
-    retire_assertion calls become, one self-service call per seat."""
+    retire_assertion calls become, one self-service call per seat.
+    118 -> 119 (2026-08-17, obligation cabfb4b2): unwitnessed_spawns — Ptah VII's rotten-
+    apple report (subagents spawned_by his own identity that he never spawned, invisible to
+    the operator). Every LIVE spawned_by fact with no transcript ever materializing on disk
+    to confirm it — "what is executing under my identity that I did not spawn," self-scoped
+    default, any identity nameable (a pure read, never gated)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 117
+    assert len(per_tool) == 119

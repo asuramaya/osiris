@@ -4567,6 +4567,43 @@ async def file_subagents(project: str | None = None, dry_run: bool = True,
 
 
 @mcp.tool()
+async def unwitnessed_spawns(agent_id: str | None = None,
+                             ctx: Context | None = None) -> dict[str, Any]:
+    """THE SELF-AUDIT (obligation cabfb4b2, Ptah VII's rotten-apple report): every LIVE
+    `spawned_by` child of `agent_id` for which NO `subagents/agent-<id>.jsonl` file has EVER
+    materialized anywhere on disk — "what is executing under my identity right now that I
+    did not spawn." Omit `agent_id` to audit YOUR OWN identity (a seat's own check); name
+    another to audit theirs (the operator's own check, or a peer's — a pure read, never
+    gated the way a write would be).
+
+    A HIT IS A LEAD, NOT A VERDICT — Ptah's own specimen retracted once already (msg 4993):
+    a subagent Ra spawned and briefed "you are Ptah" was correctly parented to Ra, not a
+    graph defect. Checked one live hypothesis (Thoth, msg 5008) against Ptah's real
+    transcript before shipping this docstring: whether a sidechain turn could be recorded
+    INLINE in the parent's own transcript (isSidechain=true) rather than as a separate
+    subagents/ file, which would make a hit here a false alarm. Zero `isSidechain:true`
+    lines exist anywhere in Ptah's own transcript — that specific escape hatch does not
+    explain his specimens, but a caller should not assume it can never apply elsewhere
+    without checking the same way. This tool reads; it never files or folds anything found
+    here — see obligation cabfb4b2 for the fix shape still pending live evidence."""
+    from pathlib import Path
+
+    from src.orchestrator.lineage import unwitnessed_spawns as _unwitnessed
+    target = agent_id
+    if target is None:
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first, or name an agent_id to audit someone else's",
+                    "why": _anchorless(ctx)}
+        target = ident.agent_id
+    st = get_settings()
+    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+        else Path.home() / ".claude" / "projects"
+    hits = await _unwitnessed(Actions(await _pool_get()), target, root=root)
+    return {"agent_id": target, "unwitnessed": hits, "count": len(hits)}
+
+
+@mcp.tool()
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
     anonymous agents that evidence says were never distinct minds (view-aliases: a mount
