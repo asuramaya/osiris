@@ -19,8 +19,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 
 from src.actions.core import Actions
+from src.config.dev_env import refuse_silent_live_db
 from src.db.pool import create_pool
 from src.orchestrator.capture import backfill_decided_in
 
@@ -28,6 +30,12 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 
 
 async def run(apply: bool) -> None:
+    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
+    # instance exists on this box — refuse a silent one-off run against it.
+    refusal = refuse_silent_live_db("backfill_decided_in")
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
     pool = await create_pool(DSN, min_size=1, max_size=2)
     actions = Actions(pool)
     out = await backfill_decided_in(actions, dry_run=not apply)

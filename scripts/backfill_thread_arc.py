@@ -37,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.actions.core import Actions  # noqa: E402
+from src.config.dev_env import refuse_silent_live_db  # noqa: E402
 from src.db.pool import create_pool  # noqa: E402
 from src.orchestrator.capture import (  # noqa: E402
     _CONF,
@@ -146,6 +147,12 @@ NEW_THREADS = [
 
 
 async def run(apply: bool) -> None:
+    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
+    # instance exists on this box — refuse a silent one-off run against it.
+    refusal = refuse_silent_live_db("backfill_thread_arc")
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
     pool = await create_pool(DSN, min_size=1, max_size=2)
     actions = Actions(pool)
     observed = datetime.now(UTC)

@@ -32,3 +32,34 @@ def apply_dev_fallback() -> None:
     DATABASE_URL already produces today — never a silent wrong success."""
     os.environ.setdefault("DATABASE_URL", DEV_DATABASE_URL)
     os.environ.setdefault("REDIS_URL", DEV_REDIS_URL)
+
+
+def refuse_silent_live_db(caller: str) -> str | None:
+    """THE SHARED GUARD (thread 86d562e0, obligation for the CLASS `cmd_bootstrap`'s own
+    fix — commit 0f99d49 — was scoped to one CLI door): on this box there is no isolated
+    dev instance — `DEV_DATABASE_URL` above (5601) IS the same database every deployed
+    service's own DATABASE_URL points at (`apply_dev_fallback`'s own docstring: a real
+    prod deploy sets DATABASE_URL via /etc/osiris/osiris.env, which does not exist here).
+    A one-off, human-run script that neither the caller nor any deployed unit's
+    environment already set DATABASE_URL for is about to hit that SAME live graph by
+    accident, indistinguishable from a real confirmed run. Returns the refusal MESSAGE
+    (never prints or exits itself — a script decides its own exit convention, matching
+    `cmd_bootstrap`'s CLI-return-code shape vs. a bare script's `sys.exit`) when
+    DATABASE_URL is unset AND `OSIRIS_ALLOW_LIVE` is not "1"; None when the caller may
+    proceed (an explicit DATABASE_URL — including one a deployed unit's own environment
+    already carries — always wins and is never blocked, same as `apply_dev_fallback`'s
+    own law).
+
+    NEVER call this from a script that is ITSELF the deployed automation (the Stop hook,
+    the statusline render) — those exist to run against the real graph on EVERY ordinary
+    invocation with nobody manually confirming; guarding them would break routine
+    operation fleet-wide, the opposite of `cmd_bootstrap`'s own deliberate scoping
+    ("exploratory/scratch run" tools only, never a deliberate operator act's own door)."""
+    if os.environ.get("DATABASE_URL") or os.environ.get("OSIRIS_ALLOW_LIVE") == "1":
+        return None
+    return (
+        f"{caller}: refusing — no DATABASE_URL is set, and this box's own dev fallback "
+        "points at the SAME database every deployed service uses (no isolated dev "
+        "instance exists here). Set DATABASE_URL to a scratch instance, or "
+        "OSIRIS_ALLOW_LIVE=1 to confirm you mean the real graph."
+    )
