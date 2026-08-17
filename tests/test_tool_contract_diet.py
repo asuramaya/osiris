@@ -520,7 +520,14 @@ def _tool_chars(t: Any) -> int:
 # rest of the wave (Khnum's pytest live-DSN guard + remote_url duplicate auto-merge,
 # Imhotep's heal guardrails, Seshat's receipt invariant) added no tools and no chars —
 # Khnum's remote_url_duplicate_candidates is a deploy-time step, deliberately not a verb.
-TOOL_CONTRACT_CEILING_CHARS = 171_100
+# 171,100 -> 171,450. 120 tools unchanged (2026-08-17, Thoth LXXVI heir viii, merge of
+# Imhotep's 7612b18, thread 7304bfd8). NO NEW TOOL: +306 chars is mount()'s docstring
+# explaining the new named state — `model` present when resolved, `model_unresolved` when
+# not, never the string "unknown" — and that transcript_path is now consulted (it was
+# captured by mount()/automount() but never threaded into identity_reading, the actual
+# resolver; Ptah VII's bridge-fork specimen). Load-bearing under 7d6815bb: a caller has to
+# be told a third state exists to branch on it. Imhotep flagged, did not raise (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 171_450
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
