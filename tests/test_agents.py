@@ -3575,6 +3575,131 @@ async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Action
     assert phantom not in {f["phantom"] for f in again}
 
 
+# ═══ HALF-HEALED PHANTOMS (decision ee012ebc) — flag present ≠ fully healed ═══
+
+async def _succeeded_by(actions: Actions, canonical: str) -> str | None:
+    return await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='succeeded_by' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+
+
+async def test_a_half_healed_phantom_is_reported_not_skipped_by_the_sweep(
+    actions: Actions,
+) -> None:
+    """The live specimen shape (decision ee012ebc): false_mint/retired/retired_by landed,
+    but the ancestor's succeeded_by pointer was never unwound — a heal interrupted
+    partway. The sweep must NOT treat 'flag present' as 'done': it must detect the
+    incompleteness, open an obligation naming both rows, and — critically — NEVER touch
+    the ancestor's succeeded_by itself (auto-completing it now would be the exact hazard
+    the finding named: rebinding a live seat backward)."""
+    from src.orchestrator.agents import (
+        _DEBOUNCE_SRC,
+        EvidenceClass,
+        confidence_for,
+        fold_existing_zero_turn_phantoms,
+        mint_heir,
+    )
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0001", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0001", root, because="live-swap",
+                                           succession="a → b")
+    # a REAL successor minted on top of the phantom — the lineage moved on, exactly the
+    # shape that makes retroactive completion unsafe
+    heir, heir_oid = await mint_heir(actions, phantom, phantom_oid, because="live-swap",
+                                     succession="b → c")
+    await record_decision(actions, "hh0001-iii did real work", source=heir)
+    # hand-write ONLY the flag-stamp half of _debounce_roundtrip's heal — the interrupted
+    # state, never the pointer unwind
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC)):
+        await actions.assert_property(phantom_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                      evidence_class=do.value)
+
+    folded = await fold_existing_zero_turn_phantoms(actions)
+    assert phantom not in {f["phantom"] for f in folded}, (
+        "a half-healed row must never be counted as a fresh fold")
+    # the ancestor's pointer is UNTOUCHED — still points at the phantom, proving no
+    # auto-completion happened
+    assert await _succeeded_by(actions, "agent:hh0001") == phantom
+    # the live head is UNTOUCHED — the real successor still stands, nothing rebound
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE id=$1", heir_oid) == "active"
+    thread = await actions.pool.fetchrow(
+        "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE $1",
+        f"%HALF-HEALED PHANTOM: {phantom}%")
+    assert thread is not None, "the incompleteness must be reported, not silently skipped"
+    assert "never unwound" in thread["summary"]
+
+
+async def test_a_half_healed_phantom_report_is_idempotent(actions: Actions) -> None:
+    """Re-sweeping a half-healed row a second time converges on the SAME Thread rather
+    than paging a fresh obligation every 15-minute tick."""
+    from src.orchestrator.agents import (
+        _DEBOUNCE_SRC,
+        EvidenceClass,
+        confidence_for,
+        fold_existing_zero_turn_phantoms,
+        mint_heir,
+    )
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0002", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0002", root, because="live-swap",
+                                           succession="a → b")
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC)):
+        await actions.assert_property(phantom_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                      evidence_class=do.value)
+
+    await fold_existing_zero_turn_phantoms(actions)
+    await fold_existing_zero_turn_phantoms(actions)
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread' AND canonical=("
+        "  SELECT canonical FROM objects WHERE type='Thread' AND EXISTS ("
+        "    SELECT 1 FROM current_assertions a WHERE a.object_id=objects.id "
+        "    AND a.name='summary' AND a.value #>> '{}' ILIKE $1) LIMIT 1)",
+        f"%HALF-HEALED PHANTOM: {phantom}%")
+    assert count == 1, "open_thread's own idempotency must collapse repeat sightings to one"
+
+
+# ═══ _debounce_roundtrip ATOMICITY (decision ee012ebc) ═══
+
+async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_exception(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before this fix, the heal's six writes were independent statements — an exception
+    partway (a crash, a dropped connection) left the flag stamped but the pointer never
+    unwound, permanently. Force the exception at the LAST write (follow_binding, after
+    the flag stamps AND the pointer unwind have already been issued inside the SAME
+    atomic() block) and prove NOTHING landed: the transaction rolled back whole, not in
+    pieces."""
+    import src.orchestrator.seats as seats_mod
+    from src.orchestrator.agents import _debounce_roundtrip, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0003", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0003", root, because="live-swap",
+                                           succession="opusA → fableB")
+
+    async def _boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("forced mid-heal failure")
+
+    monkeypatch.setattr(seats_mod, "follow_binding", _boom)
+
+    with pytest.raises(RuntimeError, match="forced mid-heal failure"):
+        await _debounce_roundtrip(actions, agent_id=phantom, observed="opusA",
+                                  now=datetime.now(UTC))
+
+    # NOTHING landed — not the flag, not the pointer unwind, not the estate move
+    assert await _false_mint(actions, phantom) is None
+    assert await _succeeded_by(actions, "agent:hh0003") == phantom
+
+
 # ═══════════ THE BOUNDED CHAIN-WALK (thread e749036e, msg 1398) ═══════════
 
 async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions) -> None:

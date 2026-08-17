@@ -709,6 +709,17 @@ class Actions:
             )
             return new_id
 
+    async def execute(self, query: str, *args: Any) -> str:
+        """Raw SQL joining this Actions' OWN transaction when bound (inside an
+        `atomic()` block), a fresh pool connection otherwise — for a caller that needs
+        one extra write alongside assert_property/create_link in the SAME atomic
+        sequence (a bespoke table `assert_property` has no verb for, e.g. `fleet_
+        messages`/`agent_mounts`) without reaching into the private `_conn` directly.
+        No audit/outbox row — this is a passthrough, not a domain write; the CALLER's
+        own assert_property calls in the same block carry the audit trail."""
+        async with self._tx() as conn:
+            return cast(str, await conn.execute(query, *args))
+
     # --- read helpers (no mutation; used by callers and tests) -----------
 
     async def resolve_object_id(self, object_id: uuid.UUID) -> uuid.UUID:

@@ -619,6 +619,30 @@ async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def phantom_heal_heartbeat(ctx: dict[str, Any]) -> int:
+    """The phantom-heal sweep's scheduled leg (decision ee012ebc, operator ruling
+    7d6815bb) — a no-op unless osiris_phantom_heal_enabled (the kill switch), same shape
+    as fleet_reconcile_heartbeat/closure_miner_heartbeat: the flag gate lives here, the
+    acting logic (fold_existing_zero_turn_phantoms) lives in agents.py so a test can
+    exercise it directly without touching arq. Folds only FRESH zero-turn phantoms never
+    before flagged; an already-flagged-but-half-healed row is reported as an obligation
+    by the same call, never auto-completed. A DB hiccup logs, never sinks the cron."""
+    from src.config.settings import get_settings
+    from src.orchestrator.agents import fold_existing_zero_turn_phantoms
+
+    if not get_settings().osiris_phantom_heal_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        folded = await fold_existing_zero_turn_phantoms(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("phantom heal heartbeat failed: %r", exc)
+        return 0
+    if folded:
+        _log.info("phantom heal heartbeat: folded %s", folded)
+    return len(folded)
+
+
 async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     """The closure miner's scheduled leg (Thoth DM 2679, following the deploy that made
     this defensible) — same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
@@ -815,6 +839,13 @@ class WorkerSettings:
         # so none of them contend for CPU at the same wall-clock second.
         cron(watched(closure_miner_heartbeat, every=900), minute={10, 25, 40, 55},
              second={5}, timeout=600, run_at_startup=True),
+        # the phantom-heal sweep's scheduled leg (decision ee012ebc, operator ruling
+        # 7d6815bb): fold FRESH zero-turn phantoms fleet-wide, on the same 15-min cadence
+        # class as reap_orphans/fleet_reconcile_heartbeat/closure_miner_heartbeat — a
+        # no-op unless osiris_phantom_heal_enabled (the kill switch). Offset from all
+        # three so none contend for CPU at the same wall-clock second.
+        cron(watched(phantom_heal_heartbeat, every=900), minute={13, 28, 43, 58},
+             second={10}, timeout=600, run_at_startup=True),
         # task #101's backfill, on a schedule (Thoth's grant DM 2271): closes the RACE
         # where a decision cites a commit before gitlog has ingested it — a cheap,
         # SQL-only scan (no LLM/embedding cost), offset from the other 10-minute jobs

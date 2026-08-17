@@ -313,6 +313,15 @@ class Settings(BaseSettings):
     # everything else stays a rot_candidate for a human to confirm) but it still writes
     # unattended, so it gets the same second signature before it may act.
     osiris_closure_miner_enabled: bool = False
+    # THE PHANTOM-HEAL SWEEP'S OWN SWITCH (decision ee012ebc, operator ruling 7d6815bb —
+    # the false-mint class must heal mechanically, never by hand) — same law as the two
+    # above: a mechanism that WRITES to the graph on a schedule earns its own kill switch.
+    # OFF by default. When on, a 15-min tick runs fold_existing_zero_turn_phantoms fleet-
+    # wide — folds only FRESH, never-flagged zero-turn phantoms (the going-forward class
+    # this was built for); a phantom already flagged false_mint but never fully unwound
+    # (an interrupted heal from the older, now-atomic _debounce_roundtrip) is reported via
+    # an obligation, never auto-completed, regardless of this switch.
+    osiris_phantom_heal_enabled: bool = False
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a
