@@ -386,6 +386,76 @@ def revert_pin_write(path: str) -> dict[str, Any]:
 # lines so the surrounding sections never collide. THE BOOT COMPILER (thread 4951d818) closed
 # the v1.1 gap this comment used to name here: reissue_office recomputes this live on an
 # already-occupied seat, same as establish_office always has for a fresh one.
+async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> dict[str, Any]:
+    """MECHANISM (1) of ruling fe8ec7ff — the operator's own standard (decision df646654):
+    "give each agent independence and infrastructure to fix their own problems... patch
+    osiris so the problems don't even happen in the first place." No human blesses a value
+    the graph already holds unambiguously; nobody escalates for the ordinary case.
+
+    Called at mount, before any pin banner renders. A no-op (`{"state": "n/a"}`) unless the
+    pin is genuinely unset (no `.osiris`, or one that never declares `project`) AND readable
+    (a broken file or a missing cwd are `project_pin_banner`'s real errors, untouched here).
+
+    THE RULE, verbatim: write `project` into the seat's OWN pin only when THREE independent
+    graph signals — `governs` (this seat's own charter), `works_in` (this agent's own active
+    project link), and the anchor directory's basename resolving to a real, active
+    SoftwareProject — ALL exist and ALL agree on the same one project. Any signal absent, or
+    any two disagreeing, and the write is refused: `{"state": "unset", "reason": "..."}`
+    names exactly which signals fired and which didn't, so unset stays a valid, auditable
+    state rather than a silent gap. A caller with no held seat gets the same honest refusal
+    — self-healing is a seat's own act, same law `correct_own_pin_value` already keeps.
+
+    The write itself goes through `write_pin_additions` unchanged (additive-only, backup-
+    first, idempotent) — this function only ever supplies ITS OWN candidate value to that
+    door, never bypasses it. `revert_pin_write` undoes it exactly as it would any other
+    write there."""
+    from src.orchestrator.agents import read_project_pin
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import held_seat
+
+    pin_read = read_project_pin(cwd)
+    if pin_read.error or pin_read.cwd_missing or pin_read.value is not None:
+        return {"state": "n/a"}  # a real error, or already declared — not this mechanism's case
+
+    bound = await held_seat(pool, agent_id)
+    if bound is None:
+        return {"state": "unset", "reason": "no seat held — self-healing is a seat's own "
+                                            "act; nothing to reconcile against"}
+    seat_id = bound["seat_id"]
+
+    governs = await charter_of(pool, seat_id)
+    governs_vote = governs[0] if len(governs) == 1 else None
+
+    works_in_rows = await pool.fetch(
+        "SELECT DISTINCT p.canonical FROM links l "
+        "JOIN objects a ON a.id=l.from_id AND a.type='Agent' AND a.canonical=$1 "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        agent_id)
+    works_in_names = {r["canonical"].removeprefix("repo:") for r in works_in_rows}
+    works_in_vote = next(iter(works_in_names)) if len(works_in_names) == 1 else None
+
+    basename = Path(cwd).name
+    basename_is_real_project = await pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical=$1 "
+        "AND status='active'", f"repo:{basename}")
+    anchor_vote = basename if basename_is_real_project else None
+
+    votes = {governs_vote, works_in_vote, anchor_vote}
+    if len(votes) != 1 or None in votes:
+        return {"state": "unset", "reason": (
+            f"governs={governs_vote!r} works_in={works_in_vote!r} "
+            f"anchor_cwd={anchor_vote!r} — not all three agree; leaving unset, valid")}
+
+    assert governs_vote is not None  # narrowed by the `None in votes` check above
+    candidate = governs_vote  # == works_in_vote == anchor_vote, asserted above
+    write = write_pin_additions(cwd, {"project": candidate})
+    if write.get("error") or not write.get("written"):
+        return {"state": "unset", "reason": f"self-heal attempted but did not write: {write}"}
+    return {"state": "self-healed", "project": candidate,
+            "evidence": "governs + works_in + anchor_cwd all agree", "write": write}
+
+
 def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
     """The `## Peer` section's full text, INCLUDING its own leading `\\n` (one blank line
     after the charter block) and trailing `\\n\\n` (one blank line before "## How to work").

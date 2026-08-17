@@ -15,6 +15,7 @@ from src.orchestrator.offices import (
     establish_office,
     plan_pin_migration,
     revert_pin_write,
+    self_heal_project_pin,
     write_pin_additions,
 )
 
@@ -765,3 +766,88 @@ def test_pin_backup_resolves_a_worktree_gitlink_to_its_own_private_gitdir(
     reverted = revert_pin_write(str(worktree))
     assert reverted["reverted"] is True
     assert (worktree / ".osiris").read_text() == 'project = "tony"\n'
+
+
+# ═══ SELF-HEAL: PIN `project` UNSET IS A VALID STATE (ruling fe8ec7ff, operator df646654)
+# governs + works_in + anchor_cwd must ALL agree before a seat's own mount writes anything;
+# any one absent or disagreeing leaves the pin unset, valid, with a reason. ═══
+
+async def _seat_with_project(
+    actions: Actions, *, agent: str, handle: str, project: str, charter: bool, works_in: bool,
+) -> str:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, agent, handle, source="test")
+    seat_id = claimed["seat_id"]
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", "test")
+    if charter:
+        from src.orchestrator.charter import set_charter
+        await set_charter(actions, seat_id, [project], actor=agent)
+    if works_in:
+        agent_oid = await actions.create_or_find_object("Agent", agent, agent)
+        await actions.create_link(agent_oid, proj, "works_in", agent, now, 0.9)
+    return seat_id
+
+
+async def test_self_heal_writes_when_all_three_signals_agree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "heal1"
+    office.mkdir()
+    real = office / "dealer-to-fb"
+    real.mkdir()  # anchor_cwd's own basename IS the project name — the Marquee shape
+    (real / ".osiris").write_text('model = "claude-sonnet-5"\n')
+    await _seat_with_project(
+        actions, agent="agent:heal1", handle="Heal1", project="dealer-to-fb",
+        charter=True, works_in=True)
+
+    out = await self_heal_project_pin(actions.pool, "agent:heal1", str(real))
+    assert out["state"] == "self-healed"
+    assert out["project"] == "dealer-to-fb"
+    assert 'project = "dealer-to-fb"' in (real / ".osiris").read_text()
+    assert 'model = "claude-sonnet-5"' in (real / ".osiris").read_text()  # additive, untouched
+
+
+async def test_self_heal_leaves_unset_when_governs_and_works_in_disagree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "amb2"
+    office.mkdir()
+    real = office / "dealer-to-fb"
+    real.mkdir()
+    await actions.create_or_find_object("SoftwareProject", "repo:some-other-project", "test")
+    await _seat_with_project(
+        actions, agent="agent:amb2", handle="Amb2", project="dealer-to-fb",
+        charter=True, works_in=False)
+    # works_in points somewhere ELSE — the two signals disagree
+    agent_oid = await actions.create_or_find_object("Agent", "agent:amb2", "agent:amb2")
+    other = await actions.create_or_find_object("SoftwareProject", "repo:some-other-project",
+                                                 "test")
+    await actions.create_link(agent_oid, other, "works_in", "agent:amb2",
+                              datetime.now(UTC), 0.9)
+
+    out = await self_heal_project_pin(actions.pool, "agent:amb2", str(real))
+    assert out["state"] == "unset"
+    assert "not all three agree" in out["reason"]
+    assert not (real / ".osiris").exists()
+
+
+async def test_self_heal_leaves_unset_with_no_seat_held(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "noseat3"
+    office.mkdir()
+    out = await self_heal_project_pin(actions.pool, "agent:noseat3-unclaimed", str(office))
+    assert out["state"] == "unset"
+    assert "no seat held" in out["reason"]
+
+
+async def test_self_heal_is_a_noop_when_project_already_declared(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "already4"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    out = await self_heal_project_pin(actions.pool, "agent:already4", str(office))
+    assert out == {"state": "n/a"}

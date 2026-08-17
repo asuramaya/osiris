@@ -973,14 +973,15 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
     resolve". Silent for the bare seat-office root (577988ed's carve-out, unchanged) and
     when a real pin was found and used (the common, healthy case).
 
-    FOUR DISTINCT MESSAGES now, not three — each a distinct repair (b3a1f987's own finding:
-    a check keyed on "has a pin" would never catch the middle two; msg 3928 found the
-    canonical reader itself was blind to a fourth):
+    TWO MESSAGES now, not four (ruling fe8ec7ff, mechanism 1): the other two ("NO .osiris
+    ANYWHERE" and "FOUND, VALID, NEVER DECLARES `project`") are no longer errors at all —
+    an unset project is a VALID STATE (general-purpose, or not yet named), never a thing
+    to alarm on. Those two moved to `project_pin_state` below, which mount() only renders
+    AFTER `self_heal_project_pin` has already tried and failed to fill it in from the
+    graph's own unambiguous signal. What remains HERE are the two that stay genuine
+    problems no self-heal can repair:
       CWD DOES NOT EXIST (msg 3928) — the address itself is a ghost; no pin write repairs
         this, only reaping the graph's stale belief about it does.
-      NO .osiris ANYWHERE — write one.
-      FOUND, VALID, NEVER DECLARES `project` (the heinrich shape: a deliberately-written
-        file answering a different question) — add the missing key, keep the rest.
       COULD NOT BE READ (broken TOML) — fix the syntax error named in the message.
 
     THE "SILENT FOR THE BARE ROOT" CLAIM ABOVE WAS ONLY HALF TRUE (Thoth LXXVI's live
@@ -1015,19 +1016,35 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
             "instead of reading it. Fix the file's TOML syntax (the error above names "
             "exactly what's wrong), then add `project = \"...\"` if it isn't there yet."
         )
+    return None
+
+
+def project_pin_state(ident: AgentIdentity) -> str | None:
+    """MECHANISM (1) of ruling fe8ec7ff (operator, df646654: "project may not be decided
+    right away, project none is valid, like a general purpose agent or the project isn't
+    named yet... the problem needs to handle itself"). These are the SAME two conditions
+    `project_pin_banner` used to alarm on ("NEVER DECLARES `project`" / "NO .osiris PIN
+    ANYWHERE") — split out here because unset is a VALID STATE, not an error: no `⚠`, no
+    "fell back to a BASENAME GUESS" framing (a guess implies something is owed and missing;
+    an unset project is simply undecided, same as a fresh general-purpose seat). Silent for
+    the two cases that remain real problems (`project_pin_cwd_missing`, `project_pin_error`)
+    — those still come from `project_pin_banner`, unchanged. mount() calls
+    `self_heal_project_pin` FIRST; this only ever renders when that mechanism found the
+    graph's own signals ambiguous or absent and correctly declined to guess a value in."""
+    if ident.project_pin_error or ident.project_pin_cwd_missing:
+        return None  # project_pin_banner's own cases — a real problem, not a valid state
     if ident.project_pin_path:
         return (
-            f"⚠ .osiris AT {ident.project_pin_path} NEVER DECLARES `project` — the file is "
-            "valid and answers a different question (e.g. only `model`), so your project "
-            f"fell back to a BASENAME GUESS ({ident.project!r}). Add `project = \"...\"` to "
-            "that file; leave everything else in it alone."
+            f"project: unset (general-purpose, or not yet named) — .osiris at "
+            f"{ident.project_pin_path} is valid and answers a different question (e.g. only "
+            "`model`), and does not declare `project`. This is a valid state, not an error. "
+            "If you know your project, write it: correct_own_pin_value / write_pin_additions."
         )
     if ident.project_pin_missing:
         return (
-            f"⚠ NO .osiris PIN ANYWHERE UNDER {ident.cwd} — your project fell back to a "
-            f"BASENAME GUESS ({ident.project!r}), which happens to be correct today only "
-            "because the folder name matches. Write `.osiris` here (or at this repo's "
-            "root) with `project = \"...\"`, or pass project explicitly."
+            f"project: unset (general-purpose, or not yet named) — no .osiris pin exists "
+            f"yet under {ident.cwd}. This is a valid state, not an error. If you know your "
+            "project, write `.osiris` here with `project = \"...\"`, or pass it explicitly."
         )
     return None
 
