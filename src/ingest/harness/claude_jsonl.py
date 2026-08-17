@@ -117,6 +117,25 @@ class ClaudeJsonlAdapter:
             source_path=str(path), cwd=cwd, project=proj,
         )
 
+    def discover_at(self, path: Path) -> SessionLocator | None:
+        """Build a locator DIRECTLY from a caller-KNOWN path — no job_dir/cwd search at
+        all (thread 7304bfd8). The fix for a background-job fork whose job_dir-based
+        search (discover(), above) can land on a stub/wrong file or find nothing: the
+        caller (mount()'s/automount()'s own `transcript_path` param, hook-stamped) already
+        has the real one. Same stem-parse convention as discover(); cwd/project are left
+        unset (unknown from a bare path alone) — identity only needs the model reading,
+        never these for the explicit-path lane."""
+        if not path.is_file():
+            return None
+        stem = path.stem
+        anchor = stem.split("-")[0]
+        if len(anchor) < 8:
+            return None
+        return SessionLocator(
+            anchor_sid=anchor, session_id=stem, harness=self.name,
+            source_path=str(path), cwd=None, project=None,
+        )
+
     def enumerate(self, *, root: Path | None = None) -> Iterator[SessionLocator]:
         """Every Claude Code transcript on disk — the miner's backfill sweep.
 

@@ -1817,7 +1817,12 @@ async def mount(
     automount()'s own (#48 piece 1, decision 424c4158): a tab-view of a living session
     (`transcript_path` names a file that belongs to another session's mount row) and a
     background-job fork (`bridge_session_id` from CLAUDE_CODE_BRIDGE_SESSION_ID) each
-    REBIND to their existing soul instead of minting a stranger — same as fork/ledger."""
+    REBIND to their existing soul instead of minting a stranger — same as fork/ledger.
+    `transcript_path` ALSO feeds MODEL RESOLUTION directly now (thread 7304bfd8): a
+    background-job fork's job_dir-based transcript search can land on a stub file or find
+    nothing at all, while this caller-known path is the real one — passed straight
+    through to identity_reading's explicit-path lane, tried before the job_dir/cwd
+    search, not merely captured and left unread."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -1980,7 +1985,8 @@ async def mount(
     # JSONL-fallback removal, #29): eat the current session's turns from whatever harness
     # the operator is running (Claude Code, Crush, …), then hand the model reading to
     # resolve_identity so non-Claude minds mount RESOLVED. Fail-open inside the helper.
-    store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir)
+    store_reading = await identity_reading(pool, cwd=cwd, job_dir=job_dir,
+                                           transcript_path=transcript_path)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, model=model,
                              claimed=claimed, fallback_seed=key,
                              store_reading=store_reading,
@@ -2195,8 +2201,15 @@ async def mount(
     # an override. write_attribution_banner (agents.py) also guards against the stale-
     # comparison specimen Thoth LXXVI caught live — see its own docstring.
     wa_warn = write_attribution_banner(ident)
+    # UNRESOLVED IS A NAMED STATE, NEVER DATA-SHAPED (thread 7304bfd8, ruling 7d6815bb):
+    # "unknown" used to fill the SAME `model` field a real reading occupies — a reader
+    # (or the fleet's own swap-confession rule) cannot tell "the harness said so" from
+    # "nothing was observed" without re-deriving it from ident.model itself. Same idiom
+    # this dict already uses for "seat"/"anonymous" and "visitor": a real value gets its
+    # normal key, an absence gets its OWN key naming the absence and what to do about it.
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
-           "model": ident.model or "unknown",
+           **({"model": ident.model} if ident.model else
+              {"model_unresolved": "model unresolved — pass model= explicitly"}),
            **({"co_agents": co_agents} if co_agents else {}),
            **({"held_work": held_work} if held_work else {}),
            # THE VISITOR GATE'S OWN CONFESSION (#48 piece 2): a resolved anchor that matched

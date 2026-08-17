@@ -38,7 +38,7 @@ _SYNTHETIC = "<synthetic>"
 
 async def identity_reading(
     pool: asyncpg.Pool, *, cwd: str | None, job_dir: str | None,
-    root: Path | None = None,
+    root: Path | None = None, transcript_path: str | None = None,
 ) -> ModelReading | None:
     """The identity callers' one door to the store — discover_and_ingest, FAIL-OPEN.
 
@@ -46,10 +46,15 @@ async def identity_reading(
     session's model reading if the store can produce one, and NO EXCEPTION otherwise —
     a store failure must never block an identity path (the whisper's own law). Since
     the JSONL-fallback removal (task #29) this is the ONLY observation lane; None
-    degrades resolve_identity honestly to the caller's self-report."""
+    degrades resolve_identity honestly to the caller's self-report.
+
+    `transcript_path` (thread 7304bfd8) passes a caller-KNOWN location straight through
+    to discover_and_ingest's explicit-path lane — previously captured by mount()'s/
+    automount()'s own signature and used only for revisit resolution, never consulted
+    here at all."""
     try:
         return await TranscriptStore(pool).discover_and_ingest(
-            cwd=cwd, job_dir=job_dir, root=root)
+            cwd=cwd, job_dir=job_dir, root=root, transcript_path=transcript_path)
     except Exception:  # noqa: BLE001 — identity must resolve even with the store down
         return None
 
@@ -205,7 +210,7 @@ class TranscriptStore:
     async def discover_and_ingest(
         self, *, cwd: str | None, job_dir: str | None,
         adapters: list[HarnessAdapter] | None = None,
-        root: Path | None = None,
+        root: Path | None = None, transcript_path: str | None = None,
     ) -> ModelReading | None:
         """Try each adapter; ingest from the first that discovers a session.
 
@@ -218,9 +223,31 @@ class TranscriptStore:
         same override resolve_identity's cwd sid-guess honors). The reading carries the
         locator's `anchored` grade — identity's whole basis for trusting it.
 
+        `transcript_path` is a CALLER-KNOWN location (thread 7304bfd8: mount()'s and
+        automount()'s own hook-stamped param, previously captured but never consulted
+        here) — tried FIRST via each adapter's own `discover_at`, bypassing the job_dir/
+        cwd SEARCH entirely. This is the fix for the bridge-fork specimen: a background-
+        job fork's job_dir-based search can find a stub file or nothing, while the caller
+        already has the real path in hand. Falls through to ordinary discovery when no
+        adapter recognizes the path (or none is given) — never a second, competing lane.
+
         Returns the model reading for identity resolution, or None when no adapter
         recognizes the session — since the JSONL-fallback removal (task #29) there is no
         legacy probe behind this: no reading means no observed model."""
+        if transcript_path:
+            p = Path(transcript_path)
+            for adapter in (adapters or self._default_adapters):
+                discover_at = getattr(adapter, "discover_at", None)
+                if discover_at is None:
+                    continue
+                try:
+                    locator = discover_at(p)
+                except Exception:  # noqa: BLE001 — an adapter failure must never block mount
+                    continue
+                if locator is not None:
+                    reading = await self._ingest_locator(adapter, locator)
+                    if reading is not None:
+                        return reading
         for adapter in (adapters or self._default_adapters):
             try:
                 locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
@@ -228,20 +255,31 @@ class TranscriptStore:
                 continue
             if locator is None:
                 continue
-            skip, since, observed, size = await self._freshness(locator)
-            if skip:
-                stored = await self.model_of_session(locator.harness, locator.anchor_sid)
-                if stored is not None:
-                    return replace(stored, anchored=locator.anchored)
-                skip, since = False, 0  # a session row without turns: eat it whole
-            turns = list(adapter.read_turns(locator, since_idx=since))
-            if turns:
-                await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
-            elif since == 0:
-                continue  # nothing in the source at all — try the next adapter
-            reading = await self.model_of_session(locator.harness, locator.anchor_sid)
-            return replace(reading, anchored=locator.anchored) if reading else None
+            reading = await self._ingest_locator(adapter, locator)
+            if reading is not None:
+                return reading
         return None
+
+    async def _ingest_locator(
+        self, adapter: HarnessAdapter, locator: SessionLocator,
+    ) -> ModelReading | None:
+        """The shared body behind BOTH discovery lanes above (explicit-path and search):
+        freshness-gated ingest, then read the reading back from the store. None means
+        THIS locator yielded nothing (an empty source with no prior rows) — the caller
+        tries the next adapter/lane, never a hard failure."""
+        skip, since, observed, size = await self._freshness(locator)
+        if skip:
+            stored = await self.model_of_session(locator.harness, locator.anchor_sid)
+            if stored is not None:
+                return replace(stored, anchored=locator.anchored)
+            skip, since = False, 0  # a session row without turns: eat it whole
+        turns = list(adapter.read_turns(locator, since_idx=since))
+        if turns:
+            await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
+        elif since == 0:
+            return None  # nothing in the source at all — try the next adapter/lane
+        reading = await self.model_of_session(locator.harness, locator.anchor_sid)
+        return replace(reading, anchored=locator.anchored) if reading else None
 
     async def model_of_session(
         self, harness: str, anchor_sid: str,

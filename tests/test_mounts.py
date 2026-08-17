@@ -291,6 +291,53 @@ async def test_mount_tool_welcomes_an_unbound_fresh_session(
         srv._pool = saved_pool
 
 
+async def test_mount_reports_model_unresolved_as_a_named_state(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """thread 7304bfd8, ruling 7d6815bb: no transcript anywhere for this anchor and no
+    self-report — the receipt must say so in its OWN key, never fill `model` with a
+    string ("unknown") a reader could mistake for real data."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "0b5e1e5d")   # no transcript exists for this anchor
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "unresolved-repo"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out.get("model_unresolved") == "model unresolved — pass model= explicitly"
+    assert "model" not in out
+
+
+async def test_mount_uses_transcript_path_when_the_job_dir_search_fails(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE BRIDGE-FORK SPECIMEN (thread 7304bfd8, Ptah VII's repro), through the real
+    mount() tool end to end: job_dir names an anchor whose transcript search finds
+    nothing, but transcript_path (hook-stamped, previously captured and never consulted)
+    names the real file — the receipt must resolve the model from it."""
+    from src import mcp_server as srv
+
+    sid = "0b5e1e5d"
+    job_dir = str(tmp_path / "jobs" / sid)   # this job_dir's own search finds nothing —
+    # no ~/.claude/projects fixture exists for it in this test's tmp_path
+    real = tmp_path / "elsewhere" / f"{sid}-session-uuid.jsonl"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text('{"type": "assistant", '
+                    '"timestamp": "2026-08-17T00:00:00+00:00", '
+                    '"message": {"model": "claude-opus-5", "usage": {}}}\n')
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "bridge-fork-repo"), job_dir=job_dir,
+                              transcript_path=str(real))
+    finally:
+        srv._pool = saved_pool
+    assert out.get("model") == "claude-opus-5"
+    assert "model_unresolved" not in out
+
+
 async def test_mount_never_mints_a_genuine_visitor(
     actions: Actions, tmp_path: Path,
 ) -> None:

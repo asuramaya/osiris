@@ -99,6 +99,40 @@ def test_claude_adapter_discovers_and_reads(tmp_path: Path) -> None:
     assert models == ["claude-fable-5", "claude-opus-4-8"]
 
 
+def test_claude_adapter_discover_at_builds_a_locator_from_a_known_path(
+    tmp_path: Path,
+) -> None:
+    """thread 7304bfd8: discover_at bypasses the job_dir/cwd SEARCH entirely — given the
+    path directly, it never touches locate_current_transcript. Proven by putting the
+    transcript somewhere discover()'s own search would never find it."""
+    sid = "deadbeef"
+    transcript = _write_claude_transcript(
+        tmp_path / "nowhere" / "special" / f"{sid}-session-uuid.jsonl", sid,
+        [("assistant", "claude-opus-5")],
+    )
+    adapter = ClaudeJsonlAdapter()
+    # the search-based door finds nothing here — proves the two lanes are independent
+    assert adapter.discover(cwd=None, job_dir=None, root=tmp_path / "nowhere") is None
+    loc = adapter.discover_at(transcript)
+    assert loc is not None
+    assert loc.anchor_sid == sid
+    assert loc.source_path == str(transcript)
+    turns = list(adapter.read_turns(loc))
+    assert [t.model for t in turns if t.role == "assistant"] == ["claude-opus-5"]
+
+
+def test_claude_adapter_discover_at_returns_none_for_a_missing_file(tmp_path: Path) -> None:
+    adapter = ClaudeJsonlAdapter()
+    assert adapter.discover_at(tmp_path / "ghost.jsonl") is None
+
+
+def test_claude_adapter_discover_at_returns_none_for_a_short_stem(tmp_path: Path) -> None:
+    p = tmp_path / "short.jsonl"
+    p.write_text("{}\n")
+    adapter = ClaudeJsonlAdapter()
+    assert adapter.discover_at(p) is None
+
+
 def test_claude_adapter_returns_none_when_no_anchor(tmp_path: Path) -> None:
     adapter = ClaudeJsonlAdapter()
     assert adapter.discover(cwd="/nowhere", job_dir="/x/jobs/deadbeef", root=tmp_path) is None
@@ -180,6 +214,49 @@ def test_crush_adapter_returns_none_when_no_db(
 @pytest_asyncio.fixture
 async def store(actions: Actions) -> TranscriptStore:
     return TranscriptStore(actions.pool)
+
+
+async def test_discover_and_ingest_uses_the_explicit_path_when_the_search_fails(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """THE BRIDGE-FORK SPECIMEN (thread 7304bfd8, Ptah VII's repro): job_dir/cwd search
+    finds nothing (a background-job fork's own transcript search failure), but the
+    caller already knows the real path — the explicit-path lane must resolve the model
+    the search-only lane never could."""
+    sid = "cafebabe"
+    real = tmp_path / "real" / f"{sid}-session-uuid.jsonl"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text("\n".join(json.dumps(e) for e in [
+        {"type": "assistant", "timestamp": datetime(2026, 8, 17, 0, 0, tzinfo=UTC).isoformat(),
+         "message": {"model": "claude-opus-5", "usage": {}}},
+    ]) + "\n")
+    # the search root has nothing under it — job_dir/cwd search returns None
+    search_root = tmp_path / "empty-projects"
+    search_root.mkdir()
+    reading = await store.discover_and_ingest(
+        cwd=None, job_dir=None, root=search_root, transcript_path=str(real))
+    assert reading is not None
+    assert reading.current == "claude-opus-5"
+    assert reading.anchored is True
+
+
+async def test_discover_and_ingest_falls_back_to_search_when_the_path_is_unrecognized(
+    store: TranscriptStore, tmp_path: Path,
+) -> None:
+    """A bad/missing explicit path is not a hard failure — ordinary job_dir/cwd search
+    still runs, exactly as if transcript_path had never been passed."""
+    sid = "aabbccdd"
+    projects = tmp_path / "projects"
+    real = projects / "-home-x-code-widget" / f"{sid}-session-uuid.jsonl"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text(json.dumps({
+        "type": "assistant", "timestamp": datetime(2026, 8, 17, tzinfo=UTC).isoformat(),
+        "message": {"model": "claude-fable-5", "usage": {}}}) + "\n")
+    reading = await store.discover_and_ingest(
+        cwd="/home/x/code/widget", job_dir=f"/home/x/.claude/jobs/{sid}", root=projects,
+        transcript_path=str(tmp_path / "ghost.jsonl"))
+    assert reading is not None
+    assert reading.current == "claude-fable-5"
 
 
 async def test_store_ingests_and_reads_back(store: TranscriptStore, tmp_path: Path) -> None:
