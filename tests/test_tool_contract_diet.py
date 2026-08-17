@@ -533,7 +533,14 @@ def _tool_chars(t: Any) -> int:
 # scoped verb refuses by construction (Seshat f78b41c8). Mirrors resync_seat_house_third_party
 # exactly; `because` mandatory; contract test proves identical writes to the self-service
 # path. Measured +1,821 chars at the merged tip; Seshat flagged, did not raise (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 173_000
+# 173,000 -> 174,600 (measured 174,500 exact, +1,500 for rematerialize). 121 -> 122 tools (2026-08-17, Thoth LXXVI heir viii, merge of Imhotep's
+# 9b5073c, #51 piece 2). ONE NEW TOOL: rematerialize — byte-for-byte transcript reconstruction from
+# soul_lines with the hash chain verified while collecting (a break is a NAMED receipt, writes
+# nothing); default dest = the session's recorded source_path so `claude --resume` on ANY host
+# finds it; refuses to overwrite a live transcript (mtime newer than last ingest) unless force.
+# CLI + MCP parity by construction. Imhotep flagged, did not raise (45e72476). Exact number
+# measured at the merged tip and written below.
+TOOL_CONTRACT_CEILING_CHARS = 174_600
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -622,4 +629,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     door at all — importable only, a fifth-ledger-disease specimen. dry_run=True default,
     same "list only, the bulk act is the operator's" shape as #150's own repairs."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 121
+    assert len(per_tool) == 122
