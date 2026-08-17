@@ -117,6 +117,28 @@ On a box without the compose plugin yet, `deploy/up.sh` brings the same topology
 infra as containers and the API/worker as local processes (`deploy/down.sh` tears down).
 The manifest is guarded by `tests/test_deploy_topology.py` so it can't silently drift.
 
+## Off-box Claude Code session hooks
+
+The session-lifecycle hooks (`osiris_whisper.py`/SessionStart, `osiris_precompact.py`/
+PreCompact, `osiris_spawn.py`/SubagentStart+Stop, `osiris_sessionend.py`/SessionEnd) post
+to the MCP server over loopback by default — correct only when the Claude Code session
+runs on the SAME box as the worker. A session on a different machine (a second dev box, a
+container host) needs each hook pointed at the real worker URL, or its session-death
+seams (compaction, session end) never reach the fleet's worker at all — invisibly, since
+every hook is fail-open and stays silent on stdout. Set, wherever that machine's Claude
+Code hooks run:
+
+```bash
+OSIRIS_AUTOMOUNT_URL=http://<worker-host>:8790/automount
+OSIRIS_SWEEP_URL=http://<worker-host>:8790/sweep
+OSIRIS_SPAWN_URL=http://<worker-host>:8790/spawn
+OSIRIS_SESSION_END_URL=http://<worker-host>:8790/session-end
+```
+
+Each hook logs which URL it posted to and whether it connected to its own stderr, so a
+misconfigured off-box machine is diagnosable from its own hook output rather than a
+silent gap in the graph.
+
 ## Operational tail (before a beat goes live for a user)
 
 A watch that pages a real operator needs guards the demo doesn't:

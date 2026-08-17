@@ -15,14 +15,20 @@ re-earns its row from a fresh automount, exactly as if this hook had never fired
 
 STDLIB ONLY and FAIL-OPEN, mirroring osiris_whisper.py: any failure is silent, exit 0 — a
 session must always be able to end. Timeout 2s.
+
+OSIRIS_SESSION_END_URL overrides the target (thread from Sekhmet's #40 finding, decision
+66318e03): the hardcoded loopback only ever reaches a worker on THIS box — an off-box
+machine points this at the real worker URL; default unchanged. Every attempt is logged
+to stderr: which URL, connected or not.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-SESSION_END = "http://127.0.0.1:8790/session-end"
+SESSION_END = os.environ.get("OSIRIS_SESSION_END_URL", "http://127.0.0.1:8790/session-end")
 
 
 def main() -> int:
@@ -38,8 +44,9 @@ def main() -> int:
             SESSION_END, data=json.dumps({"session_id": session_id}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=2)
-    except Exception:  # noqa: BLE001 — server down: the row just ages out as it does today
-        pass
+        print(f"osiris_sessionend: posted {SESSION_END} — connected", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — server down: the row just ages out as today
+        print(f"osiris_sessionend: posted {SESSION_END} — failed ({exc})", file=sys.stderr)
     return 0
 
 
