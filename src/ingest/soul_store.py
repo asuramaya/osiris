@@ -17,7 +17,9 @@ soul store, just another index.
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 
@@ -31,6 +33,21 @@ def _read_source(source_path: str) -> str:
     own `_stat` — the read is still blocking either way, this only satisfies ASYNC240's
     syntactic check on the call site."""
     return Path(source_path).read_text("utf-8", errors="replace")
+
+
+def _dest_mtime(path: Path) -> datetime | None:
+    """Sync helper, same blocking-call-lint reasoning as `_read_source` — None when the
+    path doesn't exist (nothing to compare against, never an error)."""
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return None
+
+
+def _write_dest(path: Path, content: str) -> None:
+    """Sync helper, same blocking-call-lint reasoning as `_read_source`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 def _chain_hash(prev_hash: str | None, raw_line: str) -> str:
@@ -141,3 +158,93 @@ class SoulStore:
         if not rows:
             return None
         return "\n".join(r["raw_line"] for r in rows)
+
+    async def _verified_lines(
+        self, anchor_sid: str,
+    ) -> tuple[list[str] | None, dict[str, Any] | None]:
+        """Walk soul_lines in order, verifying the hash chain AS it collects — a break is
+        a NAMED state (the second element), never a silent partial result. Returns
+        (lines, None) on a clean chain, (None, break_receipt) on the first gap/mismatch,
+        (None, None) when nothing was ever ingested for this session — three distinct
+        outcomes, never conflated."""
+        rows = await self.pool.fetch(
+            "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
+            "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
+            _HARNESS, anchor_sid)
+        if not rows:
+            return None, None
+        expected_prev: str | None = None
+        lines: list[str] = []
+        for i, row in enumerate(rows):
+            if row["line_idx"] != i:
+                return None, {
+                    "error": f"chain broken — a GAP at line_idx {i} (expected {i}, "
+                             f"found {row['line_idx']})",
+                    "verified_through": i - 1}
+            if row["prev_hash"] != expected_prev:
+                return None, {
+                    "error": f"chain broken at line {i} — prev_hash does not match the "
+                             "prior line's own hash",
+                    "verified_through": i - 1}
+            if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                return None, {
+                    "error": f"chain broken at line {i} — stored hash does not match "
+                             "its own content (tampered or corrupted)",
+                    "verified_through": i - 1}
+            expected_prev = row["line_hash"]
+            lines.append(row["raw_line"])
+        return lines, None
+
+    async def rematerialize_to_disk(
+        self, anchor_sid: str, *, dest: str | None = None, force: bool = False,
+    ) -> dict[str, Any]:
+        """PIECE 2: write a session's transcript back to disk, byte-for-byte, from
+        soul_lines alone — the acceptance test a soul store stands or falls on, made
+        durable rather than in-memory-only (re_materialize's own job, unchanged).
+
+        Verifies the hash chain WHILE collecting (`_verified_lines`), not as a separate
+        pass before a separate write: a break is a NAMED state in the receipt
+        (`{"error": ..., "verified_through": N}`) and NOTHING is written — never a
+        silently truncated file that LOOKS complete.
+
+        `dest` defaults to this session's own recorded source_path (soul_sessions) — the
+        harness's OWN projects-slug convention, so `claude --resume` on a host that never
+        had the original file finds the reconstruction in the exact place a live session
+        would have written it.
+
+        REFUSES to overwrite a LIVE transcript: if `dest` already exists and its mtime is
+        newer than this session's last_ingested_at, something has written to it more
+        recently than what the store knows about (the file's own mtime is the "lease" —
+        a live process still appending to it keeps moving it forward) — writing over it
+        would clobber content the store never saw. `force=True` skips this guard."""
+        row = await self.pool.fetchrow(
+            "SELECT source_path, last_ingested_at FROM soul_sessions "
+            "WHERE harness=$1 AND anchor_sid=$2", _HARNESS, anchor_sid)
+        if row is None:
+            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+                             "materialize"}
+        target = Path(dest) if dest is not None else Path(row["source_path"])
+        if not force:
+            existing_mtime = _dest_mtime(target)
+            if existing_mtime is not None and existing_mtime > row["last_ingested_at"]:
+                return {
+                    "error": "refused — a LIVE transcript exists at the target",
+                    "target": str(target),
+                    "target_mtime": existing_mtime.isoformat(),
+                    "last_ingested_at": row["last_ingested_at"].isoformat(),
+                    "note": "the file was modified more recently than the store's last "
+                            "ingest — writing over it would clobber content the store "
+                            "never saw. Pass force=True to override.",
+                }
+        lines, broken = await self._verified_lines(anchor_sid)
+        if broken is not None:
+            return broken
+        if lines is None:
+            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+                             "materialize"}
+        content = "\n".join(lines) + "\n"
+        _write_dest(target, content)
+        return {
+            "written": str(target), "lines": len(lines),
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }

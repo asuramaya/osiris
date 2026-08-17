@@ -1779,6 +1779,49 @@ async def cmd_annotate_thread(
     return 0
 
 
+async def cmd_rematerialize(
+    anchor_sid: str, *, dest: str | None = None, force: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rematerialize <anchor_sid> [--dest PATH] [--force] — the console-script
+    door onto SoulStore.rematerialize_to_disk, the SAME function the rematerialize MCP
+    tool wraps (no duplicated guard: the live-transcript refusal and the broken-chain
+    report are exactly rematerialize_to_disk's own, untouched here).
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general
+    rule, same as annotate-thread above): mirrors the MCP wrapper's own dict shape by
+    hand rather than a round-trip through the tool itself."""
+    from src.ingest.soul_store import SoulStore
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rematerialize: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        receipt = await SoulStore(pool).rematerialize_to_disk(
+            anchor_sid, dest=dest, force=force)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in receipt:
+        print(f"osiris rematerialize: refused — {receipt['error']}", file=sys.stderr)
+        return 1
+    print(f"wrote {receipt['written']} ({receipt['lines']} lines, "
+          f"sha256 {receipt['sha256']})")
+    return 0
+
+
 # --- amend-decision ----------------------------------------------------------------------------
 
 async def cmd_amend_decision(
@@ -2333,6 +2376,27 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help=f"who is making this addendum — defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
+    p_rematerialize = sub.add_parser(
+        "rematerialize", description=_d(
+            "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
+            "soul_lines alone (task #51 piece 2) — the same SoulStore.rematerialize_to_"
+            "disk the MCP tool wraps. Verifies the hash chain while collecting; a break "
+            "is reported and NOTHING is written, never a silent partial file. Refuses "
+            "to overwrite a transcript modified more recently than the store's last "
+            "ingest unless --force is given."),
+        epilog="example: osiris rematerialize deadbeef\n"
+            "example, to a specific path: osiris rematerialize deadbeef "
+            "--dest /tmp/recovered.jsonl")
+    p_rematerialize.add_argument("anchor_sid", help="the 8-char session anchor to "
+                                 "reconstruct")
+    p_rematerialize.add_argument("--dest", default=None,
+                                 help="where to write the reconstruction — defaults to "
+                                      "the session's own recorded source_path (the "
+                                      "harness's own projects-slug convention)")
+    p_rematerialize.add_argument("--force", action="store_true",
+                                 help="write even if the target exists and was modified "
+                                      "more recently than the store's last ingest")
+
     p_mint_seat = sub.add_parser(
         "mint-seat", description=_d(
             "Mint (or adopt) a worker seat: ensure_seat + an office scaffold on "
@@ -2468,6 +2532,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_annotate_thread(args.ref, args.note, actor=args.actor))
     if args.command == "amend-decision":
         return asyncio.run(cmd_amend_decision(args.ref, args.addendum, actor=args.actor))
+    if args.command == "rematerialize":
+        return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
+                                             force=args.force))
     if args.command == "mint-seat":
         return asyncio.run(cmd_mint_seat(
             args.handle, manager=args.manager, project=args.project, house=args.house,

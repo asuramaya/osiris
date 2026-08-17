@@ -5745,6 +5745,34 @@ async def annotate_thread(
 
 
 @mcp.tool()
+async def rematerialize(
+    anchor_sid: str, dest: str | None = None, force: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE SOUL STORE, PIECE 2 (task #51, ruling 62dc6397): reconstruct a session's
+    transcript BYTE-FOR-BYTE from soul_lines alone, written to disk — the acceptance
+    test a soul store stands or falls on, made durable (piece 1's own `re_materialize`
+    only ever returned the text in memory). `anchor_sid` is the 8-char session anchor
+    (matches harness/soul_sessions' own key).
+
+    Verifies the hash chain WHILE collecting, not as a separate pass: a break returns
+    `{"error": ..., "verified_through": N}` and NOTHING is written — never a silently
+    truncated file that looks complete. `dest` defaults to the session's own recorded
+    source_path (soul_sessions) — the harness's OWN projects-slug convention, so
+    `claude --resume` on a host that never had the original file finds the
+    reconstruction in the exact place a live session would have written it.
+
+    REFUSES to overwrite a LIVE transcript: if `dest` already exists and was modified
+    more recently than this session's last ingest, writing over it would clobber
+    content the store never saw — `force=True` overrides. Success returns
+    `{"written": <path>, "lines": N, "sha256": <hex>}`."""
+    from src.ingest.soul_store import SoulStore
+
+    pool = await _pool_get()
+    return await SoulStore(pool).rematerialize_to_disk(anchor_sid, dest=dest, force=force)
+
+
+@mcp.tool()
 async def correct_thread_summary(
     ref: str, corrected_summary: str, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
