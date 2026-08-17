@@ -25,6 +25,7 @@ import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 
+from src import memprofile
 from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
@@ -6828,6 +6829,9 @@ async def _boot_check() -> None:
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
         logging.getLogger("osiris.deploy_guard").warning(
             "deploy_guard reboot check failed at mcp boot: %r", exc)
+
+
+memprofile.maybe_start()  # inert unless OSIRIS_PROFILE_MEMORY is set — thread e6fd3772
 
 
 def main() -> None:
