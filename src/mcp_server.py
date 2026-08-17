@@ -731,14 +731,22 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     cwd-derived project still gets asserted for a session that isn't seated yet).
 
     A thin wrapper (msg 1888, the mount/project-resolution pollution build) around
-    `seats._seated_house` — the SAME seat-first check `seats.resolve_project` (the shared
-    resolver the stop hook and census now use) leads with. Deliberately not the full
-    `resolve_project`: its cwd-guessing fallback is for callers with no cwd-derived answer
-    of their own; mount() already has one, fresh off `resolve_identity` moments earlier in
-    this same pipeline, and it must win untouched when this comes up unseated — recomputing
-    a second, independent cwd guess here could disagree with it."""
-    from src.orchestrator.seats import _seated_house
-    house = await _seated_house(pool, ident.agent_id)
+    `seats.resolve_and_persist_seated_project` — the SAME seat-first check
+    `seats.resolve_project` (the shared resolver the stop hook and census now use) leads
+    with. Deliberately not the full `resolve_project`: its cwd-guessing fallback is for
+    callers with no cwd-derived answer of their own; mount() already has one, fresh off
+    `resolve_identity` moments earlier in this same pipeline, and it must win untouched
+    when this comes up unseated — recomputing a second, independent cwd guess here could
+    disagree with it.
+
+    ALSO PERSISTS the correction onto the Agent object's own `project` assertion (thread
+    6a00e942) — not merely this call's in-memory `ident`/the durable mount-registry row.
+    fleet() reads that assertion directly, never the registry row; without this, a seated
+    session whose cwd didn't independently resolve (the bare seats container root) stayed
+    filed under "?" in fleet() forever, even though this very function already knew the
+    seat's true house and mount()'s own receipt already showed it correctly."""
+    from src.orchestrator.seats import resolve_and_persist_seated_project
+    house = await resolve_and_persist_seated_project(Actions(pool), ident.agent_id)
     if house is not None:
         ident.project = house
 

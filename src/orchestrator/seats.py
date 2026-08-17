@@ -259,6 +259,38 @@ async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     return str(seat["house"]) if seat and seat.get("house") else None
 
 
+async def resolve_and_persist_seated_project(
+    actions: Actions, agent_id: str,
+) -> str | None:
+    """`_seated_house`, but ALSO fixes the gap thread 6a00e942 found: mount()'s own
+    `_resolve_project_seat_first` (and automount()'s twin) mutate the in-memory
+    AgentIdentity's `.project` — which fixes THAT call's own receipt and the durable
+    mount-registry row — but register_agent had already asserted (or skipped
+    asserting, when cwd resolved to nothing) the Agent object's OWN `project` property
+    moments earlier, and nothing ever went back to correct it. fleet() reads THAT
+    assertion directly (`current_assertions WHERE name='project'`), never the registry
+    row — so a seated agent whose cwd didn't independently resolve to its house (the
+    bare seats container root is the canonical case) stayed filed under "?" in every
+    fleet() call forever, even though orient()/mount() (which re-derive live via the
+    seat binding on every call) told the correct story the whole time.
+
+    Writes the SAME source/evidence shape register_agent's own project assertion uses
+    (`src=agent_id`, SELF_DECLARED) so this correction properly SUPERSEDES within that
+    source — one clean compensating write, not a second competing source muddying
+    current_assertions' multi-source set. No-op (returns None, writes nothing) for an
+    unseated agent — an honest 'not seated' stays exactly what register_agent already
+    wrote, never invented here."""
+    house = await _seated_house(actions.pool, agent_id)
+    if house is None:
+        return None
+    agent_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if agent_oid is not None:
+        await actions.assert_property(agent_oid, "project", house, agent_id,
+                                      datetime.now(UTC), _CONF, evidence_class=_EC)
+    return house
+
+
 async def resolve_project(
     pool: asyncpg.Pool, agent_id: str, cwd: str | None,
 ) -> str | None:

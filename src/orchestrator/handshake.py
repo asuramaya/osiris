@@ -547,6 +547,28 @@ async def automount(
     if lived or viewed is not None or (seat_id and attach_token):
         await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                              mint_reason=mint_reason)
+    # IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed) — SAME LAW,
+    # PREVIOUSLY MISSING HERE (thread 6a00e942): mcp_server.mount() already overrides a
+    # SEATED session's project with its seat's own derived house, unconditionally,
+    # after register_agent and before the registry write — this whisper path wrote
+    # `ident.project` straight from resolve_identity's cwd-only guess (honestly None at
+    # a bare seats container root) into `agent_mounts.project` with no such override,
+    # so a background job's first-breath whisper permanently filed a seated agent's own
+    # registry row under no project at all. WORSE, and shared with mount()'s own OLDER
+    # gap (fixed in the same commit): register_agent's OWN project ASSERTION on the
+    # Agent object had already been written moments earlier from the same unresolved
+    # guess, and fleet() reads THAT assertion directly, never the registry row — so a
+    # seated agent stayed filed under "?" in fleet() forever, while orient()/mount()
+    # (re-deriving live via the SAME seat binding on every call) told a different,
+    # correct story. resolve_and_persist_seated_project fixes both halves: the
+    # in-memory ident.project AND the Agent's own project assertion, in one call. Call
+    # AFTER register_agent (the write gate must still see the fresh cwd-derived value,
+    # unclobbered, for a session that isn't seated yet) and before the registry write
+    # below.
+    from src.orchestrator.seats import resolve_and_persist_seated_project
+    seated_house = await resolve_and_persist_seated_project(actions, ident.agent_id)
+    if seated_house is not None:
+        ident.project = seated_house
     # THE SESSION LEDGER, write side: a named binding is filed the moment it exists, so
     # no future registry accident can orphan this sid. Fail-open like the deed.
     try:
