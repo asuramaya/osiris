@@ -3549,6 +3549,32 @@ async def _lineage_holder_with_session(
                                   evidence_class="self_declared")
     return sense
 
+
+async def _lineage_holder_with_unsigned_session(
+    actions: Actions, tmp_path: Path, *, agent_id: str, transcript_bytes: int = 16,
+) -> Path:
+    """Same shape as `_lineage_holder_with_session` — a real, uncompacted transcript the
+    seat's own `session` property points at — but with NO signed testimony anywhere in
+    it: thread ef88e2bb's own specimen, the `resident-unknown` class (an absence of
+    evidence, never a positive finding of a different mind)."""
+    import os
+    import time as _time
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"just harness chrome, nothing signed"}\n'
+                  + b"x" * transcript_bytes)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    return sense
+
 async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -3669,6 +3695,39 @@ async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumab
 
     assert d["status"] == "launched" and "mode" not in d
     assert len(spawned) == 1
+
+
+async def test_launch_harness_lane_refuses_outright_when_resident_is_unknown(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb): a resumable session
+    with NO signed testimony anywhere — an ABSENCE of evidence, not a positive finding of
+    a different mind — must refuse the WHOLE launch, never fall through to the same fresh
+    mint a genuine crossed-registry finding would take. Before this fix both gates nulled
+    `resume` identically and fell through — exactly how ferryman's real, resumable session
+    got a stranger minted over it."""
+    sense = await _lineage_holder_with_unsigned_session(
+        actions, tmp_path, agent_id="agent:unkhold")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:unkhold", manager_agent="agent:hm-unk",
+        worker_handle="Unknown-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/unknown-test")
+
+    async def _boom_spawn(*a: Any, **kw: Any) -> None:
+        raise AssertionError("resident-unknown must refuse the launch, never mint a stranger")
+
+    async def _boom_resume(*a: Any, **kw: Any) -> None:
+        raise AssertionError("resident-unknown must refuse, never resume blind either")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-unk", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom_spawn, resume_spawn=_boom_resume, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-resume-unknown"
+    assert d["session"] == FULL_SID
+    assert d["body_exists"] is False and d["can_receive"] is False
+    assert "claude -p --resume" in d["detail"] and FULL_SID in d["detail"]
 
 
 async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
