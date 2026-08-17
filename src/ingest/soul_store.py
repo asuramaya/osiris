@@ -17,6 +17,7 @@ soul store, just another index.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -158,6 +159,72 @@ class SoulStore:
         if not rows:
             return None
         return "\n".join(r["raw_line"] for r in rows)
+
+    async def raw_lines(self, anchor_sid: str) -> list[str] | None:
+        """The stored lines as a plain list, in order — the SAME shape
+        `Path.read_text().splitlines()` gives the disk-based miner, so a lines-consuming
+        function (distill/models_in, in src.ingest.sessions) works unchanged whether its
+        input came from a file or from here. None when nothing has been ingested (never
+        an empty list — the two are different facts: 'not ingested' vs 'ingested,
+        genuinely empty', though the latter can't happen since ingest_path only ever
+        writes a session that had at least one line)."""
+        rows = await self.pool.fetch(
+            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+            "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
+        if not rows:
+            return None
+        return [r["raw_line"] for r in rows]
+
+    async def mining_view(self, anchor_sid: str) -> list[dict[str, Any]] | None:
+        """THE MINING VIEW (task #51 piece 3, ruling 62dc6397): soul_lines projected into
+        a mineable per-turn shape — {session, turn_index, role, text, tool_calls} — so a
+        miner reads the STORE, never re-parsing raw JSONL by hand. None when nothing has
+        been ingested for this session.
+
+        Skips sidechain/meta/compaction-summary lines and anything that isn't a user/
+        assistant turn — the same discipline distill() (src.ingest.sessions) already
+        applies for the adversary's own text extraction, moved here to the projection
+        layer so OTHER miners (closure, decision) get it for free instead of each
+        re-implementing the same filter. `text` joins every text block (assistant) or
+        the raw string content (user); `tool_calls` is `[{"name", "input"}, ...]` for
+        every tool_use block on that turn, `[]` when none."""
+        rows = await self.pool.fetch(
+            "SELECT line_idx, raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+            "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
+        if not rows:
+            return None
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                d = json.loads(r["raw_line"])
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(d, dict) or d.get("isSidechain") or d.get("isMeta"):
+                continue
+            role = d.get("type")
+            if role not in ("user", "assistant") or d.get("isCompactSummary"):
+                continue
+            content = (d.get("message") or {}).get("content")
+            text_parts: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            if isinstance(content, str):
+                if content.strip():
+                    text_parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text" and block.get("text"):
+                        text_parts.append(block["text"])
+                    elif btype == "tool_use":
+                        tool_calls.append({"name": block.get("name"),
+                                           "input": block.get("input")})
+            out.append({
+                "session": anchor_sid, "turn_index": r["line_idx"], "role": role,
+                "text": "\n".join(text_parts), "tool_calls": tool_calls,
+            })
+        return out
 
     async def _verified_lines(
         self, anchor_sid: str,

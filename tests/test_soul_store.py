@@ -318,3 +318,50 @@ async def test_rematerialize_mcp_tool_wraps_the_same_verb(
     assert out["written"] == str(dest)
     assert out["lines"] == 2
     assert dest.read_text() == "\n".join(lines) + "\n"
+
+
+# --- raw_lines / mining_view (task #51 piece 3) -----------------------------
+
+async def test_raw_lines_matches_splitlines_of_the_source(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _synthetic_lines(4)
+    source = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(source), "ba5eba11")
+    assert await store.raw_lines("ba5eba11") == source.read_text().splitlines()
+
+
+async def test_raw_lines_none_when_never_ingested(store: SoulStore) -> None:
+    assert await store.raw_lines("neverseen1") is None
+
+
+async def test_mining_view_extracts_role_text_and_tool_calls(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = [
+        json.dumps({"type": "user", "message": {"content": "please check the logs"}}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "thinking", "thinking": "let me look"},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "text", "text": "found it"},
+        ]}}),
+        json.dumps({"type": "user", "isSidechain": True,
+                   "message": {"content": "a subagent's own turn — out of scope"}}),
+        json.dumps({"type": "user", "isCompactSummary": True,
+                   "message": {"content": "the whole history replayed"}}),
+    ]
+    source = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(source), "0b5e7ab1")
+    view = await store.mining_view("0b5e7ab1")
+    assert view is not None
+    assert len(view) == 2  # sidechain + compaction-summary skipped
+    assert view[0] == {"session": "0b5e7ab1", "turn_index": 0, "role": "user",
+                       "text": "please check the logs", "tool_calls": []}
+    assert view[1]["role"] == "assistant"
+    assert view[1]["turn_index"] == 1
+    assert view[1]["text"] == "found it"  # thinking block skipped, matching distill()
+    assert view[1]["tool_calls"] == [{"name": "Bash", "input": {"command": "ls"}}]
+
+
+async def test_mining_view_none_when_never_ingested(store: SoulStore) -> None:
+    assert await store.mining_view("neverseen2") is None

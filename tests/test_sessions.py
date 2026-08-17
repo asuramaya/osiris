@@ -15,6 +15,8 @@ from typing import Any
 from src.actions.core import Actions
 from src.ingest.sessions import (
     SessionYield,
+    adversary_pass,
+    adversary_pass_from_store,
     credential_shaped,
     distill,
     emit_yield,
@@ -22,6 +24,7 @@ from src.ingest.sessions import (
     redact,
     sense_sessions_tick,
 )
+from src.ingest.soul_store import SoulStore
 from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 from src.orchestrator.compositions import run_composition, seed_default_compositions
 from src.parsers.base import EvidenceClass
@@ -83,6 +86,83 @@ def _dialogue(operator: str, claude: str) -> list[str]:
         _line("assistant", [{"type": "thinking", "thinking": "private and bulky"},
                             {"type": "text", "text": claude}]),
     ]
+
+
+# --- the soul store's own miner (task #51 piece 3) — reads soul_lines instead of disk -----
+
+async def test_adversary_pass_from_store_matches_the_disk_path_byte_for_byte(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE CONTRACT TEST (piece 3's own acceptance bar): mine the SAME session content
+    twice — once via adversary_pass against the real file, once via
+    adversary_pass_from_store against the store ALONE after the file is gone — and
+    prove they are the same act, not merely similar-looking output. The prompt the LLM
+    sees must be BYTE-IDENTICAL (proves distill() over store-sourced lines matches
+    distill() over disk-sourced lines exactly); the resulting yield must land on the
+    exact same Thread (proves the closure candidate itself, not just its shape, is
+    equivalent) — the sha256/hash-chain proof piece 1/2 already gave for the BYTES
+    extends here to the MINING that reads them."""
+    dialogue = _dialogue(
+        "we agreed the soul store's own miner must read soul_lines, never the disk, so "
+        "a session survives its own transcript being deleted. " * 2,
+        "recorded that; the mining view projects turn_index/role/text/tool_calls, and "
+        "the adversary itself now has a store-backed twin. " * 2,
+    )
+    lines = dialogue
+    proj = tmp_path / "-home-x-code-testrepo"
+    proj.mkdir()
+    disk_path = proj / "diskonly01-session.jsonl"
+    disk_path.write_text("\n".join(lines) + "\n")
+
+    # ingest into the store BEFORE the disk pass, exactly as a live pipeline would —
+    # the store and the disk both hold the same content at this point
+    await SoulStore(actions.pool).ingest_path(str(disk_path), "diskonly01")
+
+    payload = {"threads_opened": [{"summary": "the soul store's own miner reads the store",
+                                   "class": "commitment"}],
+              "threads_resolved": []}
+    llm_disk = FakeLLM(payload)
+    disk_report = await adversary_pass(actions, disk_path, llm_disk)
+
+    disk_path.unlink()  # THE SOURCE IS GONE — the exact scenario piece 3 exists for
+    assert not disk_path.exists()
+
+    llm_store = FakeLLM(payload)
+    store_report = await adversary_pass_from_store(actions, "diskonly01", llm_store)
+
+    assert llm_disk.prompts == llm_store.prompts  # byte-identical prompt, not merely equal shape
+    assert disk_report["proposed"] == store_report["proposed"] == 1
+    rows = await actions.pool.fetch(
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Thread' AND a.name='summary' "
+        "AND a.value #>> '{}' = 'the soul store''s own miner reads the store'")
+    assert len(rows) == 1  # ONE candidate, not two — the same closure candidate either way
+
+
+async def test_adversary_pass_from_store_errors_when_nothing_ingested(
+    actions: Actions,
+) -> None:
+    report = await adversary_pass_from_store(actions, "neverseen0", FakeLLM({}))
+    assert report == {"error": "no soul_lines ingested for 'neverseen0' — nothing to mine"}
+
+
+async def test_adversary_pass_from_store_skips_a_wake_spawn(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The store-backed path must filter Osiris's own alarm-clock chatter exactly like
+    the disk path — _is_wake_spawn_lines is the shared fingerprint, not a re-guess."""
+    from src.ingest.sessions import _WAKE_FIRST_TURN
+
+    lines = [
+        _line("user", _WAKE_FIRST_TURN + " — three unread, check your desk"),
+        *_dialogue("routine wake chatter, nothing anyone asked for. " * 3,
+                  "acknowledged the wake and did the mechanical thing. " * 3),
+    ]
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join(lines) + "\n")
+    await SoulStore(actions.pool).ingest_path(str(p), "wakespawn1")
+    report = await adversary_pass_from_store(actions, "wakespawn1", FakeLLM({}))
+    assert report.get("skipped_wake") == 1
 
 
 # --- redaction (ruling f8f22e14) -------------------------------------------------------
