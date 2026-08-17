@@ -699,6 +699,27 @@ async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
     return int(report["minted"])
 
 
+async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
+    """The tree-ingest census's scheduled leg (thread 5126, operator ruling df646654/
+    fe8ec7ff) — a no-op unless osiris_tree_ingest_alarm_enabled (the kill switch), same
+    shape as closure_miner_heartbeat/phantom_heal_heartbeat: the flag gate and the acting
+    logic both live in tree_ingest.uningested_trees_alarm_tick, never here. It never
+    ingests anything itself — it mails the owning Seat a graded 'ask'; ingest_project stays
+    that seat's own deliberate second call. A DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.tree_ingest import uningested_trees_alarm_tick
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await uningested_trees_alarm_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("tree ingest alarm heartbeat failed: %r", exc)
+        return 0
+    alarmed = len(report.get("alarmed") or [])
+    if alarmed:
+        _log.info("tree ingest alarm heartbeat: %s", report)
+    return alarmed
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -856,6 +877,14 @@ class WorkerSettings:
         # contention with them.
         cron(watched(backfill_decided_in_heartbeat, every=600), minute=set(range(1, 60, 10)),
              second={50}, timeout=300, run_at_startup=True),
+        # the tree-ingest census's scheduled leg (thread 5126, operator ruling df646654/
+        # fe8ec7ff): find un-ingested trees and mail the OWNING SEAT, on the same 15-min
+        # cadence class as reap_orphans/fleet_reconcile_heartbeat/closure_miner_heartbeat/
+        # phantom_heal_heartbeat — a no-op unless osiris_tree_ingest_alarm_enabled (the kill
+        # switch). It never ingests; it only alarms. Offset from all four siblings so none
+        # contend for CPU at the same wall-clock second.
+        cron(watched(tree_ingest_alarm_heartbeat, every=900), minute={1, 16, 31, 46},
+             second={15}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
