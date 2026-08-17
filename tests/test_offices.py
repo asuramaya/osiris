@@ -706,3 +706,62 @@ async def test_correct_own_pin_value_propagates_a_missing_key_refusal(
     out = await correct_own_pin_value(
         actions.pool, "agent:cov5nokey", "project", "x", reason="x", office_root=tmp_path)
     assert "not declared" in out["error"]
+
+
+# ═══ _pin_backup_path (obligation 27ae4f89) — a REPO-side pin's backup must never land
+# inside the tracked git working tree; a SEAT-OFFICE pin's backup is unaffected. ═══
+
+def test_pin_backup_stays_beside_the_file_for_a_plain_office(tmp_path: Path) -> None:
+    """No .git anywhere near the pin (the seat-office case, ruling ed5f5ce2) — unchanged
+    behavior, backup lands right next to the pin, same as before this fix."""
+    office = tmp_path / "plainoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('seat = "plain"\n')
+
+    write_pin_additions(str(office), {"project": "cultural-infrastructure"})
+    assert (office / ".osiris.bak").exists()
+    assert not (office / ".git").exists()
+
+
+def test_pin_backup_goes_inside_dot_git_for_a_real_repo_root(tmp_path: Path) -> None:
+    """A REPO pin sitting inside an ordinary (non-worktree) git repo root: the backup must
+    land inside .git/, never beside the tracked .osiris file."""
+    repo = tmp_path / "somerepo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".osiris").write_text('project = "tony"\n')
+
+    out = correct_pin_value(str(repo), "project", "cultural-infrastructure", reason="x")
+    assert out["written"] is True
+    assert not (repo / ".osiris.bak").exists()          # never beside the tracked file
+    backup = repo / ".git" / "osiris-pin.bak"
+    assert backup.is_file()
+    assert backup.read_text() == 'project = "tony"\n'
+
+    reverted = revert_pin_write(str(repo))
+    assert reverted["reverted"] is True
+    assert (repo / ".osiris").read_text() == 'project = "tony"\n'
+
+
+def test_pin_backup_resolves_a_worktree_gitlink_to_its_own_private_gitdir(
+    tmp_path: Path,
+) -> None:
+    """A worktree checkout's `.git` is a FILE (a gitlink: "gitdir: <real path>"), not a
+    directory — the backup must resolve through it to the worktree's own private gitdir,
+    never fail, and never land beside the tracked .osiris file either."""
+    real_gitdir = tmp_path / "mainrepo" / ".git" / "worktrees" / "wt1"
+    real_gitdir.mkdir(parents=True)
+    worktree = tmp_path / "wt1-checkout"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {real_gitdir}\n")
+    (worktree / ".osiris").write_text('project = "tony"\n')
+
+    out = correct_pin_value(str(worktree), "project", "cultural-infrastructure", reason="x")
+    assert out["written"] is True
+    assert not (worktree / ".osiris.bak").exists()
+    backup = real_gitdir / "osiris-pin.bak"
+    assert backup.is_file()
+    assert backup.read_text() == 'project = "tony"\n'
+
+    reverted = revert_pin_write(str(worktree))
+    assert reverted["reverted"] is True
+    assert (worktree / ".osiris").read_text() == 'project = "tony"\n'
