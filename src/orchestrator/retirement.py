@@ -54,6 +54,42 @@ async def list_assertions(actions: Actions, *, ref: str, name: str) -> dict[str,
     }
 
 
+async def stale_current_flags(actions: Actions, *, limit: int = 50) -> dict[str, Any]:
+    """THE READ DOOR (thread 09bde57e, Sekhmet's own blocker named — no read door for
+    assertions/supersedes through the composer, hand SQL off the table): every row where
+    `is_current=true` (migration 0047's maintained flag) YET a real `supersedes` FK already
+    points at it from another assertion — the exact anomaly khepri's own specimen (seat:
+    ddafff44, assertion 2676719) surfaced live: current_assertions kept listing a row as
+    current that a genuine successor had already superseded, because the flip (assert_
+    property's own same-source path, or supersede_assertion's cross-source one — both flip
+    `is_current` in the SAME transaction as the INSERT, per 0047's own design) never landed
+    for this specific row. Read-only, bounded (`limit` caps the sample; `count` is always
+    the true total, never capped, so a caller sees the real population size even from a
+    small sample)."""
+    pool = actions.pool
+    count = await pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+        "WHERE a.is_current")
+    rows = await pool.fetch(
+        "SELECT a.id AS stale_id, a.object_id, a.name, a.value #>> '{}' AS value, "
+        " a.source_id, a.observed_at, "
+        " s.id AS superseding_id, s.source_id AS superseding_source, "
+        " s.observed_at AS superseding_observed_at "
+        "FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+        "WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1", limit)
+    return {
+        "count": count,
+        "sample": [
+            {"stale_id": r["stale_id"], "object_id": str(r["object_id"]), "name": r["name"],
+             "value": r["value"], "source": r["source_id"],
+             "observed_at": r["observed_at"].isoformat(),
+             "superseding_id": r["superseding_id"], "superseding_source": r["superseding_source"],
+             "superseding_observed_at": r["superseding_observed_at"].isoformat()}
+            for r in rows
+        ],
+    }
+
+
 async def retire_assertion(
     actions: Actions, *, ref: str, name: str, superseded_id: int, value: Any,
     because: str, actor: str,
