@@ -84,6 +84,43 @@ async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a) == 1
 
 
+# --- _resolve_or_mint_project refuses a degenerate bare label (thread 05793d4a — repo:?,
+# minted 2026-07-18, 18 live links, no genuine identity: task #107's own capture.py
+# _validate_repo_name was never actually wired into this path). ------------------------
+
+async def test_register_agent_never_mints_a_bare_question_mark_project(
+    actions: Actions,
+) -> None:
+    ident = resolve_identity(cwd="/w/?", session="sess-qm", model="claude-fable-5")
+    assert ident.project == "?"  # confirms the fixture actually exercises the degenerate case
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    # the Agent's own project property still gets asserted (unaffected scope decision) —
+    # only the SoftwareProject MINT and its works_in edge are refused
+    project_prop = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='project'", a)
+    assert project_prop == "?"
+    minted = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:?'")
+    assert minted is None, "a degenerate '?' canonical was minted"
+    works_in = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a)
+    assert works_in == 0
+
+
+async def test_register_agent_refuses_to_reuse_an_existing_bare_question_mark_project(
+    actions: Actions,
+) -> None:
+    """A pre-existing repo:? (a fossil from before this guard existed) must not gain a
+    fresh works_in edge either — refusing new mints while still linking to an old
+    garbage object would just keep the pollution growing by a different door."""
+    await actions.create_or_find_object("SoftwareProject", "repo:?", "test")
+    ident = resolve_identity(cwd="/w/?", session="sess-qm2", model="claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    works_in = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a)
+    assert works_in == 0
+
+
 # --- register_agent must never let a routine mount clobber a DECLARED rename (#137/#152,
 # Thoth DM 3801) — measured live: repo:xxit's declared "handlingtheloop" (decision 8766acd7)
 # was silently reverted to "xxit" by five ordinary metron/deckard mounts, because this write
