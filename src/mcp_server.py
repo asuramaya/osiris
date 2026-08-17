@@ -3898,6 +3898,36 @@ async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def reconcile_seat_identity_third_party(
+    seat_id: str, because: str, agent_id: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING of reconcile_seat_identity (decision f78b41c8's own gap:
+    mechanism 3 shipped self-service-only, and #157's population — four OTHER seats' stale
+    house/project rows — cannot be reached by a verb that always resolves its target from
+    the caller's own held seat). NOT self-scoped, on purpose — mirrors resync_seat_house_
+    third_party's own precedent exactly: `seat_id`/`agent_id` name ANY seat/agent, never
+    only your own; `because` is REQUIRED (a correction with no stated reason is the silent
+    overwrite 719ed5b1 rules against, not a fix); does NOT check caller authority beyond
+    being mounted — same as correct_agent_house and resync_seat_house_third_party, callers
+    are responsible for the authorization this docstring cannot enforce.
+
+    OTHERWISE IDENTICAL to the self-service verb — same heal_contradicting_property
+    mechanism, same two properties (house/project, never generalised), same reversibility,
+    the SAME graph writes for the same row. `agent_id` omitted heals `house` alone."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a correction is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.identity_heal import (
+        reconcile_seat_identity_third_party as _reconcile_third_party,
+    )
+    return await _reconcile_third_party(
+        Actions(await _pool_get()), seat_id=seat_id, agent_id=agent_id, because=because,
+        actor=ident.agent_id)
+
+
+@mcp.tool()
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
     """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
     legitimate write left after house became a live derivation off the managed_by chain
