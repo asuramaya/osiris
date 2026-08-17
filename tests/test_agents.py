@@ -858,11 +858,13 @@ def test_resolve_identity_never_confesses_an_explicit_project_label_override(
     assert ident.project_pin_missing is False
 
 
-def test_project_pin_banner_fires_on_all_three_no_project_shapes(tmp_path: Path) -> None:
-    """Task #128 wave 2: WARN, never refuse, on all three ways a session can end up
-    resolving its project from a basename guess — three DISTINCT messages, since b3a1f987
-    found each needs its own repair. Silent only when a real pin was found and used, or for
-    the bare seat-office root carve-out (ruling 577988ed)."""
+def test_project_pin_banner_fires_only_on_the_two_real_errors(tmp_path: Path) -> None:
+    """Task #128 wave 2, NARROWED by ruling fe8ec7ff mechanism (1): the operator's own
+    standard is that an unset project is a VALID state, not an error — so only the two
+    genuinely unrepairable shapes (cwd gone, TOML broken) still warn here. The other two
+    (no pin anywhere, pin found but never declares project) moved to `project_pin_state`,
+    covered separately below. Silent when a real pin was found and used, or for the bare
+    seat-office root carve-out (ruling 577988ed)."""
     from src.orchestrator.agents import project_pin_banner
 
     clean = AgentIdentity(agent_id="agent:clean1", session="clean1", project="fine",
@@ -882,26 +884,53 @@ def test_project_pin_banner_fires_on_all_three_no_project_shapes(tmp_path: Path)
     found_unset = AgentIdentity(agent_id="agent:heinrich1", session="heinrich1",
                                 project="heinrich", model=None, cwd="/x/heinrich",
                                 project_pin_path="/x/heinrich/.osiris")
-    banner = project_pin_banner(found_unset)
-    assert banner is not None
-    assert "/x/heinrich/.osiris" in banner
-    assert "NEVER DECLARES" in banner
-    assert "heinrich" in banner
-    assert "TOMLDecodeError" not in banner  # not the broken-file message
+    assert project_pin_banner(found_unset) is None  # unset is valid, not a banner anymore
 
     missing = AgentIdentity(agent_id="agent:tantra1", session="tantra1", project="tantra",
                             model=None, cwd="/x/tantra", project_pin_missing=True)
-    banner = project_pin_banner(missing)
-    assert banner is not None
-    assert "/x/tantra" in banner
-    assert "NO .osiris PIN ANYWHERE" in banner
-    assert "tantra" in banner
+    assert project_pin_banner(missing) is None  # same — no pin at all is also just unset
 
     # bare seat-office root carve-out (577988ed): resolve_identity never sets
     # project_pin_missing here even though nothing is pinned — the banner must stay silent
     bare_root = AgentIdentity(agent_id="agent:anon1", session="anon1", project=None,
                               model=None, cwd="/home/x/.osiris/seats")
     assert project_pin_banner(bare_root) is None
+
+
+def test_project_pin_state_reports_the_two_unset_shapes_calmly(tmp_path: Path) -> None:
+    """The two shapes carved OUT of project_pin_banner by ruling fe8ec7ff: unset is a valid
+    state (general-purpose / not yet named), never an alarm — no `⚠`, no "BASENAME GUESS"
+    framing. Silent for everything project_pin_banner itself still owns (real errors) and
+    for a clean pin."""
+    from src.orchestrator.agents import project_pin_state
+
+    clean = AgentIdentity(agent_id="agent:clean2", session="clean2", project="fine",
+                          model=None, cwd="/x")
+    assert project_pin_state(clean) is None
+
+    broken = AgentIdentity(agent_id="agent:broken2", session="broken2", project="redmonth",
+                           model=None, cwd="/x/redmonth",
+                           project_pin_error="TOMLDecodeError: expected '='",
+                           project_pin_path="/x/redmonth/.osiris")
+    assert project_pin_state(broken) is None  # a real error, project_pin_banner's own case
+
+    found_unset = AgentIdentity(agent_id="agent:heinrich2", session="heinrich2",
+                                project="heinrich", model=None, cwd="/x/heinrich",
+                                project_pin_path="/x/heinrich/.osiris")
+    state = project_pin_state(found_unset)
+    assert state is not None
+    assert "⚠" not in state
+    assert "BASENAME GUESS" not in state
+    assert "valid state, not an error" in state
+    assert "/x/heinrich/.osiris" in state
+
+    missing = AgentIdentity(agent_id="agent:tantra2", session="tantra2", project="tantra",
+                            model=None, cwd="/x/tantra", project_pin_missing=True)
+    state = project_pin_state(missing)
+    assert state is not None
+    assert "⚠" not in state
+    assert "valid state, not an error" in state
+    assert "/x/tantra" in state
 
 
 def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(

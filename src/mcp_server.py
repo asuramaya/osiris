@@ -64,6 +64,7 @@ from src.orchestrator.agents import (
     misfiled_by_lineage,
     nearest_handoff_ancestor,
     project_pin_banner,
+    project_pin_state,
     read_project_model,
     read_project_pin,
     register_agent,
@@ -2167,7 +2168,17 @@ async def mount(
         expected=await _expected_model(pool, cwd, ident.project),  # repo intent wins
         anchored=ident.model_method == "job_dir",   # only a true anchor confesses a swap
         deliberate=ident.model_deliberate))         # a /model on the record is never a sin
-    pin_warn = project_pin_banner(ident)  # no pin / unparseable / found-but-unset — agents.py
+    pin_warn = project_pin_banner(ident)  # cwd-missing / unparseable — real errors, agents.py
+    pin_heal: dict[str, Any] | None = None
+    if not pin_warn and ident.cwd:
+        from src.orchestrator.offices import self_heal_project_pin
+        heal = await self_heal_project_pin(pool, ident.agent_id, ident.cwd)
+        if heal["state"] == "self-healed":
+            pin_heal = heal
+        elif heal["state"] == "unset":
+            pin_state = project_pin_state(ident)  # calm state, not an error — agents.py
+            if pin_state:
+                pin_heal = {"state": "unset", "note": pin_state}
     seat = await handshake._seat_of(Actions(pool), ident.agent_id)
     # co-agent awareness at ARRIVAL (Deckard XXVI, msg 258): a live sibling in your own
     # repo is the one blindness that costs unrecoverable work (a stomped commit)
@@ -2207,6 +2218,7 @@ async def mount(
                     f"{unread} unread — call inbox()") if unread else "none",
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
            **({"project_pin_error": pin_warn} if pin_warn else {}),
+           **({"project_pin": pin_heal} if pin_heal else {}),
            **({"write_attribution_disagreement": wa_warn} if wa_warn else {}),
            **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
            "note": "linked — writes now attributed to you; call orient() next"}

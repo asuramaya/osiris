@@ -674,14 +674,15 @@ async def test_mount_confesses_honestly_when_neither_side_is_a_real_office(
         srv._pool = saved_pool
 
 
-async def test_mount_warns_on_a_valid_pin_that_never_sets_project(
+async def test_mount_reports_a_valid_pin_that_never_sets_project_as_a_calm_state(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The heinrich boundary case (Sekhmet's design, e3f4f159; task #128 wave 2, 2026-08-03),
     exercised through the real mount() tool: a VALID .osiris file that simply never
-    declares `project` is a NO DECLARATION, never a couldn't-read — but wave 2 now WARNS
-    on it too (a check keyed on "has a pin" would never catch this shape), with a message
-    distinct from the broken-file one."""
+    declares `project` is a NO DECLARATION, never a couldn't-read. Ruling fe8ec7ff mechanism
+    (1), operator df646654: unset is a VALID state, not an error — mount() first tries
+    `self_heal_project_pin` (no seat held here, so it correctly declines) and then reports
+    the calm `project_pin` state instead of the old alarm-shaped `project_pin_error`."""
     from src import mcp_server as srv
 
     heinrich = tmp_path / "heinrich"
@@ -692,19 +693,22 @@ async def test_mount_warns_on_a_valid_pin_that_never_sets_project(
     srv._pool = actions.pool
     try:
         out = await srv.mount(cwd=str(heinrich), job_dir=job_dir)
-        warn = out.get("project_pin_error")
-        assert warn is not None, f"mount() never warned on the found-but-unset pin: {out}"
-        assert "NEVER DECLARES" in warn and "TOMLDecodeError" not in warn
+        assert out.get("project_pin_error") is None  # no longer an error
+        pin = out.get("project_pin")
+        assert pin is not None, f"mount() never reported the unset pin state: {out}"
+        assert pin["state"] == "unset"
+        assert "valid state, not an error" in pin["note"]
+        assert "⚠" not in pin["note"]
     finally:
         srv._pool = saved_pool
 
 
-async def test_mount_warns_on_no_osiris_pin_anywhere(
+async def test_mount_reports_no_osiris_pin_anywhere_as_a_calm_state(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The third wave-2 shape, exercised through mount(): genuinely nothing ever declared —
-    the ordinary 29-name UNPINNED-LUCKY case — now warns too, distinct wording from both
-    the broken-file and found-but-unset messages."""
+    """The other wave-2 shape, exercised through mount(): genuinely nothing ever declared —
+    the ordinary 29-name UNPINNED-LUCKY case. Same fe8ec7ff mechanism: unset is valid, and
+    with no seat held self_heal_project_pin declines, so mount() reports the calm state."""
     from src import mcp_server as srv
 
     repo = tmp_path / "xxit"
@@ -715,9 +719,47 @@ async def test_mount_warns_on_no_osiris_pin_anywhere(
     try:
         out = await srv.mount(cwd=str(repo), job_dir=job_dir)
         assert out["project"] == "xxit"  # basename fallback, unbroken
-        warn = out.get("project_pin_error")
-        assert warn is not None, f"mount() never warned on the missing pin: {out}"
-        assert "NO .osiris PIN ANYWHERE" in warn and "xxit" in warn
+        assert out.get("project_pin_error") is None
+        pin = out.get("project_pin")
+        assert pin is not None, f"mount() never reported the unset pin state: {out}"
+        assert pin["state"] == "unset"
+        assert "xxit" in pin["note"]
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mount_self_heals_project_pin_when_seat_signals_agree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The write half of ruling fe8ec7ff mechanism (1), end to end through mount(): a held
+    seat whose governs/works_in/anchor-basename all point at the same project gets that
+    project written into its own pin on its own next mount — no human blesses it."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.charter import set_charter
+
+    office = tmp_path / "dealer-to-fb"
+    office.mkdir()
+    (office / ".osiris").write_text('model = "claude-sonnet-5"\n')
+    await actions.create_or_find_object("SoftwareProject", "repo:dealer-to-fb", "test")
+    job_dir = str(tmp_path / "jobs" / "heal01")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        claimed = await claim_name(actions, "agent:heal01", "Heal01", source="test")
+        await set_charter(actions, claimed["seat_id"], ["dealer-to-fb"], actor="agent:heal01")
+        await actions.create_link(
+            await actions.create_or_find_object("Agent", "agent:heal01", "agent:heal01"),
+            await actions.create_or_find_object("SoftwareProject", "repo:dealer-to-fb", "test"),
+            "works_in", "agent:heal01", datetime.now(UTC), 0.9)
+
+        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+        pin = out.get("project_pin")
+        assert pin is not None, f"mount() never reported the self-heal: {out}"
+        assert pin["state"] == "self-healed"
+        assert pin["project"] == "dealer-to-fb"
+        assert 'project = "dealer-to-fb"' in (office / ".osiris").read_text()
     finally:
         srv._pool = saved_pool
 
