@@ -734,12 +734,17 @@ async def find_agent_fold_candidates(
         "ORDER BY c.score DESC, c.id LIMIT 100")]
     # labels the census can no longer resolve (folded meanwhile) would confuse the tray —
     # they are stamped by fold_agent itself, so pending here is always actionable
+    from src.orchestrator.succession_repair import unresumed_heads
+    succession = await unresumed_heads(pool)
     return {"examined": len(anons), "proposed": proposed, "pending": pending,
-            "seatless": seatless,
+            "seatless": seatless, "unresumed_heads": succession,
             "note": "proposals only — judge each with resolve_fold_candidate (merged | "
                     "rejected); a rejection is remembered and never re-proposed; "
                     "`seatless` counts anons in rooms whose charter names NO seat — "
-                    "visitor-gate demotion candidates, not folds"}
+                    "visitor-gate demotion candidates, not folds. `unresumed_heads` is a "
+                    "SEPARATE, NON-FOLD class (thread ef88e2bb's aftermath, module docstring "
+                    "has the full reasoning) — never resolved via resolve_fold_candidate, a "
+                    "human judgment call every time."}
 
 
 async def resolve_fold_candidate(

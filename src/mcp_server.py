@@ -4811,7 +4811,8 @@ async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
     body; restart-mints: an anonymous mount in a named lineage's own home) and queue them
     as review-gated merge candidates. PROPOSALS ONLY — nothing folds. Returns the pending
     tray (score-ranked, each with its cited signals); judge each with resolve_fold.
-    Rejected pairs are remembered and never re-proposed."""
+    Rejected pairs are remembered and never re-proposed. Also carries `unresumed_heads`
+    (ef88e2bb) — a SEPARATE non-fold class, never resolve_fold'd — a human call each time."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
