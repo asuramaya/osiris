@@ -488,7 +488,8 @@ async def automount(
     # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29) —
     # fail-open inside identity_reading: a store outage degrades the whisper to an
     # unobserved-model mount, it never blocks the greeting
-    reading = await identity_reading(actions.pool, cwd=cwd, job_dir=job_dir, root=root)
+    reading = await identity_reading(actions.pool, cwd=cwd, job_dir=job_dir, root=root,
+                                     transcript_path=transcript_path)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label,
                              store_reading=reading)
     if bound is not None:
