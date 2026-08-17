@@ -2048,6 +2048,64 @@ def test_rank_open_threads_owner_match_is_lineage_aware() -> None:
     ]
 
 
+def test_rank_open_threads_string_parse_misses_a_multi_hop_lineage() -> None:
+    """The gap `owner_lineage_roots` closes (decision — Thoth's dispatch, measured live
+    2026-08-16: 18 of 71 distinct open-thread owners disagreed, every one a real lineage).
+    `_generation()` strips only the LAST `-<roman>` segment: for a multi-hop id like
+    `agent:x-g40-g40-vii` (Thoth's own real shape across this reign), the string parse
+    lands on `agent:x-g40-g40`, a DIFFERENT string than an earlier generation's own
+    string-parsed root (`agent:x-g40` for `agent:x-g40-iii`) — even though both are, in
+    truth, the exact same lineage. Ownership never hides a row (every claim still shows,
+    RANKING is the only effect) — so without `owner_roots`, the earlier-generation claim
+    still shows but sorts BELOW a genuinely unrelated claim, exactly as if it belonged to
+    a stranger — the WITHOUT-fix baseline this fix corrects (proven by the sibling test
+    using a real owner_roots map, where it sorts back above)."""
+    from src.mcp_server import _rank_open_threads
+
+    me = frozenset({"agent:x-g40-g40-vii"})
+    rows = [
+        {"summary": "a-strangers-claim", "kind": "obligation", "owner": "agent:unrelated"},
+        {"summary": "mine-across-the-hop", "kind": "obligation", "owner": "agent:x-g40-iii"},
+    ]
+    shown, _ = _rank_open_threads(rows, me)  # no owner_roots — string-parse fallback
+    assert [r["summary"] for r in shown] == ["a-strangers-claim", "mine-across-the-hop"], (
+        "under the OLD string-parse, the multi-hop claim ranks no higher than a stranger's")
+
+
+async def test_owner_lineage_roots_resolves_a_multi_hop_lineage_the_string_parse_misses(
+    actions: Actions,
+) -> None:
+    """The fix, proven end to end: with `owner_lineage_roots`'s own edge-walked map
+    supplied, the exact same multi-hop specimen the sibling test shows failing without
+    it now ranks correctly as mine to act."""
+    from src.mcp_server import _rank_open_threads
+    from src.orchestrator.compositions import owner_lineage_roots
+
+    now = datetime.now(UTC)
+    for heir, predecessor in (
+        ("agent:x-g40-iii", "agent:x-g40-ii"), ("agent:x-g40-ii", "agent:x-g40"),
+        ("agent:x-g40", "agent:x"), ("agent:x-g40-g40", "agent:x-g40"),
+        ("agent:x-g40-g40-vii", "agent:x-g40-g40"),
+    ):
+        oid = await actions.create_or_find_object("Agent", heir, heir)
+        await actions.assert_property(oid, "succeeded_from", predecessor, heir, now, 0.9,
+                                      evidence_class="direct_observation")
+
+    me = frozenset({"agent:x-g40-g40-vii"})
+    rows = [
+        {"summary": "a-strangers-claim", "kind": "obligation", "owner": "agent:unrelated"},
+        {"summary": "mine-across-the-hop", "kind": "obligation", "owner": "agent:x-g40-iii"},
+    ]
+    owner_roots = await owner_lineage_roots(
+        actions.pool, {"agent:x-g40-iii", "agent:unrelated"} | me)
+    assert owner_roots["agent:x-g40-iii"] == "agent:x"
+    assert owner_roots["agent:x-g40-g40-vii"] == "agent:x"
+    shown, _ = _rank_open_threads(rows, me, owner_roots)
+    assert [r["summary"] for r in shown] == ["mine-across-the-hop", "a-strangers-claim"], (
+        "with the edge-walked roots, the multi-hop claim now ranks as MINE, above a "
+        "genuine stranger's — the fix, not just the absence of a crash")
+
+
 async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
     """End to end: open_thread(owner='operator') stamps the property; the wall renders the
     tag and sinks the waiting-on-human duty below an unowned one for any reader; the owner

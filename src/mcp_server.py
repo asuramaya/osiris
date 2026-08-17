@@ -2559,7 +2559,9 @@ async def _project_briefing(
     if not isinstance(items, dict):  # unseeded / error — never crash orient, just show empty
         items = {}
     wall, echoes = await _open_thread_wall(pool, proj)
-    shown, more = _rank_open_threads(wall, me)
+    owner_roots = await comp.owner_lineage_roots(
+        pool, {str(o) for r in wall if (o := r.get("owner"))} | me)
+    shown, more = _rank_open_threads(wall, me, owner_roots)
     tensions = [dict(r) for r in (items.get("tensions") or []) if r.get("pole_a")]
     if tensions:
         # TWO MINDS LEAN APART (task #53): the table shows one winner per property, but a
@@ -5771,11 +5773,13 @@ async def _retire_stale_handoffs(
     edge-walk (decision 61cb1f02: this carried the identical string-parse defect
     ack_handoff's own lineage guard did, same fix applied here for the same reason) —
     except `keep`. Cross-lineage records are NEVER touched: Khnum's handoff is never
-    retired by a Sekhmet-actor's backfill run. `rank_open_threads.whose_move` still
-    compares `_generation()` STRING roots for its own, unrelated "mine to act" ranking
-    question — a display-ordering concern on a documented PURE function, not this
-    function's own retirement guard; left alone deliberately, not silently inconsistent
-    (decision — see the sibling check this fix was built alongside).
+    retired by a Sekhmet-actor's backfill run. `rank_open_threads.whose_move` carried the
+    SAME `_generation()` string-parse defect for its own "mine to act" ranking question —
+    measured live 2026-08-16 (18 of 71 distinct open-thread owners disagreed between the
+    string parse and the edge walk, every one a real lineage), then fixed the same way:
+    `owner_roots` (precomputed once per caller via `owner_lineage_roots`, never per row —
+    the function itself stays synchronous and pure) now wins over the string-parse
+    fallback (decision — see the sibling build this fix was made alongside).
 
     Resolves each candidate's CURRENT is_handoff value the same way every other property-
     read in this codebase does (confidence DESC, observed_at DESC LIMIT 1) rather than a
