@@ -1328,6 +1328,90 @@ async def test_mount_never_refuses_a_session_from_the_bare_root(
         "AND value #>> '{}' = 'seats'") == 0
 
 
+async def test_mount_from_bare_root_writes_the_seated_house_to_the_registry(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """thread 6a00e942: a SEATED agent mounting from the bare seats container root —
+    fleet() reads agent_mounts.project directly, orient() re-derives via the seat
+    binding on every call; the two disagreed because the WRITTEN registry row never
+    got the seat-first resolution mount()'s own in-memory ident.project already has.
+    The registry must carry the SAME answer orient() would give, not a frozen '?'."""
+    from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    seat = await ensure_seat(actions, house="osiris", handle="Barerootseat", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bare0001",
+                      source="test")
+    job_dir = str(tmp_path / "jobs" / "bare0001")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:bare0001",
+                            project=None, cwd=str(fake_root), model=None,
+                            session_key="k:bareroot")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out["agent"] == "agent:bare0001"
+    assert out["project"] == "osiris", "the receipt itself must show the seated house"
+    rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert rec is not None
+    assert rec.project == "osiris", (
+        "the REGISTRY row must carry the seated house too — fleet() reads this column "
+        "directly and must never file a seated agent under '?'")
+    # THE ACTUAL REPORTED SYMPTOM: fleet() reads the AGENT's own current_assertions
+    # 'project' (not agent_mounts.project) — this is the field register_agent asserted
+    # BEFORE _resolve_project_seat_first's override, so it must be checked separately.
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        roster = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+    entry = next((r for r in roster["registered"] if r["agent"] == "agent:bare0001"), None)
+    assert entry is not None
+    assert entry["project"] == "osiris", (
+        f"fleet() must file the seated agent under its house, never '?': {entry}")
+
+
+async def test_mount_from_bare_root_first_ever_mount_of_a_seated_agent(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of 6a00e942's specimen: no PRIOR registry row at all (a genuinely
+    fresh job_dir, the exact shape a background job's first call has) for an agent that
+    already holds a seat — the row this call MINTS must carry the seated house too, not
+    just a later re-mount of an already-existing row."""
+    from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    seat = await ensure_seat(actions, house="osiris", handle="Freshbareseat", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:fresh0001",
+                      source="test")
+    job_dir = str(tmp_path / "jobs" / "fresh0001")  # NEVER mounted before — no registry row
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(fake_root), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out["agent"] == "agent:fresh0001"
+    assert out["project"] == "osiris"
+    rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert rec is not None and rec.project == "osiris"
+
+
 async def test_mount_resolves_project_from_the_seat_not_cwd_when_seated(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

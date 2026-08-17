@@ -23,6 +23,7 @@ from src.orchestrator.handshake import (
     record_session_anchor,
 )
 from src.orchestrator.mailbox import send_message
+from src.orchestrator.seats import bind_holder, ensure_seat
 
 SID = "39fb22a2-0000-4000-8000-000000000000"
 
@@ -75,6 +76,50 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
     assert again["agent"] == out["agent"]
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 0
+
+
+async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """thread 6a00e942: THE ACTUAL SPECIMEN — a background job's FIRST whisper fires from
+    the bare seats CONTAINER root (~/.osiris/seats), not the interactive mount() tool.
+    mount()'s own project write already overrides a seated session's project with its
+    seat's derived house (mcp_server._resolve_project_seat_first) — automount() never
+    did, so a session whisper-mounted here permanently filed its registry row under no
+    project at all, while orient()/mount() (re-deriving live via the same seat binding
+    on every later call) told the correct story. Same seat, same session, two answers —
+    the 60bc15db shape."""
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+
+    seat = await ensure_seat(actions, house="osiris", handle="Barewhisper", source="test")
+    assert seat.get("error") is None
+    # the job_dir a whisper for THIS session_id will derive — bind the seat to the SAME
+    # agent id BEFORE the first breath, exactly as a returning/pre-charted seat would be
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:39fb22a2",
+                      source="test")
+
+    out = await automount(actions, session_id=SID, cwd=str(fake_root),
+                          actor="analyst:operator", jobs_home=tmp_path / "jobs")
+    assert out["agent"] == "agent:39fb22a2"
+    row = await actions.pool.fetchrow(
+        "SELECT project FROM agent_mounts WHERE agent_id='agent:39fb22a2'")
+    assert row is not None
+    assert row["project"] == "osiris", (
+        "the whisper's own registry write must carry the seated house too — a background "
+        "job's first breath must never file a seated agent under no project at all")
+    # THE ACTUAL REPORTED SYMPTOM: fleet() reads the AGENT's own current_assertions
+    # 'project', not agent_mounts.project — this is register_agent's own stamp,
+    # written BEFORE the seat-first correction, so it must be checked separately.
+    fleet_row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS project FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:39fb22a2' AND a.name='project' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert fleet_row is not None
+    assert fleet_row["project"] == "osiris", (
+        "fleet() must file the seated agent under its house, never '?'")
 
 
 async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
