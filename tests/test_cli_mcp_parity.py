@@ -46,6 +46,10 @@ NO_MCP_EQUIVALENT = {
     "boot-status": "operator devops read across the fleet's own compiled bodies",
     "deploy": "operator devops act — an agent should not restart shared services",
     "migrate": "operator devops act — an agent should not run schema migrations",
+    "retention": "operator devops act (thread e6fd3772 piece 1, Khnum 288675e) — a retention "
+                 "DELETE on outbox/audit_log has no unmerge; execute=False is the only "
+                 "default and the act is deliberately kept off the agent-callable surface, "
+                 "same class as deploy/migrate",
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
