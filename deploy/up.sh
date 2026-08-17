@@ -13,8 +13,13 @@ export DATABASE_URL="postgresql://osiris:osiris@127.0.0.1:${PG_PORT}/osiris"
 export REDIS_URL="redis://127.0.0.1:${REDIS_PORT}/0"
 
 echo "[up] infra (Postgres + Redis) as containers"
+# tuning flags: deploy/postgresql.conf has the full justification (thread e6fd3772
+# piece 1) — override-only, never replaces the image's own generated config, so every
+# other stock default (data_directory, socket paths, ...) is untouched.
 docker run -d --rm --name osiris-pg -e POSTGRES_USER=osiris -e POSTGRES_PASSWORD=osiris \
-  -e POSTGRES_DB=osiris -p "127.0.0.1:${PG_PORT}:5432" postgres:16 >/dev/null
+  -e POSTGRES_DB=osiris -p "127.0.0.1:${PG_PORT}:5432" postgres:16 \
+  -c shared_buffers=4GB -c effective_cache_size=12GB -c work_mem=32MB \
+  -c maintenance_work_mem=512MB -c random_page_cost=1.1 >/dev/null
 docker run -d --rm --name osiris-redis -p "127.0.0.1:${REDIS_PORT}:6379" redis:7 >/dev/null
 
 echo "[up] waiting for Postgres"

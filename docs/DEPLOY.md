@@ -69,6 +69,22 @@ sudo systemctl enable --now osiris-api osiris-worker
 Both units are `Restart=always`. Postgres and Redis are the only shared dependencies;
 run them as their own services (or containers) the units order after.
 
+## Postgres tuning (thread e6fd3772 piece 1)
+
+`deploy/postgresql.conf` has the justified values (measured against this box's own
+osiris-pg, not guessed from a generic sizing guide) and where each apply path draws
+from it: `deploy/up.sh`'s own `docker run` and `deploy/docker-compose.full.yml`'s
+postgres service both carry the same `-c` flags for a FRESH container. For an EXISTING
+running container (this box's own hand-run `osiris-pg`, or any other already-standing
+instance), apply without a data-volume remount via `deploy/postgres_tuning.sql`:
+
+```bash
+docker exec -i osiris-pg psql -U osiris -d osiris -f deploy/postgres_tuning.sql
+docker restart osiris-pg   # shared_buffers + maintenance_work_mem need this;
+                            # the rest reload on the SIGHUP the script's own
+                            # pg_reload_conf() call already sent
+```
+
 ## The heartbeat + user-level units (single-operator dev box)
 
 The units above are **system** units (a service account, `/opt` deploy, `EnvironmentFile`).
