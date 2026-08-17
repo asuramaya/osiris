@@ -686,6 +686,31 @@ def _prune_wake_verdict(cap: int = _WAKE_VERDICT_CAP) -> None:
         _wake_verdict.pop(k, None)
 
 
+def _is_wake_spawn_lines(lines: Iterable[str]) -> bool:
+    """The pure fingerprint check behind `_is_wake_spawn`, over already-read LINES —
+    no file IO, so it works identically whether the lines came from disk or from the
+    soul store (task #51 piece 3: a store-only session, source file gone, must be
+    filtered the same way a disk-mined one is). The first user turn is the wake prompt
+    or it is not a wake; scans at most the first 40 lines for it, matching the disk
+    path's own bound."""
+    for i, line in enumerate(lines):
+        if i >= 40:  # the first user turn is at the top or it is not a wake
+            break
+        if '"user"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") != "user" or entry.get("isSidechain"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, list):
+            content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+        return str(content or "").lstrip().startswith(_WAKE_FIRST_TURN)
+    return False
+
+
 def _is_wake_spawn(path: Path) -> bool:
     """Did OSIRIS ITSELF spawn this session? Its very first turn is the wake prompt.
 
@@ -699,7 +724,8 @@ def _is_wake_spawn(path: Path) -> bool:
     work. So the fingerprint has to be the content: the wake prompt IS the session's first words.
 
     Cached forever per path — a transcript's opening turn cannot change, and re-reading 1300 files
-    every ten minutes to re-learn the same fact would be its own small madness.
+    every ten minutes to re-learn the same fact would be its own small madness. The fingerprint
+    itself lives in `_is_wake_spawn_lines`, shared with the store-backed mining path.
     """
     key = str(path)
     if key in _wake_verdict:
@@ -707,23 +733,7 @@ def _is_wake_spawn(path: Path) -> bool:
     verdict = False
     try:
         with path.open("r", errors="replace") as fh:
-            for _ in range(40):  # the first user turn is at the top or it is not a wake
-                line = fh.readline()
-                if not line:
-                    break
-                if '"user"' not in line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    continue
-                if entry.get("type") != "user" or entry.get("isSidechain"):
-                    continue
-                content = (entry.get("message") or {}).get("content")
-                if isinstance(content, list):
-                    content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
-                verdict = str(content or "").lstrip().startswith(_WAKE_FIRST_TURN)
-                break
+            verdict = _is_wake_spawn_lines(iter(fh.readline, ""))
     except OSError:
         verdict = False
     _wake_verdict[key] = verdict
@@ -1569,6 +1579,93 @@ async def adversary_pass(
 
     size = await asyncio.to_thread(_file_size, path)
     lines, _ = await asyncio.to_thread(_read_chunk, path, 0, min(size, _MAX_SCAN_BYTES))
+    text, cwd = distill(lines)
+    if len(text) < _MIN_DISTILLED:
+        return report                  # nothing worth a model call — and silence is a fine answer
+
+    chunk_models = models_in(lines)
+    repo = await asyncio.to_thread(_repo_from_cwd, cwd)
+    usage: list[Usage] = []
+    raw = await llm.complete(system=_SYSTEM, prompt=_sandwich(redact(_whole_arc(text))),
+                             model=model, usage_out=usage)
+    if usage:
+        await record_usage(actions.pool, purpose="session-adversary", usage=usage[-1])
+
+    y = parse_session_yield(raw)
+    y.decisions = []                   # it is not asked for them, and it may not land them
+    counts = await emit_yield(actions, y, repo=repo, origin=agent_source,
+                              source_model=chunk_models[-1] if chunk_models else None)
+    report["proposed"] = counts["threads"] + counts["obligations"]
+    report["resolve_candidates"] = counts["resolve_candidates"]
+    report["skipped_dup"] = counts["skipped_dup"]
+    report["skipped_foreign"] = counts["skipped_foreign"]
+    return report
+
+
+async def adversary_pass_from_store(
+    actions: Actions, anchor_sid: str, llm: LLMClient | None = None, *,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """THE SOUL STORE'S OWN MINER (task #51 piece 3, ruling 62dc6397): the SAME adversary,
+    reading soul_lines instead of disk — a miner reads the STORE, not the file, so a
+    session whose source transcript has since been rotated off disk or lost with a dead
+    laptop can still be mined exactly as if the file were still there.
+
+    DELIBERATELY A SEPARATE FUNCTION, not a path-vs-store branch inside `adversary_pass`
+    itself (same reasoning as `_fold_zero_turn_ancestors`/`_debounce_roundtrip` staying
+    two independent healers rather than one shared abstraction two fragile paths lean
+    on): the live, spend-metered disk path stays untouched and provably unaffected by
+    this addition. What IS shared, on purpose, so the two can never silently diverge:
+    the spend ceiling (may_spend), the licence gate, `_is_wake_spawn_lines` (the SAME
+    fingerprint check `_is_wake_spawn` wraps for the disk path), `distill`/`models_in`
+    (unchanged — both already take `list[str]`, agnostic to where the lines came from),
+    and `emit_yield` (unchanged, DB-only, no path dependency at all). The only genuine
+    difference is IDENTITY: `_agent_of(path)` parses `agent:<sid8>` off the filename
+    stem; here the caller already has the anchor_sid as the store's own key, so
+    `agent:{anchor_sid}` is built directly — the identical scheme, no path needed to
+    reach it.
+
+    Returns the same report shape as `adversary_pass`. `{"error": ...}` when nothing
+    has been ingested for `anchor_sid` at all — a store-only miner has nothing else to
+    fall back to."""
+    from src.ingest.soul_store import SoulStore
+
+    llm = llm or llm_provider()
+    if llm is None:
+        raise RuntimeError("no LLM provider for the adversary — install Claude Code, or set "
+                           "ANTHROPIC_API_KEY")
+    model = model or get_settings().osiris_extract_model
+    report: dict[str, Any] = {
+        "proposed": 0, "resolve_candidates": 0, "skipped_dup": 0, "skipped_foreign": 0}
+
+    ok, why = await may_spend(actions.pool, cap=get_settings().osiris_daily_usd,
+                              metered=spend_is_metered())
+    if not ok:
+        report["refused"] = 1
+        report["why"] = why
+        _log.warning("the adversary is refusing to spend: %s", why)
+        return report
+
+    lic = await licence(actions.pool)
+    if not lic["may_spend"]:
+        report["refused"] = 1
+        report["why"] = lic["reason"]
+        _log.warning("the adversary is refusing to spend: %s", lic["reason"])
+        return report
+
+    lines = await SoulStore(actions.pool).raw_lines(anchor_sid)
+    if lines is None:
+        return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to mine"}
+
+    if _is_wake_spawn_lines(lines):
+        report["skipped_wake"] = 1     # Osiris's own alarm clock: its chatter was never knowledge
+        return report
+
+    agent_source = f"agent:{anchor_sid}"
+    if await _is_self_documenting(actions.pool, agent_source):
+        report["deferred"] = 1         # backfill the SILENT; never second-guess the diligent
+        return report
+
     text, cwd = distill(lines)
     if len(text) < _MIN_DISTILLED:
         return report                  # nothing worth a model call — and silence is a fine answer
