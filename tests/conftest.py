@@ -140,6 +140,66 @@ _RESET_TABLES = (
 _CONTAINER: dict[str, PostgresContainer] = {}
 
 
+# THE LIVE-DB GUARD (thread 9b9ba394): agent:repro-test-same/agent:repro-test-0 were a
+# reproduction harness that reached the LIVE fleet graph instead of an isolated fixture
+# DB — the twin of dev_env.refuse_silent_live_db (e4a3f3c) one layer over: that guard
+# stops a bare SCRIPT invocation from silently defaulting to the live DSN; this one stops
+# a pytest PROCESS from ever opening one at all, no matter how deep the call — a fixture,
+# a script imported and driven by a repro test, a CLI/orchestrator function called
+# directly. Same law (never infer from cwd, key on the DSN itself): the only DSNs this
+# process may ever open are THIS session's own testcontainer's host:port, learned once at
+# container start and never trusted from an env var or a caller's own claim. Patches BOTH
+# asyncpg entrypoints (create_pool — src.db.pool.create_pool's own primitive, and every
+# scripts/*.py direct caller; connect — the bare-connection callers like
+# osiris_stophook.py/osiris_fleet_glance.py) so nothing in this process can route around
+# it by skipping src.db.pool. Installed once per process (the controller's own copy is
+# inert dead weight under xdist — a controller never runs a test — but harmless to
+# install there too; the worker's own copy, in its own process, is the one that matters).
+def _dsn_host_port(dsn: str | None, host: object = None, port: object = None) -> tuple[str, str]:
+    """Extract (host, port) the same way asyncpg itself would resolve a connection
+    target — either a `dsn` string (the common case, every call site in this repo) or
+    bare `host=`/`port=` kwargs (asyncpg.connect's own alternate calling form, unused
+    today but a guard keyed only on `dsn` would silently miss it)."""
+    from urllib.parse import urlsplit
+
+    if dsn:
+        parsed = urlsplit(dsn)
+        return str(parsed.hostname), str(parsed.port)
+    return str(host), str(port)
+
+
+def _install_live_db_guard(host: str, port: str) -> None:
+    import asyncpg
+
+    allowed = (host, str(port))
+    real_create_pool = asyncpg.create_pool
+    real_connect = asyncpg.connect
+
+    def _refuse(kind: str, got: tuple[str, str]) -> None:
+        raise RuntimeError(
+            f"LIVE-DB GUARD (thread 9b9ba394): a pytest process tried {kind} against "
+            f"{got[0]}:{got[1]}, not this session's own testcontainer ({allowed[0]}:"
+            f"{allowed[1]}). Refused before any network attempt. Route through the "
+            "`actions`/`pg_dsn` fixtures — never a hardcoded or env-sourced DSN inside "
+            "a test, fixture, or a script called from one."
+        )
+
+    async def _guarded_create_pool(dsn: str | None = None, **kwargs: object) -> object:
+        got = _dsn_host_port(dsn, kwargs.get("host"), kwargs.get("port"))
+        if got != allowed:
+            _refuse("asyncpg.create_pool", got)
+        return await real_create_pool(dsn, **kwargs)  # type: ignore[arg-type]
+
+    async def _guarded_connect(dsn: str | None = None, **kwargs: object) -> object:
+        got = _dsn_host_port(dsn, kwargs.get("host"), kwargs.get("port"))
+        if got != allowed:
+            _refuse("asyncpg.connect", got)
+        return await real_connect(dsn, **kwargs)  # type: ignore[arg-type]
+
+    asyncpg.create_pool = _guarded_create_pool  # type: ignore[assignment]
+    asyncpg.connect = _guarded_connect  # type: ignore[assignment]
+
+
 def _install_tool_contract_ceiling_merge_driver() -> None:
     """Self-installs the merge driver for TOOL_CONTRACT_CEILING_CHARS (dispatch 26686b77,
     Thoth msg 3658) into this repo's SHARED git config — `.gitattributes` alone names the
@@ -204,12 +264,15 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.option.basetemp is None:
         config.option.basetemp = f"/tmp/pt-{os.getpid()}"
     if hasattr(config, "workerinput"):
+        wi = config.workerinput  # type: ignore[attr-defined]
+        _install_live_db_guard(str(wi["pg_host"]), str(wi["pg_port"]))
         return  # an xdist worker: the controller (or, outside xdist, this same
         # process, since it then takes this same branch itself) owns the container
     _install_tool_contract_ceiling_merge_driver()
     pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
     pg.start()
     _CONTAINER["pg"] = pg
+    _install_live_db_guard(pg.get_container_host_ip(), str(pg.get_exposed_port(5432)))
 
 
 def pytest_configure_node(node: pytest.Item) -> None:  # xdist controller-only hook
