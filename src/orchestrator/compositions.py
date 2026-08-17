@@ -2021,8 +2021,83 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
 ORIENT_OPEN_THREADS = 25
 
 
+async def owner_lineage_roots(
+    pool: asyncpg.Pool, owners: set[str],
+) -> dict[str, str]:
+    """Resolve every DISTINCT agent-shaped owner's TRUE lineage root the SAME way
+    `lineage_root`'s own succeeded_from edge walk does — never `_generation()`'s string
+    parse, which strips only the LAST `-<roman>` segment and is blind to a multi-hop id
+    like `agent:x-g40-g40-vii` (measured live, 2026-08-16: 18 of 71 distinct open-thread
+    owners disagreed, EVERY one a real lineage the string parse split into false-separate
+    roots — Imhotep's #150 finding, the same shape, applied one layer up to
+    `rank_open_threads`'s own `whose_move`, per Thoth's dispatch).
+
+    ONE BULK FETCH, NOT N SEQUENTIAL WALKS (measured live, same night: calling
+    `lineage_root` once per owner against a real 76-generation-deep lineage — Thoth's own
+    — cost ~1.8s for just 13 distinct owners, ~137ms/owner, each independently re-walking
+    a chain most of them share most of. `lineage_root` itself stays untouched and correct
+    for a single lookup; this is a SEPARATE bulk path for the same underlying data, one
+    query for the WHOLE succeeded_from adjacency map (bounded by however many Agent
+    objects have ever asserted it — hundreds, not the thousands orient()'s own hot path
+    needs to fear), same belief resolution `_succeeded_from_of` uses (DISTINCT ON,
+    confidence DESC/observed_at DESC) so it can never disagree with a single-owner
+    `lineage_root` call reading the identical data. Every owner's chain then walks
+    IN MEMORY, memoizing every node's own root across ALL owners in this one call — a
+    76-hop chain shared by 13 owners costs one real walk, not thirteen. Same 100-iteration
+    cycle guard as `lineage_root`; a chain that doesn't terminate within it is confessed
+    (left OUT of the returned map, same as any other unresolved owner) rather than risking
+    a bad root.
+
+    Batched ONCE per caller here, never per row — `rank_open_threads` itself stays pure
+    and synchronous; every bit of I/O this needs happens before it's called, matching
+    577988ed's own ban on a fleet-wide hot-path slowdown for a ranking nicety. A value
+    that isn't agent-shaped ('operator', a project name, blank) is skipped — it was never
+    lineage-comparable to begin with, and `rank_open_threads` falls back to its own
+    string-parse for anything missing from the returned map (a genuinely unresolved
+    lookup degrades to the OLD behavior, never a crash or a silent mis-rank to 'nobody's')."""
+    candidates = {o for o in owners if o and o.startswith("agent:")}
+    if not candidates:
+        return {}
+    edges = {
+        r["canonical"]: r["predecessor"]
+        for r in await pool.fetch(
+            "SELECT DISTINCT ON (o.canonical) o.canonical, "
+            "a.value #>> '{}' AS predecessor FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id WHERE a.name='succeeded_from' "
+            "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC")
+    }
+    resolved: dict[str, str] = {}  # memoized per-node root, shared across every owner
+
+    def walk(start: str) -> str | None:
+        chain: list[str] = []
+        cur = start
+        for _ in range(200):
+            if cur in resolved:
+                root = resolved[cur]
+                break
+            nxt = edges.get(cur)
+            if nxt is None:
+                root = cur
+                break
+            chain.append(cur)
+            cur = nxt
+        else:
+            return None  # cycle/too-deep — confessed by absence, never a guessed root
+        for node in chain:
+            resolved[node] = root
+        return root
+
+    out: dict[str, str] = {}
+    for o in candidates:
+        root = walk(o)
+        if root is not None:
+            out[o] = root
+    return out
+
+
 def rank_open_threads(
     rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
+    owner_roots: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Rank open threads for display and cap. Obligations — DUTIES an action minted — float
     above ordinary threads. WITHIN each kind group, ownership orders for the READER (`me` =
@@ -2032,6 +2107,13 @@ def rank_open_threads(
     later generation of the same agent lineage (agent:foo-iii vs agent:foo-iv, post-
     compaction succession) still ranks as mine — the compositions layer had never inherited
     the `_generation()` treatment held_seat/manager_of_seat already carry.
+
+    `owner_roots` (optional, from `owner_lineage_roots` above): the EDGE-WALKED root for
+    each distinct owner/`me` value this caller already resolved, precomputed once. Every
+    lookup here prefers it; a value absent from the map (the caller didn't precompute it,
+    or it isn't agent-shaped) falls back to the old `_generation()` string parse — this
+    function stays callable exactly as before for anyone who doesn't have a pool handy,
+    degrading gracefully rather than refusing. Still entirely synchronous and Pure.
 
     WITHIN each (kind, ownership) band, RELEVANCE OBSERVED, NOT DECLARED (ruling a4bd555c,
     #121's catalog-usage law applied to the object that matters most, Thoth msg 2332):
@@ -2043,14 +2125,19 @@ def rank_open_threads(
     `open_thread_wall`'s own split). `arc` is the last tie-break — grouping, not priority:
     no arc in the closed taxonomy outranks another, so it never overrides an observed
     signal, only orders otherwise-identical ties so same-arc threads sit together on a
-    capped page. Input order is the final fallback — Python's sort is stable. Pure."""
-    me_roots = frozenset(_generation(m)[0] for m in me)
+    capped page. Input order is the final fallback — Python's sort is stable."""
+    owner_roots = owner_roots or {}
+
+    def root_of(a: str) -> str:
+        return owner_roots.get(a) or _generation(a)[0]
+
+    me_roots = frozenset(root_of(m) for m in me)
     never = datetime.min.replace(tzinfo=UTC)
     latest = datetime.max.replace(tzinfo=UTC)
 
     def whose_move(r: dict[str, Any]) -> int:
         owner = (r.get("owner") or "").strip()
-        if not owner or owner in me or _generation(owner)[0] in me_roots:
+        if not owner or owner in me or root_of(owner) in me_roots:
             return 0  # mine to act (unowned = anyone who reads it may act)
         return 2 if owner == "operator" else 1
 
@@ -2237,7 +2324,9 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     me = frozenset(me_arg) if isinstance(me_arg, list | tuple | set) else frozenset()
     if subject is not None:
         wall, echoes = await open_thread_wall(pool, subject)
-        shown, more = rank_open_threads(wall, me)
+        owner_roots = await owner_lineage_roots(
+            pool, {str(o) for r in wall if (o := r.get("owner"))} | me)
+        shown, more = rank_open_threads(wall, me, owner_roots)
         return {"wall": shown, "more_on_wall": more,
                 "echo_pile": {"count": len(echoes),
                               "note": "untouched miner echoes + judged questions — the "
@@ -2302,7 +2391,9 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         # A thread rides the wall IFF A MIND TOUCHED IT. A guessed obligation used to get a
         # week's grace here; the miner mints faster than a week, so the grace WAS the pile.
         "WHERE t.summary IS NOT NULL AND t.touched")]
-    shown, more = rank_open_threads(top_rows, me)
+    owner_roots = await owner_lineage_roots(
+        pool, {str(o) for r in top_rows if (o := r.get("owner"))} | me)
+    shown, more = rank_open_threads(top_rows, me, owner_roots)
     # totals over the WHOLE record — a repo-less thread must count even though the
     # per-project breakdown can't file it
     # THE NUMBERS MUST ADD UP (operator, 2026-07-12: "1051 open · 334 obligations · 951 pile —
