@@ -9,14 +9,22 @@ already shows it, instead of waiting on the miner's 10-minute rounds.
 
 STDLIB ONLY and FAIL-OPEN: a missed ring costs at most one miner lag, never a blocked
 compaction. Timeout 2s.
+
+OSIRIS_SWEEP_URL overrides the target (thread from Sekhmet's #40 finding, decision
+66318e03): the hardcoded loopback only ever reaches a worker running on THIS box, so a
+compaction on a machine that isn't the fleet's worker box (hyper-docker, the operator's
+laptop) rang a doorbell nobody was listening at, invisibly. Default unchanged, so nothing
+moves on the worker's own box; an off-box machine sets the env var to the real worker
+URL. Every attempt is logged to stderr: which URL, and whether the POST connected.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-SWEEP = "http://127.0.0.1:8790/sweep"
+SWEEP = os.environ.get("OSIRIS_SWEEP_URL", "http://127.0.0.1:8790/sweep")
 
 
 def main() -> int:
@@ -36,8 +44,9 @@ def main() -> int:
             }).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=2)
-    except Exception:  # noqa: BLE001 — the rite is best-effort; the rounds still come
-        pass
+        print(f"osiris_precompact: rang {SWEEP} — connected", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — the rite is best-effort; the rounds still come
+        print(f"osiris_precompact: rang {SWEEP} — failed ({exc})", file=sys.stderr)
     return 0
 
 

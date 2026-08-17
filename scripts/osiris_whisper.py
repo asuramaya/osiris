@@ -11,6 +11,11 @@ its name, its project, its mail, and what happened while its lineage slept.
 STDLIB ONLY (runs for every project on the box — no venv assumption) and FAIL-OPEN: any
 failure prints a manual-mount hint (or nothing) and exits 0; a session must never be
 slowed or broken by its own whisper. Timeout 3s total.
+
+OSIRIS_AUTOMOUNT_URL overrides the target (thread from Sekhmet's #40 finding, decision
+66318e03): the hardcoded loopback only ever reaches a worker on THIS box — an off-box
+machine (hyper-docker, the operator's laptop) points this at the real worker URL;
+default unchanged. Every attempt is logged to stderr: which URL, connected or not.
 """
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ import sys
 import urllib.request
 from typing import Any
 
-AUTOMOUNT = "http://127.0.0.1:8790/automount"
+AUTOMOUNT = os.environ.get("OSIRIS_AUTOMOUNT_URL", "http://127.0.0.1:8790/automount")
 
 
 def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
@@ -251,7 +256,9 @@ def main() -> int:
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=3) as resp:
             out = json.load(resp)
-    except Exception:  # noqa: BLE001 — server down: hint at the manual door, never block
+        print(f"osiris_whisper: posted {AUTOMOUNT} — connected", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — server down: hint at the manual door, never block
+        print(f"osiris_whisper: posted {AUTOMOUNT} — failed ({exc})", file=sys.stderr)
         print("◈ OSIRIS (fleet memory) is configured but its server is unreachable right "
               "now. When your work touches shared knowledge, try the MCP tool "
               f"mount(cwd='{cwd}') — it may be back.")

@@ -10,14 +10,20 @@ is still running.
 
 STDLIB ONLY and FAIL-OPEN: any failure exits 0 silently — a spawn must never be slowed or
 broken by its own announcement. Timeout 2s.
+
+OSIRIS_SPAWN_URL overrides the target (thread from Sekhmet's #40 finding, decision
+66318e03): the hardcoded loopback only ever reaches a worker on THIS box — an off-box
+machine points this at the real worker URL; default unchanged. Every attempt is logged
+to stderr: which URL, connected or not.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-SPAWN = "http://127.0.0.1:8790/spawn"
+SPAWN = os.environ.get("OSIRIS_SPAWN_URL", "http://127.0.0.1:8790/spawn")
 
 
 def main() -> int:
@@ -42,8 +48,9 @@ def main() -> int:
             SPAWN, data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=2)
-    except Exception:  # noqa: BLE001 — server down: the miner's round still catches the spawn
-        pass
+        print(f"osiris_spawn: posted {SPAWN} — connected", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — server down: the miner's round still catches it
+        print(f"osiris_spawn: posted {SPAWN} — failed ({exc})", file=sys.stderr)
     return 0
 
 
