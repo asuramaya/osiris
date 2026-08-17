@@ -93,7 +93,7 @@ from src.orchestrator.mailbox import (
     read_desk,
     read_inbox,
     send_message,
-    unread_count,
+    unread_counts,
 )
 from src.orchestrator.mailbox import (
     dim_brief as mailbox_dim,
@@ -2171,11 +2171,9 @@ async def mount(
             await mounts.save_mount(pool, job_dir=sa, agent_id=ident.agent_id,
                                     project=ident.project, cwd=cwd, model=ident.model,
                                     session_key=key)
-    unread = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
-                                 lease_secs=lease) if ident.project else 0)
-    asks = (await unread_count(pool, ident.project, reader_agent=ident.agent_id,
-                               lease_secs=lease, grade="ask")
-            if ident.project and unread else 0)
+    counts = (await unread_counts(pool, ident.project, reader_agent=ident.agent_id,
+                                  lease_secs=lease) if ident.project else {"total": 0, "ask": 0})
+    unread, asks = counts["total"], counts["ask"]
     # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs
     op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id)
     banner = swap_banner(classify_swap(
@@ -2698,10 +2696,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     if spawn is not None and spawn != (ident.agent_id if ident else None):
         who = f"{spawn} — a SPAWN of {ident.agent_id if ident else 'an unmounted parent'}; " \
               "your writes are your own, the seat and its mail are your parent's"
-    unread = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease)
-              if proj else 0)
-    asks = (await unread_count(pool, proj, reader_agent=reader, lease_secs=lease,
-                               grade="ask") if proj and unread else 0)
+    counts = (await unread_counts(pool, proj, reader_agent=reader, lease_secs=lease)
+              if proj else {"total": 0, "ask": 0})
+    unread, asks = counts["total"], counts["ask"]
     mail = (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of you) — "
             "inbox()" if asks else f"{unread} unread — inbox()") if unread else "none"
     # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs

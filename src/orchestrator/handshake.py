@@ -26,7 +26,7 @@ from src.ingest.sessions import locate_current_transcript
 from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
-from src.orchestrator.mailbox import desk_briefs_from, settle_history_at_join, unread_count
+from src.orchestrator.mailbox import desk_briefs_from, settle_history_at_join, unread_counts
 
 
 async def fork_seat(
@@ -658,13 +658,13 @@ async def automount(
     except Exception as e:  # noqa: BLE001 — the whisper never dies of a heal
         heal = {"error": f"TRANSCRIPT HEAL FAILED — {str(e)[:200]}; the mount stands; "
                          "moved sessions may still refuse to resume here"}
-    mail = await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
-                              lease_secs=lease_secs) if ident.project else 0
     # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
-    # actionable; ungraded mail keeps the plain count — never guessed into a band
-    mail_asks = (await unread_count(actions.pool, ident.project, reader_agent=ident.agent_id,
-                                    lease_secs=lease_secs, grade="ask")
-                 if ident.project and mail else 0)
+    # actionable; ungraded mail keeps the plain count — never guessed into a band. One
+    # combined query (thread 72e45258's residual) instead of the same predicate run twice.
+    mail_counts = (await unread_counts(actions.pool, ident.project,
+                                       reader_agent=ident.agent_id, lease_secs=lease_secs)
+                  if ident.project else {"total": 0, "ask": 0})
+    mail, mail_asks = mail_counts["total"], mail_counts["ask"]
     # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs,
     # never the fleet-wide backlog — a number identical in every chrome informs nobody
     desk = await desk_briefs_from(actions.pool, ident.agent_id)

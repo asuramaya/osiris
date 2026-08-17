@@ -611,6 +611,34 @@ async def unread_count(
     return await pool.fetchval(q, *args)  # type: ignore[no-any-return]
 
 
+async def unread_counts(
+    pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900,
+) -> dict[str, int]:
+    """{"total", "ask"} in ONE scan — thread 72e45258's own residual, measured (~640ms of
+    two sequential `unread_count` calls against `fleet_messages` in orient()'s own profile,
+    the largest remaining cost after the CTE fix). mount()/orient()/automount() all ran the
+    SAME `_DELIVERABLE_TO_READER` predicate TWICE, back to back, differing only in an added
+    `AND m.grade='ask'` — the same rows evaluated twice for no reason a caller couldn't get
+    from one pass. `_DELIVERABLE_TO_READER` itself (correlated EXISTS/NOT EXISTS, the
+    lineage rollup, the lease/grace clause) is untouched — this changes NOTHING about which
+    messages count, only how many times the predicate runs. Conditional aggregation
+    (`FILTER (WHERE ...)`) computes both counts from the same table pass."""
+    from src.orchestrator.agents import _generation
+
+    q = ("SELECT count(*) AS total, "
+         "count(*) FILTER (WHERE m.grade = 'ask') AS ask "
+         "FROM fleet_messages m "
+         "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
+         "WHERE " + _DELIVERABLE_TO_READER)
+    q = (q.replace("$agent", "$1").replace("$project", "$2").replace("$lease", "$3")
+         .replace("$grace", "$4").replace("$lineage", "$5"))
+    row = await pool.fetchrow(
+        q, reader_agent, _norm(reader_project), lease_secs, _HOLD_GRACE_SECS,
+        _generation(reader_agent)[0])
+    assert row is not None  # count(*) always returns exactly one row
+    return {"total": row["total"], "ask": row["ask"]}
+
+
 async def unread_split(
     pool: asyncpg.Pool, reader_project: str | None, *, reader_agent: str | None,
     lease_secs: int = 900,
