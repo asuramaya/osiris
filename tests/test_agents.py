@@ -2356,6 +2356,39 @@ async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Acti
     assert still_live_on_ancestor == 1, "dry run must write nothing"
 
 
+async def test_backfill_agent_project_links_plans_zero_moves_across_a_true_tie_hop(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE (Thoth's dispatch msg 5046, live-found on her own lineage): a lineage
+    whose head is resolved past a succeeded_by TRUE TIE (test_lineage_head_breaks_a_true_
+    tie... — same live shape) and whose edges already live on that true head must plan
+    ZERO moves for it. Before the lineage_head fix this fixture reproduced the exact live
+    bug: the resolver stopped at the OLDER generation, so a live agent's own current
+    works_in/governs would have been (wrongly) planned to move onto a retired ancestor."""
+    from src.orchestrator.agents import backfill_agent_project_links
+
+    now = datetime.now(UTC)
+    base = await actions.create_or_find_object("Agent", "agent:66c0ffee", "test")
+    v = await actions.create_or_find_object("Agent", "agent:66c0ffee-v", "test")
+    await actions.create_or_find_object("Agent", "agent:66c0ffee-vi", "test")
+    await actions.assert_property(base, "succeeded_by", "agent:66c0ffee-v", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(v, "succeeded_by", "", "phantom-fold", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(v, "succeeded_by", "agent:66c0ffee-vi", "agent:66c0ffee-vi",
+                                  now, 0.6, evidence_class="direct_observation")
+    head_oid = await actions.create_or_find_object("Agent", "agent:66c0ffee-vi", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:tie6proj", "test")
+    await actions.create_link(head_oid, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await backfill_agent_project_links(actions, actor="test", dry_run=True)
+
+    matching = [p for p in out["plan"] if p["agent"].startswith("agent:66c0ffee")]
+    assert matching == [], (
+        f"the true head must never be planned as off-head: {matching}")
+
+
 async def test_backfill_agent_project_links_applied_moves_the_edge(actions: Actions) -> None:
     from src.orchestrator.agents import backfill_agent_project_links
 
@@ -3309,6 +3342,36 @@ async def test_lineage_head_walks_through_a_healed_husk_to_the_real_tail(
     await actions.assert_property(d2, "false_mint", True, "seam-debounce", now, 0.6,
                                   evidence_class="direct_observation")
     assert await lineage_head(actions.pool, "agent:44c0ffee") == "agent:44c0ffee-iii"
+
+
+async def test_lineage_head_breaks_a_true_tie_toward_the_real_pointer_not_the_retraction(
+    actions: Actions,
+) -> None:
+    """Live specimen (thread 20af2c95, msg 5046: Thoth's own -v -> -vi hop, discovered by
+    backfill_agent_project_links's first live dry-run): a phantom-fold heal's retraction
+    (succeeded_by="") and the REAL succeeded_by re-assertion landed at the IDENTICAL
+    confidence AND observed_at — the same shared-timestamp class as f6f11d78/5b217d13's
+    works_in duplicate, here on succeeded_by. `ORDER BY confidence DESC, observed_at DESC`
+    alone had no tiebreaker for that exact tie, so the walk could stop dead at the OLDER
+    generation depending on Postgres's own arbitrary row order. Reproduced verbatim: same
+    confidence (0.6), same instant, one empty one real, insertion order EMPTY FIRST (the
+    worst case for the old query, which had no tiebreaker to correct it)."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    v = await actions.create_or_find_object("Agent", "agent:55c0ffee-v", "test")
+    await actions.create_or_find_object("Agent", "agent:55c0ffee-vi", "test")
+    # THE TIE: empty retraction and the real pointer, DIFFERENT sources (so same-source
+    # auto-supersession never fires between them), identical instant and confidence —
+    # exactly what a heal transaction sharing one `now` produces live. Retraction inserted
+    # FIRST — the worst case for the old query, which had no tiebreaker to correct it.
+    await actions.assert_property(v, "succeeded_by", "", "phantom-fold", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(v, "succeeded_by", "agent:55c0ffee-vi", "agent:55c0ffee-vi",
+                                  now, 0.6, evidence_class="direct_observation")
+
+    assert await lineage_head(actions.pool, "agent:55c0ffee-v") == "agent:55c0ffee-vi", (
+        "a same-instant retraction must never outrank a same-instant real pointer")
 
 
 async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:

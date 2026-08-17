@@ -1255,10 +1255,23 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     seen = {canonical}
     head = canonical
     for _ in range(64):
+        # THE TRUE-TIE BUG (thread 20af2c95's dry-run, msg 5046, live specimen: Thoth's own
+        # -v -> -vi hop): a phantom-fold heal's retraction (succeeded_by="") and the REAL
+        # succeeded_by re-assertion can land at the IDENTICAL confidence AND observed_at —
+        # both stamped by the same healing transaction's shared `now`, the same shared-
+        # timestamp class as f6f11d78/5b217d13's works_in duplicate, here on succeeded_by
+        # instead. `ORDER BY confidence DESC, observed_at DESC` alone has NO tiebreaker for
+        # that tie — which of two current_assertions rows wins is Postgres's own arbitrary
+        # plan-dependent choice, not a decided fact — so the walk could non-deterministically
+        # pick the EMPTY retraction and stop dead at the OLDER generation. A retraction never
+        # legitimately outranks a same-instant real pointer (its own job is invalidating an
+        # OLDER wrong belief, not this one) — non-empty wins a tie; `a.id DESC` is the final,
+        # fully deterministic tiebreaker (assertions.id is a bigserial, insertion order).
         nxt = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
             "WHERE o.canonical=$1 AND o.type='Agent' AND a.name='succeeded_by' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", cur)
+            "ORDER BY a.confidence DESC, a.observed_at DESC, "
+            "(a.value #>> '{}') <> '' DESC, a.id DESC LIMIT 1", cur)
         if not nxt or nxt in seen:
             return head
         seen.add(nxt)
