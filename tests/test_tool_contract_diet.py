@@ -660,8 +660,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-<<<<<<< ours
     assert len(per_tool) == 128
-=======
-    assert len(per_tool) == 128
->>>>>>> theirs
