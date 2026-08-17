@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import http.server
 import os
 import sys
@@ -168,6 +170,28 @@ def _dsn_host_port(dsn: str | None, host: object = None, port: object = None) ->
     return str(host), str(port)
 
 
+# THE ONE NAMED EXEMPTION: a test that deliberately dials a target NOTHING listens on
+# (test_manager's "postgres is unreachable" probe dials 127.0.0.1:1) is not opening a live
+# DB — but the guard cannot tell "dead port" from "live DSN" without a heuristic, and a
+# heuristic is exactly what 9b9ba394 forbids. So the exemption is an EXPLICIT ACT at the
+# call site: `with unreachable_dsn_allowed(): ...` — visible in the test, greppable, and
+# scoped to that block only. Never a global flag, never an env var.
+_FOREIGN_DSN_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "osiris_test_foreign_dsn_allowed", default=False)
+
+
+@contextlib.contextmanager
+def unreachable_dsn_allowed() -> Iterator[None]:
+    """Let THIS block open a non-testcontainer DSN — for tests that prove failure paths
+    against a target nothing listens on. The name says what it is for; using it to reach
+    a real database is the defect the guard exists to catch."""
+    token = _FOREIGN_DSN_ALLOWED.set(True)
+    try:
+        yield
+    finally:
+        _FOREIGN_DSN_ALLOWED.reset(token)
+
+
 def _install_live_db_guard(host: str, port: str) -> None:
     import asyncpg
 
@@ -186,13 +210,13 @@ def _install_live_db_guard(host: str, port: str) -> None:
 
     async def _guarded_create_pool(dsn: str | None = None, **kwargs: object) -> object:
         got = _dsn_host_port(dsn, kwargs.get("host"), kwargs.get("port"))
-        if got != allowed:
+        if got != allowed and not _FOREIGN_DSN_ALLOWED.get():
             _refuse("asyncpg.create_pool", got)
         return await real_create_pool(dsn, **kwargs)  # type: ignore[arg-type]
 
     async def _guarded_connect(dsn: str | None = None, **kwargs: object) -> object:
         got = _dsn_host_port(dsn, kwargs.get("host"), kwargs.get("port"))
-        if got != allowed:
+        if got != allowed and not _FOREIGN_DSN_ALLOWED.get():
             _refuse("asyncpg.connect", got)
         return await real_connect(dsn, **kwargs)  # type: ignore[arg-type]
 

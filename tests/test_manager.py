@@ -431,8 +431,11 @@ async def test_default_probe_reports_down_when_postgres_is_unreachable(
 
     # A pool pointed at a port nothing listens on: min_size=0 so construction itself
     # never blocks — the failure surfaces inside the probe's own bounded timeout, not here.
-    pool = await asyncpg.create_pool(
-        dsn="postgresql://osiris:osiris@127.0.0.1:1/osiris", min_size=0, max_size=1)
+    from tests.conftest import unreachable_dsn_allowed
+
+    with unreachable_dsn_allowed():  # LIVE-DB GUARD (9b9ba394): port 1 is a dead target
+        pool = await asyncpg.create_pool(
+            dsn="postgresql://osiris:osiris@127.0.0.1:1/osiris", min_size=0, max_size=1)
     assert pool is not None
     redis_client = create_redis(redis_url)
     manager = Manager(
