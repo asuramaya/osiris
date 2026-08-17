@@ -533,7 +533,8 @@ def _tool_chars(t: Any) -> int:
 # scoped verb refuses by construction (Seshat f78b41c8). Mirrors resync_seat_house_third_party
 # exactly; `because` mandatory; contract test proves identical writes to the self-service
 # path. Measured +1,821 chars at the merged tip; Seshat flagged, did not raise (45e72476).
-# 173,000 -> 174,600 (measured 174,500 exact, +1,500 for rematerialize). 121 -> 122 tools (2026-08-17, Thoth LXXVI heir viii, merge of Imhotep's
+# 173,000 -> 174,600 (measured 174,500 exact, +1,500 for rematerialize). 121 -> 122 tools
+# (2026-08-17, Thoth LXXVI heir viii, merge of Imhotep's
 # 9b5073c, #51 piece 2). ONE NEW TOOL: rematerialize — byte-for-byte transcript reconstruction from
 # soul_lines with the hash chain verified while collecting (a break is a NAMED receipt, writes
 # nothing); default dest = the session's recorded source_path so `claude --resume` on ANY host
