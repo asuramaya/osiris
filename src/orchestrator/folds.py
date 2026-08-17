@@ -51,20 +51,32 @@ async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
     answers to the name today. The registry only breaks the tie for a label with no
     succession record (an anonymous base), and its answer may never REGRESS to an
     older generation than the graph's. Estate must never land on a dead generation:
-    succession's own transfer (mint_heir) would just have to move it again."""
+    succession's own transfer (mint_heir) would just have to move it again.
+
+    THE INVARIANT, MADE UNCONDITIONAL (thread 20af2c95, msg 5052, live specimen: Imhotep
+    XX -> XXXI): a BROKEN MID-CHAIN LINK — the walk's own succeeded_by resolution genuinely
+    winning on a stale retraction partway through (e.g. a "seam-debounce" cleanup at a
+    later, non-tied timestamp than the real pointer it invalidated, distinct from
+    lineage_head's own true-tie fix) — used to escape this safety net entirely, because it
+    only ever fired when `head == canon`, i.e. the walk advanced ZERO hops from the very
+    base. A walk that advances NINETEEN real hops and only then hits a broken link looked
+    identical to a genuine, correctly-resolved head — `head != canon` short-circuited
+    straight past the live-mount check below. Fixed by making the comparison UNCONDITIONAL:
+    always compute the freshest live-mounted candidate in this family and take whichever of
+    {the walk's own answer, that candidate} names the NEWER generation — head resolution
+    must never name a generation older than one with a live mount, regardless of how far
+    the walk itself got before stopping."""
     from src.orchestrator.agents import _generation, lineage_head
 
     canon = await canonical_agent(pool, agent_id)
     head = await lineage_head(pool, canon)
-    if head != canon:
-        return head
     base = _generation(canon)[0]
     row = await pool.fetchval(
         "SELECT agent_id FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
         "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)
-    if row and _generation(str(row))[1] > _generation(canon)[1]:
+    if row and _generation(str(row))[1] > _generation(head)[1]:
         return str(row)
-    return canon
+    return head
 
 
 async def wakeable_identity(pool: asyncpg.Pool, agent_id: str) -> str | None:
