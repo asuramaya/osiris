@@ -1128,6 +1128,34 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
     return notes
 
 
+async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
+    """#108 PIECE 3 WIRING, conservative first cut (scope: decision 2ee34a9d; build:
+    Thoth's dispatch msg 4990/4973/4975) — a second post-migration deploy step beside
+    casefold's, same shape: ALWAYS surveys (every candidate/skip named, never silent).
+    EXECUTES under the SAME OSIRIS_CASEFOLD_AUTOMERGE default as piece 2 (0 opts out,
+    anything else — including unset — executes) rather than a second env var: both are
+    the same standing autonomy ruling (22d47acb) over the same class of act (a
+    deterministic-signal SoftwareProject merge with its own belief-gate), so a second
+    knob would only be a second thing to forget to set. Every candidate still goes
+    through the SAME fold_project door with its own contradiction gate — this wiring
+    never re-derives that logic, only decides whether to pass execute."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import remote_url_duplicate_candidates
+
+    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
+    result = await remote_url_duplicate_candidates(
+        Actions(pool), evidence="osiris deploy: automatic remote_url-matched merge "
+        "(#108 piece 3, decision 2ee34a9d)",
+        actor="osiris-deploy", execute=execute)
+    notes = [f"remote_url auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+             f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
+    for c in result["candidates"]:
+        notes.append(f"  {c['dupe']} -> {c['into']} (remote_url {c['remote_url']!r})")
+    for s in result["skipped"]:
+        notes.append(f"  SKIPPED: {s['canonicals']} — {s['reason']}")
+    return notes
+
+
 MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
 MigrateRunner = Callable[[Path], Awaitable[None]]
 
@@ -1372,6 +1400,8 @@ async def cmd_deploy(
             return 1
 
         for note in await _run_casefold_automerge(pool):
+            print(note)
+        for note in await _run_remote_url_automerge(pool):
             print(note)
 
         tools_before = await list_tools()
