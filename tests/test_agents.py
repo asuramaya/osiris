@@ -1073,6 +1073,55 @@ async def test_a_deliberate_swap_writes_the_seats_osiris_pin(
     assert 'project = "osiris"' in text, "an existing project declaration must survive"
 
 
+async def test_a_deliberate_swap_writes_the_office_pin_even_when_mounted_from_a_worktree(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VERIFICATION for Thoth's #146 close-out ask (bears_on 600a6f85): a session mounted
+    from a code WORKTREE cwd (`.../.claude/worktrees/<name>`, several directories below the
+    real repo root, and never the seat's own office) must still land the pin at the SEAT'S
+    OFFICE, never at or near the worktree — write_model_pin resolves the office purely from
+    the seat handle via held_seat, structurally blind to identity.cwd, so the sibling test
+    above (cwd='/x/osiris', an office-shaped path) already proves this by construction; this
+    test proves it empirically with a cwd that is deliberately NOT office-shaped, so the two
+    together cover both mount contexts named in the ask rather than assuming the code path
+    is cwd-independent from reading it alone."""
+    from src.orchestrator import agents as agents_mod
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    office_root = tmp_path / "offices"
+    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+
+    worktree_cwd = "/home/x/code/osiris/.claude/worktrees/some-branch"
+    proj = tmp_path / "-home-x-code-osiris--claude-worktrees-some-branch"
+    proj.mkdir()
+    lines = [
+        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5", "content": []}}),
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": "<command-name>/model</command-name>\n"
+                                       "<command-message>model</command-message>"}}),
+        json.dumps({"type": "assistant",
+                    "message": {"model": "claude-haiku-4-5", "content": []}}),
+    ]
+    (proj / "deadbeef2-1111-2222-3333-444455556667.jsonl").write_text("\n".join(lines) + "\n")
+    ident = resolve_identity(cwd=worktree_cwd, job_dir="/j/jobs/deadbeef2",
+                             store_reading=_store_reading(tmp_path, "/j/jobs/deadbeef2"))
+    assert ident.model_deliberate is True
+
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "Worktreewriter", source=ident.agent_id)
+    seat = await held_seat(actions.pool, ident.agent_id)
+    assert seat is not None
+
+    await register_agent(actions, ident, actor="analyst:operator", expected_model="claude-fable-5")
+
+    office_pin = office_root / str(seat["handle"]).lower() / ".osiris"
+    assert office_pin.exists(), "the pin must land at the OFFICE, even mounted from a worktree"
+    assert 'model = "claude-haiku-4-5"' in office_pin.read_text()
+    assert not (Path(worktree_cwd) / ".osiris").exists(), \
+        "the worktree cwd itself must never receive a pin write"
+
+
 async def test_an_unexplained_swap_never_touches_the_pin_file(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
