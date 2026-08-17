@@ -1065,3 +1065,96 @@ async def casefold_auto_merge_candidates(
         candidates.append({"populated": populated_can, "phantom": phantom_can,
                            "correct_case": correct_case, "result": result})
     return {"executed": execute, "candidates": candidates, "skipped": skipped}
+
+
+async def remote_url_duplicate_candidates(
+    actions: Actions, *, evidence: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """#108 PIECE 3, CONSERVATIVE FIRST CUT (scope: decision 2ee34a9d, per Thoth's ask
+    msg 4973/4975): the population duplicate_suspect leaves after piece 2's casefold pass
+    — SAME-BASENAME SoftwareProject pairs that are NOT case-fold twins (piece 2's own
+    full-canonical grouping already excludes them). Measured live 2026-08-17: exactly 3
+    SoftwareProject groups (rotten-apple 3-way, coldspot 2-way, kast 2-way), all a
+    path-shaped local clone sharing a basename with a bare, heavily-linked canonical — the
+    #107 disease, structurally distinct from #108's case-fold question.
+
+    THE BAR (deliberately narrow, per the scope memo): auto-merge ONLY when both sides of
+    a clean PAIR (never an N-way group — same skip discipline as piece 2) carry an
+    IDENTICAL, non-empty `remote_url` assertion — the #144 Rule 2 signal, matching
+    basename alone is never sufficient (that trap is exactly what piece 2's own
+    full-canonical grouping, one layer down, was built to dodge). On today's real
+    population every group has remote_url on only ONE side (the bare canonical) and None
+    on the path-shaped side — so the honest result is UNCERTAIN for all three, not a
+    false positive; a future census run that lands a remote_url on the path-shaped clone
+    too is what would make one a genuine candidate.
+
+    DIRECTION, when the bar is met: the side with MORE live links survives as `into`; the
+    other folds as `dupe`. Equal counts (no clear survivor) skips loudly, a human
+    question, same as an N-way group.
+
+    NOT A NEW MERGE MECHANISM, same law as piece 2: composes with `fold_project` (the
+    reversible, contradiction-gated primitive already built for exactly this) and never
+    re-derives its guard — but fold_project itself has no dry-run mode, so this preflights
+    with the SAME `_contradicting_properties` check fold_project runs internally (the
+    identical pattern normalize_project_casing's own dry-run preview already uses), so a
+    dry-run report is never optimistic about a merge that would actually refuse.
+    `execute=False` is the default, same asymmetry as piece 2's own primitive."""
+    rows = await actions.pool.fetch(
+        "SELECT lower(CASE "
+        "  WHEN canonical LIKE '%/%' THEN regexp_replace(canonical, '^.*/', '') "
+        "  WHEN canonical LIKE '%:%' THEN regexp_replace(canonical, '^[^:]*:', '') "
+        "  ELSE canonical END) AS basename, "
+        "array_agg(id) AS ids, array_agg(canonical) AS canonicals "
+        "FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "GROUP BY basename HAVING count(*) > 1")
+    candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        ids, canonicals = row["ids"], row["canonicals"]
+        if len(ids) > 2:
+            skipped.append({"canonicals": canonicals,
+                            "reason": f"{len(ids)} active projects share this basename, "
+                            "not a clean pair — a human question"})
+            continue
+        oid_a, oid_b = ids
+        can_a, can_b = canonicals
+        remote_a = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions "
+            "WHERE object_id=$1 AND name='remote_url'", oid_a)
+        remote_b = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions "
+            "WHERE object_id=$1 AND name='remote_url'", oid_b)
+        if not remote_a or not remote_b or remote_a != remote_b:
+            skipped.append({"canonicals": canonicals,
+                            "reason": "remote_url does not match on both sides "
+                            f"({remote_a!r} vs {remote_b!r}) — the only bar this "
+                            "conservative first cut trusts; a human question otherwise"})
+            continue
+        link_a = await actions.pool.fetchval(
+            "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
+            "AND (valid_until IS NULL OR valid_until > now())", oid_a)
+        link_b = await actions.pool.fetchval(
+            "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
+            "AND (valid_until IS NULL OR valid_until > now())", oid_b)
+        if link_a == link_b:
+            skipped.append({"canonicals": canonicals,
+                            "reason": f"equal live link counts ({link_a}) — no clear "
+                            "survivor to fold the other into, a human question"})
+            continue
+        into_can, into_oid = (can_a, oid_a) if link_a > link_b else (can_b, oid_b)
+        dupe_can, dupe_oid = (can_b, oid_b) if link_a > link_b else (can_a, oid_a)
+        conflicts = await _contradicting_properties(actions.pool, dupe_oid, into_oid)
+        if conflicts:
+            skipped.append({"canonicals": canonicals,
+                            "reason": f"contradicting values on: {', '.join(conflicts)} "
+                            "— likely two different projects sharing a basename, not one "
+                            "under two paths"})
+            continue
+        if execute:
+            result = await fold_project(actions, dupe=dupe_can, into=into_can,
+                                        evidence=evidence, actor=actor)
+        else:
+            result = {"plan": {"would_fold": dupe_can, "into": into_can}}
+        candidates.append({"dupe": dupe_can, "into": into_can, "remote_url": remote_a,
+                           "result": result})
+    return {"executed": execute, "candidates": candidates, "skipped": skipped}

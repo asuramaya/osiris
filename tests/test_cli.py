@@ -1482,6 +1482,72 @@ async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
     assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
 
 
+async def _remote_url_dupe(actions: Actions, basename: str) -> None:
+    """A minimal remote_url-matched pair sharing a basename but NOT a case-fold twin —
+    the exact #107 shape (path-shaped vs bare) remote_url_duplicate_candidates keys on."""
+    now = datetime.now(UTC)
+    path_id = await actions.create_or_find_object(
+        "SoftwareProject", f"repo:/home/x/code/REPOS/{basename}", "test")
+    bare_id = await actions.create_or_find_object("SoftwareProject", f"repo:{basename}", "test")
+    url = f"https://github.com/x/{basename}.git"
+    await actions.assert_property(path_id, "remote_url", url, "test", now, 0.9)
+    await actions.assert_property(bare_id, "remote_url", url, "test", now, 0.9)
+    t = await actions.create_or_find_object("Thread", f"thread:deploy-remoteurl-{basename}", "test")
+    await actions.create_link(t, bare_id, "in_repo", "agent:test", now, 0.9)
+
+
+async def test_cmd_deploy_remote_url_automerge_executes_by_default(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#108 piece 3 wiring (decision 2ee34a9d): the SAME env flag as piece 2 gates both
+    steps — no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE this step too, not just casefold's."""
+    monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
+    await _remote_url_dupe(actions, "deployremotea")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
+    text = buf.getvalue()
+    assert "remote_url auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "/home/x/code/REPOS/deployremotea -> repo:deployremotea" in text
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/deployremotea'")
+    assert row["status"] == "merged"
+
+
+async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "0")
+    await _remote_url_dupe(actions, "deployremoteb")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke)
+    assert "remote_url auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/deployremoteb'")
+    assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:

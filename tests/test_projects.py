@@ -18,6 +18,7 @@ from src.orchestrator.projects import (
     fold_project,
     normalize_project_casing,
     reconcile_project_fold,
+    remote_url_duplicate_candidates,
     retire_project,
     unfold_project,
 )
@@ -1470,3 +1471,173 @@ async def test_casefold_auto_merge_skips_when_neither_side_is_lowercase(
     assert out["candidates"] == []
     assert len(out["skipped"]) == 1
     assert "no single fully-lowercase spelling" in out["skipped"][0]["reason"]
+
+
+# ═══ remote_url_duplicate_candidates — #108 piece 3, conservative first cut (decision
+# 2ee34a9d): SAME-basename SoftwareProject pairs that are NOT case twins (the #107
+# disease piece 2's own full-canonical grouping structurally excludes) — auto-merge only
+# on an exact, non-empty remote_url match on both sides. ═══════════════════════════════
+
+
+async def _remote(actions: Actions, oid, url: str) -> None:
+    await actions.assert_property(oid, "remote_url", url, "test", NOW, 0.9)
+
+
+async def test_remote_url_automerge_finds_a_clean_pair_and_defaults_to_dry_run(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:/home/x/code/REPOS/dupsame", "dupsame")
+    await _stub_project(actions, "repo:dupsame", "dupsame")
+    path_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:/home/x/code/REPOS/dupsame'")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupsame'")
+    await _remote(actions, path_id, "https://github.com/x/dupsame.git")
+    await _remote(actions, bare_id, "https://github.com/x/dupsame.git")
+    await _link_it(actions, bare_id)  # the bare side is heavier -> survives as `into`
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["executed"] is False  # dry-run is the default, unlike fold_project itself
+    assert len(out["candidates"]) == 1
+    c = out["candidates"][0]
+    assert c["dupe"] == "repo:/home/x/code/REPOS/dupsame"
+    assert c["into"] == "repo:dupsame"
+    assert c["remote_url"] == "https://github.com/x/dupsame.git"
+    assert "plan" in c["result"]  # nothing written — the preview only
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/dupsame'")
+    assert row["status"] == "active", "a dry run must never fold anything"
+
+
+async def test_remote_url_automerge_executes_when_told_to(actions: Actions) -> None:
+    # the path-shaped side's `name` is its own full path, matching the REAL live shape
+    # (measured 2026-08-17: rotten-apple/coldspot/kast's path-shaped canonicals all carry
+    # name=<their own path>, never the bare basename) — giving it the bare basename
+    # instead, as an earlier draft of this test did, would make _resolve_software_project
+    # (which fold_project itself calls to resolve `into`) hit its own name-property
+    # fallback ambiguously, a synthetic-fixture artifact this shape avoids by construction.
+    await _stub_project(actions, "repo:/home/x/code/REPOS/dupexec",
+                        "/home/x/code/REPOS/dupexec")
+    await _stub_project(actions, "repo:dupexec", "dupexec")
+    path_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:/home/x/code/REPOS/dupexec'")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupexec'")
+    await _remote(actions, path_id, "https://github.com/x/dupexec.git")
+    await _remote(actions, bare_id, "https://github.com/x/dupexec.git")
+    await _link_it(actions, bare_id)
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test", execute=True)
+    assert out["executed"] is True
+    assert out["candidates"][0]["result"]["folded"] == "repo:/home/x/code/REPOS/dupexec"
+    assert out["candidates"][0]["result"]["into"] == "repo:dupexec"
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/dupexec'")
+    assert row["status"] == "merged"
+
+
+async def test_remote_url_automerge_skips_when_remote_url_is_missing_on_one_side(
+    actions: Actions,
+) -> None:
+    """The exact live shape today (rotten-apple/coldspot/kast, measured 2026-08-17): the
+    bare canonical carries a real remote_url, the path-shaped clone carries none — honest
+    UNCERTAIN, never a guess from basename alone."""
+    await _stub_project(actions, "repo:/home/x/code/REPOS/onesided", "onesided")
+    await _stub_project(actions, "repo:onesided", "onesided")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:onesided'")
+    await _remote(actions, bare_id, "https://github.com/x/onesided.git")
+    await _link_it(actions, bare_id)
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "does not match on both sides" in out["skipped"][0]["reason"]
+
+
+async def test_remote_url_automerge_skips_when_remote_urls_disagree(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:/home/x/code/REPOS/twourls", "twourls")
+    await _stub_project(actions, "repo:twourls", "twourls")
+    path_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:/home/x/code/REPOS/twourls'")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:twourls'")
+    await _remote(actions, path_id, "https://github.com/x/fork-of-twourls.git")
+    await _remote(actions, bare_id, "https://github.com/x/twourls.git")
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "does not match on both sides" in out["skipped"][0]["reason"]
+
+
+async def test_remote_url_automerge_skips_a_three_way_collision_loudly(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:/home/x/code/REPOS/triway", "triway")
+    await _stub_project(actions, "repo:/home/x/seats/ra/triway", "triway")
+    await _stub_project(actions, "repo:triway", "triway")
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "not a clean pair" in out["skipped"][0]["reason"]
+
+
+async def test_remote_url_automerge_skips_when_link_counts_are_equal(
+    actions: Actions,
+) -> None:
+    """A matching remote_url with no clear survivor (equal live link counts) still
+    refuses to guess a direction — a human question, same discipline as an N-way group."""
+    await _stub_project(actions, "repo:/home/x/code/REPOS/tiecount", "tiecount")
+    await _stub_project(actions, "repo:tiecount", "tiecount")
+    path_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:/home/x/code/REPOS/tiecount'")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:tiecount'")
+    await _remote(actions, path_id, "https://github.com/x/tiecount.git")
+    await _remote(actions, bare_id, "https://github.com/x/tiecount.git")
+    # both zero live links — a genuine tie, not the common "one side is a phantom" shape
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "equal live link counts" in out["skipped"][0]["reason"]
+
+
+async def test_remote_url_automerge_skips_a_genuine_contradiction(
+    actions: Actions,
+) -> None:
+    """Even with a matching remote_url and a clear link-count winner, a genuine
+    cross-object contradiction on another property still refuses — the same guard
+    fold_project itself would apply, preflighted here so a dry-run report is never
+    optimistic about a merge that would actually refuse."""
+    await _stub_project(actions, "repo:/home/x/code/REPOS/conflicted", "conflicted")
+    await _stub_project(actions, "repo:conflicted", "conflicted")
+    path_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:/home/x/code/REPOS/conflicted'")
+    bare_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:conflicted'")
+    await _remote(actions, path_id, "https://github.com/x/conflicted.git")
+    await _remote(actions, bare_id, "https://github.com/x/conflicted.git")
+    await _link_it(actions, bare_id)
+    await actions.assert_property(path_id, "language", "python", "agent:alice", NOW, 0.9)
+    await actions.assert_property(bare_id, "language", "go", "agent:bob", NOW, 0.9)
+
+    out = await remote_url_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "contradicting values on: language" in out["skipped"][0]["reason"]
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/conflicted'")
+    assert row["status"] == "active"
