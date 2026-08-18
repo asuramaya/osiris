@@ -606,15 +606,23 @@ async def _cmd_launch_harness(
         # holder was falsy. Asserted, not silently narrowed: a violated invariant here
         # should be loud, never a quiet skip of the identity gate.
         assert holder is not None
+        # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
+        # 983ec87a, two doors must return the same receipt): the SAME arithmetic
+        # _lineage_resume_candidate's own success line renders ("...resumable, N hop(s)
+        # back") — its log always ends with exactly one success entry when `resume` is
+        # set, so the count of entries BEFORE it is N.
         gate, refusal = await _resume_guard(
-            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st)
+            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st,
+            hop=len(resume_log) - 1, launch_cwd=launch_cwd)
         if gate == "resident-unknown":
             # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
             # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
             # ABSENCE of signed testimony is not evidence this head belongs to someone
             # else. "crossed-registry" (a POSITIVE finding) still falls through to a
             # fresh mint below; "resident-unknown" refuses the WHOLE launch instead —
-            # nothing spawned, the exact resume command named.
+            # nothing spawned, the exact resume command named. NOTE (#173a): only
+            # reached when the zero-hop graph door (hop/launch_cwd above) did NOT
+            # already clear the gate.
             print(f"osiris launch: REFUSING — {handle!r} has a possibly-resumable "
                   f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
                   f"{resume[0]}` by hand to confirm it yourself; osiris will not mint "

@@ -936,9 +936,46 @@ async def _resident_disagrees(
         pool, root, sid, base, job_dir_hint=job_dir_hint, seat_id=seat_id) != "match"
 
 
+def _zero_hop_graph_corroborates(
+    resume: tuple[str, str, float, str], *, hop: int | None, launch_cwd: str | None,
+) -> bool:
+    """A NAMED third verdict alongside `_resident_verdict`'s match/mismatch/unknown (#173a,
+    the ferryman incident 2026-08-18 00:41Z: `osiris launch` FOUND d8727352 — gen 8, 0
+    hops, resumable — and the resident-unknown guard REFUSED it, because no signed osiris
+    act had been written into that transcript yet; the operator resumed it by hand anyway,
+    correctly, since it plainly WAS ferryman's own session). NEVER a loosening of
+    `_resident_verdict` itself (that function, and its three verdicts, are untouched) —
+    this is a wholly separate, narrower door that opens ONLY for `_lineage_resume_
+    candidate`'s own first hop (`hop == 0`, i.e. the lineage HEAD's own current session,
+    never an ancestor's): the session id found there came straight off the GRAPH's own
+    `session` property (succession_chain's fresh read of this exact lineage head's own
+    mount-time stamp), not from re-scanning a transcript for testimony it may not have
+    written yet.
+
+    REVIEW NOTE (Sekhmet XXI, reviewing this branch as a stranger's per Thoth's own
+    instruction): `resume[1]` is NOT independent evidence — trace `_lineage_resume_
+    candidate`'s own return (`(session, repo, mtime, "")`, `repo` being that function's
+    OWN `repo` KEYWORD ARGUMENT), and `launch_seat`'s one call site (`repo=launch_cwd`,
+    then `_resume_guard(..., launch_cwd=launch_cwd)`): `resume[1]` and `launch_cwd` are
+    the SAME value threaded through, so `resume[1] == launch_cwd` is true by construction
+    for every existing caller — never a real second signal, whatever this docstring used
+    to claim. Left in (rather than silently dropped) as a documented invariant a future
+    caller could violate by wiring `resume`/`launch_cwd` from different sources; the
+    ACTUAL gate here is just `hop == 0` — trusting the graph's own `session` pointer for
+    the lineage head's own current generation, once a launch location is known.
+    A GENUINE second signal (e.g. a fresh `agent_mounts` row for this exact holder whose
+    own `cwd` agrees) is possible and may be worth adding — flagged to Thoth rather than
+    redesigned here, mid-incident, in a branch under active review. Callers outside the
+    lineage-walk lane never pass `hop`/`launch_cwd` — this always returns False for them,
+    so `_resume_guard` behaves exactly as before wherever this new context is
+    unavailable."""
+    return hop == 0 and launch_cwd is not None and resume[1] == launch_cwd
+
+
 async def _resume_guard(
     pool: asyncpg.Pool, resume: tuple[str, str, float, str], base: str, *,
-    seat_id: str | None, st: Settings,
+    seat_id: str | None, st: Settings, hop: int | None = None,
+    launch_cwd: str | None = None,
 ) -> tuple[str | None, str | None]:
     """The resident-identity gate (0100a35e) an already-found `_agent_resumable` result
     must clear before ANY caller continues someone else's session — shared by
@@ -953,7 +990,14 @@ async def _resume_guard(
     absence of evidence either way (ruling f624d114: these used to be the same bool and
     the same rendered sentence; a caller that string-matched `detail` to recover the
     distinction would just reinvent that bug one layer up, so this returns the token
-    itself instead of prose to be re-parsed)."""
+    itself instead of prose to be re-parsed).
+
+    `hop`/`launch_cwd` (#173a): only `launch_seat`'s own lineage-walk branch has this
+    context (`_lineage_resume_candidate`'s hop count and the seat's own launch location);
+    every other caller omits both and gets identical behavior to before this addition —
+    see `_zero_hop_graph_corroborates`'s own docstring for what this narrow extra door is
+    and, just as importantly, is NOT (it never runs when the testimony arm found a
+    positive mismatch — that arm stays unconditional)."""
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     verdict = await _resident_verdict(pool, root, resume[0], base, job_dir_hint=resume[3],
@@ -965,6 +1009,8 @@ async def _resume_guard(
             "the registry's door for this addressee leads to a session whose own "
             "signed testimony names a different mind (the crossed-registry class, "
             "0100a35e)")
+    if _zero_hop_graph_corroborates(resume, hop=hop, launch_cwd=launch_cwd):
+        return None, None
     return "resident-unknown", (
         "no signed testimony could be found anywhere in the addressee's scanned "
         "session history to confirm this door — an absence of evidence, not "
@@ -2228,8 +2274,15 @@ async def launch_seat(
             # holder was falsy. Asserted, not silently narrowed: a violated invariant here
             # should be loud, never a quiet skip of the identity gate.
             assert holder is not None
+            # hop count (#173a): the SAME arithmetic `_lineage_resume_candidate`'s own
+            # success line renders ("...resumable, N hop(s) back") — its log always ends
+            # with exactly one success entry when `resume` is set, so the count of entries
+            # BEFORE it (this list minus that one) is N. `launch_cwd` is this seat's own
+            # launch location (office, or tree_cwd when tree-bound), the 1:1 identity the
+            # zero-hop graph door corroborates against.
             gate, refusal = await _resume_guard(
-                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st)
+                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st,
+                hop=len(resume_log) - 1, launch_cwd=launch_cwd)
             if gate == "resident-unknown":
                 # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb — self-healing
                 # over manual bandaids): an ABSENCE of signed testimony is not evidence this
@@ -2240,7 +2293,10 @@ async def launch_seat(
                 # genuinely isn't this seat's, so a fresh body under this seat's own name is
                 # legitimate. "resident-unknown" gets no such pass: refuse the WHOLE launch,
                 # spawn nothing, name the exact command a human can run to confirm it
-                # themselves — never silently degrade into "mint a stranger."
+                # themselves — never silently degrade into "mint a stranger." NOTE (#173a):
+                # this branch is only reached when the zero-hop graph door (passed via
+                # hop/launch_cwd above) did NOT already clear the gate — a zero-hop,
+                # graph-corroborated candidate resolves gate=None before this check ever runs.
                 return {"status": "refused-resume-unknown", "seat": target_seat,
                         "session": resume[0], "body_exists": False, "can_receive": False,
                         "detail": f"{refusal} — refusing rather than minting a stranger "

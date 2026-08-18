@@ -3745,6 +3745,107 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     assert row is not None and "pick up where you left off" in row["body"]
 
 
+# ═══ THE ZERO-HOP GRAPH DOOR (#173a, the ferryman incident 2026-08-18 00:41Z) ════════════
+# `osiris launch` found d8727352 (gen 8, 0 hops, resumable) and the resident-unknown guard
+# refused it: no signed osiris act had been written into that transcript yet, so the
+# testimony arm honestly answered "unknown" — an absence of evidence, not a stranger. The
+# operator resumed it by hand anyway, correctly. `_zero_hop_graph_corroborates` is the
+# named, narrow door that now lets exactly this shape through — never for an ancestor hop,
+# never when the repo lands anywhere but the seat's own launch location.
+
+async def test_launch_harness_lane_resumes_a_zero_hop_candidate_with_no_signed_testimony(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The exact ferryman shape: a fresh, anchored, resumable transcript for the seat's
+    CURRENT holder (0 hops back) that never wrote a single signed osiris act — the
+    testimony arm alone would refuse this as resident-unknown. The zero-hop graph door
+    corroborates it a different way (the graph's own `session` stamp + the seat's own
+    launch location) and the resume proceeds anyway."""
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-ferryman"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"booting"}\n' + b"x" * 16)  # no signed act
+    obj = await actions.create_or_find_object("Agent", "agent:ferry1234", "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:ferry1234", manager_agent="agent:hm-ferry",
+        worker_handle="Ferryman-Test", house="osiris")
+    await _office(actions, worker_seat, "/repo/ferryman")
+    manc = await actions.create_or_find_object("Agent", "agent:hm-ferry", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a graph-corroborated zero-hop candidate must never be minted")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-ferry", target=worker_seat,
+        message="pick it back up", substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched" and d["mode"] == "resumed"
+    assert d["session"] == FULL_SID
+    assert len(resumed) == 1 and resumed[0]["repo"] == "/repo/ferryman"
+    assert resumed[0].get("resume_session") == FULL_SID
+
+
+async def test_zero_hop_graph_door_never_fires_one_hop_back(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The door is named and narrow: an otherwise-identical unsigned, resumable transcript
+    ONE hop back (the predecessor's session, not the current holder's own) must still
+    refuse resident-unknown — the graph door only ever opens for hop 0. Composed with
+    ef88e2bb (954c591/9421c81): a resident-unknown refusal now REFUSES THE WHOLE LAUNCH
+    rather than falling through to a fresh mint — this is the exact case that fix exists
+    for, one hop back is simply not eligible for the zero-hop door's own exception."""
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-ferryman2"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"booting"}\n' + b"x" * 16)  # no signed act
+    pred = await actions.create_or_find_object("Agent", "agent:ferry2", "test")
+    await actions.assert_property(pred, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(pred, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(
+        (await actions.create_or_find_object("Agent", "agent:ferry2-ii", "test")),
+        "succeeded_from", "agent:ferry2", "test", NOW, 0.9,
+        evidence_class="self_declared")  # minted, never mounted — no session of its own
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:ferry2-ii", manager_agent="agent:hm-ferry2",
+        worker_handle="Ferryman2-Test", house="osiris")
+    await _office(actions, worker_seat, "/repo/ferryman2")
+    manc = await actions.create_or_find_object("Agent", "agent:hm-ferry2", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    async def _boom_resume(*a: Any, **kw: Any) -> None:
+        raise AssertionError("one hop back must never clear the graph door")
+
+    async def _boom_spawn(*a: Any, **kw: Any) -> None:
+        raise AssertionError("resident-unknown must refuse the whole launch (ef88e2bb), "
+                             "never fall through to a fresh mint")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm-ferry2", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom_spawn, resume_spawn=_boom_resume,
+        agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-resume-unknown"
+    assert d["session"] == FULL_SID
+    assert d["body_exists"] is False and d["can_receive"] is False
+
+
 async def test_launch_harness_lane_walks_past_a_zero_turn_generation(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -3813,15 +3914,19 @@ async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumab
     assert len(spawned) == 1
 
 
-async def test_launch_harness_lane_refuses_outright_when_resident_is_unknown(
+async def test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_not_a_refusal(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb): a resumable session
-    with NO signed testimony anywhere — an ABSENCE of evidence, not a positive finding of
-    a different mind — must refuse the WHOLE launch, never fall through to the same fresh
-    mint a genuine crossed-registry finding would take. Before this fix both gates nulled
-    `resume` identically and fell through — exactly how ferryman's real, resumable session
-    got a stranger minted over it."""
+    """THE COMPOSITION OF ef88e2bb (954c591) AND #173a (0db0659): a resumable session with
+    NO signed testimony, for the seat's OWN CURRENT holder (hop 0, no predecessor at all)
+    — the exact shape this test used to expect a hard refusal for, back when ef88e2bb
+    shipped alone. Once #173a's zero-hop graph door lands beside it, THIS fixture is
+    precisely the case that door exists to let through: `_zero_hop_graph_corroborates`
+    clears the gate before ef88e2bb's `resident-unknown` refusal branch is ever reached,
+    so the resume proceeds. `test_zero_hop_graph_door_never_fires_one_hop_back` is the
+    sibling proof that a NON-zero-hop resident-unknown case still hits ef88e2bb's refusal
+    (refused-resume-unknown, nothing spawned) — the two tests together are the real
+    contract: hop 0 resumes, hop >=1 refuses, never a fresh mint either way."""
     sense = await _lineage_holder_with_unsigned_session(
         actions, tmp_path, agent_id="agent:unkhold")
     worker_seat, _manager_seat = await _managed_pair(
@@ -3829,21 +3934,22 @@ async def test_launch_harness_lane_refuses_outright_when_resident_is_unknown(
         worker_handle="Unknown-Test", house="osiris")
     await _office(actions, worker_seat, "/tmp/unknown-test")
 
-    async def _boom_spawn(*a: Any, **kw: Any) -> None:
-        raise AssertionError("resident-unknown must refuse the launch, never mint a stranger")
+    resumed: list[dict[str, Any]] = []
 
-    async def _boom_resume(*a: Any, **kw: Any) -> None:
-        raise AssertionError("resident-unknown must refuse, never resume blind either")
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    async def _boom_spawn(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a zero-hop graph-corroborated candidate must never be minted")
 
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm-unk", target=worker_seat, substrate="harness",
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom_spawn, resume_spawn=_boom_resume, agents_json=_fake_agents_json([[]]))
+        spawn=_boom_spawn, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
 
-    assert d["status"] == "refused-resume-unknown"
+    assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
-    assert d["body_exists"] is False and d["can_receive"] is False
-    assert "claude -p --resume" in d["detail"] and FULL_SID in d["detail"]
+    assert len(resumed) == 1 and resumed[0].get("resume_session") == FULL_SID
 
 
 async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
