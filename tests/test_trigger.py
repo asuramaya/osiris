@@ -1881,13 +1881,17 @@ async def test_the_daemon_reply_rung_leads_and_wears_the_envelope(
         nudges.append((job, text))
         return True
 
+    async def _agents_json() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "sessionId": FULL_SID, "cwd": "/wherever"}]
+
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         raise AssertionError("a daemon-held addressee must be nudged, never resumed")
 
     d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense)),
-                          spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_nudge)
+                          spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                          agents_json=_agents_json)
     assert d["mode"] == "nudged" and "[D] Demo" in d["detail"]
     job, text = nudges[0]
     assert f"DM #{msg_id}" in text                      # which message
@@ -1943,16 +1947,21 @@ async def test_a_nudged_message_is_never_renudged(
     async def _nudge(job: dict[str, Any], text: str) -> bool:
         return True
 
+    async def _agents_json() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "sessionId": FULL_SID, "cwd": "/wherever"}]
+
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         raise AssertionError("nothing may spawn in this test")
 
     st = _settings(enabled=True, sense=str(sense))
     d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                            sender="agent:sender", settings=st, spawn=_spawn,
-                           windows=_no_windows, jobs=_jobs, nudge=_nudge)
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
     d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                            sender="agent:sender", settings=st, spawn=_spawn,
-                           windows=_no_windows, jobs=_jobs, nudge=_nudge)
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
     assert d1["mode"] == "nudged" and d2["mode"] == "skipped-once-per-message"
     # RECEIPT HONESTY (thread aa58c1e4, decision 636c8abd): 'nudged' means the daemon
     # ACCEPTED the injection, never that the turn already ran — 'landed as X's next turn'
@@ -1961,6 +1970,113 @@ async def test_a_nudged_message_is_never_renudged(
     assert "ACCEPTED" in d1["detail"] and "landed as" not in d1["detail"]
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE message_id=$1", msg_id) == 1
+
+
+# ═══ the third state (task #176, 2026-08-18): the daemon accepted, but nobody confirmed
+# home — practice 2c45d78e's "must be able to say I don't know" applied to dispatch_dm's
+# own strongest-looking receipt ═══
+
+async def test_a_nudge_with_no_confirmed_listener_is_queued_not_nudged(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The daemon's {ok:true} means it ACCEPTED the envelope into its own queue, never that
+    a live reader is there — a job it still lists after the body exited, or one that
+    outlived the daemon's own generation, both accept with nobody home. When `claude agents
+    --json` shows no matching session-shaped body, the receipt must say UNKNOWN
+    (queued-no-listener), never the confident 'nudged' a caller would read as delivered."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return True
+
+    async def _agents_json() -> list[dict[str, Any]]:
+        return []  # the daemon's job list disagrees with the harness's own live roster
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("nothing may spawn in this test")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                          agents_json=_agents_json)
+    assert d["mode"] == "queued-no-listener"
+    assert "UNKNOWN" in d["detail"] and "claude agents --json" in d["detail"]
+
+
+async def test_queue_semantics_are_unchanged_by_the_listener_check(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The explicit guardrail (task #176): the third state is a RECEIPT change only. The
+    agent_wakes ledger row still lands on a bare {ok:true} regardless of the listener
+    check, so the once-per-message brake still fires on a second dispatch — at-least-once
+    across successions stays correct, unchanged by this fix."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _jobs(ids: set) -> dict[str, Any]:
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return True
+
+    async def _agents_json() -> list[dict[str, Any]]:
+        return []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        raise AssertionError("nothing may spawn in this test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
+    assert d1["mode"] == "queued-no-listener" and d2["mode"] == "skipped-once-per-message"
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id) == "dm-reply"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_wakes WHERE message_id=$1", msg_id) == 1
+
+
+async def test_confirm_listener_matches_by_short_full_or_prefix_session_id() -> None:
+    """`_confirm_listener` matches a job the SAME way `claude_daemon.job_for` does — short
+    id, full session id, or its 8-char prefix — so the two can never disagree about which
+    identity means the same body."""
+    from src.orchestrator.trigger import _confirm_listener
+
+    async def _rows_by_short() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "cwd": "/x"}]
+
+    async def _rows_by_full_sid() -> list[dict[str, Any]]:
+        return [{"sessionId": FULL_SID, "cwd": "/x"}]
+
+    async def _rows_no_match() -> list[dict[str, Any]]:
+        return [{"id": "ffffffff", "sessionId": "ffffffff-0000-0000-0000-000000000000"}]
+
+    job = {"short": "abcd1234", "sessionId": FULL_SID}
+    assert await _confirm_listener(job, _rows_by_short) is True
+    assert await _confirm_listener(job, _rows_by_full_sid) is True
+    assert await _confirm_listener(job, _rows_no_match) is False
+
+
+async def test_confirm_listener_fails_open_on_a_read_error() -> None:
+    """An `agents_json` read failure (harness version seam, transient error) reads as
+    'cannot confirm' — False, never a raised exception that would strand the caller."""
+    from src.orchestrator.trigger import _confirm_listener
+
+    async def _broken() -> list[dict[str, Any]]:
+        raise TimeoutError("harness CLI hung")
+
+    assert await _confirm_listener({"short": "abcd1234"}, _broken) is False
+
 
 async def test_mail_settled_by_a_successor_is_never_phantom_nudged(
     actions: Actions, tmp_path: Path
