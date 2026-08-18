@@ -576,7 +576,11 @@ def _tool_chars(t: Any) -> int:
 # Thoth LXXVII heir ix, #172/#173a/#179 wave): NO NEW TOOL — fleet()'s docstring grew by the
 # whisper_health field (Imhotep d72281c, #179: hook failures alarmed and read back). Flagged by
 # its author ("~250 chars, not raised"), raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 182_000
+# 182,000 -> 182,400 (measured 182,241 exact). 129 tools unchanged (2026-08-18 ~02:30, Thoth
+# LXXVII heir ix, #174/#175/#180-piece-1 wave): NO NEW TOOL — fleet()'s ghost_gap went
+# per-identity (false_live/false_dead, Khnum 18a5d81, #174) and the docstring grew with it.
+# Flagged by its author, raised once here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 182_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
