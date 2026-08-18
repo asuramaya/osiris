@@ -598,7 +598,14 @@ def _tool_chars(t: Any) -> int:
 # LXXVII heir ix, #180 piece 2 merge): NO NEW TOOL — fleet()'s docstring grew with pool_health
 # (pg_stat_activity by application_name + tx_total) and merged_into grouping (Khnum d061a5a).
 # Flagged by its author, raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 184_400
+# 184,400 -> 185,800 (measured 185,628 exact). 130 -> 131 tools (2026-08-18 ~04:35, Thoth
+# LXXVII heir ix, #181 merge): ONE NEW TOOL — recover_harness_exchanges (Imhotep 9e09d30):
+# dry-run-first recovery of the harness's own cross-session SendMessage traffic out of the
+# soul-stored transcripts into harness_messages (migration 0051), so reasoning behind
+# rulings never lives only in two jsonl files (Ptah 5260); plus fleet()'s per-seat
+# osiris-vs-harness adoption share. Flagged by its author, raised once here at the merged
+# tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 185_800
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -691,4 +698,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 130
+    assert len(per_tool) == 131
