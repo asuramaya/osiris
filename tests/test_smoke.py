@@ -10,16 +10,19 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.api.app import create_app
 from src.orchestrator.capture import record_hook_failure
 from src.orchestrator.smoke import (
     CHROME_ROUTES,
+    registry_rowless_warning,
     smoke,
     smoke_chrome,
     smoke_pool,
     summarize_failures,
+    summarize_warnings,
     whisper_health,
 )
 
@@ -270,3 +273,73 @@ def test_summarize_failures_says_nothing_when_whisper_is_healthy() -> None:
     mcp_result = {"chrome": _green_chrome(), "db": "ok", "ok": True,
                  "whisper": {"ok": True, "error_count": 0, "window_hours": 24}}
     assert summarize_failures(_green_chrome(), mcp_result) == []
+
+
+# --- registry_rowless_warning: WARNING, never a failure (Thoth DM 5257) --------------------
+
+async def test_registry_rowless_warning_is_none_on_a_clean_census(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import mounts
+
+    async def _clean(pool: object) -> dict[str, object]:
+        return {"blind": False, "verified": [], "matched": [], "rowless": []}
+
+    monkeypatch.setattr(mounts, "registry_census", _clean)
+    assert await registry_rowless_warning(actions.pool) is None
+
+
+async def test_registry_rowless_warning_names_the_count(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import mounts
+
+    async def _rowless(pool: object) -> dict[str, object]:
+        return {"blind": False, "verified": [], "matched": [],
+                "rowless": [{"session_id": "a"}, {"session_id": "b"}]}
+
+    monkeypatch.setattr(mounts, "registry_census", _rowless)
+    assert await registry_rowless_warning(actions.pool) == "2 listed bodies with no row"
+
+
+async def test_registry_rowless_warning_is_silent_when_the_census_is_blind(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A harness read failure must never stack a second, misleading alarm on top of an
+    already-honestly-reported gap (registry_census's own `blind: true` shape)."""
+    from src.orchestrator import mounts
+
+    async def _blind(pool: object) -> dict[str, object]:
+        return {"blind": True, "verified": [], "matched": [], "rowless": [],
+                "note": "the harness registry read failed"}
+
+    monkeypatch.setattr(mounts, "registry_census", _blind)
+    assert await registry_rowless_warning(actions.pool) is None
+
+
+async def test_smoke_carries_the_rowless_warning_without_failing_ok(
+    client: httpx.AsyncClient, actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import mounts
+
+    async def _rowless(pool: object) -> dict[str, object]:
+        return {"blind": False, "verified": [], "matched": [], "rowless": [{"session_id": "x"}]}
+
+    monkeypatch.setattr(mounts, "registry_census", _rowless)
+    res = await smoke(client, actions.pool)
+    assert res["warnings"] == ["1 listed bodies with no row"]
+    assert res["ok"] is True, "a warning must never gate smoke()'s overall verdict"
+
+
+def test_summarize_warnings_passes_through_smokes_own_warnings_list() -> None:
+    mcp_result = {"chrome": _green_chrome(), "db": "ok", "ok": True,
+                 "warnings": ["3 listed bodies with no row"]}
+    assert summarize_warnings(mcp_result) == ["3 listed bodies with no row"]
+
+
+def test_summarize_warnings_is_empty_on_a_bare_error_string() -> None:
+    assert summarize_warnings("error: connection refused") == []
+
+
+def test_summarize_warnings_is_empty_when_absent() -> None:
+    assert summarize_warnings({"chrome": _green_chrome(), "db": "ok", "ok": True}) == []

@@ -217,13 +217,21 @@ async def cmd_attach(handle: str, *, manager: ManagerCall = _default_manager) ->
 
 # --- smoke -----------------------------------------------------------------------------------
 
-async def _run_smoke_probes() -> list[str]:
-    """The two probes, composed — shared by `cmd_smoke` and `cmd_deploy` so neither
-    re-derives it. Returns the flat failure list (empty = all green)."""
+async def _run_smoke_probes_full() -> tuple[list[str], list[str]]:
+    """The two probes, composed, PLUS osiris-mcp's own non-blocking `warnings` (task
+    #180 follow-through, Thoth DM 5257: the registry_census `rowless` count folded into
+    smoke's verdict) — split from `_run_smoke_probes` only so the deploy gate's retry
+    loop (which must key its backoff on FAILS alone, never a non-blocking warning) keeps
+    its existing narrow `list[str]` contract untouched. Returns (fails, warnings)."""
     import httpx
 
     from src.config.settings import get_settings
-    from src.orchestrator.smoke import call_mcp_smoke, smoke_chrome, summarize_failures
+    from src.orchestrator.smoke import (
+        call_mcp_smoke,
+        smoke_chrome,
+        summarize_failures,
+        summarize_warnings,
+    )
 
     settings = get_settings()
     url = await _mcp_url()
@@ -235,7 +243,15 @@ async def _run_smoke_probes() -> list[str]:
             return await smoke_chrome(client)
 
     chrome, mcp_result = await asyncio.gather(local_chrome(), call_mcp_smoke(url))
-    return summarize_failures(chrome, mcp_result)
+    return summarize_failures(chrome, mcp_result), summarize_warnings(mcp_result)
+
+
+async def _run_smoke_probes() -> list[str]:
+    """The two probes, composed — shared by `cmd_smoke` and `cmd_deploy` so neither
+    re-derives it. Returns the flat failure list (empty = all green); see
+    `_run_smoke_probes_full` for the non-blocking warnings alongside it."""
+    fails, _warnings = await _run_smoke_probes_full()
+    return fails
 
 
 async def _health_probe() -> bool:
@@ -316,14 +332,16 @@ def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
 
 
 async def cmd_smoke() -> int:
-    fails = await _run_smoke_probes()
+    fails, warnings = await _run_smoke_probes_full()
     if not fails:
         print("smoke: all green (8 chrome routes + the live mcp pool)")
-        return 0
-    print("SMOKE FAILURES:")
-    for f in fails:
-        print(" -", f)
-    return 1
+    else:
+        print("SMOKE FAILURES:")
+        for f in fails:
+            print(" -", f)
+    for w in warnings:
+        print("WARNING:", w)
+    return 0 if not fails else 1
 
 
 # --- boot-status -------------------------------------------------------------------------------

@@ -106,15 +106,46 @@ async def whisper_health(pool: asyncpg.Pool, *, window_hours: int = 24) -> dict[
     return out
 
 
+async def registry_rowless_warning(pool: asyncpg.Pool) -> str | None:
+    """WARNING, never a failure (Thoth DM 5257, whisper-health follow-through): reads
+    `mounts.registry_census`'s own `rowless` population back — verified-live harness
+    bodies (real /proc-confirmed pids) with NO `agent_mounts` row at all, exactly the
+    population #178's pieces (a)/(b) exist to close to zero. Folding "N listed bodies
+    with no row" into smoke's own verdict means a stranger's machine sees it in the
+    first minute, same law as `whisper_health` above — a read-back, no new counter.
+    Never gates `ok`: a rowless body self-heals at its own next mount (registry_census's
+    own docstring), a known transient gap, not a liveness failure. `None` on a clean
+    census OR a blind one (the harness read itself failed — silence here, not a second
+    alarm stacked on an already-reported gap). Same fail-open law as every other probe
+    here: a broken POOL (registry_census's own `pool.fetch` call, not just its harness
+    read) must degrade to `None`, never crash the whole `smoke()` composition — proven
+    live by `test_smoke_is_not_ok_when_the_pool_fails`, which hands `smoke()` a pool with
+    no `.fetch` at all."""
+    from src.orchestrator.mounts import registry_census
+
+    try:
+        census = await registry_census(pool)
+    except Exception:  # noqa: BLE001 - report nothing, never raise past this probe
+        return None
+    if census.get("blind"):
+        return None
+    n = len(census.get("rowless") or [])
+    return f"{n} listed bodies with no row" if n else None
+
+
 async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]:
-    """The whole picture: every chrome route + the pool + the whisper/hook alarm channel,
-    composed. `ok` is a single boolean a deploy script can branch on without re-deriving
-    the per-surface detail."""
+    """The whole picture: every chrome route + the pool + the whisper/hook alarm channel
+    + the registry rowless count, composed. `ok` is a single boolean a deploy script can
+    branch on without re-deriving the per-surface detail — `warnings` (a list, empty when
+    clean) never feeds it: a warning names something worth a glance, never a reason to
+    fail a deploy."""
     chrome = await smoke_chrome(client)
     db = await smoke_pool(pool)
     whisper = await whisper_health(pool)
+    rowless_warning = await registry_rowless_warning(pool)
     ok = db == "ok" and all(v == "ok" for v in chrome.values()) and whisper["ok"]
-    return {"chrome": chrome, "db": db, "whisper": whisper, "ok": ok}
+    return {"chrome": chrome, "db": db, "whisper": whisper,
+            "warnings": [rowless_warning] if rowless_warning else [], "ok": ok}
 
 
 async def call_mcp_smoke(url: str) -> dict[str, Any] | str:
@@ -147,3 +178,14 @@ def summarize_failures(chrome: dict[str, str], mcp_result: dict[str, Any] | str)
             fails.append(f"whisper/hook alarms: {whisper.get('error_count', '?')} in "
                         f"{whisper.get('window_hours', '?')}h{detail}")
     return fails
+
+
+def summarize_warnings(mcp_result: dict[str, Any] | str) -> list[str]:
+    """Non-blocking findings from osiris-mcp's own `smoke()` verdict — the `warnings` list
+    (today: `registry_rowless_warning`) — kept OUT of `summarize_failures`'s list on
+    purpose: a warning is worth a glance, never a deploy-gate reason. A bare error STRING
+    (the round-trip itself failed) has nothing further to warn about beyond that already-
+    fatal fact."""
+    if isinstance(mcp_result, str):
+        return []
+    return list(mcp_result.get("warnings") or [])
