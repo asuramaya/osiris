@@ -3125,6 +3125,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "  AS mount_seen, "
         " (SELECT m.cwd FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "  ORDER BY m.last_seen DESC NULLS LAST LIMIT 1) AS cwd, "
+        " (SELECT m.job_dir FROM agent_mounts m WHERE m.agent_id=o.canonical "
+        "  ORDER BY m.last_seen DESC NULLS LAST LIMIT 1) AS job_dir, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "  WHERE l.from_id=o.id AND l.type='spawned_by' LIMIT 1) AS parent "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.canonical"
@@ -3158,6 +3160,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                                int(r["seat_gen"]) if r["seat_gen"] else None),
             "bound": r["bound_seat"],
             "cwd": r["cwd"],
+            "job_dir": r["job_dir"],
         }
     # PROJECT LABEL NORMALIZATION THROUGH merged_into (task #180 piece 2 (f), Henry msg 5236,
     # third surface of 3c3d9efa (b)): a project's raw `current_assertions` label can name a
@@ -3291,6 +3294,49 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         pool_health = await pg_activity_by_app(pool)
     except Exception:  # noqa: BLE001
         pool_health = {"by_application": {}, "backends": None, "tx_total": {}}
+    # CROSS-CHANNEL ADOPTION (task #181, Thoth DM 5320): per-live-seat osiris-vs-harness
+    # traffic share — Ptah measured 3 osiris sends against ~24 harness-socket (SendMessage)
+    # sends during a routing defect, 90% of that day's reasoning invisible to this graph.
+    # `harness_count: None` (never a false zero) whenever the seat's current session was
+    # never soul-stored + recovered (`recover_harness_exchanges` is the write side; this
+    # only reads what already landed) — "not recovered" and "recovered, zero harness
+    # traffic" are different facts, never conflated. Batched (not per-node), same law as
+    # the project-label normalization above it: fleet() can carry 500+ rows.
+    try:
+        anchor_by_canonical = {
+            c: str(Path(n["job_dir"]).name) for c, n in nodes.items()
+            if n["live"] and n["job_dir"]
+        }
+        osiris_counts: dict[str, int] = {}
+        harness_counts: dict[str, int] = {}
+        if anchor_by_canonical:
+            rows_o = await pool.fetch(
+                "SELECT from_agent, count(*) AS n FROM fleet_messages "
+                "WHERE from_agent = ANY($1::text[]) "
+                "AND created_at > now() - interval '24 hours' GROUP BY from_agent",
+                list(anchor_by_canonical))
+            osiris_counts = {r["from_agent"]: int(r["n"]) for r in rows_o}
+            rows_h = await pool.fetch(
+                "SELECT anchor_sid, count(*) AS n FROM harness_messages "
+                "WHERE anchor_sid = ANY($1::text[]) "
+                "AND (observed_at IS NULL OR observed_at > now() - interval '24 hours') "
+                "GROUP BY anchor_sid", list(set(anchor_by_canonical.values())))
+            harness_counts = {r["anchor_sid"]: int(r["n"]) for r in rows_h}
+        for c, anchor in anchor_by_canonical.items():
+            osiris_n = osiris_counts.get(c, 0)
+            if anchor in harness_counts:
+                harness_n = harness_counts[anchor]
+                total = osiris_n + harness_n
+                adopt_entry: dict[str, Any] = {
+                    "osiris_count": osiris_n, "harness_count": harness_n, "recovered": True}
+                if total:
+                    adopt_entry["share"] = round(osiris_n / total, 3)
+            else:
+                adopt_entry = {"osiris_count": osiris_n, "harness_count": None,
+                               "recovered": False}
+            nodes[c]["adoption"] = adopt_entry
+    except Exception:  # noqa: BLE001 — best-effort, same fail-open law as every probe here
+        pass
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -3312,7 +3358,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"],
              "last_seen": n["ts"].isoformat() if n["ts"] else None,
-             **({"seat": n["seat"]} if n["seat"] else {})}
+             **({"seat": n["seat"]} if n["seat"] else {}),
+             **({"adoption": n["adoption"]} if n.get("adoption") else {})}
             for c, n in shown.items()
         ],
         **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "
@@ -4103,6 +4150,26 @@ async def unwire_informs_fanout(
     return await _unwire_informs_fanout(
         Actions(await _pool_get()), project=project, actor=ident.agent_id,
         dry_run=dry_run, because=because)
+
+
+@mcp.tool()
+async def recover_harness_exchanges(
+    anchor_sid: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """RECOVERY (task #181, Thoth DM 5320): lift a session's harness-native cross-session
+    messages (the SendMessage tool) OUT of its already-soul-stored transcript into typed,
+    attributed, time-threaded `harness_messages` rows — Ptah measured that during a
+    routing defect he and Ra sent 3 messages through osiris and ~24 through the harness's
+    own socket, 90% of a day's reasoning invisible to orient()/search()/fleet(). `smoke.
+    embed_health`'s own sibling wall: osiris cannot see the harness's cross-session
+    socket LIVE, only after a transcript is soul-stored and this runs over it.
+
+    `anchor_sid` must already be soul-stored (`SoulStore.ingest_path` — this tool never
+    reads disk itself). DRY RUN IS THE DEFAULT: returns `{found, already_recovered,
+    would_write, sample}` without writing. `dry_run=False` REQUIRES a non-blank `because`.
+    Idempotent per (anchor_sid, turn_index) — safe to re-run once a session keeps growing."""
+    from src.ingest.cross_channel import recover_harness_exchanges as _recover
+    return await _recover(await _pool_get(), anchor_sid, dry_run=dry_run, because=because)
 
 
 @mcp.tool()
