@@ -567,7 +567,12 @@ def _tool_chars(t: Any) -> int:
 # self-healing mechanism: 48 of 60 projects have zero commits ingested), repair_stale_current_flags
 # (Seshat e428dc1, 09bde57e (d); dry-run 123,914). Each flagged by its author, raised once here
 # at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 180_200
+# 180,200 -> 181,600 (measured 181,402 exact). 128 -> 129 tools (2026-08-18 ~00:55, Thoth
+# LXXVII heir ix, #177 merge wave): ONE NEW TOOL — unwire_informs_fanout (Imhotep 0a05d2c,
+# thread 5156: _wire_informs' cross-join repair verb, dry_run=True default; live dry-run 1020
+# edges across 60 projects, execution operator-gated). Flagged by its author, raised once
+# here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 181_600
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -660,4 +665,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 128
+    assert len(per_tool) == 129
