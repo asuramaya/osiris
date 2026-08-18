@@ -89,6 +89,32 @@ async def test_liveness_can_only_ever_ADD_life_never_take_it(
     assert "agent:chatty" in await _live(actions.pool)
 
 
+async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Ptah's gap (thread #174, 2026-08-17), the SAME self-evident derivation
+    `find_session_row`'s own lane 3 closes: a `-p --resume` wake's mount row carries a
+    job_dir keyed by the WAKE's own fresh job anchor (c8a22a05), unrelated to the resumed
+    transcript's own sid (02eaaa7a) — even though 02eaaa7a genuinely IS this agent's own
+    generation-derived identity. The job-dir join alone would miss this transcript's mtime
+    forever; matching also on agent_id (self-evident, no ledger read needed) closes it."""
+    await mounts.save_mount(actions.pool, job_dir="/home/x/.claude/jobs/c8a22a05",
+                            agent_id="agent:02eaaa7a-ii", project="rotten-apple",
+                            cwd="/repo", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = $2 WHERE agent_id = $1",
+        "agent:02eaaa7a-ii", datetime.now(UTC) - timedelta(minutes=20))
+    _transcript(tmp_path, "-ptah", "02eaaa7a-ea67-4fac-a9fc-d9377c6f8474")
+
+    stale_before = await _live(actions.pool)
+    assert "agent:02eaaa7a-ii" not in stale_before, "reads cold, exactly Ptah's own symptom"
+
+    touched = await observe_liveness(actions.pool, tmp_path)
+    assert touched == 1
+
+    assert "agent:02eaaa7a-ii" in await _live(actions.pool)
+
+
 async def test_a_genuinely_dead_session_STAYS_dead(actions: Actions, tmp_path: Path) -> None:
     """The fix must not trade false-dead for false-alive — which is exactly what simply widening
     the 15-minute window would have done. A session whose transcript has not moved in hours has

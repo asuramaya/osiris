@@ -137,16 +137,22 @@ def test_os_bodies_is_additive_and_absent_by_default() -> None:
 def test_os_bodies_rides_beside_the_project_head_and_names_the_gap() -> None:
     """The graph believes 2 are live in osiris; the OS backs only 1 — the gap IS the ghost
     (a closed tab mid-decay, or a phantom mount that never backed a real session). sibling-one
-    has a real body backing its one live agent: no ghost note."""
+    has a real body backing its one live agent: no ghost note. (thread #174, 2026-08-18: the
+    ghost note itself is driven by the explicit PER-IDENTITY `ghost_gap`, never re-derived
+    here as a netted `live_n - bodies` subtraction — that netting is exactly the bug that let
+    a false-live row and a false-dead body cancel silently.)"""
     nodes = {
         "agent:live1": _n(live=True, ts=T1),
         "agent:live2": _n(live=True, ts=T1),
         "agent:h1": _n(project="sibling-one", live=True, ts=T1),
     }
-    tree = render_fleet_tree(nodes, os_bodies={"osiris": 1, "sibling-one": 1})
+    tree = render_fleet_tree(
+        nodes, os_bodies={"osiris": 1, "sibling-one": 1},
+        ghost_gap={"osiris": {"false_live": ["agent:live2"], "false_dead": []}})
     osiris_line = tree.splitlines()[0]
     assert osiris_line.startswith("▸ osiris — 2 live · 2 sessions")
-    assert "1 os body" in osiris_line and "⚠ 1 ghost" in osiris_line
+    assert "1 os body" in osiris_line
+    assert "⚠ 1 ghost (1 false-live)" in osiris_line
     sibling_line = next(line for line in tree.splitlines() if line.startswith("▸ sibling-one"))
     assert "1 os body" in sibling_line and "ghost" not in sibling_line
 
@@ -155,8 +161,27 @@ def test_os_bodies_defaults_an_unlisted_project_to_zero() -> None:
     """A project census never even mentions (no real process, ever) still gets an honest '0 os
     bodies' line rather than silently omitting the signal."""
     nodes = {"agent:live1": _n(live=True, ts=T1)}
-    tree = render_fleet_tree(nodes, os_bodies={})
-    assert "0 os bodies" in tree and "⚠ 1 ghost" in tree
+    tree = render_fleet_tree(
+        nodes, os_bodies={},
+        ghost_gap={"osiris": {"false_live": ["agent:live1"], "false_dead": []}})
+    assert "0 os bodies" in tree and "⚠ 1 ghost (1 false-live)" in tree
+
+
+def test_ghost_gap_names_false_live_and_false_dead_without_cancelling() -> None:
+    """rotten-apple's own specimen (thread #174, 2026-08-18): ONE false-live row and THREE
+    unclaimed real bodies in the SAME project. The old netted math (1 live - 3 bodies = -2)
+    would have shown NOTHING wrong at all; per-identity shows both, honestly."""
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    tree = render_fleet_tree(
+        nodes, os_bodies={"osiris": 3},
+        ghost_gap={"osiris": {
+            "false_live": ["agent:live1"],
+            "false_dead": [{"cwd": "/a", "pids": [1]}, {"cwd": "/b", "pids": [2]},
+                            {"cwd": "/c", "pids": [3]}],
+        }})
+    line = tree.splitlines()[0]
+    assert "3 os bodies" in line
+    assert "⚠ 4 ghosts (1 false-live, 3 unclaimed bodies)" in line
 
 
 def test_the_binding_renders_anchored_beside_the_claimed_name() -> None:

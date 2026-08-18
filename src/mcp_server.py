@@ -3033,9 +3033,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `os_bodies` is a per-project count of REAL OS processes (`pgrep -x claude` + `/proc`)
     backing that project RIGHT NOW — ADDITIVE, and
     it changes nothing about what `live` means (still the mount registry's belief, exactly as
-    before). `ghost_gap` is where the graph's `live` count exceeds it: a closed tab mid-decay,
-    or a phantom mount that registered identity but never backed an actual session — either way
-    invisible to a query that only ever asks the graph, visible here the instant you look.
+    before). `ghost_gap` (thread #174, 2026-08-18) is PER-IDENTITY, not a netted count — a
+    per-project subtraction let a false-live row and a false-dead body cancel silently
+    (rotten-apple's own specimen: "1 live · 3 bodies" read as clean while carrying both).
+    Per project: `false_live` names each LIVE agent canonical whose own mount cwd backs no
+    real process (a closed tab mid-decay, or a phantom mount that registered identity but
+    never backed an actual session); `false_dead` names each real process (`cwd`, `pids`)
+    backing no live graph row at all — either way invisible to a query that only ever asks
+    the graph, visible here the instant you look.
 
     `whisper_health` (task #179) is the SessionStart whisper/session-end/precompact/stophook
     alarm channel read back — recent failure count + last error over a 24h window, from the
@@ -3084,6 +3089,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "  ORDER BY hl.first_seen DESC LIMIT 1) AS bound_seat, "
         " (SELECT max(m.last_seen) FROM agent_mounts m WHERE m.agent_id=o.canonical) "
         "  AS mount_seen, "
+        " (SELECT m.cwd FROM agent_mounts m WHERE m.agent_id=o.canonical "
+        "  ORDER BY m.last_seen DESC NULLS LAST LIMIT 1) AS cwd, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "  WHERE l.from_id=o.id AND l.type='spawned_by' LIMIT 1) AS parent "
         "FROM objects o WHERE o.type='Agent' AND o.status='active' ORDER BY o.canonical"
@@ -3116,6 +3123,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "seat": seat_label(str(r["canonical"]), r["handle"],
                                int(r["seat_gen"]) if r["seat_gen"] else None),
             "bound": r["bound_seat"],
+            "cwd": r["cwd"],
         }
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
@@ -3133,13 +3141,48 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         os_bodies = {p: len(pids) for p, pids in census.live_bodies().items()}
     except Exception:  # noqa: BLE001
         os_bodies = {}
-    mounts_live: dict[str, int] = {}
-    for n in nodes.values():
-        if n["live"]:
+    # PER-IDENTITY, NOT NETTED (thread #174, rotten-apple's own specimen, 2026-08-18): a
+    # per-project SUBTRACTION (live_count - body_count) reads as "no gap" whenever a false-LIVE
+    # row and a false-DEAD body happen to cancel — rotten-apple showed "1 live · 3 bodies" as
+    # clean while carrying both at once (a ghost mount with no real process, AND real processes
+    # the graph never recognized as live — #174's own anchor-lookup gap was exactly why).
+    # `live_bodies_by_cwd()` is cwd-grained (unlike `os_bodies` above, which stays
+    # project-grained for its existing consumers/tree render); matching each LIVE node's own
+    # `agent_mounts.cwd` against it catches both directions with no netting to cancel through.
+    try:
+        bodies_by_cwd = census.live_bodies_by_cwd() or {}
+    except Exception:  # noqa: BLE001
+        bodies_by_cwd = {}
+
+    def _resolved(cwd: str | None) -> str | None:
+        if not cwd:
+            return None
+        try:
+            return str(Path(cwd).resolve())
+        except OSError:
+            return None
+
+    live_cwds = {_resolved(n["cwd"]) for n in nodes.values() if n["live"] and n["cwd"]}
+    live_cwds.discard(None)
+    ghost_gap: dict[str, dict[str, list[Any]]] = {}
+    for canonical, n in nodes.items():
+        if not n["live"]:
+            continue
+        if _resolved(n["cwd"]) not in bodies_by_cwd:
             proj = n["project"] or "?"
-            mounts_live[proj] = mounts_live.get(proj, 0) + 1
-    ghost_gap = {p: gap for p, n_live in mounts_live.items()
-                if (gap := n_live - os_bodies.get(p, 0)) > 0}
+            ghost_gap.setdefault(proj, {"false_live": [], "false_dead": []})
+            ghost_gap[proj]["false_live"].append(canonical)
+    for cwd, pids in bodies_by_cwd.items():
+        if cwd in live_cwds:
+            continue
+        proj = None
+        for n in nodes.values():
+            if _resolved(n["cwd"]) == cwd:
+                proj = n["project"]
+                break
+        proj = proj or "?"
+        ghost_gap.setdefault(proj, {"false_live": [], "false_dead": []})
+        ghost_gap[proj]["false_dead"].append({"cwd": cwd, "pids": pids})
     from src.orchestrator.seats import fleet_occupancy
     seats = await fleet_occupancy(pool)
     # WHISPER HEALTH (task #179): recent whisper/session-end/precompact/stophook alarm
@@ -3166,7 +3209,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
         "seats": [{"seat": s["seat_id"], "handle": s["handle"], "house": s["house"],
                    "state": s["state"], "holder": s["holder"]} for s in seats],
-        "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies),
+        "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies, ghost_gap=ghost_gap),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"],

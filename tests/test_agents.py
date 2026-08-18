@@ -3102,37 +3102,57 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
 
 
 async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> None:
-    """heinrich's ghost-seat filing (thread 1fe6811c) made visible: the graph's mount registry
-    calls TWO agents live in 'ghosttown', but the (faked) OS census backs only ONE real
-    process — the gap IS the ghost, additive beside the untouched `live` count. 'quietplace'
-    has no gap: its one live mount is backed by a real body."""
+    """heinrich's ghost-seat filing (thread 1fe6811c) made visible, PER-IDENTITY (thread #174,
+    2026-08-18): 'ghosttown' carries BOTH a false-live row (a mount with no real process behind
+    it) AND an unclaimed real body (a process the graph never counted live) AT THE SAME TIME —
+    exactly rotten-apple's own specimen, where the old net (`live_n - bodies`) cancelled the two
+    and read as clean. 'quietplace' has neither: its one live mount is backed by a real body at
+    the same cwd."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
 
-    for i, project in enumerate(("ghosttown", "ghosttown", "quietplace")):
-        a = f"agent:census{i}"
+    # ghosttown/census0: LIVE, no real body at its cwd -> false_live.
+    # ghosttown/census1: LIVE, a real body backs its cwd -> clean.
+    # ghosttown/census3: a PROVISIONAL (not live) row, so its cwd can still carry the project
+    #   label for the unclaimed body below without itself counting as a live false-positive.
+    # quietplace/census2: LIVE, backed -> clean, no gap either direction.
+    rows = [
+        ("census0", "ghosttown", "/gt/a", True),
+        ("census1", "ghosttown", "/gt/b", True),
+        ("census2", "quietplace", "/qp/a", True),
+        ("census3", "ghosttown", "/gt/c", False),
+    ]
+    for name, project, cwd, alive in rows:
+        a = f"agent:{name}"
         obj = await actions.create_or_find_object("Agent", a, a)
         await actions.assert_property(obj, "project", project, a, datetime.now(UTC), 0.9,
                                       evidence_class=EvidenceClass.SELF_DECLARED.value)
         await mounts.save_mount(actions.pool, job_dir=f"/j/{a}", agent_id=a, project=project,
-                                cwd="/x", model="claude-fable-5", session_key=a)
+                                cwd=cwd, model="claude-fable-5", session_key=a, alive=alive)
 
-    saved_pool, saved_census = srv._pool, census.live_bodies
+    saved_pool = srv._pool
+    saved_live_bodies, saved_by_cwd = census.live_bodies, census.live_bodies_by_cwd
     srv._pool = actions.pool
     census.live_bodies = lambda: {"ghosttown": [111], "quietplace": [222]}  # type: ignore
+    census.live_bodies_by_cwd = lambda: {  # type: ignore
+        "/gt/b": [111], "/qp/a": [222], "/gt/c": [333],
+    }
     try:
         out = await srv.fleet()
     finally:
         srv._pool = saved_pool
-        census.live_bodies = saved_census  # type: ignore
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
 
     assert out["live"] == 3                              # UNCHANGED meaning — still the belief
     assert out["os_bodies"] == {"ghosttown": 1, "quietplace": 1}
-    assert out["ghost_gap"] == {"ghosttown": 1}           # 2 live - 1 body = 1 ghost
-    assert "quietplace" not in out["ghost_gap"]           # 1 live - 1 body = 0: no gap
+    assert out["ghost_gap"]["ghosttown"]["false_live"] == ["agent:census0"]
+    assert out["ghost_gap"]["ghosttown"]["false_dead"] == [{"cwd": "/gt/c", "pids": [333]}]
+    assert "quietplace" not in out["ghost_gap"]           # backed both ways: no gap at all
     ghosttown_line = next(line for line in out["tree"].splitlines()
                           if line.startswith("▸ ghosttown"))
-    assert "1 os body" in ghosttown_line and "⚠ 1 ghost" in ghosttown_line
+    assert "1 os body" in ghosttown_line
+    assert "⚠ 2 ghosts (1 false-live, 1 unclaimed body)" in ghosttown_line
 
 
 async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
@@ -3141,18 +3161,24 @@ async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     from src import mcp_server as srv
     from src.orchestrator import census
 
-    saved_pool, saved_census = srv._pool, census.live_bodies
+    saved_pool = srv._pool
+    saved_live_bodies, saved_by_cwd = census.live_bodies, census.live_bodies_by_cwd
 
     def _boom() -> dict[str, list[int]]:
         raise RuntimeError("no /proc on this box")
 
     srv._pool = actions.pool
     census.live_bodies = _boom  # type: ignore
+    # the per-identity ghost_gap read (thread #174) is a SEPARATE OS read from os_bodies
+    # above — must fail the same way, or this test would pick up whatever real claude
+    # processes happen to be running on the box that runs it (this session included).
+    census.live_bodies_by_cwd = _boom  # type: ignore
     try:
         out = await srv.fleet()
     finally:
         srv._pool = saved_pool
-        census.live_bodies = saved_census  # type: ignore
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
     assert out["os_bodies"] == {}
     assert "ghost_gap" not in out or out["ghost_gap"] == {}
 

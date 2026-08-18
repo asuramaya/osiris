@@ -70,6 +70,20 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
     durable anchor matters — a session with no anchor cannot be found on disk and keeps the old,
     chatty signal (degraded, never wrong).
 
+    SECOND KEY (thread #174, Ptah's gap, 2026-08-17), the SAME self-evident derivation
+    `find_session_row`'s own lane 3 uses: a `-p --resume` wake's mount row carries a job_dir
+    keyed by the WAKE's own fresh job anchor, unrelated to the resumed transcript's own sid —
+    the job-dir join above misses it even though the sid genuinely IS that agent's own
+    generation-derived identity. Matching also on `agent_id` directly (self-evident, no ledger
+    read needed — record_session_anchor deliberately never writes an entry for this exact case)
+    closes that gap in the SAME bulk UPDATE, no per-row Python loop. Verified live: Ptah
+    (agent:02eaaa7a-iii) read cold at 23:53 while working; his transcript's own mtime never
+    promoted his row because job_dir=jobs/c8a22a05 never matched sid 02eaaa7a. (The anchor_sid
+    LEDGER lane — find_session_row's lane 2, for a truly-rebound identity the sid alone cannot
+    re-derive — is NOT added here: it needs `_generation`'s own roman-numeral suffix stripping,
+    which isn't safely expressible as raw SQL; left as a follow-up if it's ever measured to
+    matter for liveness specifically, not built speculatively.)
+
     GREATEST(last_seen, mtime): a transcript that moved makes you alive; an Osiris call still makes
     you alive. This can only ever ADD life, never take it away — a liveness fix that could mark a
     working mind dead would be worse than the bug it replaces.
@@ -89,7 +103,10 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
     rows = await pool.fetch(
         "UPDATE agent_mounts m SET last_seen = GREATEST(m.last_seen, v.moved) "
         "FROM (SELECT * FROM unnest($1::text[], $2::timestamptz[]) AS t(sid, moved)) v "
-        "WHERE m.job_dir LIKE '%' || v.sid AND (m.last_seen IS NULL OR v.moved > m.last_seen) "
+        "WHERE (m.job_dir LIKE '%' || v.sid "
+        "       OR m.agent_id = 'agent:' || v.sid "
+        "       OR m.agent_id LIKE 'agent:' || v.sid || '-%') "
+        "AND (m.last_seen IS NULL OR v.moved > m.last_seen) "
         "RETURNING m.job_dir, m.agent_id",
         [s[:8] for s, _ in seen], [t for _, t in seen])
     # A PROMOTED ROW MUST FOLLOW ITS LINEAGE HEAD (thread cb2b0a09). Promotion is by mtime,

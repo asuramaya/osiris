@@ -98,13 +98,19 @@ def _render_expanded(
 
 def render_fleet_tree(
     nodes: dict[str, Node], *, full: bool = False, os_bodies: dict[str, int] | None = None,
+    ghost_gap: dict[str, dict[str, list[Any]]] | None = None,
 ) -> str:
     """The glanceable fleet: one section per project, live expanded, retired collapsed.
 
     `os_bodies` (heinrich's ghost-seat filing, thread 1fe6811c) is ADDITIVE and OPTIONAL: when
-    given, a project's line grows the OS-truth count beside its graph-belief `live` count, and
-    a `ghost` note when the graph claims more live than any real process backs — the gap made
-    visible, never a change to what `live` itself means (still `_any_live`, untouched)."""
+    given, a project's line grows the OS-truth count beside its graph-belief `live` count.
+
+    `ghost_gap` (thread #174, 2026-08-18) is the PER-IDENTITY finding fleet() computes — never
+    re-derived here as a netted `live_n - bodies` subtraction, which is exactly the bug this
+    replaced: a false-LIVE row and a false-DEAD body in the SAME project cancel under
+    subtraction (rotten-apple's own specimen — "1 live · 3 bodies" read as clean while carrying
+    both). Rendered honestly as however many of each this project actually carries, never a
+    net that can hide one behind the other."""
     kids = _children_of(nodes)
     roots = kids.get(None, [])
     groups: dict[str, list[str]] = {}
@@ -121,9 +127,19 @@ def render_fleet_tree(
         if os_bodies is not None:
             bodies = os_bodies.get(project, 0)
             head += f" · {bodies} os {'body' if bodies == 1 else 'bodies'}"
-            gap = live_n - bodies
-            if gap > 0:
-                head += f" · ⚠ {gap} ghost{'s' if gap != 1 else ''}"
+        if ghost_gap is not None:
+            gap = ghost_gap.get(project) or {}
+            n_false_live = len(gap.get("false_live") or [])
+            n_false_dead = len(gap.get("false_dead") or [])
+            total = n_false_live + n_false_dead
+            if total:
+                bits = []
+                if n_false_live:
+                    bits.append(f"{n_false_live} false-live")
+                if n_false_dead:
+                    noun = "body" if n_false_dead == 1 else "bodies"
+                    bits.append(f"{n_false_dead} unclaimed {noun}")
+                head += f" · ⚠ {total} ghost{'s' if total != 1 else ''} ({', '.join(bits)})"
         lines.append(head)
         expand = [r for r in proj_roots if full or _any_live(r, nodes, kids)]
         fold = [r for r in proj_roots if r not in expand]
