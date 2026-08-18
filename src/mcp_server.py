@@ -3069,7 +3069,12 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `bodies`: every harness-verified live process, each with harness_name/job_dir_key/
     harness_cwd, `row` ('matched'/'rowless'), agent_id/project when matched, and
     `ghost_status` ('false_dead' when the SAME cwd also shows no live graph node above —
-    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own."""
+    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own.
+
+    PROJECT GROUPING NORMALIZES THROUGH `merged_into` (task #180 piece 2 (f)): a raw label
+    naming a project that has since been folded into another (repo:henry->repo:shellbiz)
+    renders under the SURVIVOR's live label, not the dead one — best-effort, degrades to the
+    raw label on any failure."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3148,6 +3153,30 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "bound": r["bound_seat"],
             "cwd": r["cwd"],
         }
+    # PROJECT LABEL NORMALIZATION THROUGH merged_into (task #180 piece 2 (f), Henry msg 5236,
+    # third surface of 3c3d9efa (b)): a project's raw `current_assertions` label can name a
+    # SoftwareProject that has since been FOLDED into another (repo:henry->repo:shellbiz,
+    # 2026-08-14) — grouping on the raw label renders the dead label's own group forever (11
+    # sessions still did, at time of writing). Resolve each DISTINCT raw label ONCE (fleet()
+    # can carry 500+ agent rows; a per-row call would be wasteful) through the same
+    # fold-aware primitive settle.py/agents.py/project_identity_evidence already share.
+    # Best-effort, same fail-open shape as os_bodies/ghost_gap beside it: a normalize failure
+    # degrades to the raw label, never breaks fleet().
+    try:
+        from src.orchestrator.project_identity import _normalize_project_label_through_merge
+
+        raw_labels = {n["project"] for n in nodes.values() if n["project"]}
+        label_map: dict[str, str] = {}
+        for raw in raw_labels:
+            normalized, _confession = await _normalize_project_label_through_merge(pool, raw)
+            if normalized != raw:
+                label_map[raw] = normalized
+        if label_map:
+            for n in nodes.values():
+                if n["project"] in label_map:
+                    n["project"] = label_map[n["project"]]
+    except Exception:  # noqa: BLE001
+        pass
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
     # below are always over the whole fleet, so nothing here undercounts, it only under-SHOWS.

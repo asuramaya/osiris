@@ -3238,6 +3238,46 @@ async def test_fleet_harness_registry_survives_a_blind_census(actions: Actions) 
     assert out["harness_registry"]["bodies"] == []
 
 
+async def test_fleet_groups_a_folded_project_under_its_survivor(actions: Actions) -> None:
+    """Task #180 piece 2 (f), Henry msg 5236 — the repo:henry->repo:shellbiz specimen
+    (2026-08-14): an Agent's raw `project` assertion still names the FOLDED label after a
+    fold_project — fold_project re-addresses agent_mounts.project and the estate link
+    types, but never the Agent's own current_assertions property. fleet()'s grouping must
+    normalize through merged_into or the dead label renders its own group forever."""
+    from src import mcp_server as srv
+    from src.orchestrator import census, mounts
+    from src.orchestrator.projects import fold_project
+
+    await actions.create_or_find_object("SoftwareProject", "repo:foldedproj", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:survivorproj", "test")
+    await fold_project(actions, dupe="foldedproj", into="survivorproj",
+                       evidence="test: same project, two labels", actor="agent:test")
+
+    a = "agent:foldedgroup"
+    obj = await actions.create_or_find_object("Agent", a, a)
+    await actions.assert_property(obj, "project", "foldedproj", a, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir=f"/j/{a}", agent_id=a, project="foldedproj",
+                            cwd="/fp/a", model="claude-fable-5", session_key=a, alive=True)
+
+    saved_pool = srv._pool
+    saved_live_bodies, saved_by_cwd = census.live_bodies, census.live_bodies_by_cwd
+    srv._pool = actions.pool
+    census.live_bodies = lambda: {}  # type: ignore
+    census.live_bodies_by_cwd = lambda: {}  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
+
+    node = next(r for r in out["registered"] if r["agent"] == a)
+    assert node["project"] == "survivorproj"
+    assert "▸ survivorproj" in out["tree"]
+    assert "▸ foldedproj" not in out["tree"]
+
+
 async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     """The OS census is best-effort, never a hard dependency: if it raises for any reason,
     fleet() must still answer — with the truth it can vouch for."""
