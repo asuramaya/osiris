@@ -3365,6 +3365,44 @@ async def test_fleet_surfaces_occupancy_including_a_seat_with_no_agent_at_all(
     assert rows[cold_seat["seat_id"]]["holder"] == "agent:occtest02"
 
 
+async def test_fleet_surfaces_cross_channel_adoption_for_a_recovered_seat(
+    actions: Actions,
+) -> None:
+    """task #181 (Thoth DM 5320): a live seat whose current session was already recovered
+    (recover_harness_exchanges) shows a real osiris-vs-harness split; one that was never
+    recovered shows harness_count=None (unknown), never a false zero."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+
+    recovered, unrecovered = "agent:adopttest01", "agent:adopttest02"
+    for a, jd in ((recovered, "/j/adoptrec1"), (unrecovered, "/j/adoptnorec")):
+        obj = await actions.create_or_find_object("Agent", a, a)
+        await actions.assert_property(obj, "project", "osiris", a, datetime.now(UTC), 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        await mounts.save_mount(actions.pool, job_dir=jd, agent_id=a, project="osiris",
+                                cwd="/x", model="claude-fable-5", session_key=a)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_project, body) "
+        "VALUES ($1, 'osiris', 'one osiris send')", recovered)
+    await actions.pool.execute(
+        "INSERT INTO harness_messages (anchor_sid, turn_index, to_raw, message) "
+        "VALUES ('adoptrec1', 0, 'x', 'm1'), ('adoptrec1', 1, 'x', 'm2'), "
+        "       ('adoptrec1', 2, 'x', 'm3')")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+
+    rows = {r["agent"]: r for r in out["registered"]}
+    rec = rows[recovered]["adoption"]
+    assert rec == {"osiris_count": 1, "harness_count": 3, "recovered": True, "share": 0.25}
+    unrec = rows[unrecovered]["adoption"]
+    assert unrec == {"osiris_count": 0, "harness_count": None, "recovered": False}
+
+
 def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.
