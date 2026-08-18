@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.deploy_guard import (
+    _REPO_ROOT,
     _is_ancestor,
     alarm_schema_drift,
     alarm_unreviewed_boot,
@@ -25,6 +26,7 @@ from src.orchestrator.deploy_guard import (
     origin_visibility,
     schema_drift,
     unreviewed_boot,
+    venv_import_hygiene,
 )
 
 
@@ -352,6 +354,39 @@ async def test_reboot_alarm_opens_one_durable_thread_and_briefs_the_desk(
         "SELECT body FROM fleet_messages WHERE from_agent = 'system:osiris-worker' "
         "AND to_project = 'operator'")
     assert brief is not None and "aaa" in brief["body"]
+
+
+async def test_reboot_alarm_names_src_root_in_the_brief_not_the_thread(
+    actions: Actions,
+) -> None:
+    """Task #180 piece 2 (msg 5253): `src_root` rides beside `running_head` in the operator
+    brief — the fact that would have surfaced the week-long Imhotep-worktree drift on day
+    one — but stays OUT of the Thread's own dedup identity, same discipline as `service`."""
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'aaa' was never recorded by `osiris deploy`",
+        running_head="aaa", service="osiris-worker",
+        src_root="/home/asuramaya/code/osiris/.claude/worktrees/imhotep")
+    thread = await actions.pool.fetchrow(
+        "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
+        "JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%aaa%'")
+    assert thread is not None and "imhotep" not in thread["summary"]
+    brief = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE from_agent = 'system:osiris-worker' "
+        "AND to_project = 'operator'")
+    assert brief is not None and "imhotep" in brief["body"]
+
+
+async def test_reboot_alarm_omitted_src_root_still_works(actions: Actions) -> None:
+    """Existing callers with no `src_root` to hand (the pre-#180-piece-2 shape) keep working
+    unchanged — the parameter is optional and appended-only."""
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
+                                running_head="aaa", service="osiris-worker")
+    brief = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE from_agent = 'system:osiris-worker' "
+        "AND to_project = 'operator'")
+    assert brief is not None
 
 
 async def test_reboot_alarm_is_idempotent_on_the_same_drift_text(actions: Actions) -> None:
@@ -1020,3 +1055,21 @@ async def test_merge_claim_hygiene_unverifiable_when_the_named_branch_is_gone(
 async def test_merge_claim_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
     note = await merge_claim_hygiene(tmp_path)
     assert "nothing to verify" in note
+
+
+# ── venv_import_hygiene (task #180 piece 2, decision 6fc0c082's own specimen) ───────────────
+
+async def test_venv_import_hygiene_clean_when_src_resolves_from_repo_root() -> None:
+    """The real, running interpreter's own `src` package DOES resolve from this very repo
+    root in a correctly-configured dev box/CI — the positive case needs no fixture at all."""
+    note = await venv_import_hygiene(_REPO_ROOT)
+    assert note.startswith("venv import: clean")
+
+
+async def test_venv_import_hygiene_flags_a_mismatched_repo_root(tmp_path: Path) -> None:
+    """The Imhotep-worktree specimen, reproduced structurally: `src` resolves from the real
+    repo, but the caller claims a DIFFERENT tree is the one being deployed."""
+    note = await venv_import_hygiene(tmp_path)
+    assert "NOT the deploying tree" in note
+    assert str(_REPO_ROOT) in note
+    assert str(tmp_path.resolve()) in note

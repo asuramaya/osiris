@@ -793,7 +793,9 @@ async def _amain() -> None:  # pragma: no cover - process entrypoint
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     settings = get_settings()
-    pool = await create_pool(settings.database_url)
+    pool = await create_pool(
+        settings.database_url, max_size=settings.osiris_manager_pool_size,
+        application_name="osiris-manager")
     redis = create_redis(settings.redis_url)
     manager = Manager(socket_path=default_socket_path(), pool=pool, redis=redis)
     try:

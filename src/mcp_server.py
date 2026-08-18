@@ -911,7 +911,8 @@ async def _pool_get() -> asyncpg.Pool:
         # entire fleet (the whole point — bounded connections); under stdio it's this one
         # session. min_size stays 1 so an idle server is cheap.
         _pool = await create_pool(
-            get_settings().database_url, max_size=get_settings().osiris_mcp_pool_size
+            get_settings().database_url, max_size=get_settings().osiris_mcp_pool_size,
+            application_name="osiris-mcp",
         )
     return _pool
 
@@ -3069,7 +3070,17 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `bodies`: every harness-verified live process, each with harness_name/job_dir_key/
     harness_cwd, `row` ('matched'/'rowless'), agent_id/project when matched, and
     `ghost_status` ('false_dead' when the SAME cwd also shows no live graph node above —
-    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own."""
+    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own.
+
+    PROJECT GROUPING NORMALIZES THROUGH `merged_into` (task #180 piece 2 (f)): a raw label
+    naming a project that has since been folded into another (repo:henry->repo:shellbiz)
+    renders under the SURVIVOR's live label, not the dead one — best-effort, degrades to the
+    raw label on any failure.
+
+    `pool_health` (task #180 piece 2 (c)): pg_stat_activity backends grouped by the
+    application_name each bounded daemon pool now tags itself with (osiris-mcp/-worker/
+    -console/-manager), plus `tx_total` — a CUMULATIVE counter since the last stats reset,
+    not a live rate; diff two readings yourself for an actual rate. Best-effort."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3148,6 +3159,30 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             "bound": r["bound_seat"],
             "cwd": r["cwd"],
         }
+    # PROJECT LABEL NORMALIZATION THROUGH merged_into (task #180 piece 2 (f), Henry msg 5236,
+    # third surface of 3c3d9efa (b)): a project's raw `current_assertions` label can name a
+    # SoftwareProject that has since been FOLDED into another (repo:henry->repo:shellbiz,
+    # 2026-08-14) — grouping on the raw label renders the dead label's own group forever (11
+    # sessions still did, at time of writing). Resolve each DISTINCT raw label ONCE (fleet()
+    # can carry 500+ agent rows; a per-row call would be wasteful) through the same
+    # fold-aware primitive settle.py/agents.py/project_identity_evidence already share.
+    # Best-effort, same fail-open shape as os_bodies/ghost_gap beside it: a normalize failure
+    # degrades to the raw label, never breaks fleet().
+    try:
+        from src.orchestrator.project_identity import _normalize_project_label_through_merge
+
+        raw_labels = {n["project"] for n in nodes.values() if n["project"]}
+        label_map: dict[str, str] = {}
+        for raw in raw_labels:
+            normalized, _confession = await _normalize_project_label_through_merge(pool, raw)
+            if normalized != raw:
+                label_map[raw] = normalized
+        if label_map:
+            for n in nodes.values():
+                if n["project"] in label_map:
+                    n["project"] = label_map[n["project"]]
+    except Exception:  # noqa: BLE001
+        pass
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
     # below are always over the whole fleet, so nothing here undercounts, it only under-SHOWS.
@@ -3248,6 +3283,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         whisper = await _whisper_health(pool)
     except Exception:  # noqa: BLE001
         whisper = {"ok": True, "error": "whisper_health probe unavailable"}
+    # PER-DAEMON POOL SURFACE (task #180 piece 2 (c)): pg_stat_activity grouped by the
+    # application_name each bounded daemon pool now tags itself with — same best-effort
+    # shape as whisper_health/os_bodies beside it.
+    try:
+        from src.orchestrator.pool_health import pg_activity_by_app
+        pool_health = await pg_activity_by_app(pool)
+    except Exception:  # noqa: BLE001
+        pool_health = {"by_application": {}, "backends": None, "tx_total": {}}
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -3258,6 +3301,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
         "whisper_health": whisper,
         "harness_registry": harness_registry,
+        "pool_health": pool_health,
         # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
         # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
@@ -7181,6 +7225,48 @@ async def heartbeat_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+@mcp.custom_route("/stop", methods=["POST"])
+async def stop_route(request: Any) -> Any:
+    """The Stop hook's server half (task #180 piece 2 (b), msg 5253): every stop-hook
+    invocation used to open its OWN `asyncpg.connect()` — up to two per call (the mail
+    check always, the offload-ritual box check conditionally) — the SAME per-process-fork
+    cost `/heartbeat` already fixed for the statusline, on a different trigger. Fires on
+    every turn boundary, fleet-wide.
+
+    ONE ROUTE, TWO PHASES (`body["phase"]`): the hook's own `main()` decides whether to
+    check offload boxes at ALL only after computing a context-occupancy percentage from the
+    'deliverable' phase's own window AND the harness transcript locally — the two DB reads
+    are genuinely conditional on each other's caller-side result, not always-both, so this
+    stays two round-trips (same as today) rather than one route always paying for a box
+    check that most turns never need. `compute_stop_deliverable`/`compute_stop_offload`
+    (src/orchestrator/stophook_logic.py) are the SAME implementation the hook's own direct-
+    connect fallback calls — one body, never two drifting copies.
+
+    Localhost-only, fail-open like every route beside it: the hook tries this route first
+    and falls straight back to its own direct-connect path on ANY failure — a route outage
+    costs exactly what today already costs, never more."""
+    from starlette.responses import JSONResponse
+
+    from src.orchestrator.stophook_logic import compute_stop_deliverable, compute_stop_offload
+
+    try:
+        body = await request.json()
+        phase = str(body.get("phase") or "")
+        cwd = str(body.get("cwd") or "")
+        session_id = str(body.get("session_id") or "")
+        pool = await _pool_get()
+        out: Any
+        if phase == "deliverable":
+            out = await compute_stop_deliverable(pool, cwd=cwd, session_id=session_id)
+        elif phase == "offload":
+            out = await compute_stop_offload(pool, session_id=session_id, cwd=cwd)
+        else:
+            return JSONResponse({"error": f"unknown phase {phase!r}"}, status_code=400)
+        return JSONResponse({"result": out})
+    except Exception as e:  # noqa: BLE001 — the hook falls back to its own connect; never block
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @mcp.custom_route("/spawn", methods=["POST"])
 async def spawn_route(request: Any) -> Any:
     """SubagentStart/SubagentStop's server half: the harness announces a spawn the moment it
@@ -7321,8 +7407,13 @@ async def _boot_check() -> None:
                 from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
 
                 running_head = _git_head(_REPO_ROOT) or "unknown"
+                src_root = None
+                with contextlib.suppress(Exception):
+                    from src.orchestrator.deploy_guard import _resolve_imported_src_root
+
+                    src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
                 await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
-                                           service="osiris-mcp")
+                                           service="osiris-mcp", src_root=src_root)
         finally:
             await pool.close()
     except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against

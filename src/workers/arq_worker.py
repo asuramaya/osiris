@@ -81,7 +81,9 @@ def register_default_watchers() -> None:
 
 async def startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
-    pool = await create_pool(settings.database_url)
+    pool = await create_pool(
+        settings.database_url, max_size=settings.osiris_worker_pool_size,
+        application_name="osiris-worker")
     redis = create_redis(settings.redis_url)
     actions = Actions(pool)
     ctx["cascade"] = CascadeContext(
@@ -131,8 +133,13 @@ async def startup(ctx: dict[str, Any]) -> None:
                 from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
 
                 running_head = _git_head(_REPO_ROOT) or "unknown"
+                src_root = None
+                with contextlib.suppress(Exception):
+                    from src.orchestrator.deploy_guard import _resolve_imported_src_root
+
+                    src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
                 await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
-                                           service="osiris-worker")
+                                           service="osiris-worker", src_root=src_root)
         except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
             _log.warning("deploy_guard reboot check failed at worker boot: %r", exc)
 

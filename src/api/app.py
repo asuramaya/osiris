@@ -120,7 +120,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()
         own = pool is None
-        app.state.pool = pool or await create_pool(settings.database_url)
+        app.state.pool = pool or await create_pool(
+            settings.database_url, max_size=settings.osiris_api_pool_size,
+            application_name="osiris-console")
         # the Type catalog (task #97): schema.py's declared types as graph objects.
         # ensure_type's keep-prior-on-omission contract makes this safe to run on
         # every boot — idempotent, never blanks an already-richer Type.

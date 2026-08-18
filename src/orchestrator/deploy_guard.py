@@ -278,12 +278,24 @@ async def check_diverged_since_last_deploy(
 
 async def alarm_unreviewed_boot(
     pool: asyncpg.Pool, drift: str, *, running_head: str, service: str,
+    src_root: str | None = None,
 ) -> None:
     """LOUD, never a refusal, never blocking — the reboot-is-a-deploy confession (thread
     489a39d0). Same shape as `alarm_schema_drift`, including the same lesson already applied
     there: `service` stays OUT of the Thread summary (the canonical-identity text) so two
     services confessing the same unreviewed HEAD converge on one Thread, not two — it still
     survives per-observation via the log line, the operator DM, and `source`.
+
+    `src_root` (task #180 piece 2, msg 5253): the interpreter's own resolved `src.__file__`
+    parent, printed BESIDE `running_head` — the venv-drift specimen (decision 6fc0c082) means
+    a boot's own git ref and the CODE it is actually running can disagree; naming both facts
+    in the same alarm is what would have made that week-long drift visible on day one. Same
+    OUT-OF-THE-THREAD-SUMMARY treatment as `service`: `venv_import_hygiene` is the intended
+    home for a genuine drift alarm (it fires standalone, deploy-time, independent of whether
+    this reboot guard also fires) — folding a venv path into THIS Thread's dedup identity
+    would mint a fresh Thread per differing path even when the underlying unreviewed-boot
+    fact hasn't changed. Optional and appended-only: existing callers with no `src_root` to
+    hand keep working unchanged.
 
     DEDUPS ON `running_head` ALONE, not the full `drift` text (decision 8a830336): `drift`
     also embeds `last_deployed`, which changes on every SUBSEQUENT successful `osiris
@@ -297,7 +309,8 @@ async def alarm_unreviewed_boot(
     from src.orchestrator.capture import open_thread
     from src.orchestrator.mailbox import send_message
 
-    _log.critical("%s booted on an unreviewed ref: %s", service, drift)
+    src_note = f" (src resolves from {src_root})" if src_root else ""
+    _log.critical("%s booted on an unreviewed ref: %s%s", service, drift, src_note)
     actions = Actions(pool)
     await open_thread(
         actions,
@@ -312,8 +325,8 @@ async def alarm_unreviewed_boot(
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(
             pool, from_agent=f"system:{service}", from_project="osiris", to_project="operator",
-            body=f"{service} booted on an unreviewed ref — {drift}. Review before trusting "
-                 "it, then `osiris deploy` to re-sync the ledger.",
+            body=f"{service} booted on an unreviewed ref — {drift}{src_note}. Review before "
+                 "trusting it, then `osiris deploy` to re-sync the ledger.",
             dedup_window_secs=86400,
         )
 
@@ -446,6 +459,57 @@ async def local_ref_hygiene(repo_root: Path) -> str:
 
 _MERGE_SUBJECT_BRANCH = re.compile(r"^merge\s+([^\s:]+)")  # stop at whitespace OR a directly-
 # attached colon ("merge foo: did the thing") — both shapes appear in this house's own log
+
+
+def _resolve_imported_src_root() -> Path:
+    """Sync helper (ASYNC240, this codebase's own ruff gate: filesystem resolution stays out
+    of async function bodies) — `import src; Path(src.__file__).resolve().parent.parent` is
+    the SAME resolution every daemon's own `_REPO_ROOT`-style derivation goes through (this
+    module's own `_REPO_ROOT` included)."""
+    import src as _src
+
+    src_file = getattr(_src, "__file__", None)
+    if not src_file:
+        raise ValueError("`src` has no __file__ (namespace package?)")
+    return Path(src_file).resolve().parent.parent
+
+
+def _resolve_path(p: Path) -> Path:
+    """Sync helper (ASYNC240) — `Path.resolve()` stays out of the async caller's own body."""
+    return p.resolve()
+
+
+async def venv_import_hygiene(repo_root: Path) -> str:
+    """THE VENV-DRIFT SPECIMEN (Thoth's confirmation, decision 6fc0c082, 2026-08-18):
+    `/home/asuramaya/code/osiris/.venv`'s editable-install pointer
+    (`_editable_impl_osiris.pth`, a raw directory string Python's site-packages loader
+    resolves `src.*` imports through) had pointed at Imhotep's own worktree instead of
+    self-referencing this repo since 2026-08-11 17:26 — over a week. Every daemon sharing
+    that venv (`ExecStart=.../.venv/bin/...`) was silently running whatever Imhotep's
+    worktree happened to have checked out, not the tree `osiris deploy` believed it was
+    deploying. A stranger's machine must never run a worktree's code under main's name.
+
+    NEVER REFUSES (577988ed, same fail-open discipline as every check beside it): an
+    import failure, a namespace package with no `__file__`, or any other surprise degrades
+    to 'unknown', never a blocked deploy — this is read-only corroboration, not a gate."""
+    try:
+        resolved_src_root = await asyncio.to_thread(_resolve_imported_src_root)
+    except Exception as exc:  # noqa: BLE001 — an import failure is UNKNOWN, never a refusal
+        return (f"venv import: could not import `src` to check ({exc!r}) — unknown, "
+                "not assumed clean")
+
+    try:
+        resolved_repo_root = await asyncio.to_thread(_resolve_path, repo_root)
+    except OSError as exc:
+        return f"venv import: could not resolve repo_root ({exc!r}) — unknown, not assumed clean"
+
+    if resolved_src_root == resolved_repo_root:
+        return (f"venv import: clean — `src` resolves inside the deploying tree "
+                f"({resolved_src_root})")
+    return (f"venv import: ⚠ `src` resolves to {resolved_src_root}, NOT the deploying tree "
+            f"{resolved_repo_root} — the venv's editable-install pointer names a different "
+            "checkout (the exact shape of the Imhotep-worktree specimen, decision 6fc0c082); "
+            "every daemon sharing this venv is running THAT tree's code, not this one's")
 
 
 async def merge_claim_hygiene(repo_root: Path) -> str:
