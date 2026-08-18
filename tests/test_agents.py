@@ -3155,6 +3155,89 @@ async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> N
     assert "⚠ 2 ghosts (1 false-live, 1 unclaimed body)" in ghosttown_line
 
 
+async def test_fleet_folds_registry_census_bodies_with_ghost_status(
+    actions: Actions,
+) -> None:
+    """Thoth dispatch msg 5286 (thread 5256): registry_census's own harness-vs-mount view
+    folded into fleet(), occupancy and identity side by side, no second call. A rowless
+    body whose cwd the SAME ghost_gap read also can't find a live graph node behind gets
+    ghost_status='false_dead' — the two independent detectors (harness self-report, OS
+    pgrep) agreeing; a matched body backed by a live node gets no ghost_status at all."""
+    from src import mcp_server as srv
+    from src.orchestrator import census, mounts
+
+    live_agent = "agent:reg01"
+    obj = await actions.create_or_find_object("Agent", live_agent, live_agent)
+    await actions.assert_property(obj, "project", "regproj", live_agent, datetime.now(UTC),
+                                  0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/reg01", agent_id=live_agent,
+                            project="regproj", cwd="/reg/matched", model="claude-fable-5",
+                            session_key=live_agent)
+
+    async def _fake_census(pool: object) -> dict[str, object]:
+        return {
+            "blind": False, "verified_count": 2, "matched_count": 1, "rowless_count": 1,
+            "matched": [{"session_id": "s-matched", "job_dir_key": "matched1",
+                         "harness_name": "[OS] matched", "harness_cwd": "/reg/matched",
+                         "agent_id": live_agent, "project": "regproj"}],
+            "rowless": [{"session_id": "s-rowless", "job_dir_key": "rowless1",
+                        "harness_name": "[OS] rowless", "harness_cwd": "/reg/rowless"}],
+        }
+
+    saved_pool = srv._pool
+    saved_live_bodies, saved_by_cwd = census.live_bodies, census.live_bodies_by_cwd
+    saved_registry_census = mounts.registry_census
+    srv._pool = actions.pool
+    census.live_bodies = lambda: {}  # type: ignore
+    # /reg/rowless has a real OS body but no live graph node at all -> false_dead.
+    # /reg/matched has BOTH a live graph node and a real body -> no gap either way.
+    census.live_bodies_by_cwd = lambda: {"/reg/rowless": [999], "/reg/matched": [111]}  # type: ignore
+    mounts.registry_census = _fake_census  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
+        mounts.registry_census = saved_registry_census  # type: ignore
+
+    hr = out["harness_registry"]
+    assert hr["blind"] is False
+    assert hr["matched_count"] == 1 and hr["rowless_count"] == 1
+    by_key = {b["job_dir_key"]: b for b in hr["bodies"]}
+    matched = by_key["matched1"]
+    assert matched["row"] == "matched"
+    assert matched["agent_id"] == live_agent and matched["project"] == "regproj"
+    assert matched["ghost_status"] is None
+    rowless = by_key["rowless1"]
+    assert rowless["row"] == "rowless"
+    assert "agent_id" not in rowless
+    assert rowless["ghost_status"] == "false_dead"
+
+
+async def test_fleet_harness_registry_survives_a_blind_census(actions: Actions) -> None:
+    """Same fail-open law as os_bodies/whisper_health: a registry_census failure must
+    never break fleet() itself — it reads blind, not absent."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+
+    async def _boom(pool: object) -> dict[str, object]:
+        raise RuntimeError("harness read failed")
+
+    saved_pool = srv._pool
+    saved_registry_census = mounts.registry_census
+    srv._pool = actions.pool
+    mounts.registry_census = _boom  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        mounts.registry_census = saved_registry_census  # type: ignore
+
+    assert out["harness_registry"]["blind"] is True
+    assert out["harness_registry"]["bodies"] == []
+
+
 async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     """The OS census is best-effort, never a hard dependency: if it raises for any reason,
     fleet() must still answer — with the truth it can vouch for."""

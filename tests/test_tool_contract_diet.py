@@ -588,7 +588,13 @@ def _tool_chars(t: Any) -> int:
 # pieces (a)/(b) exist to close to zero. Load-bearing (this IS the piece Thoth dispatched),
 # trimmed to the category rule's lean end first — flagged by its author, not raised beyond
 # the exact measured total, matching the immediately preceding precedent (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 183_200
+# 183,200 -> 183,600 (measured 183,571 exact). Tool count unchanged at 130 (2026-08-18
+# ~04:40, Seshat XXXVI, thread 5256's next-lane dispatch): NO NEW TOOL — fleet() gained
+# `harness_registry`, folding registry_census's own harness-vs-mount view in (occupancy AND
+# identity, one call) with a #174-style `ghost_status` per body. Trimmed to the lean end
+# first (two passes), then flagged by its author, not raised beyond the exact measured
+# total, matching the immediately preceding precedent.
+TOOL_CONTRACT_CEILING_CHARS = 183_600
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

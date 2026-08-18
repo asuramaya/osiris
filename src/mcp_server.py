@@ -3063,7 +3063,13 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     alarm channel read back — recent failure count + last error over a 24h window, from the
     SAME blind-spot mechanism (task #34) each hook's own except-block files into on a
     failure. `ok: true` means no hook has confessed to failing recently, not that the
-    whisper is definitely up — it is a read of the alarm log, not an active probe."""
+    whisper is definitely up — it is a read of the alarm log, not an active probe.
+
+    `harness_registry` folds registry_census IN — occupancy AND identity, no second call.
+    `bodies`: every harness-verified live process, each with harness_name/job_dir_key/
+    harness_cwd, `row` ('matched'/'rowless'), agent_id/project when matched, and
+    `ghost_status` ('false_dead' when the SAME cwd also shows no live graph node above —
+    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3200,6 +3206,36 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         proj = proj or "?"
         ghost_gap.setdefault(proj, {"false_live": [], "false_dead": []})
         ghost_gap[proj]["false_dead"].append({"cwd": cwd, "pids": pids})
+    # THE REGISTRY FOLD (Thoth dispatch msg 5286, thread 5256): registry_census's own
+    # harness-vs-mount-registry view, additive, reusing bodies_by_cwd/live_cwds/_resolved
+    # already computed above for ghost_gap — no new OS read. Purely additive key; never
+    # touches os_bodies/ghost_gap or the row-fetch SQL above it.
+    try:
+        from src.orchestrator.mounts import registry_census as _registry_census
+        census_report = await _registry_census(pool)
+    except Exception:  # noqa: BLE001 — same fail-open law as os_bodies/whisper_health
+        census_report = {"blind": True, "verified": [], "matched": [], "rowless": []}
+    bodies = []
+    for b in (*census_report.get("matched", []), *census_report.get("rowless", [])):
+        rc = _resolved(b.get("harness_cwd"))
+        entry = {
+            "harness_name": b.get("harness_name"), "job_dir_key": b.get("job_dir_key"),
+            "harness_cwd": b.get("harness_cwd"),
+            "row": "matched" if b.get("agent_id") else "rowless",
+            "ghost_status": ("false_dead" if rc in bodies_by_cwd and rc not in live_cwds
+                             else None),
+        }
+        if b.get("agent_id"):
+            entry["agent_id"] = b["agent_id"]
+            entry["project"] = b.get("project")
+        bodies.append(entry)
+    harness_registry = {
+        "blind": census_report.get("blind", False),
+        "verified_count": census_report.get("verified_count", len(bodies)),
+        "matched_count": census_report.get("matched_count", 0),
+        "rowless_count": census_report.get("rowless_count", 0),
+        "bodies": bodies,
+    }
     from src.orchestrator.seats import fleet_occupancy
     seats = await fleet_occupancy(pool)
     # WHISPER HEALTH (task #179): recent whisper/session-end/precompact/stophook alarm
@@ -3221,6 +3257,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "os_bodies": os_bodies,
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
         "whisper_health": whisper,
+        "harness_registry": harness_registry,
         # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
         # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
