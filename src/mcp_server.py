@@ -6217,7 +6217,8 @@ async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
 
 async def _retire_stale_handoffs(
     pool: asyncpg.Pool, actor: str, keep: uuid.UUID, now: datetime, *, max_hops: int = 200,
-) -> dict[str, list[str]]:
+    dry_run: bool = False,
+) -> dict[str, Any]:
     """A ONE-TIME BACKFILL UTILITY, NOT A LIVE TRIGGER (Thoth DM 3355 built the write-
     triggered version this originally was; the operator's 2026-08-03 ruling superseded that
     trigger with an explicit ack_handoff(ref=...) receipt — see settle()'s own docstring).
@@ -6264,7 +6265,19 @@ async def _retire_stale_handoffs(
     discipline as `amend_decision`/`amend_practice`, an independent property, not a rewrite.
     Returns `{"retired": [...], "skipped_incomplete_walk": [...]}` — short ids either way,
     for the caller's own receipt — a silent mutation behind an already-silent bleed would
-    just be a quieter version of the same disease."""
+    just be a quieter version of the same disease.
+
+    `dry_run=True` (task #150 backlog disposition, decision pending) runs every read and
+    every `lineage_root` walk exactly as a live call would — same refuse-on-incomplete-
+    actor-walk, same per-candidate skip — but never calls `actions.assert_property`;
+    `retired` names what WOULD be retired. The population is append-only either way: a
+    dry run's own `retired` list is the exact set a live call would touch, because both
+    read the identical `current_assertions` query and the identical `lineage_root` walk —
+    nothing about is_handoff resolution is time-sensitive between the two calls beyond the
+    ordinary risk of a concurrent write landing in between, the same risk any dry-run/
+    execute pair carries. REVERSAL, if a live run ever needs undoing: is_handoff is never
+    DELETEd, only asserted — re-asserting 'true' (a fresh, higher-`observed_at` row) restores
+    the record exactly as `ack_handoff`'s own un-ack would, no bespoke undo path needed."""
     root, root_complete = await lineage_root(pool, actor, max_hops=max_hops)
     if not root_complete:
         raise ValueError(
@@ -6292,10 +6305,12 @@ async def _retire_stale_handoffs(
             skipped.append(str(r["object_id"])[:8])
             continue
         if candidate_root == root:
-            await actions.assert_property(r["object_id"], "is_handoff", "false", actor, now,
-                                          0.9, evidence_class="self_declared")
+            if not dry_run:
+                await actions.assert_property(
+                    r["object_id"], "is_handoff", "false", actor, now,
+                    0.9, evidence_class="self_declared")
             retired.append(str(r["object_id"])[:8])
-    return {"retired": retired, "skipped_incomplete_walk": skipped}
+    return {"retired": retired, "skipped_incomplete_walk": skipped, "dry_run": dry_run}
 
 
 async def _resolve_acked_handoff_threads(

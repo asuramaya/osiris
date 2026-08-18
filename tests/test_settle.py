@@ -1155,6 +1155,39 @@ async def test_retire_stale_handoffs_skips_a_candidate_with_a_truncated_walk(
     assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched
 
 
+async def test_retire_stale_handoffs_dry_run_names_the_population_without_writing(
+    actions: Actions,
+) -> None:
+    """#150 backlog disposition (Thoth msg 5254): dry_run=True must report the EXACT same
+    `retired` population a live call would touch — same query, same lineage_root walk —
+    but never call assert_property, so a preview can be trusted byte-for-byte against the
+    execute that follows it."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    old = await _settle_as(
+        actions.pool, "agent:dryformat",
+        decisions=[{"summary": "dryformat's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    old_id = old["accepted"]["decisions"][0]["id"]
+    await _succeed(actions, "agent:dryformat-g40-g40", "agent:dryformat")
+
+    preview = await srv._retire_stale_handoffs(
+        actions.pool, "agent:dryformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC),
+        dry_run=True)
+    assert old_id in preview["retired"]
+    assert preview["dry_run"] is True
+    assert await _is_handoff_value(actions.pool, old_id) == "true"  # UNTOUCHED by the preview
+
+    receipt = await srv._retire_stale_handoffs(
+        actions.pool, "agent:dryformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC))
+    assert receipt["retired"] == preview["retired"]
+    assert receipt["dry_run"] is False
+    assert await _is_handoff_value(actions.pool, old_id) == "false"  # the live run DOES write
+
+
 # ═══ _resolve_acked_handoff_threads — the retroactive backfill, msg 4673/decision 4bf6d835 ═══
 # ack_handoff's own status-resolution fix (this same dispatch) only covers FUTURE acks; this
 # is the one-time cleanup for the population that accumulated before it existed. Same shape
