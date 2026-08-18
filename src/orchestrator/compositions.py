@@ -1592,6 +1592,23 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
                                  "be retired; listed so the healing stays visible"}
         for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
+    # THE HALCYON RULE (obligation 6b1efacb, 2026-08-18) — a NAMED, DISTINCT check from
+    # "retired-live" above (which fires for any deliberate retirement racing a slow mount-
+    # row cleanup, a different and much less alarming shape): a generation SPECIFICALLY
+    # false_mint (never a plain deliberate close) with a live mount is the exact zero-turn
+    # phantom fold blindness this obligation's own occupancy fix (is_occupied_by_a_live_
+    # body) now guards against going forward — this check is the retrospective net for
+    # anything that slips through anyway, or that was folded before that fix shipped.
+    # `live` (agent_mounts freshness) is a cheaper, coarser signal than registry_census's
+    # own harness-confirmed check — a real false positive here is still worth a human's
+    # glance, never worth silently trusting agent_mounts alone for a repair decision.
+    land("false-mint-live", "error", [
+        {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount — a "
+                                 "genuinely live body may be wearing a phantom-folded "
+                                 "face (the halcyon shape, obligation 6b1efacb); "
+                                 "reinstate_generation is the repair door"}
+        for c in sorted(canons)
+        if props.get(c, {}).get("false_mint") == "true" and c in live])
 
     # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
     # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance

@@ -143,6 +143,30 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert len(retired) == 1 and retired[0]["subject"] == "agent:ffff0006"
     assert retired[0]["severity"] == "error"
     assert [f["subject"] for f in _by_check(out, "false-mint")] == ["agent:0000dead"]
+    # false_mint but NO mount row — the ordinary healed-phantom case, never this check's own
+    assert _by_check(out, "false-mint-live") == []
+
+
+async def test_lint_flags_a_false_minted_generation_with_a_live_mount(
+    actions: Actions,
+) -> None:
+    """THE HALCYON RULE (obligation 6b1efacb, 2026-08-18): a generation carrying
+    false_mint=true with a LIVE mount is a DISTINCT, more alarming signal than an ordinary
+    retirement racing a slow mount cleanup — a genuinely live body may be wearing a
+    phantom-folded face. Named separately from `retired-live` so a human reading the
+    report sees the repair door (reinstate_generation) directly, not a generic warning."""
+    t = "agent:teller"
+    victim = await actions.create_or_find_object("Agent", "agent:b4251601", t)
+    await actions.assert_property(victim, "false_mint", True, t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(victim, "retired", True, t, NOW, 0.9, evidence_class=_SD)
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/b4251601",
+                            agent_id="agent:b4251601", project="p", cwd="/w",
+                            model=None, session_key=None)
+    out = await _fn(actions, "lint", {})
+    findings = _by_check(out, "false-mint-live")
+    assert len(findings) == 1 and findings[0]["subject"] == "agent:b4251601"
+    assert findings[0]["severity"] == "error"
+    assert "reinstate_generation" in findings[0]["detail"]
 
 
 async def test_lint_walks_through_a_historical_generation(actions: Actions) -> None:
