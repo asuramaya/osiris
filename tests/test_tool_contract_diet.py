@@ -610,7 +610,11 @@ def _tool_chars(t: Any) -> int:
 # governed-vs-conflict and names near-misses, no-office is an honest null instead of a claim
 # (Seshat XXIX 08-12 batch, accepted into a merge batch that never landed it — found by the
 # merge-base sweep). Raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 187_200
+# 187,200 -> 187,800 (measured 187,501 exact). 131 tools unchanged (2026-08-18 ~17:20, Thoth
+# LXXVII, khnum-scale-envelope merge): fleet()'s pool_health contract grew a `caps` envelope
+# (per-daemon pool cap / backends / utilization / max_connections headroom — the 1,000-worker
+# arithmetic, decision 6a745efa). Raised once here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 187_800
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
