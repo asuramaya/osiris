@@ -39,6 +39,7 @@ from src.orchestrator.capture import (
     reclassify_thread,
     record_blind_spot,
     record_decision,
+    record_embed_load_failure,
     record_hook_failure,
     record_tension,
     resolve_thread,
@@ -969,6 +970,35 @@ async def test_record_hook_failure_never_raises(actions: Actions) -> None:
 
     await record_hook_failure(_BrokenActions(), surface="hook/stophook",  # type: ignore[arg-type]
                               cannot_see="should never raise")
+
+
+async def test_record_embed_load_failure_files_through_the_blind_spot_channel(
+    actions: Actions,
+) -> None:
+    """thread 5cd49217: embed_pass's own generic except-block used to log-and-swallow every
+    semantic-embedding load failure with nothing else watching — this is that confession,
+    same channel/shape as record_hook_failure."""
+    b = await record_embed_load_failure(actions, cannot_see="embed_backfill failed: boom")
+    assert b is None
+    obj = await actions.pool.fetchrow(
+        "SELECT o.id, o.type FROM objects o WHERE EXISTS "
+        "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='surface' AND a.value #>> '{}' = 'embed/model2vec-load')")
+    assert obj is not None and obj["type"] == "BlindSpot"
+    props = await _props(actions.pool, obj["id"])
+    assert "boom" in props["cannot_see"]
+    assert "embed_pass" in props["verify_with"]
+
+
+async def test_record_embed_load_failure_never_raises(actions: Actions) -> None:
+    class _BrokenActions:
+        pool = actions.pool
+
+        async def create_or_find_object(self, *a: object, **kw: object) -> None:
+            raise RuntimeError("simulated: the alarm channel itself is down")
+
+    await record_embed_load_failure(_BrokenActions(),  # type: ignore[arg-type]
+                                    cannot_see="should never raise")
 
 
 async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Actions) -> None:

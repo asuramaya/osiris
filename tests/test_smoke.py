@@ -14,9 +14,10 @@ import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.api.app import create_app
-from src.orchestrator.capture import record_hook_failure
+from src.orchestrator.capture import record_embed_load_failure, record_hook_failure
 from src.orchestrator.smoke import (
     CHROME_ROUTES,
+    embed_health,
     registry_rowless_warning,
     smoke,
     smoke_chrome,
@@ -343,3 +344,57 @@ def test_summarize_warnings_is_empty_on_a_bare_error_string() -> None:
 
 def test_summarize_warnings_is_empty_when_absent() -> None:
     assert summarize_warnings({"chrome": _green_chrome(), "db": "ok", "ok": True}) == []
+
+
+# --- embed_health: the same read-back shape as whisper_health, over a different surface ----
+
+async def test_embed_health_is_ok_when_nothing_ever_failed(actions: Actions) -> None:
+    out = await embed_health(actions.pool)
+    assert out["ok"] is True
+    assert out["error_count"] == 0
+    assert "last_error" not in out
+
+
+async def test_embed_health_finds_a_recorded_load_failure(actions: Actions) -> None:
+    await record_embed_load_failure(actions, cannot_see="embed_backfill failed: timeout")
+    out = await embed_health(actions.pool)
+    assert out["ok"] is False
+    assert out["error_count"] == 1
+    assert "timeout" in out["last_error"]["text"]
+
+
+async def test_embed_health_excludes_failures_outside_the_window(actions: Actions) -> None:
+    old = datetime.now(UTC) - timedelta(hours=48)
+    b = await actions.create_or_find_object("BlindSpot", "blindspot:test-old-embed-failure",
+                                            "test")
+    await actions.assert_property(b, "surface", "embed/model2vec-load", "test", old, 0.9)
+    await actions.assert_property(b, "cannot_see", "an old, stale failure", "test", old, 0.9)
+    out = await embed_health(actions.pool, window_hours=24)
+    assert out["ok"] is True
+    assert out["error_count"] == 0
+
+
+async def test_smoke_carries_the_embed_warning_without_failing_ok(
+    client: httpx.AsyncClient, actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import mounts
+
+    async def _clean(pool: object) -> dict[str, object]:
+        return {"blind": False, "verified": [], "matched": [], "rowless": []}
+
+    monkeypatch.setattr(mounts, "registry_census", _clean)  # isolate from the live harness
+    res = await smoke(client, actions.pool)
+    assert res["embed"]["ok"] is True
+    assert res["warnings"] == []
+
+    await record_embed_load_failure(actions, cannot_see="embed_backfill failed: down")
+    res2 = await smoke(client, actions.pool)
+    assert res2["embed"]["ok"] is False
+    assert any("embed door closed" in w for w in res2["warnings"])
+    assert res2["ok"] is True, "an embed-door warning must never gate smoke()'s overall verdict"
+
+
+def test_summarize_warnings_passes_through_the_embed_line_too() -> None:
+    mcp_result = {"chrome": _green_chrome(), "db": "ok", "ok": True,
+                 "warnings": ["embed door closed: 3 in 24h — last: timeout"]}
+    assert summarize_warnings(mcp_result) == ["embed door closed: 3 in 24h — last: timeout"]

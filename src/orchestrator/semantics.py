@@ -63,30 +63,49 @@ _LOAD_TIMEOUT_S = 8.0  # a ~30MB local model loads in low single digits on a hea
 # not a retry on no.
 
 
+_RETRY_COOLDOWN_S = 300.0  # thread 5cd49217 (Thoth DM 5287): #149's original latch never
+# re-opened itself — a genuinely transient cause (the HF CDN round-trip this class of
+# timeout was root-caused to) stayed closed for that process's WHOLE remaining life, the
+# operator's own "no babysitting" complaint. HALF-OPEN after a cooldown: consistency over
+# opportunism still holds WITHIN a burst (no caller mid-cooldown ever re-hangs on the same
+# doomed fetch), but past the cooldown exactly one caller gets to try again — a fresh
+# timeout re-latches for another full window, a real recovery just... works, no restart
+# required. embed_pass's own 10-minute cron grid means a 5-minute cooldown costs at most
+# one extra silently-skipped tick, never a stampede.
+
+
 class Model2VecEmbedder:
     """Static-embedding backend (minishlab/model2vec). Lazy: the model loads on FIRST
     embed (never at import — CI installs the package but must never touch the network).
     Load failure raises; resolve_embedder turns that into a clean None ONCE.
 
-    THE LOAD ITSELF IS NOW BOUNDED AND STICKY (task #149): `_load_failed` latches the
-    moment a load times out or errors, so a caller three calls in a row (Imhotep's own
-    specimen) fails fast on calls 2 and 3 instead of re-attempting — and re-hanging — the
-    same doomed fetch each time. The underlying thread is NOT killed on timeout (Python
-    cannot forcibly kill a thread) — it may still finish loading later in the background,
-    but this embedder never trusts that late result once it has already reported closed;
-    consistency over opportunism, the same discipline resolve_embedder's own ONE-time
-    ImportError cache already holds."""
+    THE LOAD ITSELF IS BOUNDED AND STICKY-WITH-COOLDOWN (task #149, sharpened by thread
+    5cd49217): `_load_failed` latches the moment a load times out, so a caller three calls
+    in a row (Imhotep's own specimen) fails fast on calls 2 and 3 instead of re-attempting
+    — and re-hanging — the same doomed fetch each time. The underlying thread is NOT
+    killed on timeout (Python cannot forcibly kill a thread) — it may still finish loading
+    later in the background, but this embedder never trusts that late result while still
+    inside a cooldown window; past it, `_load` tries once more on its own (see
+    `_RETRY_COOLDOWN_S`'s own note) — self-healing, not a human noticing and restarting a
+    daemon. `last_error`/`failed_at` are read by `smoke.embed_health` (kept as plain
+    attributes rather than a graph write here: this module has no `Actions`, only a bare
+    pool — the graph-alarm side lives at the caller, `embed_pass`)."""
 
     def __init__(self, model_name: str) -> None:
         self.model = model_name
         self._m: Any = None
         self._load_failed = False
+        self._failed_at: float | None = None
+        self.last_error: str | None = None
 
     def _load(self) -> Any:
         if self._load_failed:
-            raise RuntimeError(f"{self.model} previously failed to load (timed out or "
-                               "errored) — the semantic door stays closed for this "
-                               "process; never re-attempted per call")
+            if (self._failed_at is not None
+                    and time.monotonic() - self._failed_at < _RETRY_COOLDOWN_S):
+                raise RuntimeError(f"{self.model} previously failed to load (timed out) — "
+                                   "the semantic door stays closed for "
+                                   f"{_RETRY_COOLDOWN_S:.0f}s, then retries itself once")
+            self._load_failed = False  # cooldown elapsed: HALF-OPEN, one real attempt below
         if self._m is None:
             from model2vec import StaticModel  # import here: the dep is optional at runtime
 
@@ -101,6 +120,8 @@ class Model2VecEmbedder:
             return await asyncio.wait_for(asyncio.to_thread(_run), timeout=_LOAD_TIMEOUT_S)
         except TimeoutError:
             self._load_failed = True
+            self._failed_at = time.monotonic()
+            self.last_error = f"timed out after {_LOAD_TIMEOUT_S:.0f}s"
             raise
 
 
