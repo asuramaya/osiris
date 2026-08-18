@@ -496,6 +496,11 @@ def test_end_to_end_refused_port_renders_unreachable_not_a_crash(tmp_path: Path)
     payload = {"workspace": {"current_dir": "/tmp"}, "session_id": "deadbeef0000",
                "model": {"id": "claude-fable-5"}}
     env = {"DATABASE_URL": "postgresql://u:p@127.0.0.1:1/osiris",
+           # ONE INGRESS (#180 piece 1): the statusline now tries the MCP server's /heartbeat
+           # route BEFORE the direct connect, so on a box whose live server is up this test
+           # would render real counts and prove nothing about the refusal path. Point the
+           # route at the same dead port so both lanes refuse and the fallback is exercised.
+           "OSIRIS_HEARTBEAT_URL": "http://127.0.0.1:1/heartbeat",
            "PATH": "/usr/bin:/bin", "HOME": str(Path.home()),
            "OSIRIS_STATUSLINE_CACHE_DIR": str(tmp_path)}
     out = subprocess.run([sys.executable, str(_SCRIPT)], input=json.dumps(payload),
