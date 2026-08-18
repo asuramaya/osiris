@@ -199,7 +199,8 @@ def main() -> None:  # pragma: no cover - CLI
     repos = _repos(argv)
 
     async def tick() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:pulse")
         try:
             res = await pulse(Actions(pool), repos, now=datetime.now(UTC))
             stamp = datetime.now(UTC).strftime("%H:%M:%S")

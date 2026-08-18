@@ -1914,7 +1914,8 @@ def main() -> None:  # pragma: no cover - CLI
 
     if cmd == "usage":  # what the auto-ingest actually burned (reads the llm_usage table)
         async def _usage_report() -> None:
-            pool = await create_pool(get_settings().database_url)
+            pool = await create_pool(
+                get_settings().database_url, application_name="osiris-script:ingest-sessions")
             try:
                 print(json.dumps(await usage_summary(pool, hours=int(arg or 24)),
                                  indent=2, default=str))
@@ -1939,7 +1940,8 @@ def main() -> None:  # pragma: no cover - CLI
         raise SystemExit(f"unknown command {cmd!r}")
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-sessions")
         try:
             actions = Actions(pool)
             if target is None:

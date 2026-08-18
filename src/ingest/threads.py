@@ -250,7 +250,8 @@ def main() -> None:  # pragma: no cover - CLI
     import asyncio
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-threads")
         try:
             actions = Actions(pool)
             print(await mine_threads(actions))

@@ -152,7 +152,9 @@ async def main() -> None:
     ap.add_argument("--apply", action="store_true", help="write (default: rehearse)")
     args = ap.parse_args()
     root = Path.home() / ".claude/projects"
-    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    pool = await asyncpg.create_pool(
+        os.environ["DATABASE_URL"],
+        server_settings={"application_name": "osiris-script:fold-twins"})
     assert pool is not None
     found = await survey(pool, root)
     anon = [t for t in found if not t["handle"]]

@@ -36,7 +36,9 @@ async def run(apply: bool) -> None:
     if refusal is not None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
-    pool = await create_pool(DSN, min_size=1, max_size=2)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=2,
+        application_name="osiris-script:backfill-decided-in")
     actions = Actions(pool)
     out = await backfill_decided_in(actions, dry_run=not apply)
     for skip in out["skipped"]:

@@ -210,7 +210,8 @@ def main() -> None:
         return
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-clinicaltrials")
         try:
             print(f"ingested: {await aim_trials(Actions(pool), sponsor)}")
         finally:

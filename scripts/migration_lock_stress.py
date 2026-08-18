@@ -69,7 +69,9 @@ def _down_revision(target_rev: str) -> str:
 async def _reader_loop(
     dsn: str, query: str, interval: float, stop: asyncio.Event, errors: list,
 ) -> int:
-    pool = await asyncpg.create_pool(dsn, min_size=4, max_size=4)
+    pool = await asyncpg.create_pool(
+        dsn, min_size=4, max_size=4,
+        server_settings={"application_name": "osiris-script:migration-lock-stress"})
     n = 0
     while not stop.is_set():
         try:
@@ -84,7 +86,9 @@ async def _reader_loop(
 
 
 async def _seed(dsn: str, n_objects: int, depth: int) -> None:
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+    pool = await asyncpg.create_pool(
+        dsn, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:migration-lock-stress"})
     async with pool.acquire() as c:
         await c.execute(
             "INSERT INTO objects (id, type, canonical, status) "
@@ -125,7 +129,9 @@ async def run(args: argparse.Namespace, seed_sql_text: str | None) -> int:
             raise SystemExit(f"baseline migration to {baseline} failed")
 
         if seed_sql_text is not None:
-            pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1)
+            pool = await asyncpg.create_pool(
+                dsn, min_size=1, max_size=1,
+                server_settings={"application_name": "osiris-script:migration-lock-stress"})
             async with pool.acquire() as c:
                 await c.execute(seed_sql_text)
             await pool.close()

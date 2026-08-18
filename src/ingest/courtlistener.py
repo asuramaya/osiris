@@ -150,7 +150,8 @@ def main() -> None:
     name = argv[0]
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-courtlistener")
         try:
             print(f"ingested: {await aim_litigation(Actions(pool), name, kind=kind)}")
         finally:

@@ -128,7 +128,8 @@ def main() -> None:
     case_id = uuid.UUID(argv[1]) if len(argv) > 1 else None
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-orgbook")
         try:
             print(f"ingested: {await aim_orgbook(Actions(pool), name, case_id=case_id)}")
         finally:

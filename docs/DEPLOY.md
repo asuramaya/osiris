@@ -184,6 +184,13 @@ A watch that pages a real operator needs guards the demo doesn't:
 
 ## The connection envelope at scale (task #180 piece 2)
 
+> **Stated max-workers number: ~1,000 concurrent Claude Code sessions is safe on this
+> box's current pool sizes, at a statusline render cadence of 5 seconds or slower.**
+> pgbouncer is REFUTED at that scale — see "THE DECISION" near the end of this section
+> for the arithmetic. If you've landed here from a stranger's box wanting the one
+> number, that's it; read on only for the reasoning and the thresholds that would change
+> it.
+
 Before this work, every statusline render and every Stop-hook turn-end opened its OWN
 `asyncpg.connect()` — a per-process fork, not a pool checkout. Measured live (Thoth,
 2026-08-18): 138 tx/s and 23 backends against an idle fleet of 16 sessions — connection
@@ -303,6 +310,15 @@ section already named as sharing the ~41-connection headroom, never individually
 This is exactly where pgbouncer's transaction-level multiplexing would pay for itself
 FIRST if it ever needs to — not the four named daemons, whose combined load (3,180
 tx/min, ~53 tx/s) is a small fraction of any of the throughput ceilings measured above.
+
+**UPDATE (msg 5364): the ad hoc class is now tagged, not bucketed.** Every `osiris`
+CLI subcommand (`osiris-cli:<subcommand>`), every standalone `src/ingest/*.py`/
+`scripts/*.py` invocation (`osiris-script:<name>`), and every Stop-hook/statusline/
+fleet-glance fallback connection (`osiris-hook:<name>`) now sets `application_name` —
+`pool_health`'s `by_application` breakdown attributes the 74% by name on the NEXT
+measurement instead of lumping it under `(unnamed)`. The apportionment above was taken
+BEFORE this tagging landed; a future re-measurement should show real names where
+`(unnamed)` used to dominate.
 
 **`osiris-worker` peaking at 90% of its own cap is the one number worth acting on now,
 cheaply, without pgbouncer**: `osiris_worker_pool_size` raised 10→16 in this same

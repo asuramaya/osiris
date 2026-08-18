@@ -154,7 +154,9 @@ async def _counts(
     async def _succeed(sid: str, model: str) -> str | None:
         return _succession(sid, model)
 
-    conn = await asyncpg.connect(DSN, timeout=connect_timeout)
+    conn = await asyncpg.connect(
+        DSN, timeout=connect_timeout,
+        server_settings={"application_name": "osiris-hook:statusline-direct"})
     try:
         result = await compute_heartbeat(
             conn, project_hint=project_hint, session_id=session_id, model_id=model_id,

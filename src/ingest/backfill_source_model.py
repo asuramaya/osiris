@@ -95,7 +95,8 @@ def main() -> None:  # pragma: no cover - CLI
     """Run the backfill once against the configured graph (OFFLINE, explicit — never a cron)."""
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-backfill-model")
         try:
             print(await backfill_source_model(Actions(pool)))
         finally:

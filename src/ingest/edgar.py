@@ -83,7 +83,8 @@ def main() -> None:
     case_id = uuid.UUID(sys.argv[2]) if len(sys.argv) > 2 else None
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-edgar")
         try:
             data = await fetch_company_tickers()
             counts = await ingest_companies(

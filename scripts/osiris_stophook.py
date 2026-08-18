@@ -99,7 +99,9 @@ async def _deliverable(
     import asyncpg
     from src.orchestrator.stophook_logic import compute_stop_deliverable
 
-    conn = await asyncpg.connect(DSN, timeout=1.0)
+    conn = await asyncpg.connect(
+        DSN, timeout=1.0,
+        server_settings={"application_name": "osiris-hook:stophook-deliverable"})
     try:
         out = await compute_stop_deliverable(conn, cwd=cwd, session_id=session_id)
     finally:
@@ -146,7 +148,9 @@ async def _offload_boxes(
     import asyncpg
     from src.orchestrator.stophook_logic import compute_stop_offload
 
-    conn = await asyncpg.connect(DSN, timeout=1.0)
+    conn = await asyncpg.connect(
+        DSN, timeout=1.0,
+        server_settings={"application_name": "osiris-hook:stophook-offload"})
     try:
         return await compute_stop_offload(conn, session_id=session_id, cwd=cwd)
     finally:
@@ -526,7 +530,9 @@ async def _assert_pending(agent_id: str) -> None:
     from src.actions.core import Actions
     from src.db.pool import create_pool
 
-    pool = await create_pool(DSN, min_size=1, max_size=1)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-hook:stophook-assert-pending")
     try:
         actions = Actions(pool)
         obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
@@ -546,7 +552,9 @@ async def _assert_context_pct(agent_id: str, pct: int) -> None:
     from src.actions.core import Actions
     from src.db.pool import create_pool
 
-    pool = await create_pool(DSN, min_size=1, max_size=1)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-hook:stophook-assert-context-pct")
     try:
         actions = Actions(pool)
         obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
@@ -775,7 +783,9 @@ async def _stage_a_async(payload: dict[str, Any], pct: int | None = None) -> Non
     session_id = str(payload.get("session_id") or "")
     import asyncpg
 
-    conn = await asyncpg.connect(DSN, timeout=1.0)
+    conn = await asyncpg.connect(
+        DSN, timeout=1.0,
+        server_settings={"application_name": "osiris-hook:stophook-stage-a"})
     try:
         identity = await _resolve_worker_identity(conn, session_id, cwd)
         if identity is None:
@@ -837,7 +847,9 @@ async def _alarm_stop_hook_failure_async(cannot_see: str) -> None:
     # a FRESH, short-lived pool — never the connection that just failed, and never the
     # shared pool other paths in this hook use, so an alarm write can never itself become
     # the thing that makes a stop slow or unsafe.
-    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1, timeout=1.0)
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1, timeout=1.0,
+        server_settings={"application_name": "osiris-hook:stophook-alarm-failure"})
     try:
         await record_hook_failure(Actions(pool), surface="hook/stophook",
                                   cannot_see=cannot_see)
