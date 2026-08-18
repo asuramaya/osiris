@@ -116,7 +116,11 @@ class Settings(BaseSettings):
     # deliberate bound. Named separately from osiris_mcp_pool_size (not one shared default)
     # because the two daemons' own concurrency shapes differ: the worker runs many
     # concurrent cascade/cron jobs, the console serves read-only HTTP requests one at a time.
-    osiris_worker_pool_size: int = 10
+    # 10 -> 16 (msg 5340, the hour-long scale-envelope measurement, 2026-08-18): the ONLY
+    # daemon that peaked near its own ceiling under a real hour of fleet activity — 9 of
+    # 10 connections, 90% — measured via fleet()'s pool_health, not guessed. The other
+    # three daemons stayed comfortably under half their own caps in the same window.
+    osiris_worker_pool_size: int = 16
     osiris_api_pool_size: int = 10
     osiris_manager_pool_size: int = 10
     # chrome (the read-only HTTP console, src/api/app.py) — a SEPARATE process/port from

@@ -3084,7 +3084,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `pool_health` (task #180 piece 2 (c)): pg_stat_activity backends grouped by the
     application_name each bounded daemon pool now tags itself with (osiris-mcp/-worker/
     -console/-manager), plus `tx_total` — a CUMULATIVE counter since the last stats reset,
-    not a live rate; diff two readings yourself for an actual rate. Best-effort."""
+    not a live rate; diff two readings yourself for an actual rate. `caps` (msg 5340, THE
+    ENVELOPE) rides beside it: each daemon's configured pool cap, current live backend
+    count, and utilization percent — plus `max_connections`/`fixed_budget`/`headroom` for
+    the whole-box arithmetic `docs/DEPLOY.md`'s own envelope section reasons about, read
+    live instead of asserted from memory. Best-effort."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
