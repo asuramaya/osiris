@@ -911,7 +911,8 @@ async def _pool_get() -> asyncpg.Pool:
         # entire fleet (the whole point — bounded connections); under stdio it's this one
         # session. min_size stays 1 so an idle server is cheap.
         _pool = await create_pool(
-            get_settings().database_url, max_size=get_settings().osiris_mcp_pool_size
+            get_settings().database_url, max_size=get_settings().osiris_mcp_pool_size,
+            application_name="osiris-mcp",
         )
     return _pool
 
@@ -3074,7 +3075,12 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     PROJECT GROUPING NORMALIZES THROUGH `merged_into` (task #180 piece 2 (f)): a raw label
     naming a project that has since been folded into another (repo:henry->repo:shellbiz)
     renders under the SURVIVOR's live label, not the dead one — best-effort, degrades to the
-    raw label on any failure."""
+    raw label on any failure.
+
+    `pool_health` (task #180 piece 2 (c)): pg_stat_activity backends grouped by the
+    application_name each bounded daemon pool now tags itself with (osiris-mcp/-worker/
+    -console/-manager), plus `tx_total` — a CUMULATIVE counter since the last stats reset,
+    not a live rate; diff two readings yourself for an actual rate. Best-effort."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3277,6 +3283,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         whisper = await _whisper_health(pool)
     except Exception:  # noqa: BLE001
         whisper = {"ok": True, "error": "whisper_health probe unavailable"}
+    # PER-DAEMON POOL SURFACE (task #180 piece 2 (c)): pg_stat_activity grouped by the
+    # application_name each bounded daemon pool now tags itself with — same best-effort
+    # shape as whisper_health/os_bodies beside it.
+    try:
+        from src.orchestrator.pool_health import pg_activity_by_app
+        pool_health = await pg_activity_by_app(pool)
+    except Exception:  # noqa: BLE001
+        pool_health = {"by_application": {}, "backends": None, "tx_total": {}}
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -3287,6 +3301,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
         "whisper_health": whisper,
         "harness_registry": harness_registry,
+        "pool_health": pool_health,
         # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
         # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.

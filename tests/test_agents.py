@@ -3278,6 +3278,22 @@ async def test_fleet_groups_a_folded_project_under_its_survivor(actions: Actions
     assert "▸ foldedproj" not in out["tree"]
 
 
+async def test_fleet_surfaces_pool_health(actions: Actions) -> None:
+    """Task #180 piece 2 (c): fleet()'s pg_stat_activity-by-application surface — this
+    test's own connection is real, so its application_name shows up in the count."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+    assert "pool_health" in out
+    assert out["pool_health"]["backends"] >= 1
+    assert isinstance(out["pool_health"]["tx_total"]["xact_commit"], int)
+
+
 async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     """The OS census is best-effort, never a hard dependency: if it raises for any reason,
     fleet() must still answer — with the truth it can vouch for."""

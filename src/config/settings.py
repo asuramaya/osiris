@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
     # per-agent 10 × 56 = 560 that would have exhausted it.
     osiris_mcp_pool_size: int = 20
+    # THE OTHER TWO LONG-RUNNING DAEMONS (task #180 piece 2 (c)): osiris-worker and the
+    # console (src/api/app.py) each called create_pool with no size override, silently
+    # inheriting the bare asyncpg.create_pool default (max_size=10) — unconfigured, not a
+    # deliberate bound. Named separately from osiris_mcp_pool_size (not one shared default)
+    # because the two daemons' own concurrency shapes differ: the worker runs many
+    # concurrent cascade/cron jobs, the console serves read-only HTTP requests one at a time.
+    osiris_worker_pool_size: int = 10
+    osiris_api_pool_size: int = 10
+    osiris_manager_pool_size: int = 10
     # chrome (the read-only HTTP console, src/api/app.py) — a SEPARATE process/port from
     # osiris-mcp, run via `uvicorn --factory src.api.app:create_app` (deploy/osiris-console.
     # service). No prior settings field existed for this; it was a bare convention baked into

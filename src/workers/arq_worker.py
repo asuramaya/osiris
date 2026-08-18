@@ -81,7 +81,9 @@ def register_default_watchers() -> None:
 
 async def startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
-    pool = await create_pool(settings.database_url)
+    pool = await create_pool(
+        settings.database_url, max_size=settings.osiris_worker_pool_size,
+        application_name="osiris-worker")
     redis = create_redis(settings.redis_url)
     actions = Actions(pool)
     ctx["cascade"] = CascadeContext(
