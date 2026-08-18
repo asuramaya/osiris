@@ -182,6 +182,105 @@ A watch that pages a real operator needs guards the demo doesn't:
   DATABASE_URL=…(throwaway) deploy/restore.sh /var/backups/osiris/osiris-<stamp>.dump
   ```
 
+## The connection envelope at scale (task #180 piece 2)
+
+Before this work, every statusline render and every Stop-hook turn-end opened its OWN
+`asyncpg.connect()` — a per-process fork, not a pool checkout. Measured live (Thoth,
+2026-08-18): 138 tx/s and 23 backends against an idle fleet of 16 sessions — connection
+count scaled with **live sessions × render/turn frequency**, unbounded, heading straight
+into `max_connections` the moment the fleet grew past a few dozen concurrent sessions.
+`/heartbeat` and `/stop` (both on `osiris-mcp`'s own shared, bounded pool) replace that:
+a session's statusline render or turn-stop is now a function call multiplexed over a
+FIXED pool, not a new connection. This section is the arithmetic for how far that
+actually reaches, not a recommendation — the numbers below are measured on this box, not
+assumed.
+
+### Fixed daemon budget vs `max_connections`
+
+This box's Postgres runs at `max_connections = 100` (`deploy/postgresql.conf`). Four
+long-running daemons each hold a BOUNDED pool (`osiris_{mcp,worker,api,manager}_pool_size`,
+`src/config/settings.py`):
+
+| Daemon | Pool cap (`max_size`) | `application_name` |
+|---|---|---|
+| `osiris-mcp` | 20 | `osiris-mcp` |
+| `osiris-worker` | 10 | `osiris-worker` |
+| `osiris-console` (api) | 10 | `osiris-console` |
+| `osiris-manager` | 10 | `osiris-manager` |
+| **Fixed budget** | **50 / 100** | — |
+
+That leaves **~47 connections of headroom** (100 − 50 − Postgres's own
+`superuser_reserved_connections`, typically 3) for ad hoc CLI invocations, ingest
+scripts, and anything else not yet routed through a named, bounded pool — several such
+call sites still exist (`src/cli.py`'s per-subcommand pools, the `src/ingest/*` scripts,
+`ontology/ingest_cli.py`, `bootstrap.py`, `satellite.py`), each opening its own untagged,
+unbounded-by-settings connection per invocation. They are BURSTY, not steady-state, so
+they share the 47-connection headroom rather than each getting a dedicated cap.
+
+**The critical decoupling**: this fixed 50-connection budget does NOT grow with fleet
+size any more. A session's marginal Postgres-connection cost, post-#180, is ZERO
+steady-state — its statusline/stop traffic is absorbed into `osiris-mcp`'s already-open
+20-connection pool. What scales with fleet size now is **request throughput against that
+pool**, not raw connection count.
+
+### Per-session request cost (measured live, this box, 2026-08-18)
+
+`/heartbeat` (statusline render, the heavier of the two — mail/dm/briefs/souls/wakes/
+owed/spend/resolved-identity in one composite read) and `/stop` (turn-end, deliverable
+phase — one mail-count query) round-trip times over 20 samples each, against the live
+20-connection `osiris-mcp` pool:
+
+| Route | p50 | p90 | max |
+|---|---|---|---|
+| `/heartbeat` | 57ms | 89ms | 89ms |
+| `/stop` (deliverable phase) | 16ms | 21ms | 21ms |
+
+Naive serial-throughput ceiling per route (`pool_size / p50`, i.e. every connection
+saturated back-to-back — optimistic, since asyncpg's pool checkout overlaps under
+Starlette's async event loop, but a useful floor):
+
+- `/heartbeat`: 20 conns ÷ 0.057s ≈ **350 req/s**
+- `/stop`: 20 conns ÷ 0.016s ≈ **1,250 req/s** (rides the SAME pool as `/heartbeat`, so
+  the two compete for the same 20 connections under load — this is a shared ceiling,
+  not two independent ones)
+
+### The 1000-session envelope
+
+`/stop` fires once per turn-end — at 1000 concurrently active sessions averaging a turn
+every ~45s, that's ≈22 req/s: trivial against either ceiling above.
+
+`/heartbeat` fires once per statusline render. This is the actual constraint:
+
+| Render cadence (per session) | Demand at 1000 sessions | vs 350 req/s ceiling |
+|---|---|---|
+| every 2s (tight — every keystroke/render) | ~500 req/s | **OVER** — the pool queues, renders lag |
+| every 5s | ~200 req/s | comfortable, ~40% headroom |
+| every 10s | ~100 req/s | comfortable, ~70% headroom |
+
+Claude Code's actual statusline refresh cadence varies by client and isn't pinned by
+this house — the table names the THRESHOLD, not a claimed cadence. If the fleet
+approaches 1000 concurrently live sessions rendering faster than roughly every 3-4
+seconds on average, `osiris_mcp_pool_size` needs raising before `/heartbeat` becomes the
+bottleneck (each +10 to the pool cap buys roughly +175 req/s of ceiling, cheaply — the
+pool cap costs Postgres connections, not CPU, and there's ~47 of headroom before
+`max_connections` itself needs raising).
+
+### Decision table: when pgbouncer becomes necessary
+
+pgbouncer is NOT needed by the fixed-daemon-budget math above — 50/100 with 47 of
+headroom has real slack. It becomes worth adding when ANY of these actually happens,
+not preemptively:
+
+| Trigger | Why pgbouncer specifically |
+|---|---|
+| A 5th+ long-running daemon needs its own bounded pool and the fixed budget would cross ~70/100, leaving under 30 for ad hoc/burst traffic | Transaction-level pooling lets many app-level "connections" share fewer real Postgres backends — buys headroom without raising `max_connections` (and its `work_mem × connections` memory cost, already the reasoning behind this box's own `max_connections=100` choice) |
+| Ad hoc script/CLI concurrency (the untagged, per-invocation `create_pool` call sites above) spikes past the ~47-connection headroom during a burst — e.g. several concurrent backfill/ingest runs | Those call sites are inherently bursty and not individually worth a dedicated bounded pool each; pgbouncer absorbs the burst without touching every call site |
+| `/heartbeat`'s own pool needs to grow past what's comfortable against `max_connections`'s total ceiling (i.e. raising `osiris_mcp_pool_size` repeatedly is no longer free headroom) | pgbouncer transaction pooling multiplies effective capacity per real Postgres connection, the same lever as (1), applied to the busiest single pool instead of the daemon count |
+
+None of these are true on this box today (fixed budget 50/100, `osiris_mcp_pool_size`
+has 3 unused daemon-budget increments of headroom before the fixed total even reaches
+70/100). Revisit when a measurement — not a guess — shows one of the three rows firing.
+
 ## Later cuts (not yet)
 
 When a pool bites, split the worker by resource class (light federators / heavy
