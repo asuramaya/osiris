@@ -929,3 +929,90 @@ async def test_lint_does_not_flag_an_ordinary_obligation_with_no_severity(
     out = await _fn(actions, "lint", {})
 
     assert _by_check(out, "held-past-deadline") == []
+
+
+async def test_lint_flags_a_stale_off_head_link(actions: Actions) -> None:
+    """STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — recurrence detection): the
+    write-side fix (mint_heir invalidating a predecessor's works_in onto its heir) landed
+    2026-08-04, but nothing watches for the CLASS recurring. An ancestor whose lineage has
+    since minted a living heir, yet still carries its own live works_in edge (simulating
+    debt from BEFORE the write-side fix, or a future regression of it), is flagged —
+    backfill_agent_project_links is the repair, this check only counts."""
+    t = "agent:teller"
+    ancestor = await actions.create_or_find_object("Agent", "agent:staleoh01", t)
+    heir = await actions.create_or_find_object("Agent", "agent:staleoh01-ii", t)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:staleoh1", t)
+    await actions.assert_property(ancestor, "succeeded_by", "agent:staleoh01-ii", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.create_link(heir, ancestor, "succeeded_from", t, NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(ancestor, proj, "works_in", t, NOW, 0.9, evidence_class=_SD)
+
+    out = await _fn(actions, "lint", {})
+
+    stale = _by_check(out, "stale-off-head-link")
+    assert [f["subject"] for f in stale] == ["agent:staleoh01"]
+    assert stale[0]["severity"] == "warn"
+    assert "repo:staleoh1" in stale[0]["detail"]
+    assert "agent:staleoh01-ii" in stale[0]["detail"]
+    assert "backfill_agent_project_links" in stale[0]["detail"]
+
+
+async def test_lint_does_not_flag_the_living_heads_own_works_in(actions: Actions) -> None:
+    """The living head's OWN works_in edge is exactly the correct, current state — never
+    flagged by the same check that catches its ancestor's stale leftover."""
+    t = "agent:teller"
+    ancestor = await actions.create_or_find_object("Agent", "agent:staleoh02", t)
+    heir = await actions.create_or_find_object("Agent", "agent:staleoh02-ii", t)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:staleoh2", t)
+    await actions.assert_property(ancestor, "succeeded_by", "agent:staleoh02-ii", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.create_link(heir, ancestor, "succeeded_from", t, NOW, 0.9, evidence_class=_SD)
+    await actions.create_link(heir, proj, "works_in", t, NOW, 0.9, evidence_class=_SD)
+
+    out = await _fn(actions, "lint", {})
+
+    assert [f["subject"] for f in _by_check(out, "stale-off-head-link")
+            if f["subject"] == "agent:staleoh02"] == []
+
+
+async def test_lint_flags_a_stale_current_flag(actions: Actions) -> None:
+    """STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — recurrence detection): khepri's
+    own specimen — a real `supersedes` FK exists but `is_current` was never flipped false
+    on the row it supersedes (a migration-0047 backfill gap), so current_assertions still
+    lists the superseded value. repair_stale_current_flags is the batched repair; this
+    check only counts."""
+    t = "agent:teller"
+    obj = await actions.create_or_find_object("Person", "person:stalecur1", t)
+    old_id = await actions.pool.fetchval(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, "
+        " confidence, evidence_class, is_current) "
+        "VALUES ($1, 'name', '\"old\"'::jsonb, $2, $3, 0.9, 'self_declared', true) "
+        "RETURNING id", obj, t, NOW)
+    await actions.pool.execute(
+        "INSERT INTO assertions (object_id, name, value, source_id, observed_at, "
+        " confidence, evidence_class, is_current, supersedes) "
+        "VALUES ($1, 'name', '\"new\"'::jsonb, $2, $3, 0.9, 'self_declared', true, $4)",
+        obj, t, NOW + timedelta(hours=1), old_id)
+
+    out = await _fn(actions, "lint", {})
+
+    stale = _by_check(out, "stale-current-flag")
+    assert [f["subject"] for f in stale] == [str(obj)]
+    assert stale[0]["severity"] == "warn"
+    assert str(old_id) in stale[0]["detail"]
+    assert "repair_stale_current_flags" in stale[0]["detail"]
+
+
+async def test_lint_does_not_flag_a_correctly_flipped_supersession(actions: Actions) -> None:
+    """The ordinary, correct case — the superseded row's own is_current was properly
+    flipped false — must never be flagged; this check is for the ANOMALY only."""
+    t = "agent:teller"
+    obj = await actions.create_or_find_object("Person", "person:stalecur2", t)
+    await actions.assert_property(obj, "name", "old", t, NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(obj, "name", "new", t, NOW + timedelta(hours=1), 0.9,
+                                  evidence_class=_SD)
+
+    out = await _fn(actions, "lint", {})
+
+    assert [f for f in _by_check(out, "stale-current-flag")
+            if f["subject"] == str(obj)] == []
