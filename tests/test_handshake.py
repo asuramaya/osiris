@@ -1079,6 +1079,12 @@ async def test_automount_inlines_the_top_of_the_obligations_wall(
     summaries = [o["summary"] for o in out["obligations"]]
     assert any("fix the thing" in s for s in summaries)
     assert not any("just a question" in s for s in summaries)  # an echo, never inlined
+    # THE WHISPER SPEAKS PLAIN JSON (2026-08-18, decision 49510a2f's tail): the /automount
+    # route serialises this exact payload with `json` — a datetime riding along in the
+    # ranked wall (`last_touched`) 500'd the whisper on 60 of 63 arrivals in a day, for two
+    # weeks, silently — so the payload must round-trip through json.dumps with NO default.
+    import json
+    json.dumps(out)
 
 
 async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_thread(
