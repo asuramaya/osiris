@@ -3180,6 +3180,22 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def registry_census() -> dict[str, Any]:
+    """THE REGISTRY+/PROC CENSUS (#178 piece c) — the harness's own live-body list
+    (`claude agents --json`), each row verified against `/proc` (the pid really is a
+    claude body), reconciled against `agent_mounts`. `matched` are bodies with a real row;
+    `rowless` are verified-live bodies with NO row at all — the population #178's pieces
+    (a)/(b) exist to close. `blind: true` means the harness read itself failed (cannot
+    census, never read as "nothing is live").
+
+    OCCUPANCY, NOT IDENTITY: this answers "is a body running", never "which agent lineage
+    holds a seat" — read the graph (roster()/doors()) for that. Conflating the two is
+    exactly the two-body-problem class of bug (ruling 719ed5b1)."""
+    from src.orchestrator.mounts import registry_census as _registry_census
+    return await _registry_census(await _pool_get())
+
+
+@mcp.tool()
 async def roster(repo: str | None = None) -> dict[str, Any]:
     """Which seat owns a repo, and is anybody home — FROM THE GRAPH, no `ls
     ~/.osiris/seats/*/.osiris` required (task #140, Alfred's 2813da48: he read mount()'s

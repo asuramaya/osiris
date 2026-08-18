@@ -576,7 +576,14 @@ def _tool_chars(t: Any) -> int:
 # Thoth LXXVII heir ix, #172/#173a/#179 wave): NO NEW TOOL — fleet()'s docstring grew by the
 # whisper_health field (Imhotep d72281c, #179: hook failures alarmed and read back). Flagged by
 # its author ("~250 chars, not raised"), raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 182_000
+# 182,000 -> 182,800 (measured 182,732 exact). 129 -> 130 tools (2026-08-18, Seshat XXXV,
+# #178 piece c): ONE NEW TOOL — registry_census. The harness's own live-body list (`claude
+# agents --json`), each row verified against /proc, reconciled against agent_mounts (the
+# cache, never a second source of truth); `rowless` names the exact population #178's
+# pieces (a)/(b) exist to close to zero. Load-bearing (this IS the piece Thoth dispatched),
+# trimmed to the category rule's lean end first — flagged by its author, not raised beyond
+# the exact measured total, matching the immediately preceding precedent (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 182_800
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -669,4 +676,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 129
+    assert len(per_tool) == 130

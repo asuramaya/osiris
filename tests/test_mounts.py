@@ -1826,3 +1826,98 @@ async def test_undrop_dead_project_mount_refuses_to_overwrite_a_live_remount(
     assert "error" in result
     live = await mounts.find_mount(p, job_dir="/x/jobs/reuse0001")
     assert live is not None and live.agent_id == "agent:brandnew"
+
+
+# ═══ registry_census — #178 piece (c): the harness registry + /proc census, VERIFIED,
+# reconciled against agent_mounts (the cache, never a second source of truth) ═══
+
+_VERSIONS_EXE = "/home/x/.local/share/claude/versions/2.1.210"
+
+
+def _fake_agents_json(rows: list[dict]) -> object:
+    async def _f() -> list[dict]:
+        return rows
+    return _f
+
+
+async def test_registry_census_matches_a_verified_body_to_its_mount_row(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/abcdefgh", agent_id="agent:abcdefgh",
+                            project="osiris", cwd="/code/osiris", model=None,
+                            session_key="whisper:abcdefgh")
+    out = await mounts.registry_census(
+        p, agents_json=_fake_agents_json(
+            [{"sessionId": "abcdefgh-1234-5678-9abc-def012345678", "pid": 111,
+              "cwd": "/code/osiris", "name": "[OS] Test"}]),
+        read_exe=lambda pid: _VERSIONS_EXE, read_cwd=lambda pid: "/code/osiris")
+    assert out["blind"] is False
+    assert out["rowless"] == []
+    assert out["matched_count"] == 1
+    assert out["matched"][0]["agent_id"] == "agent:abcdefgh"
+    assert out["matched"][0]["project"] == "osiris"
+
+
+async def test_registry_census_flags_a_verified_body_with_no_row_as_rowless(
+    actions: Actions,
+) -> None:
+    """The exact population #178 pieces (a)/(b) exist to close to zero: the harness lists
+    a real, /proc-confirmed body, and agent_mounts has never heard of it."""
+    out = await mounts.registry_census(
+        actions.pool, agents_json=_fake_agents_json(
+            [{"sessionId": "rowless12-aaaa-bbbb-cccc-dddddddddddd", "pid": 222,
+              "cwd": "/code/ghost", "name": "[GH] Ghost"}]),
+        read_exe=lambda pid: _VERSIONS_EXE, read_cwd=lambda pid: "/code/ghost")
+    assert out["matched"] == []
+    assert out["rowless_count"] == 1
+    assert out["rowless"][0]["session_id"] == "rowless12-aaaa-bbbb-cccc-dddddddddddd"
+    assert out["rowless"][0]["job_dir_key"] == "rowless1"
+
+
+async def test_registry_census_drops_a_harness_row_proc_does_not_confirm(
+    actions: Actions,
+) -> None:
+    """The harness claims a body; /proc says the pid isn't really a claude binary (the
+    vanished-process race, or a process reusing a recycled pid) — never counted as
+    verified-live, matched or rowless."""
+    out = await mounts.registry_census(
+        actions.pool, agents_json=_fake_agents_json(
+            [{"sessionId": "unconfirmed-0000-0000-0000-000000000000", "pid": 333,
+              "cwd": "/code/x"}]),
+        read_exe=lambda pid: None, read_cwd=lambda pid: "/code/x")
+    assert out["verified_count"] == 0
+    assert out["matched"] == []
+    assert out["rowless"] == []
+
+
+async def test_registry_census_is_blind_not_empty_on_a_harness_read_failure(
+    actions: Actions,
+) -> None:
+    async def _raises() -> list[dict]:
+        raise TimeoutError("harness read timed out")
+
+    out = await mounts.registry_census(actions.pool, agents_json=_raises)
+    assert out["blind"] is True
+    assert out["verified"] == []
+    assert out["matched"] == []
+    assert out["rowless"] == []
+
+
+async def test_the_registry_census_mcp_tool_wraps_the_orchestrator(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import mcp_server as srv
+
+    async def _fake(pool: object, **kwargs: object) -> dict:
+        return {"blind": False, "verified": [], "matched": [], "rowless": [],
+                "verified_count": 0, "matched_count": 0, "rowless_count": 0}
+
+    monkeypatch.setattr(mounts, "registry_census", _fake)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.registry_census()
+    finally:
+        srv._pool = saved_pool
+    assert out["blind"] is False and "rowless_count" in out
