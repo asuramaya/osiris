@@ -80,7 +80,7 @@ async def _seed_soul(actions: Actions, anchor_sid: str, lines: list[str]) -> Non
             await conn.executemany(
                 "INSERT INTO soul_lines (harness, anchor_sid, line_idx, raw_line, line_hash, "
                 " prev_hash) VALUES ('claude-code', $1, $2, $3, $4, NULL)",
-                [(anchor_sid, i, ln, f"hash{i}") for i, ln in enumerate(lines)])
+                [(anchor_sid, i, ln.encode(), f"hash{i}") for i, ln in enumerate(lines)])
             await conn.execute(
                 "INSERT INTO soul_sessions (harness, anchor_sid, source_path, last_line_idx, "
                 " last_hash) VALUES ('claude-code', $1, 'fake', $2, $3) "
