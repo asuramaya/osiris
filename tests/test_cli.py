@@ -1835,10 +1835,16 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
 # the /opt SYSTEM templates by hand; nothing in git was ever the box's actual running config.
 
 _REQUIRED_UNIT_ENV = {
-    "osiris-mcp.service": ["DATABASE_URL=", "application_name=osiris-mcp", "REDIS_URL="],
+    "osiris-mcp.service": [
+        "DATABASE_URL=", "application_name=osiris-mcp", "REDIS_URL=",
+        "OOMScoreAdjust=-500",  # thread #175: the 19:08:32 CDT system-wide OOM took this
+        # daemon down alongside osiris-worker even though neither was the actual hog.
+    ],
     "osiris-worker.service": [
         "DATABASE_URL=", "application_name=osiris-worker", "REDIS_URL=",
         "OSIRIS_WORKER_ROLE=primary", "OSIRIS_PHANTOM_HEAL_ENABLED=1",
+        "OOMScoreAdjust=-500",  # thread #175, systemd's own "Failed with result 'oom-kill'"
+        "HF_HUB_OFFLINE=1",  # thread 5cd49217: cached model, skip the HF CDN round-trip
     ],
     "osiris-console.service": ["DATABASE_URL=", "application_name=osiris-console", "REDIS_URL="],
     "osiris-pulse.service": ["DATABASE_URL=", "application_name=osiris-pulse", "REDIS_URL="],

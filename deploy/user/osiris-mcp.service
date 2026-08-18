@@ -34,6 +34,17 @@ ExecStart=%h/code/osiris/.venv/bin/python -m src.mcp_server
 Restart=always
 RestartSec=5
 MemoryMax=1G
+# #175 (2026-08-18): the 19:08:32 CDT system-wide OOM (an UNRELATED process, heinrich
+# companion, at ~21.6GB RSS + a chrome renderer at 7.9GB, drove the box to 49G/61G used +
+# 15G swap) took osiris-mcp and osiris-worker down alongside it — neither was the hog,
+# but neither had any standing next to whatever else was on the box either. Matches
+# deploy/osiris-manager.service's own precedent (OOMScoreAdjust=-900, "under system-wide
+# memory pressure the kernel should reclaim from bodies long before it ever looks at the
+# sacred proc") at a more moderate value: mcp is heavier and legitimately grows (a shared
+# pool for the whole fleet), so -900's near-immunity would be the wrong trade if IT ever
+# genuinely leaked — -500 ranks it below ordinary user processes without pretending it can
+# never be the actual problem.
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=default.target
