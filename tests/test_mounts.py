@@ -1137,6 +1137,26 @@ async def test_find_session_row_covers_both_lanes(actions: Actions) -> None:
     assert await mounts.find_session_row(p, "0dead000-none-anywhere") is None
 
 
+async def test_find_session_row_lane_3_self_evident_derivation(actions: Actions) -> None:
+    """Ptah's gap (thread #174, 2026-08-17): a `-p --resume` wake's mount row carries a
+    job_dir keyed by the WAKE's own fresh job anchor (c8a22a05), unrelated to the resumed
+    transcript's own sid (02eaaa7a) — even though 02eaaa7a genuinely IS agent:02eaaa7a-iii's
+    own generation-derived identity. Lane 1 misses (job_dir doesn't carry the transcript
+    sid); lane 2 misses too, correctly, because record_session_anchor deliberately never
+    writes an anchor_sid entry for a sid that already testifies to itself. Lane 3 closes it:
+    the SAME self-evident derivation, performed by the reader instead of assumed unwritten
+    by the writer."""
+    p = actions.pool
+    await actions.create_or_find_object("Agent", "agent:02eaaa7a-iii", "test")
+    await mounts.save_mount(p, job_dir="/x/jobs/c8a22a05", agent_id="agent:02eaaa7a-iii",
+                            project="rotten-apple", cwd="/w", model=None, session_key=None)
+    row = await mounts.find_session_row(p, "02eaaa7a-ea67-4fac-a9fc-d9377c6f8474")
+    assert row is not None and row["agent_id"] == "agent:02eaaa7a-iii"
+    # a made-up sid that merely LOOKS like a base identity but never mounted anything
+    # matches nothing real — lane 3 is a fallback, not a blank check
+    assert await mounts.find_session_row(p, "deadbeef-0000-0000-0000-000000000000") is None
+
+
 async def test_fleet_pulse_is_one_honest_glance(
     actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     """The orient fold — SAME WORD, SAME NUMBER (operator ruling 2026-07-19): every figure

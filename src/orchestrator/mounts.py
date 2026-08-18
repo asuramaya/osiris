@@ -274,13 +274,26 @@ async def find_session_row(
     that forgets it is one). Returns the row (job_dir, agent_id, project, model,
     context_window_size, mounted_at) or None.
 
-    Two lanes, strongest evidence first:
+    Three lanes, strongest evidence first:
       1. THE ANCHOR NAMED FOR THE SID — the whisper derives ~/.claude/jobs/<sid8> for
          every session it greets, so this covers first lives, resumes, and forks alike.
       2. THE SESSION LEDGER — anchor_sid:<sid8> assertions (handshake.record_session_anchor
          files sid→soul at every whisper for identities the sid alone could not re-derive);
          the owner's lineage's freshest row answers for a window whose durable anchor
          wears another name (a mount(job_dir=<inherited anchor>) session).
+      3. SELF-EVIDENT DERIVATION (thread #174, Ptah's gap, 2026-08-17): record_session_anchor
+         deliberately never WRITES an anchor_sid entry when the sid already IS the agent's own
+         generation-derived identity ("the ledger holds only what a wiped registry could not
+         reconstruct") — but that optimization assumed a reader could re-derive it directly,
+         and until this lane existed, none could: lane 1 needs job_dir to itself carry the sid
+         (false for a `-p --resume` wake, whose job_dir is a FRESH per-wake anchor unrelated to
+         the resumed transcript's own sid), and lane 2 finds nothing because nothing was ever
+         written to find. Verified live: Ptah (agent:02eaaa7a-iii)'s mount row lives under
+         job_dir=jobs/c8a22a05 (the wake's own job anchor) while his transcript file (and his
+         own identity) is 02eaaa7a-ea67-4fac-a9fc-d9377c6f8474.jsonl — both prior lanes missed
+         him; fleet() read him cold at 23:53 while he was actively working (his own msg 5164
+         carries the symptom). This lane performs the SAME re-derivation record_session_anchor's
+         skip already assumed was possible, closing the loop without any new write.
     DEAD END, verified 2026-07-19 and recorded so nobody re-walks it: agent_mounts.
     session_key's 'sid:<hex>' is the MCP CONNECTION id (Mcp-Session-Id), never the harness
     sid — it cannot serve this lookup. `db` is any fetchrow-capable handle (pool or
@@ -300,7 +313,9 @@ async def find_session_row(
         "WHERE a.name = 'anchor_sid:' || $1 "
         "ORDER BY a.observed_at DESC LIMIT 1", sid[:8])
     if owner is None:
-        return None
+        owner = f"agent:{sid[:8]}"  # lane 3: self-evident — falls through to the same
+        # base-lineage query below, which naturally returns None if no such lineage ever
+        # mounted (a made-up sid matches nothing real; no extra existence check needed).
     from src.orchestrator.agents import _generation
     base = _generation(str(owner))[0]
     return await db.fetchrow(
