@@ -29,6 +29,7 @@ mint_heir), so the SEAT is the address that stops churning precisely because min
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import uuid
 from collections.abc import AsyncIterator
@@ -460,14 +461,21 @@ _ROSTER_CAVEATS = (
     "duplicate variants (the bytebye/byebyte history is the live example) can each "
     "independently look valid here. Canonicalizing project names is task #137/#152's lane, "
     "not this verb's — a caller that needs 'which of these names is right' asks there, not here.",
-    "pin is read from anchor_cwd's own .osiris only. A seat with a distinct tree_cwd (task "
-    "#103's office/tree split) may carry its own, possibly different, .osiris there — this "
-    "does not read it, and does not check the two agree.",
-    "office_exists is a plain directory-existence check on anchor_cwd, nothing more — it does "
-    "not mean the office's CLAUDE.md/charter.md content is actually being loaded by a live "
-    "session. That question is separate and, as of ruling on Imhotep's #141 scope (msg 3812, "
-    "2026-08-08), the office-content mechanism is mid-migration — a seat can read "
-    "office_exists=true with orphaned office content.",
+    "pin is read from anchor_cwd's own .osiris, or, when anchor_cwd is not recorded, from the "
+    "conventional ~/.osiris/seats/<handle>/.osiris path when that probe finds one "
+    "(probed_anchor_cwd names which). A seat with a distinct tree_cwd (task #103's office/"
+    "tree split) may carry its own, possibly different, .osiris there — this does not read "
+    "it, and does not check the two agree.",
+    "office_exists is a plain directory-existence check on anchor_cwd (or the probed "
+    "conventional path when anchor_cwd is absent), nothing more — it does not mean the "
+    "office's CLAUDE.md/charter.md content is actually being loaded by a live session. That "
+    "question is separate and, as of ruling on Imhotep's #141 scope (msg 3812, 2026-08-08), "
+    "the office-content mechanism is mid-migration — a seat can read office_exists=true with "
+    "orphaned office content.",
+    "the conventional-path probe (pin.state=\"unknown-office\" on a miss) checks exactly one "
+    "path — ~/.osiris/seats/<handle>/ — nothing more. A miss means neither the recorded "
+    "anchor_cwd nor that one convention found an office; it is not a claim that no office "
+    "exists anywhere (Alfred's live review, thread 3806, msg 4066).",
     "live_cwd (the current holder's own agent_mounts row, when occupied) can differ from both "
     "anchor_cwd and tree_cwd with nothing wrong on the launch path — Imhotep's #141 scope found "
     "khnum and sekhmet both bound to a tree_cwd while their live sessions sit at the office cwd. "
@@ -636,6 +644,16 @@ async def roster(
     #152, running in parallel). `office_exists` and `live_cwd` are separate, deliberately
     uncollapsed axes — see the caveats for exactly what each does and does not mean.
 
+    NO `anchor_cwd` RECORDED is not the same claim as no office (Alfred's third live-
+    reproduced defect, thread 3806, msg 4066): 7 real, furnished seats read `no-office` with
+    a null anchor before this, because that state was "confident about the world, derived
+    from a null in the graph." One extra probe of the conventional path
+    (`~/.osiris/seats/<handle>/`) runs ONLY when `anchor_cwd` is absent; a hit surfaces via
+    `probed_anchor_cwd` (kept separate from `anchor_cwd` — a reader always sees what the
+    graph actually recorded vs what convention found) and `pin`/`office_exists` read from it
+    normally. A miss is `pin.state="unknown-office"`, never `no-office` — even after the
+    probe, an office could still exist somewhere this function doesn't know to check.
+
     `pin.triage_bucket` (task #158's cross-reference, thread 251443ff) is a THIRD state, not
     two: `None` when there's nothing declared to look up (`pin.state` isn't `declared`);
     `"no-such-project"` when a project IS declared but no active SoftwareProject object
@@ -648,14 +666,37 @@ async def roster(
 
     `repo=None` returns every active seat's row. `repo=<name>` instead answers Alfred's exact
     question — "who owns this" — by checking BOTH signals independently: a seat whose charter
-    OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Two seats
-    matching from different signals is `agreement="conflict"`, returned as two rows, never
-    silently resolved to one. Zero matches is `agreement="no-match"` — explicitly NOT the same
-    claim as "nobody owns this repo" (ruling 60bc15db, the third state): it means neither
-    signal this function reads found an owner, which is the honest boundary of what a
-    graph+pin read can say, not a verdict on the repo's actual ownership."""
+    OR current pin names `repo` is a match, tagged with WHICH signal(s) found it. Zero matches
+    is `agreement="no-match"` — explicitly NOT the same claim as "nobody owns this repo"
+    (ruling 60bc15db, the third state): it means neither signal this function reads found an
+    owner, which is the honest boundary of what a graph+pin read can say, not a verdict on
+    the repo's actual ownership.
+
+    TWO SEATS MATCHING (Alfred's live review, thread 3806, findings 2 and 3 — both reproduced
+    against his own house before this function saw them):
+    - the CHARTER-seat MANAGES the PIN-seat (a real `managed_by` edge, checked via
+      `manager_of_seat`) is `agreement="governed"` — a coordinator governing a repo its own
+      worker sits in is the NORMAL, correctly-configured shape (Alfred's house: 8 repos, each
+      chartered by him and pinned by a different worker), not a warning. Calling this
+      `conflict` trained readers to skip the word — the one time it means two seats genuinely
+      claiming the same repo by the same signal, it would get skipped too.
+    - anything else (two charters, two pins, or an unrelated charter+pin pair) stays
+      `agreement="conflict"`, returned as both rows, never silently resolved to one — now a
+      word that means something.
+
+    NO LITERAL MATCH is a real answer, but the caveat below is a standing disclaimer printed
+    on every no-match — Alfred's point exactly: a caveat that's always printed carries no
+    information on the call where it's actually true (ruling 60bc15db, one level up — the
+    verb KNOWS a near-miss is possible and didn't used to look). So on `no-match` only, one
+    extra pass re-checks every seat's charter/pin case- and separator-insensitively (strip
+    non-alphanumerics, lowercase) and returns `near_misses` — evidence, never promoted to a
+    match: `{"repo": <as actually stored>, "seat", "via", "differs_by": "case"|"separator"}`.
+    Live-reproduced: the operator renamed a repo `RAMstein` -> `ramstein` family-wide; two
+    seats' charter/pin still carried the old spelling, so `roster(repo='ramstein')` returned
+    a bare, uninformative `no-match` until this existed."""
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
+    from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
 
     bucket_map = await _triage_bucket_map(pool)
     seat_rows = await pool.fetch(
@@ -672,11 +713,30 @@ async def roster(
         occ = await seat_occupancy(pool, seat_id, live_secs=live_secs)
         chartered = await charter_of(pool, seat_id)
         anchor = facts["anchor_cwd"]
-        pin = read_project_pin(anchor)
+        # THE THIRD DEFECT (Alfred's live review, thread 3806, msg 4066): `anchor is None`
+        # used to mean "no-office" — a confident claim about the WORLD derived from a null
+        # in the GRAPH. Alfred read all 7 seats this collapsed (Soundwave/vajra/Tantra/Ptah/
+        # Loupe/Ra/Marquee) and every one had a real, furnished office on disk at the
+        # conventional path (~/.osiris/seats/<handle>/) — invisible to roster() and, through
+        # it, to Imhotep's plan_pin_migration (reported "33 scanned, 31 proposed, ZERO gaps"
+        # when 7 seats never became rows at all; Thoth withdrew the pin-write authorization
+        # over exactly this miscount). So: no anchor_cwd RECORDED probes the one conventional
+        # path before concluding anything — a hit reads normally (via `probed_anchor_cwd`,
+        # kept separate from `anchor_cwd` so a reader always sees what the graph actually
+        # recorded vs what this function found by convention); a miss is `unknown-office`,
+        # never `no-office` — even the probe failing only means neither of the two paths this
+        # function knows to check found one, not that no office exists anywhere.
+        probed_anchor = None
+        if anchor is None and facts["handle"]:
+            candidate = str(_DEFAULT_OFFICE_ROOT / facts["handle"].lower())
+            if _dir_exists(candidate):
+                probed_anchor = candidate
+        effective_anchor = anchor or probed_anchor
+        pin = read_project_pin(effective_anchor)
         if pin.error:
             pin_state = "unreadable"
-        elif anchor is None:
-            pin_state = "no-office"
+        elif effective_anchor is None:
+            pin_state = "unknown-office"
         elif pin.path and pin.value is None:
             pin_state = "unset"
         elif pin.value:
@@ -702,7 +762,8 @@ async def roster(
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
             "occupancy": occ["state"], "holder": occ["holder"],
             "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
-            "office_exists": _dir_exists(anchor),
+            "probed_anchor_cwd": probed_anchor,
+            "office_exists": _dir_exists(effective_anchor),
             "chartered_repos": chartered,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
                     "error": pin.error, "triage_bucket": triage_bucket,
@@ -728,8 +789,17 @@ async def roster(
         agreement = "no-match"
     elif len(matches) == 1:
         agreement = "single-match"
+    elif len(matches) == 2:
+        charter_seat = next((m["seat"] for m in matches if "charter" in m["via"]), None)
+        pin_seat = next((m["seat"] for m in matches if "pin" in m["via"]), None)
+        agreement = "conflict"
+        if charter_seat and pin_seat and charter_seat != pin_seat:
+            if await manager_of_seat(pool, pin_seat) == charter_seat:
+                agreement = "governed"
     else:
         agreement = "conflict"
+
+    near_misses: list[dict[str, Any]] = []
     caveats = list(_ROSTER_CAVEATS)
     if agreement == "no-match":
         caveats.append(
@@ -737,7 +807,26 @@ async def roster(
             "not that the repo has no owner. It may be owned by a seat whose pin this "
             "function cannot read, chartered under a name this repo string doesn't exactly "
             "match, or simply not yet declared anywhere this function looks.")
-    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats}
+
+        def _norm(s: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", s.lower())
+
+        target = _norm(name)
+        found: dict[tuple[str, str], set[str]] = {}
+        for r in rows:
+            candidates = [("charter", c) for c in r["chartered_repos"]]
+            if r["pin"]["declared"]:
+                candidates.append(("pin", r["pin"]["declared"]))
+            for via, candidate in candidates:
+                if candidate != name and _norm(candidate) == target:
+                    found.setdefault((r["seat"], candidate), set()).add(via)
+        for (seat, candidate), vias in sorted(found.items()):
+            differs = "case" if candidate.lower() == name.lower() else "separator"
+            near_misses.append({"repo": candidate, "seat": seat, "via": sorted(vias),
+                                 "differs_by": differs})
+
+    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats,
+            "near_misses": near_misses}
 
 
 # A CASE-FOLDED DENY-LIST, NOT A DETECTOR (Sekhmet's own list, msg 3906 — 8 project-string

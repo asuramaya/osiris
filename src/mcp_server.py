@@ -3397,6 +3397,13 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     `governs` links), `pin` (a live read of the seat's own `.osiris`, three-way declared/
     unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
     holder's actual mount cwd can differ from both with nothing wrong on the launch path).
+    When `anchor_cwd` isn't recorded, one extra probe of the conventional
+    `~/.osiris/seats/<handle>/` path runs before concluding anything — a hit surfaces via
+    `probed_anchor_cwd` (kept separate from `anchor_cwd`: a reader always sees what the
+    graph recorded vs what convention found) and `pin`/`office_exists` read from it; a miss
+    is `pin.state="unknown-office"`, never the old `no-office` (Alfred's third live-
+    reproduced defect, thread 3806, msg 4066 — 7 real, furnished seats read as officeless
+    and were invisible to Imhotep's plan_pin_migration count because of it).
 
     `pin.triage_bucket` (task #158's cross-reference) is a third state: `None` when nothing
     is declared to look up, `"no-such-project"` when the pin names a project that isn't a
@@ -3405,10 +3412,17 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     from `triage`, not a second project-health notion.
 
     `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
-    current pin names the repo, tagged with which signal(s) hit. Two seats matching from
-    different signals come back as a `conflict`, never silently picked one. Zero matches is
-    `no-match` — NOT a claim the repo has no owner, only that neither signal this function
-    reads found one (ruling 60bc15db, the third state).
+    current pin names the repo, tagged with which signal(s) hit. Two seats matching is
+    `governed` when the charter-seat actually MANAGES the pin-seat (a real `managed_by`
+    edge) — a coordinator governing a repo its own worker sits in is the normal shape, not a
+    warning (Alfred's live review, thread 3806: calling this `conflict` trained readers to
+    skip the word). Anything else two-seats-matching stays `conflict`, never silently picked
+    one. Zero matches is `no-match` — NOT a claim the repo has no owner, only that neither
+    signal this function reads found one (ruling 60bc15db, the third state) — paired with
+    `near_misses`: on a bare `no-match` only, one extra case/separator-insensitive pass names
+    what WAS found without promoting it to a match (Alfred live-reproduced the exact case a
+    standing "might not match exactly" caveat couldn't catch: a repo renamed `RAMstein` ->
+    `ramstein` family-wide while two seats' charter/pin still carried the old spelling).
 
     NEITHER `chartered_repos` NOR `pin` IS CERTIFIED CANONICAL. Minting a SoftwareProject is
     cheap and mostly ungated — a name resolving to a real object proves the object exists,

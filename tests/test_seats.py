@@ -1353,15 +1353,54 @@ async def test_roster_pin_unreadable_on_malformed_toml(
     assert row["pin"]["error"] is not None
 
 
-async def test_roster_pin_is_no_office_with_no_anchor_cwd(actions: Actions) -> None:
+async def test_roster_pin_is_unknown_office_with_no_anchor_cwd_and_no_conventional_office(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alfred's third live-reproduced defect (thread 3806, msg 4066): no `anchor_cwd`
+    recorded is not the same claim as no office. This is the genuine miss — the probe of
+    the conventional path (`~/.osiris/seats/<handle>/`, faked here so the test never
+    touches the real filesystem) ALSO finds nothing — so the honest state is
+    `unknown-office`, never the old `no-office`."""
+    from src.orchestrator import offices
     from src.orchestrator.seats import roster
 
+    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
     seat = await ensure_seat(actions, house="osiris", handle="Rpin4", source="test")
 
     row = next(r for r in (await roster(actions.pool))["seats"]
               if r["seat"] == seat["seat_id"])
-    assert row["pin"]["state"] == "no-office"
+    assert row["pin"]["state"] == "unknown-office"
+    assert row["probed_anchor_cwd"] is None
     assert row["office_exists"] is None
+
+
+async def test_roster_pin_probes_the_conventional_office_when_no_anchor_cwd_is_recorded(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the same defect: a real, furnished office DOES exist at the
+    conventional path, just never recorded as this seat's anchor_cwd — exactly Alfred's 7
+    seats (Soundwave/vajra/Tantra/Ptah/Loupe/Ra/Marquee), invisible to roster() and, through
+    it, to Imhotep's plan_pin_migration undercount. The probe finds it; `anchor_cwd` stays
+    honestly null (the graph never recorded it) while `probed_anchor_cwd` shows what
+    convention found."""
+    from src.orchestrator import offices
+    from src.orchestrator.seats import roster
+
+    fake_root = tmp_path / "seats"
+    fake_root.mkdir()
+    office = fake_root / "rpin5"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "kast"\n')
+    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", fake_root)
+    seat = await ensure_seat(actions, house="osiris", handle="Rpin5", source="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["anchor_cwd"] is None
+    assert row["probed_anchor_cwd"] == str(office)
+    assert row["office_exists"] is True
+    assert row["pin"] == {"declared": "kast", "state": "declared", "path": None,
+                          "error": None, "triage_bucket": "no-such-project"}
 
 
 async def test_roster_office_exists_is_false_for_a_vanished_path(actions: Actions) -> None:
@@ -1459,6 +1498,100 @@ async def test_roster_repo_lookup_conflict_when_charter_and_pin_disagree(
     assert seats_found == {charter_seat["seat_id"], pin_seat["seat_id"]}
 
 
+async def test_roster_repo_lookup_governed_when_charter_seat_manages_pin_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Alfred's live review (thread 3806, finding 3): a coordinator's charter and a worker
+    it manages pinning the SAME repo is the normal, correctly-configured shape (his own
+    house: 8 repos, each governed by him and pinned by a different worker) — not a
+    `conflict`, which trained readers to skip the word."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "kast")
+    coordinator = await ensure_seat(actions, house="alfred", handle="Rlk4a", source="test")
+    await set_charter(actions, coordinator["seat_id"], ["kast"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "kast"\n')
+    worker = await ensure_seat(actions, house="alfred", handle="Rlk4b", source="test",
+                               anchor_cwd=str(office))
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    coordinator_oid = await actions.create_or_find_object(
+        "Seat", coordinator["seat_id"], "test")
+    await actions.create_link(worker_oid, coordinator_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await roster(actions.pool, repo="kast")
+    assert out["agreement"] == "governed"
+    seats_found = {m["seat"] for m in out["matches"]}
+    assert seats_found == {coordinator["seat_id"], worker["seat_id"]}
+
+
+async def test_roster_repo_lookup_stays_conflict_when_the_manager_edge_points_the_other_way(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`governed` requires the CHARTER-seat to manage the PIN-seat specifically — the
+    reverse (pin-seat manages charter-seat) is not the shape Alfred named and stays a real
+    `conflict`, same as two genuinely unrelated seats."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "sutra2")
+    charter_seat = await ensure_seat(actions, house="alfred", handle="Rlk5a", source="test")
+    await set_charter(actions, charter_seat["seat_id"], ["sutra2"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "sutra2"\n')
+    pin_seat = await ensure_seat(actions, house="alfred", handle="Rlk5b", source="test",
+                                 anchor_cwd=str(office))
+    charter_oid = await actions.create_or_find_object("Seat", charter_seat["seat_id"], "test")
+    pin_oid = await actions.create_or_find_object("Seat", pin_seat["seat_id"], "test")
+    await actions.create_link(charter_oid, pin_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await roster(actions.pool, repo="sutra2")
+    assert out["agreement"] == "conflict"
+
+
+async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Alfred live-reproduced this exact shape (thread 3806, finding 2): the operator
+    renamed a repo family-wide (`RAMstein` -> `ramstein`) while a seat's pin still carried
+    the old spelling. A bare `no-match` gave no evidence; near_misses does."""
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "RAMstein"\n')
+    seat = await ensure_seat(actions, house="alfred", handle="Rlk6", source="test",
+                             anchor_cwd=str(office))
+
+    out = await roster(actions.pool, repo="ramstein")
+    assert out["agreement"] == "no-match"
+    assert out["matches"] == []
+    assert out["near_misses"] == [
+        {"repo": "RAMstein", "seat": seat["seat_id"], "via": ["pin"], "differs_by": "case"}]
+
+
+async def test_roster_repo_lookup_near_misses_empty_when_agreement_is_not_no_match(
+    actions: Actions,
+) -> None:
+    """The extra scan only ever runs on a bare no-match (Alfred's own scoping: "costs one
+    extra pass on the miss path only") — a real match never pays for it."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "gestalt")
+    seat = await ensure_seat(actions, house="alfred", handle="Rlk7", source="test")
+    await set_charter(actions, seat["seat_id"], ["gestalt"], actor="test")
+
+    out = await roster(actions.pool, repo="gestalt")
+    assert out["agreement"] == "single-match"
+    assert out["near_misses"] == []
+
+
 async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
@@ -1468,14 +1601,18 @@ async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> 
     assert any("not that the repo has no owner" in c for c in out["caveats"])
 
 
-async def test_roster_pin_triage_bucket_none_when_nothing_declared(actions: Actions) -> None:
+async def test_roster_pin_triage_bucket_none_when_nothing_declared(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator import offices
     from src.orchestrator.seats import roster
 
+    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
     seat = await ensure_seat(actions, house="osiris", handle="Rtri1", source="test")
 
     row = next(r for r in (await roster(actions.pool))["seats"]
               if r["seat"] == seat["seat_id"])
-    assert row["pin"]["state"] == "no-office"
+    assert row["pin"]["state"] == "unknown-office"
     assert row["pin"]["triage_bucket"] is None
 
 
