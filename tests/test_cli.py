@@ -620,25 +620,9 @@ async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     location, and the resume proceeds through THIS door too, not just launch_seat's."""
     from src.cli import _cmd_launch_harness
 
-    sense = tmp_path / "projects"
-    proj = sense / "-repo-demo"
-    proj.mkdir(parents=True, exist_ok=True)
-    t = proj / f"{_RESUME_SID}.jsonl"
-    t.write_bytes(b'{"type":"assistant","text":"booting"}\n' + b"x" * 16)  # no signed act
-    import os
-    import time as _time
-    old = _time.time() - 3600
-    os.utime(t, (old, old))
-
-    seat = await ensure_seat(actions, house="osiris", handle="clizerohop",
-                             anchor_cwd="/tmp/clizerohop-office", source="test")
-    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:clizerohop01")
-    obj = await actions.create_or_find_object("Agent", "agent:clizerohop01", "test")
-    now = datetime(2026, 8, 18, tzinfo=UTC)
-    await actions.assert_property(obj, "seat_generation", "1", "test", now, 0.9,
-                                  evidence_class="self_declared")
-    await actions.assert_property(obj, "session", _RESUME_SID, "test", now, 0.9,
-                                  evidence_class="self_declared")
+    sense = await _resumable_seat_no_signed_testimony(
+        actions, tmp_path, handle="clizerohop", agent_id="agent:clizerohop01",
+        anchor_cwd="/tmp/clizerohop-office")
 
     resumed: list[dict[str, Any]] = []
 
@@ -743,19 +727,41 @@ async def _resumable_seat_no_signed_testimony(
     return sense
 
 
-async def test_cmd_launch_harness_refuses_outright_when_resident_is_unknown_never_mints_a_stranger(
+async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX FOR ef88e2bb (operator, 2026-08-17): a resumable session with NO signed
-    testimony anywhere — an ABSENCE of evidence, not a positive finding of a different
-    mind — must refuse the WHOLE launch. Before this fix it fell through to the same
-    `claude --bg` mint as a genuine crossed-registry finding, exactly how ferryman's real,
-    resumable session got a stranger minted over it."""
+    """THE FIX FOR ef88e2bb (operator, 2026-08-17), through the CLI-facing door: a
+    resumable session with NO signed testimony, ONE HOP BACK (the predecessor's own
+    session, not the seat's current holder) — not eligible for #173a's zero-hop graph
+    door (see the sibling zero-hop test above, and test_trigger.py's own
+    `test_zero_hop_graph_door_never_fires_one_hop_back` for the launch_seat side of this
+    same contract) — must refuse the WHOLE launch. Before ef88e2bb this fell through to
+    the same `claude --bg` mint as a genuine crossed-registry finding, exactly how
+    ferryman's real, resumable session got a stranger minted over it."""
     from src.cli import _cmd_launch_harness
 
-    sense = await _resumable_seat_no_signed_testimony(
-        actions, tmp_path, handle="cliunknown", agent_id="agent:cliunknown01",
-        anchor_cwd="/tmp/cliunknown-office")
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{_RESUME_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"booting"}\n' + b"x" * 16)  # no signed act
+    import os
+    import time as _time
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+
+    seat = await ensure_seat(actions, house="osiris", handle="clihopback",
+                             anchor_cwd="/tmp/clihopback-office", source="test")
+    pred = await actions.create_or_find_object("Agent", "agent:clihopback01", "test")
+    now = datetime(2026, 8, 18, tzinfo=UTC)
+    await actions.assert_property(pred, "seat_generation", "1", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(pred, "session", _RESUME_SID, "test", now, 0.9,
+                                  evidence_class="self_declared")
+    heir = await actions.create_or_find_object("Agent", "agent:clihopback01-ii", "test")
+    await actions.assert_property(heir, "succeeded_from", "agent:clihopback01", "test", now,
+                                  0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:clihopback01-ii")
 
     async def _boom_spawn(*a: Any, **k: Any) -> None:
         raise AssertionError("resident-unknown must refuse the launch, never mint a stranger")
@@ -772,7 +778,7 @@ async def test_cmd_launch_harness_refuses_outright_when_resident_is_unknown_neve
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await _cmd_launch_harness(
-            "cliunknown", model=None, pool=actions.pool, wake_default=None,
+            "clihopback", model=None, pool=actions.pool, wake_default=None,
             spawn=_boom_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
             settings=_resume_settings(sense))
 
