@@ -28,7 +28,7 @@ THE ESCAPE HATCH IS PART OF THE BUILD (10d4fa5f — the stranger hitting this is
 check with one loud line to stderr naming that it happened, and the refusal message itself
 prints this exact line so nobody needs to have read this docstring first.
 
-FOUR SURFACES, per Thoth's own post-incident audit (each surface below is scoped to the
+FIVE SURFACES, per Thoth's own post-incident audit (each surface below is scoped to the
 COMMIT RANGE actually about to be uploaded, resolved fresh per push — never "the branch",
 the RANGE, since a branch can carry commits already on origin):
   1. `commit_range` — the exact commits this specific push would add, not the whole branch.
@@ -40,6 +40,18 @@ the RANGE, since a branch can carry commits already on origin):
   4. (NOT this file's job — a push-time gate only ever sees what THIS push sends, never a
      stray local ref sitting unpushed.) The "what would a --mirror push expose" hygiene
      question is `deploy_guard.origin_visibility`'s own extension, a READ not a gate.
+  5. `is_worktree_checkout` — REF HYGIENE, not content (Thoth msg 5278, the sekhmet-
+     advisory-lock-fix / sekhmet-resume-guard-zero-hop specimen, 2026-08-18): the four
+     surfaces above only ever ask "does this push CARRY a secret" — they had nothing to
+     say about "should this ACTOR be pushing at all", and correctly ALLOWED a worker's
+     clean, secretless branch straight onto the public origin, because that policy
+     (workers commit, they never push — CLAUDE.md's own law) was never encoded here.
+     MEASURED before this was added: the hook was already correctly installed and firing
+     from every worktree (verified live — a throwaway bare remote pushed to from inside a
+     worktree printed `push_guard: clean` and the push went through). The gap was never
+     coverage, it was scope. A LINKED WORKTREE (never the main checkout) now refuses
+     categorically, any content, same `OSIRIS_PUSH_GUARD_SKIP` escape hatch as every other
+     check here — one hatch, not a second one to remember.
 
 PATTERNS: a small, low-false-positive-risk default set (private key blocks, GitHub/Slack/
 Stripe token shapes — see `DEFAULT_PATTERNS`) plus an OPTIONAL local, untracked file
@@ -94,6 +106,38 @@ def git_common_dir(repo_root: Path = REPO_ROOT) -> Path | None:
     ok, out = _run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
                     repo_root)
     return Path(out) if ok and out else None
+
+
+def is_worktree_checkout(repo_root: Path) -> bool | None:
+    """True when `repo_root` is a LINKED WORKTREE — a seat's own isolated checkout
+    (`.claude/worktrees/<name>`, by this house's own EnterWorktree/`git worktree add`
+    convention), never the main checkout the operator/manager actually pushes from. Uses
+    git's own structural signal, not a path-string convention that would go blind the
+    moment a worktree is created somewhere else (`git worktree add /tmp/whatever`, still
+    caught): `--git-dir` resolves to `<common-dir>/worktrees/<name>` for a linked worktree
+    and to the exact SAME path as `--git-common-dir` for the main checkout — comparing the
+    two is the canonical way git itself tells them apart.
+
+    None (never raises) on a git failure — the caller's job to fail OPEN on that, same as
+    every other infra read in this module (577988ed)."""
+    ok1, git_dir = _run(["git", "rev-parse", "--path-format=absolute", "--git-dir"], repo_root)
+    ok2, common_dir = _run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], repo_root)
+    if not ok1 or not ok2 or not git_dir or not common_dir:
+        return None
+    return git_dir != common_dir
+
+
+WORKTREE_PUSH_REFUSAL = (
+    "push_guard: REFUSED — this push is running from a LINKED WORKTREE (git rev-parse "
+    "--git-dir != --git-common-dir), never the main checkout. House rule: a seat commits "
+    "its own work but NEVER pushes — that is the manager's/operator's own hand, from the "
+    "main checkout. This is REF HYGIENE, not a content scan — it refuses regardless of "
+    "what the push carries.\n\n"
+    "TO OVERRIDE (a deliberate operator push from a worktree, judged safe): "
+    f"{SKIP_ENV_VAR}=1 git push ... — this bypasses every check in this hook and prints a "
+    "loud warning when it does, it does not push silently."
+)
 
 
 def custom_patterns(common_dir: Path | None) -> dict[str, str]:
@@ -230,6 +274,10 @@ def run(repo_root: Path, stdin_text: str) -> int:
         print(f"push_guard: SKIPPED — {SKIP_ENV_VAR} is set. Pushing WITHOUT a secret/PII "
               "scan.", file=sys.stderr)
         return 0
+
+    if is_worktree_checkout(repo_root):
+        print(WORKTREE_PUSH_REFUSAL, file=sys.stderr)
+        return 1
 
     common_dir = git_common_dir(repo_root)
     patterns = {**DEFAULT_PATTERNS, **custom_patterns(common_dir)}

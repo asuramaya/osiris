@@ -19,6 +19,8 @@ could be caught holding.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import subprocess
 from pathlib import Path
 
@@ -31,6 +33,7 @@ from scripts.push_guard import (
     format_refusal,
     git_common_dir,
     hook_status,
+    is_worktree_checkout,
     parse_stdin_refs,
     run,
     scan_range,
@@ -75,6 +78,17 @@ def small_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "test@test")
     _git(repo, "config", "user.name", "test")
     return repo
+
+
+@pytest.fixture
+def linked_worktree(small_repo: Path, tmp_path: Path) -> Path:
+    """A REAL `git worktree add` checkout off `small_repo` — the exact shape a seat's own
+    `.claude/worktrees/<name>` is (EnterWorktree's own convention), not a path-string
+    stand-in. Needs at least one commit to check out, so this seeds one."""
+    _commit(small_repo, "seed")
+    wt = tmp_path / "linked-worktree"
+    _git(small_repo, "worktree", "add", "-q", str(wt))
+    return wt
 
 
 # --- parse_stdin_refs -----------------------------------------------------------------------
@@ -225,6 +239,62 @@ def test_run_honors_the_skip_env_var_even_with_a_real_secret(
 
 def test_run_allows_on_an_unresolvable_range_rather_than_blocking(small_repo: Path) -> None:
     stdin = f"refs/heads/main not-a-real-sha refs/heads/main {_NULL_SHA}\n"
+    assert run(small_repo, stdin) == 0
+
+
+# --- is_worktree_checkout / the ref-hygiene refusal (Thoth msg 5278, 2026-08-18) --------------
+
+def test_is_worktree_checkout_is_false_for_the_main_checkout(small_repo: Path) -> None:
+    assert is_worktree_checkout(small_repo) is False
+
+
+def test_is_worktree_checkout_is_true_for_a_real_linked_worktree(
+    linked_worktree: Path,
+) -> None:
+    assert is_worktree_checkout(linked_worktree) is True
+
+
+def test_is_worktree_checkout_is_none_off_a_non_git_directory(tmp_path: Path) -> None:
+    assert is_worktree_checkout(tmp_path / "no-such-repo") is None
+
+
+def test_run_refuses_a_clean_push_from_a_linked_worktree(linked_worktree: Path) -> None:
+    """THE ACTUAL GAP (Thoth msg 5278): content-clean is not enough — a seat worktree must
+    never push AT ALL, whatever the range carries. This is the specimen shape of XXIII's
+    own incident (sekhmet-advisory-lock-fix / sekhmet-resume-guard-zero-hop): no secret in
+    either branch, and the old hook had nothing else to say no with."""
+    a = _commit(linked_worktree, "clean commit, no secret anywhere")
+    stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
+    assert run(linked_worktree, stdin) == 1
+
+
+def test_run_refusal_from_a_worktree_names_the_override(linked_worktree: Path) -> None:
+    a = _commit(linked_worktree, "clean commit")
+    stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        code = run(linked_worktree, stdin)
+    assert code == 1
+    assert "OSIRIS_PUSH_GUARD_SKIP=1" in buf.getvalue()
+    assert "LINKED WORKTREE" in buf.getvalue()
+
+
+def test_run_honors_the_skip_env_var_for_a_worktree_push(
+    linked_worktree: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_PUSH_GUARD_SKIP", "1")
+    a = _commit(linked_worktree, "clean commit")
+    stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
+    assert run(linked_worktree, stdin) == 0
+
+
+def test_run_from_the_main_checkout_is_unaffected_by_the_worktree_check(
+    small_repo: Path,
+) -> None:
+    """The negative control: a plain, non-worktree checkout (the operator's own) still
+    scans by content exactly as before — the new check never fires there."""
+    a = _commit(small_repo, "clean commit")
+    stdin = f"refs/heads/main {a} refs/heads/main {_NULL_SHA}\n"
     assert run(small_repo, stdin) == 0
 
 
