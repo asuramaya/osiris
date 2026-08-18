@@ -2699,6 +2699,75 @@ async def test_dispatch_dm_resumes_when_neither_occupancy_signal_fires(
     assert calls and calls[0][1].get("resume_session") == FULL_SID
 
 
+async def test_178_acceptance_replays_the_incident_shape_neither_door_mints_a_stranger(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ACCEPTANCE #178 NAMED (Thoth msg 5254) — nobody had actually run it end to end
+    until now. Replays the exact incident shape live: a body the HARNESS still lists
+    (`claude agents --json`), whose `agent_mounts` row is SWEPT (the #178a suspend-never-
+    delete sentinel, `mounts.SUSPENDED_AT` — not merely aged stale), sitting on a
+    RESUMABLE transcript. Both doors that can spawn a body for this identity are exercised
+    against the IDENTICAL fixture, in one test, so neither can silently disagree with the
+    other:
+
+    `osiris launch` (launch_seat) — `_launch_twin_check` reads the harness roster BY CWD
+    and refuses outright ("already-live"); it never even reaches the resume/identity lane,
+    exactly as it must when a live body genuinely already holds the office.
+
+    dispatch_dm's mail-wake lane — `_lineage_resume_candidate` SELECTS THE GRAPH HEAD
+    first (the correct session, graph-truth, proven by the session id appearing in the
+    receipt's own detail) and only THEN `_resume_occupancy_gate` (matching by session id
+    this time, not cwd) refuses the fork ("resume-refused-occupied") — proving identity
+    resolution and occupancy refusal are properly sequenced, not accidentally correct.
+
+    Both doors' own spawn/resume_spawn hooks are wired to raise if ever called — the
+    strongest assertion available that NO NEW GENERATION is minted by either path."""
+    from src.orchestrator.mounts import SUSPENDED_AT
+
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
+    # THE SWEEP (#178a, not just "aged stale"): the row survives (findable, never deleted)
+    # but reads as dead to is_live() via the epoch sentinel — the real post-OOM-kill shape.
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen=$1 WHERE agent_id='agent:abcd1234'", SUSPENDED_AT)
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-incident178",
+        worker_handle="Incident178", house="osiris")
+    await _office(actions, worker_seat, "/repo/demo")
+
+    # THE HARNESS'S OWN LISTING — one row satisfies BOTH doors' distinct matchers: launch's
+    # twin_check matches by `cwd`, dispatch's occupancy gate matches by `sessionId`.
+    listing = _fake_agents_json([[{"sessionId": FULL_SID, "id": FULL_SID[:8],
+                                  "cwd": "/repo/demo"}]])
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("the incident-shaped fixture must never mint a new generation")
+
+    launch_receipt = await trigger_module.launch_seat(
+        actions, caller="agent:hm-incident178", target=worker_seat, substrate="harness",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom, resume_spawn=_boom, agents_json=listing)
+    assert launch_receipt["status"] == "already-live"
+    assert launch_receipt["body_exists"] is True
+
+    msg_id = await _dm_to_owner(actions)
+    dispatch_receipt = await dispatch_dm(
+        actions.pool, addressee="agent:abcd1234", msg_id=msg_id, sender="agent:sender",
+        settings=_settings(enabled=True, sense=str(sense)),
+        spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom, agents_json=listing)
+    assert dispatch_receipt["mode"] == "resume-refused-occupied"
+    # THE GRAPH HEAD WAS ACTUALLY SELECTED (identity), not just refused blind (occupancy):
+    # the correct session id names itself in the very detail that then refuses it.
+    assert FULL_SID[:8] in dispatch_receipt["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+    # NO NEW GENERATION: the only Agent object for this identity is still gen 1 — no
+    # abcd1234-ii or any other successor was ever minted by either door.
+    agents = await actions.pool.fetch(
+        "SELECT canonical FROM objects WHERE type='Agent' AND canonical LIKE 'agent:abcd1234%'")
+    assert [r["canonical"] for r in agents] == ["agent:abcd1234"]
+
+
 # ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
 # wake() adds ONE thing dispatch_dm doesn't have: the managed_by authority gate. These tests
 # pin the gate (both directions authorize, peers/unbound/seatless refuse, nothing is sent on
