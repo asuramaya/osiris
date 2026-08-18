@@ -1973,6 +1973,34 @@ async def test_cmd_deploy_calls_install_units_before_restarting(
     assert "unit: installed (new) osiris-mcp.service" in buf.getvalue()
 
 
+async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The live specimen this guards against: a real deploy restarted onto a stale unit set
+    while install_units printed ZERO `unit:` lines and the deploy still exited 0 (Thoth's
+    dispatch msg 5161, gate24's captured log). deploy/user/ carrying real files but
+    install_units reporting nothing must REFUSE before the restart, not restart blind."""
+    (tmp_path / "deploy" / "user").mkdir(parents=True)
+    (tmp_path / "deploy" / "user" / "osiris-mcp.service").write_text("[Service]\n")
+
+    async def _silent_no_op(repo_root: Path) -> list[str]:
+        return []
+
+    async def _unreachable(units: list[str]) -> tuple[int, str]:
+        raise AssertionError("must never be called — the silent no-op guard refuses first")
+
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
+                               restart=_unreachable, pool=actions.pool,
+                               install_units=_silent_no_op)
+    assert out == 1
+    assert "silent no-op" in buf.getvalue()
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
