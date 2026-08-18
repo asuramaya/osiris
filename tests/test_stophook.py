@@ -25,7 +25,7 @@ from src.orchestrator.capture import (
     refute_practice,
 )
 from src.orchestrator.mailbox import send_message
-from src.orchestrator.mounts import save_mount
+from src.orchestrator.mounts import find_mount, save_mount
 from src.orchestrator.seats import bind_holder
 
 # ═══════════ THE PURE POLICY — acceptance (a)-(d) ═══════════
@@ -365,6 +365,41 @@ async def test_resolve_identity_falls_back_to_the_office_when_unmounted(
     identity = await stophook._resolve_worker_identity(
         actions.pool, never_mounted_sid, str(office))
     assert identity == {"agent_id": agent, "seat_id": seat}
+    # #178 residual: the seat-fallback branch must ALSO self-restore a durable mount row,
+    # since piece (b)'s own self-restore never fires here (no MCP tool call happened) —
+    # without this a seat that only ever stops stays permanently rowless in registry_census.
+    row = await find_mount(
+        actions.pool, job_dir=str(tmp_path / ".claude" / "jobs" / "cccccccc"))
+    assert row is not None
+    assert row.agent_id == agent
+    assert row.cwd == str(office)
+
+
+async def test_resolve_identity_self_restore_never_clobbers_a_real_mount(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that DOES have a real mount row takes the first branch entirely — the
+    self-restore helper must never even be reached, let alone overwrite it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    agent = "agent:eeee0001"
+    await actions.create_or_find_object("Agent", agent, agent)
+    seat = "seat:eeee0001"
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", "worker3", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    job_dir = str(tmp_path / "jobs" / "eeee0001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="realproject",
+                     cwd=str(tmp_path / "somewhere-real"), model="claude-sonnet-5",
+                     session_key=None)
+    sid = "eeee0001-0000-4000-8000-000000000000"
+    identity = await stophook._resolve_worker_identity(
+        actions.pool, sid, str(tmp_path / "somewhere-real"))
+    assert identity == {"agent_id": agent, "seat_id": seat}
+    row = await find_mount(actions.pool, job_dir=job_dir)
+    assert row is not None
+    assert row.project == "realproject"  # untouched by the self-restore path
 
 
 async def test_resolve_identity_none_outside_any_office(

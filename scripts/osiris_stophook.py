@@ -362,6 +362,37 @@ def _swap_confession(payload: dict[str, Any]) -> str | None:
 # a decision at all — c54e8176's own second case (a read-only audit that writes nothing,
 # so no write-time check could have fired). See the STAGE C section below for the detail.
 
+async def _self_restore_mount(
+    conn: Any, *, agent_id: str, cwd: str, session_id: str,
+) -> None:
+    """#178 RESIDUAL (Thoth dispatch msg 5277, thread 5256 — authorized across the
+    mounts.py file boundary): piece (b)'s self-restore lives ONLY in
+    mcp_server._reattach, which fires only on a live MCP tool call. A seat resolved
+    SOLELY through this function's own seat-binding fallback below — one that stops every
+    turn but never itself calls mount()/orient()/any osiris tool this session — earns no
+    agent_mounts row from that mechanism and stays stuck in registry_census's rowless set
+    forever, no matter how many turns it takes (confirmed live on Ptah/agent:02eaaa7a).
+    `_resolve_worker_identity`'s caller already proved via `find_session_row` that THIS
+    exact anchor has no row (that miss is why the fallback branch ran at all), so minting
+    one here can't clobber a real mount() row. Goes through mounts.save_mount, never touches
+    agent_mounts SQL directly — mounts.py stays the single writer. Fail-open: a missed
+    restore here costs exactly what it already costs today, never more."""
+    from src.orchestrator.handshake import _derive_job_dir
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import resolve_project
+
+    job_dir = _derive_job_dir(session_id)
+    if job_dir is None:
+        return
+    sid32 = (session_id or "").replace("-", "").strip().lower()
+    try:
+        project = await resolve_project(conn, agent_id, cwd)
+        await save_mount(conn, job_dir=job_dir, agent_id=agent_id, project=project,
+                         cwd=cwd, model=None, session_key=f"sid:{sid32}")
+    except Exception:  # noqa: BLE001 — the Stop hook must never block a turn on this
+        pass
+
+
 async def _resolve_worker_identity(
     conn: Any, session_id: str, cwd: str,
 ) -> dict[str, Any] | None:
@@ -382,6 +413,8 @@ async def _resolve_worker_identity(
     bound = await binding_of_handle(conn, p.name)
     if bound is None:
         return None
+    await _self_restore_mount(conn, agent_id=bound["holder"], cwd=cwd,
+                              session_id=session_id)
     return {"agent_id": bound["holder"], "seat_id": bound["seat_id"]}
 
 
