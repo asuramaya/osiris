@@ -3906,6 +3906,32 @@ async def restore_attribution(
 
 
 @mcp.tool()
+async def unwire_informs_fanout(
+    project: str = "osiris", dry_run: bool = True, because: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the pre-fix `_wire_informs` cross-join (thread 5156, root cause of
+    the repo:? specimen, decision ca091c4b): `ingest_canon` used to fan every Reference
+    out to EVERY active SoftwareProject fleet-wide instead of just the one it grounds —
+    measured live, 1037 of 1054 informs edges were pure noise. Fixed going forward
+    (src/ingest/reference.py); this repairs the historical damage.
+
+    Finds every live `informs` edge stamped with the fan-out's own source_id whose target
+    is NOT `project` (default "osiris", the module's only real caller) — never touches an
+    informs edge asserted by anything else. DRY RUN IS THE DEFAULT: returns the plan
+    without writing. `dry_run=False` REQUIRES a non-blank `because` (invalidating ~1000
+    edges is a deliberate act on the record, never silent). Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — an unwire is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.ingest.reference import unwire_informs_fanout as _unwire_informs_fanout
+    return await _unwire_informs_fanout(
+        Actions(await _pool_get()), project=project, actor=ident.agent_id,
+        dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
     """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
     self-healing over manual cleanup) — the self-service replacement for #157's own repair,

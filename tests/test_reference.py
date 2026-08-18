@@ -14,6 +14,7 @@ from src.ingest.reference import (
     ingest_reference_doc,
     mine_mentions,
     parse_doc,
+    unwire_informs_fanout,
 )
 from src.ontology.schema import LINK_TYPES, OBJECT_TYPES
 
@@ -130,6 +131,104 @@ async def test_ingest_canon_informs_the_repo(actions: Actions) -> None:
     assert ec == "self_declared"                          # our own attribution, not vendor canon
     again = await ingest_canon(actions)                   # idempotent — no duplicate edges
     assert again["informs"] == 0
+
+
+# --- _wire_informs must wire EXACTLY the project it grounds, never fan out to every
+# active SoftwareProject fleet-wide (thread 5156 — the repo:? specimen's own root cause,
+# decision ca091c4b: measured live, 1037 of 1054 informs edges were pure cross-join
+# noise). Contract test: ingesting the canon wires exactly repo:osiris, nothing else. ---
+
+
+async def test_ingest_canon_wires_only_the_named_project_not_every_active_one(
+    actions: Actions,
+) -> None:
+    repo = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "gitlog")
+    unrelated1 = await actions.create_or_find_object("SoftwareProject", "repo:unrelated1",
+                                                      "gitlog")
+    unrelated2 = await actions.create_or_find_object("SoftwareProject", "repo:unrelated2",
+                                                      "gitlog")
+    res = await ingest_canon(actions)
+    assert res["informs"] >= 7
+    informed = {r["to_id"] for r in await actions.pool.fetch(
+        "SELECT DISTINCT to_id FROM links WHERE type='informs' "
+        "AND (valid_until IS NULL OR valid_until > now())")}
+    assert informed == {repo}, "informs fanned out beyond the one project it actually grounds"
+    assert unrelated1 not in informed
+    assert unrelated2 not in informed
+
+
+async def test_unwire_informs_fanout_dry_run_finds_exactly_the_noise(actions: Actions) -> None:
+    """A fixture reproducing the OLD cross-join shape directly (bypassing the now-fixed
+    _wire_informs): the repair verb must find exactly the noise edges, leave the one
+    genuine edge alone, and never touch an informs edge asserted by a different source."""
+    repo = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "gitlog")
+    unrelated1 = await actions.create_or_find_object("SoftwareProject", "repo:unrelated1",
+                                                      "gitlog")
+    unrelated2 = await actions.create_or_find_object("SoftwareProject", "repo:unrelated2",
+                                                      "gitlog")
+    unrelated3 = await actions.create_or_find_object("SoftwareProject", "repo:unrelated3",
+                                                      "gitlog")
+    ref = await actions.create_or_find_object("Reference", "ref:fixture", "test")
+    now = datetime.now(UTC)
+    # the genuine edge (must survive)
+    await actions.create_link(ref, repo, "informs", "ref:osiris", now, 0.9,
+                              evidence_class="self_declared")
+    # the fan-out noise (must be found and, on execute, invalidated)
+    await actions.create_link(ref, unrelated1, "informs", "ref:osiris", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(ref, unrelated2, "informs", "ref:osiris", now, 0.9,
+                              evidence_class="self_declared")
+    # a genuinely third-party-asserted informs edge, on its OWN triple (the fan-out's own
+    # dedup never let it double up with a noise row on the same (from,to) pair) — never
+    # the fan-out's own signature, must never be touched
+    await actions.create_link(ref, unrelated3, "informs", "agent:third-party", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await unwire_informs_fanout(actions, project="osiris", actor="agent:test",
+                                      dry_run=True)
+    assert out["dry_run"] is True
+    assert out["edges_to_unwire"] == 2
+    targets = {item["to_id"] for item in out["plan"]}
+    assert targets == {str(unrelated1), str(unrelated2)}
+
+    # dry run wrote nothing
+    live = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='informs' AND from_id=$1 "
+        "AND (valid_until IS NULL OR valid_until > now())", ref)
+    assert live == 4
+
+    out2 = await unwire_informs_fanout(actions, project="osiris", actor="agent:test",
+                                       dry_run=False, because="thread 5156 repair")
+    assert out2["unwired"] == 2
+
+    remaining = {(r["to_id"]) for r in await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE type='informs' AND from_id=$1 "
+        "AND (valid_until IS NULL OR valid_until > now())", ref)}
+    assert remaining == {repo, unrelated3}, (
+        "the genuine edge or the third-party edge was wrongly touched")
+
+    # idempotent
+    out3 = await unwire_informs_fanout(actions, project="osiris", actor="agent:test",
+                                       dry_run=True)
+    assert out3["edges_to_unwire"] == 0
+
+
+async def test_unwire_informs_fanout_refuses_execute_without_because(actions: Actions) -> None:
+    repo = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "gitlog")
+    unrelated = await actions.create_or_find_object("SoftwareProject", "repo:unrelated3",
+                                                     "gitlog")
+    ref = await actions.create_or_find_object("Reference", "ref:fixture2", "test")
+    now = datetime.now(UTC)
+    await actions.create_link(ref, repo, "informs", "ref:osiris", now, 0.9)
+    await actions.create_link(ref, unrelated, "informs", "ref:osiris", now, 0.9)
+
+    out = await unwire_informs_fanout(actions, project="osiris", actor="agent:test",
+                                      dry_run=False, because="  ")
+    assert "un-audited reversal" in out["error"]
+    live = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='informs' AND to_id=$1 "
+        "AND (valid_until IS NULL OR valid_until > now())", unrelated)
+    assert live == 1, "the noise edge was removed despite the refusal"
 
 
 async def test_ingest_canon_wires_cites_edges(actions: Actions) -> None:

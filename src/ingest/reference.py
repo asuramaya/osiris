@@ -214,9 +214,16 @@ async def ingest_reference_dir(
     return out
 
 
-async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) -> dict[str, Any]:
+async def ingest_canon(
+    actions: Actions, *, project: str = "osiris", case_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
     """Ingest the vendor canon (docs/reference/) + our own docs, then wire the `cites` edges
-    COMPOSER.md declares (it descends its op vocabulary from the Palantir/Notion refs)."""
+    COMPOSER.md declares (it descends its op vocabulary from the Palantir/Notion refs).
+
+    `project` defaults to "osiris" — the only real caller (`src/init.py`'s own docstring:
+    "run it from the repo root", ALWAYS this repo's own docs) — but is a real parameter,
+    not a hardcode with no door out, so a future non-osiris canon ingest is not
+    structurally blocked. See `_wire_informs`."""
     vendor_refs = await ingest_reference_dir(actions, case_id=case_id)
     # ALL of docs/*.md (non-recursive — docs/reference/ is the vendor canon, ingested above)
     # plus the handful of root-level docs that are still "own" canon.
@@ -241,39 +248,123 @@ async def ingest_canon(actions: Actions, *, case_id: uuid.UUID | None = None) ->
             existing.add((composer["id"], v["id"]))
             cites += 1
     # the self-referential loop: attach the design canon to the project it grounds
-    informs = await _wire_informs(actions, vendor_refs + own, case_id=case_id)
+    informs = await _wire_informs(actions, vendor_refs + own, project=project, case_id=case_id)
     # Layer 3: join the docs to the entity graph by the names they mention
     mentions = await mine_mentions(actions, case_id=case_id)
     return {"vendor": len(vendor_refs), "own": len(own), "cites": cites,
             "informs": informs, "mentions": mentions["mentions"]}
 
 
+_INFORMS_FANOUT_SRC = "ref:osiris"
+
+
 async def _wire_informs(
-    actions: Actions, refs: list[dict[str, Any]], *, case_id: uuid.UUID | None = None
+    actions: Actions, refs: list[dict[str, Any]], *, project: str = "osiris",
+    case_id: uuid.UUID | None = None,
 ) -> int:
-    """Link each reference to the project it grounds — `Reference --informs--> SoftwareProject`
-    (the self-referential loop). Coarse on purpose: the *precise* module is in the ref's
-    `grounds` property; this edge just attaches the design canon to the repo so "what grounds
-    this project?" is a one-hop traversal. Skipped if no repo node exists yet; idempotent."""
+    """Link each reference to the ONE project it grounds — `Reference --informs-->
+    SoftwareProject` (the self-referential loop). Coarse on purpose: the *precise* module
+    is in the ref's `grounds` property; this edge just attaches the design canon to the
+    repo so "what grounds this project?" is a one-hop traversal.
+
+    SCOPED TO A SINGLE PROJECT (thread 5156, root cause of the repo:? specimen — decision
+    ca091c4b): this used to fetch EVERY active SoftwareProject fleet-wide and cross-join
+    every ref onto every one of them, no scoping parameter existed at all. Measured live
+    before this fix: 1054 total informs edges, of which only 17 (one per Reference)
+    actually named repo:osiris — the other 1037 were pure fan-out noise across 62
+    distinct projects, poisoning every unrelated project's own informs view (and are
+    exactly why repo:?, a garbage stub with zero real evidence, carried 17 informs edges
+    identical to every genuine project's own count). `project` defaults to "osiris" —
+    `ingest_canon`'s only real caller always runs against this repo's own docs — but is a
+    real parameter now, not a hardcoded cross-join. Skipped (0) if the named project
+    doesn't resolve yet; idempotent. See `unwire_informs_fanout` for the repair over the
+    already-written noise."""
     pool = actions.pool
-    repos = await pool.fetch(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active'")
-    if not repos:
+    repo_id = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "AND lower(canonical)=lower($1)", f"repo:{project}")
+    if repo_id is None:
         return 0
     ec = EvidenceClass.SELF_DECLARED
     conf, now = confidence_for(ec), datetime.now(UTC)
-    existing = {(r["from_id"], r["to_id"]) for r in
-                await pool.fetch("SELECT from_id, to_id FROM links WHERE type='informs'")}
+    existing = {r["from_id"] for r in await pool.fetch(
+        "SELECT from_id FROM links WHERE type='informs' AND to_id=$1 "
+        "AND (valid_until IS NULL OR valid_until > now())", repo_id)}
     n = 0
     for ref in refs:
-        for repo in repos:
-            if (ref["id"], repo["id"]) in existing:
-                continue
-            await actions.create_link(ref["id"], repo["id"], "informs", "ref:osiris", now,
-                                      conf, case_id=case_id, evidence_class=ec.value)
-            existing.add((ref["id"], repo["id"]))
-            n += 1
+        if ref["id"] in existing:
+            continue
+        await actions.create_link(ref["id"], repo_id, "informs", _INFORMS_FANOUT_SRC, now,
+                                  conf, case_id=case_id, evidence_class=ec.value)
+        existing.add(ref["id"])
+        n += 1
     return n
+
+
+async def unwire_informs_fanout(
+    actions: Actions, *, project: str = "osiris", actor: str, dry_run: bool = True,
+    because: str | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the pre-fix `_wire_informs` cross-join (thread 5156): every live
+    `informs` edge stamped `source_id=ref:osiris` (the fan-out's own signature — never
+    touches an informs edge asserted by anything else) whose target is NOT the one real
+    `project` is noise from the old unscoped wiring, not a genuine grounding claim.
+
+    DRY RUN IS THE DEFAULT: returns the plan (from/to pairs it would invalidate) without
+    writing. `dry_run=False` refuses a blank `because` — invalidating ~1000 edges is a
+    deliberate act on the record, never silent. Idempotent: an edge already invalidated
+    is not live, so a second pass finds nothing left."""
+    project = (project or "").strip()
+    if not project:
+        return {"error": "unwire_informs_fanout needs a project"}
+    if not dry_run and not (because or "").strip():
+        return {"error": "unwiring the fan-out without a because is an un-audited "
+                         "reversal — cite the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    repo_id = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "AND lower(canonical)=lower($1)", f"repo:{project}")
+    if repo_id is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    rows = await pool.fetch(
+        "SELECT l.from_id, l.to_id, fo.canonical AS from_canon, to_o.canonical AS to_canon "
+        "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects to_o ON to_o.id=l.to_id "
+        "WHERE l.type='informs' AND l.source_id=$1 AND l.to_id != $2 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())",
+        _INFORMS_FANOUT_SRC, repo_id)
+    plan = [{"from_id": str(r["from_id"]), "to_id": str(r["to_id"]),
+            "edge": f"{r['from_canon']} informs {r['to_canon']}"} for r in rows]
+    report: dict[str, Any] = {
+        "project": f"repo:{project}", "dry_run": dry_run, "edges_to_unwire": len(plan),
+        "plan": plan,
+    }
+    if dry_run or not plan:
+        return report
+    now = datetime.now(UTC)
+    unwired = 0
+    skipped: list[dict[str, Any]] = []
+    for item in plan:
+        from_id, to_id = uuid.UUID(item["from_id"]), uuid.UUID(item["to_id"])
+        # invalidate_link deactivates EVERY live row on this (from, to, type) triple, not
+        # just the fan-out's own — the fan-out's own dedup never let it double up with a
+        # genuine third-party edge on the SAME triple in the first place (measured live:
+        # zero such collisions), but this checks rather than trusts that, so a future
+        # caller of _wire_informs with looser dedup can never lose a co-existing edge here.
+        other_sources = await pool.fetchval(
+            "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='informs' "
+            "AND source_id != $3 AND (valid_until IS NULL OR valid_until > now())",
+            from_id, to_id, _INFORMS_FANOUT_SRC)
+        if other_sources:
+            skipped.append({**item, "reason": "a genuine, non-fan-out edge shares this "
+                                              "triple — invalidate_link can't remove one "
+                                              "without the other, refusing"})
+            continue
+        await actions.invalidate_link(from_id, to_id, "informs", actor, now)
+        unwired += 1
+    report.update({"unwired": unwired, "because": because})
+    if skipped:
+        report["skipped"] = skipped
+    return report
 
 
 async def mine_mentions(
