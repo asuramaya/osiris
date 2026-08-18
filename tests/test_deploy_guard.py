@@ -577,12 +577,23 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
-def _commit(repo: Path, msg: str) -> str:
-    _git(repo, "commit", "--allow-empty", "-q", "-m", msg)
+def _head(repo: Path) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
+
+
+def _current_branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "branch", "--show-current"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _commit(repo: Path, msg: str) -> str:
+    _git(repo, "commit", "--allow-empty", "-q", "-m", msg)
+    return _head(repo)
 
 
 @pytest.fixture
@@ -1055,6 +1066,140 @@ async def test_merge_claim_hygiene_unverifiable_when_the_named_branch_is_gone(
 async def test_merge_claim_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
     note = await merge_claim_hygiene(tmp_path)
     assert "nothing to verify" in note
+
+
+# ── merge_claim_hygiene's `since` ranged walk (obligation 8752024d, 1c85ed3's own gap) ──────
+#
+# THE SPECIMEN THIS CLOSES: a "merge, raise ratchet, deploy" sequence carries TWO real
+# merges under one final ratchet commit whose own subject never claims a branch — the
+# old HEAD-only check reported "nothing to verify" while a bad merge rode underneath.
+
+async def test_merge_claim_hygiene_catches_a_hidden_bad_merge_under_a_ratchet_commit(
+    small_repo: Path,
+) -> None:
+    root = _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-good")
+    _commit(small_repo, "real work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge feature-good: did the thing",
+        "feature-good")
+    # the SPECIMEN: a merge commit claiming a branch that was never actually merged,
+    # buried under a ratchet commit whose own subject names nothing.
+    _git(small_repo, "checkout", "-q", "-b", "feature-bad")
+    _commit(small_repo, "work nobody actually merged")
+    _git(small_repo, "checkout", "-q", "-")
+    _commit(small_repo, "merge feature-bad: claims the merge, never happened")
+    _commit(small_repo, "ratchet: 42 tools unchanged")  # names no branch at all
+
+    note = await merge_claim_hygiene(small_repo, since=root)
+    assert "2 merge claim(s) since last deploy" in note
+    assert "⚠ 1 FAILED" in note
+    assert "'feature-bad'" in note and "NOT an ancestor" in note
+    assert root[:8] in note
+
+
+async def test_merge_claim_hygiene_ranged_walk_all_clean(small_repo: Path) -> None:
+    root = _commit(small_repo, "root")
+    for name in ("feature-a", "feature-b"):
+        _git(small_repo, "checkout", "-q", "-b", name)
+        _commit(small_repo, f"work on {name}")
+        _git(small_repo, "checkout", "-q", "-")
+        _git(small_repo, "merge", "--no-ff", "-m", f"merge {name}: landed", name)
+    _commit(small_repo, "ratchet: 42 tools unchanged")
+
+    note = await merge_claim_hygiene(small_repo, since=root)
+    assert "2 merge claim(s) since last deploy" in note
+    assert "FAILED" not in note
+    assert "'feature-a' verified" in note and "'feature-b' verified" in note
+
+
+async def test_merge_claim_hygiene_prefers_the_cited_sha_over_a_reused_branchs_moved_tip(
+    small_repo: Path,
+) -> None:
+    """THE LIVE SPECIMEN (found by dry-running the ranged walk against this house's own
+    real history, obligation 8752024d): 'sekhmet-150-backlog' was reused across two
+    separate merges weeks apart — checking the branch's CURRENT tip against the OLDER
+    merge commit false-flagged a completely genuine historical merge the moment the
+    branch moved on to a second round of work. The cited sha (this house's own
+    'merge <branch> (<sha>) — ...' convention) is time-stable; the branch tip is not."""
+    root = _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "reused-branch")
+    first_round = _commit(small_repo, "first round of work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m",
+        f"merge reused-branch ({first_round[:8]}) — first landing", "reused-branch")
+    # the branch is REUSED for a second, later round — its tip moves on, unrelated to the
+    # first merge commit above.
+    _git(small_repo, "checkout", "-q", "reused-branch")
+    _commit(small_repo, "second round of work, unrelated to the first merge")
+    _git(small_repo, "checkout", "-q", "-")
+    _commit(small_repo, "ratchet: 42 tools unchanged")
+
+    note = await merge_claim_hygiene(small_repo, since=root)
+    assert "FAILED" not in note
+    assert "'reused-branch' verified" in note and "cites" in note
+
+
+async def test_merge_claim_hygiene_catches_a_false_cited_sha(small_repo: Path) -> None:
+    """A cited sha that is ITSELF not an ancestor is still a real false claim — preferring
+    the cited sha over the branch tip must not become a way to launder a bad merge."""
+    root = _commit(small_repo, "root")
+    base_branch = _current_branch(small_repo)
+    _git(small_repo, "checkout", "-q", "-b", "feature-w")
+    real_work = _commit(small_repo, "the actual work")
+    _git(small_repo, "checkout", "-q", "-b", "unrelated-elsewhere", root)
+    unrelated = _commit(small_repo, "never actually merged")
+    _git(small_repo, "checkout", "-q", base_branch)
+    _git(small_repo, "merge", "--no-ff", "-m",
+        f"merge feature-w ({unrelated[:8]}) — claims a sha that was never merged",
+        "feature-w")
+
+    note = await merge_claim_hygiene(small_repo, since=root)
+    assert "⚠ 1 FAILED" in note
+    assert unrelated[:8] in note and "NOT an ancestor" in note
+    assert real_work  # the genuinely-merged commit exists; the CLAIM still cites the wrong one
+
+
+async def test_merge_claim_hygiene_ranged_walk_no_merges_in_range(small_repo: Path) -> None:
+    root = _commit(small_repo, "root")
+    _commit(small_repo, "ordinary work, no merge claim")
+    _commit(small_repo, "more ordinary work")
+
+    note = await merge_claim_hygiene(small_repo, since=root)
+    assert "2 commit(s) since last deploy" in note
+    assert "none claim a merge" in note
+    assert "nothing to verify" in note
+
+
+async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
+    small_repo: Path,
+) -> None:
+    """A `since` sha this checkout has never heard of (a fresh clone, a rewritten history,
+    the first deploy this checkout has ever recorded) must never be guessed against —
+    degrades to the ORIGINAL HEAD-only check, exactly as if `since` were never passed."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-x")
+    _commit(small_repo, "the actual work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
+
+    note = await merge_claim_hygiene(small_repo, since="0" * 40)
+    assert note == "merge claim: 'feature-x' verified — an actual ancestor of HEAD"
+
+
+async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
+    small_repo: Path,
+) -> None:
+    """No new commits since the last deploy — an empty range degrades to the same
+    HEAD-only check `since=None` would run, never an empty-but-technically-a-range walk."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-y")
+    _commit(small_repo, "work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge feature-y: landed", "feature-y")
+
+    note = await merge_claim_hygiene(small_repo, since=_head(small_repo))
+    assert note == "merge claim: 'feature-y' verified — an actual ancestor of HEAD"
 
 
 # ── venv_import_hygiene (task #180 piece 2, decision 6fc0c082's own specimen) ───────────────
