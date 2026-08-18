@@ -1036,6 +1036,13 @@ def _gate_name(detail: str) -> str:
         return "ceiling"
     if "no anchored transcript" in detail:
         return "no-anchor"
+    # `_lineage_resume_candidate`'s OWN log wording (task #178) — the same "nothing to
+    # resume at this hop" fact, phrased differently because it comes from a lineage-walk
+    # entry, never from `_resume_miss_reason`'s single-mount-row prose.
+    if "no transcript found on disk" in detail:
+        return "no-anchor"
+    if "never mounted, no session to check" in detail:
+        return "no-anchor"
     if detail.startswith("retired"):
         return "retired"
     return "unknown"
@@ -1273,6 +1280,42 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
         if rid in ids or rsid in ids or (rsid and rsid[:8] in ids):
             return True
     return False
+
+
+async def _resume_occupancy_gate(
+    resume: tuple[str, str, float, str], *, agents_json: Any,
+) -> str | None:
+    """IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave, operator's tonight-law:
+    mechanisms not patches, 7d6815bb/df646654): `_lineage_resume_candidate` (and
+    `_resume_guard` beside it) answer IDENTITY — whose session, graph-truth, via
+    `succession_chain`. Neither answers OCCUPANCY — whether a body is ACTUALLY SITTING
+    there right now. A `-p --resume` fired beside a live body forks the mind into two
+    processes both claiming the same identity; nothing upstream of this call catches
+    that, because nothing upstream asks the occupancy question at all. This is the ask,
+    right before ANY resume-spawn — two independent signals, matched differently on
+    purpose (a live body can be found by either without being findable by both):
+
+    `_confirm_listener` (task #176's own primitive, reused verbatim, never a second
+    matcher) checks BY SESSION ID against `claude agents --json` — catches a body the
+    graph's own candidate session id already names, wherever `_lineage_resume_candidate`
+    found it, at any hop. `census.live_bodies_by_cwd` checks BY OFFICE DIRECTORY via
+    /proc — catches a live claude process sitting in the exact office this resume would
+    land in, whatever session id it thinks it has (a manually-run `claude` that hasn't
+    self-mounted yet is invisible to the first signal, visible to this one).
+
+    Either signal firing refuses. Returns a short reason naming WHICH, or None when
+    neither finds anybody home (safe to resume) — never a silent block; the caller's own
+    receipt names exactly why."""
+    session_id, repo = resume[0], resume[1]
+    if await _confirm_listener({"sessionId": session_id, "short": ""}, agents_json):
+        return (f"a live body is already listed in `claude agents --json` for session "
+                f"{session_id[:8]}")
+    from src.orchestrator.census import live_bodies_by_cwd
+    bodies = await asyncio.to_thread(live_bodies_by_cwd)
+    if bodies is not None and bodies.get(repo):
+        pids = ", ".join(str(p) for p in bodies[repo])
+        return f"a live claude process (pid {pids}) is already sitting at {repo!r}"
+    return None
 
 
 async def dispatch_dm(
@@ -1584,19 +1627,56 @@ async def dispatch_dm(
     if not st.osiris_dm_resume:
         return {"mode": "held",
                 "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
-    if resume is None:
+    # THE SELECTION SWAP (task #178, Seshat's own specimen tonight — an old generation's
+    # 103MB transcript picked over her real, current session): `resume` above (from
+    # `_agent_resumable`) is `agent_mounts`-keyed, freshest-mounted-row-wins — the exact
+    # shared-anchor defect `_lineage_resume_candidate`'s own docstring documents for a
+    # `--bg`-launched seat (one durable per-seat mount row, overwritten by whichever
+    # generation mounts most recently, blind to which one is the TRUE current lineage
+    # head). It stays correct for the MID-TURN check above (an activity probe, not an
+    # identity claim) but must never pick WHICH session `-p --resume` actually targets.
+    # From here down, `_lineage_resume_candidate` — the SAME graph-truth primitive
+    # launch_seat already uses — walks `succession_chain`'s own `session` property
+    # instead: identity from the graph, never the registry's own amnesia. Started from
+    # `wake_target`, NOT `target`: `target` is living_head's DECLARED successor, which
+    # can be a real, active, but never-mounted Agent object with no `succeeded_from`
+    # backward link for `succession_chain` to walk at all (thread 28842543's own shape,
+    # the reason `wake_target` exists) — `wake_target` is wake's own already-resolved
+    # answer to "which identity can actually be resumed", the correct root for this walk
+    # exactly as `_agent_resumable` above was rooted on it too.
+    from src.orchestrator.seats import seat_facts
+    launch_cwd = None
+    if seat_id is not None:
+        facts = await seat_facts(pool, seat_id)
+        launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
+    graph_outcome = await _lineage_resume_candidate(
+        pool, wake_target, st, repo=launch_cwd) if launch_cwd else [
+            "no seat/office known for this addressee — a resume needs a launch location"]
+    graph_log = graph_outcome[1] if isinstance(graph_outcome, tuple) else graph_outcome
+    graph_resume = graph_outcome[0] if isinstance(graph_outcome, tuple) else None
+    if graph_resume is None:
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
-        miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
+        miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
         return {"mode": f"resume-refused-{_gate_name(miss_reason)}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
-    session_id, repo = resume[0], resume[1]
-    gate, refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
+    session_id, repo = graph_resume[0], graph_resume[1]
+    hop = len(graph_log) - 1
+    gate, refusal = await _resume_guard(
+        pool, graph_resume, base, seat_id=seat_id, st=st, hop=hop, launch_cwd=launch_cwd)
     if gate is not None:
         return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
                           "stays pull-only for now"}
+    # OCCUPANCY, THE OTHER HALF (task #178): identity above says WHOSE session this is;
+    # this asks whether anybody is ALREADY SITTING there. A `-p --resume` beside a live
+    # body forks the mind — refuse it here, before the spend, never after.
+    occupied = await _resume_occupancy_gate(graph_resume, agents_json=agents_json)
+    if occupied is not None:
+        return {"mode": "resume-refused-occupied",
+                "detail": f"{occupied} — refusing to fork a second mind beside it; the "
+                          "mail stays pull-only for now"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend
