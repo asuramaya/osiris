@@ -605,7 +605,12 @@ def _tool_chars(t: Any) -> int:
 # rulings never lives only in two jsonl files (Ptah 5260); plus fleet()'s per-seat
 # osiris-vs-harness adoption share. Flagged by its author, raised once here at the merged
 # tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 185_800
+# 185,800 -> 187,200 (measured 186,895 exact). Tool count unchanged at 131 (2026-08-18 ~09:00,
+# Thoth LXXVII, seshat-roster-review merge): roster()'s contract grew — repo= now distinguishes
+# governed-vs-conflict and names near-misses, no-office is an honest null instead of a claim
+# (Seshat XXIX 08-12 batch, accepted into a merge batch that never landed it — found by the
+# merge-base sweep). Raised once here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 187_200
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
