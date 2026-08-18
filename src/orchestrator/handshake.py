@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -388,6 +389,20 @@ def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | 
     return str((jobs_home or Path.home() / ".claude" / "jobs") / sid[:8])
 
 
+def _json_native(value: Any) -> Any:
+    """Recursively render a payload JSON-native: datetimes -> ISO-8601 strings, sets/tuples ->
+    lists, everything else untouched. The whisper route (`/automount`) and every hook that
+    reads its payload speak plain `json`, not pydantic — a datetime anywhere in the tree is a
+    500 the hook can only print, never repair."""
+    if isinstance(value, dict):
+        return {str(k): _json_native(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_native(v) for v in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
 async def automount(
     actions: Actions, *, session_id: str, cwd: str, actor: str,
     expected_model: str | None = None, lease_secs: int = 900,
@@ -702,7 +717,13 @@ async def automount(
                 wall, _echoes = await open_thread_wall(actions.pool, proj_id)
                 me = frozenset(x for x in (ident.agent_id, ident.project) if x)
                 shown, _more = rank_open_threads(wall, me)
-                obligations = shown[:3]
+                # JSON-NATIVE BY CONSTRUCTION (2026-08-18, decision 49510a2f's tail): the wall
+                # rows carry `last_touched` as a datetime for the ranker; the whisper's HTTP
+                # route serialises this payload with plain json, and a datetime here 500'd
+                # /automount on 60 of 63 arrivals in a day — silently, for two weeks — so
+                # nearly every arriving session went rowless. Render times to ISO strings HERE,
+                # at the source, and the route also encodes defensively (mcp_server).
+                obligations = [_json_native(o) for o in shown[:3]]
         except Exception:  # noqa: BLE001 — the whisper must never break on this
             obligations = []
     # THE IDENTITY ANCHOR, UNCONDITIONAL (#155, ruling via Thoth msg 3853: gating identity

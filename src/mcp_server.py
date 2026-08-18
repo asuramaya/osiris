@@ -6787,8 +6787,12 @@ async def automount_route(request: Any) -> Any:
     derives nothing the harness didn't give it) and return the payload the whisper prints.
     Plain HTTP on the same localhost-only listener; NEVER raises — the hook is fail-open and
     a session that got no whisper can always mount by hand."""
+    import json
+    import logging
+
     from starlette.responses import JSONResponse
 
+    body: Any = None
     try:
         body = await request.json()
         session_id = str(body.get("session_id") or "")
@@ -6819,8 +6823,15 @@ async def automount_route(request: Any) -> Any:
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))
-        return JSONResponse(out)
+        # DEFENSIVE ENCODING (2026-08-18): a datetime anywhere in this payload used to 500 the
+        # whisper silently (60 of 63 arrivals in a day, for two weeks) — the payload is now
+        # JSON-native at the source (handshake._json_native) AND encoded here with a default,
+        # so a future non-native value degrades to a string, never to a rowless session.
+        return JSONResponse(json.loads(json.dumps(out, default=str)))
     except Exception as e:  # noqa: BLE001 — fail-open: the whisper degrades, never blocks
+        # never silent again: the hook can only print this; the journal must carry the trace
+        sid = body.get("session_id") if isinstance(body, dict) else "?"
+        logging.getLogger("osiris.whisper").exception("automount route failed for %s", sid)
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
