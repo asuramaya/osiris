@@ -1646,6 +1646,7 @@ async def cmd_deploy(
             print("compositions: up to date")
 
         from src.orchestrator.deploy_guard import (
+            landing_audit,
             local_ref_hygiene,
             merge_claim_hygiene,
             origin_visibility,
@@ -1655,6 +1656,17 @@ async def cmd_deploy(
         print(await local_ref_hygiene(root))
         print(await merge_claim_hygiene(root, since=previously_deployed))
         print(await venv_import_hygiene(root))
+
+        from src.actions.core import Actions as _Actions
+
+        audit = await landing_audit(_Actions(pool), root)
+        if audit["stale_unmerged_branches"] or audit["graph_claim_mismatches"]:
+            print(f"landing audit: {len(audit['stale_unmerged_branches'])} stale branch(es), "
+                  f"{len(audit['graph_claim_mismatches'])} graph claim mismatch(es) — "
+                  f"{len(audit['obligations'])} obligation(s) minted/deduped")
+        else:
+            print("landing audit: clean — every branch is either merged or held-work-claimed, "
+                  "no graph text disagrees with git")
 
         from scripts.push_guard import hook_status
         print(hook_status(root))

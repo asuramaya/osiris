@@ -32,10 +32,15 @@ import contextlib
 import logging
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import asyncpg
 import httpx
+
+if TYPE_CHECKING:
+    from src.actions.core import Actions
 
 _log = logging.getLogger("osiris.deploy_guard")
 
@@ -657,3 +662,168 @@ async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> s
         return f"merge claim: {branch!r} verified — an actual ancestor of HEAD"
     return (f"merge claim: ⚠ HEAD's subject names {branch!r} but it is NOT an ancestor — "
             "the exact shape of fd3a703's own specimen (named, never merged)")
+
+
+# ═══ THE LANDING AUDITOR (Thoth's dispatch msg 5339, thread 5256/5313) ═══
+#
+# Three times a lane was declared "accepted into the merge batch" in prose (a DM, a Decision
+# summary) and never actually reached main — fd3a703/sekhmet-launch-resume-fix, seshat-
+# roster-review, seshat-migration-stress-harness — found, each time, only by a HAND SWEEP
+# (`git branch --no-merged main`), never by anything that runs on its own. `merge_claim_
+# hygiene` above already answers "does a REAL merge commit's own subject tell the truth";
+# this answers the complementary question a prose claim can dodge entirely: "is the branch
+# actually IN main, full stop" — and separately, "does anything in the GRAPH'S OWN TEXT
+# (a Decision, a Task) claim a branch landed that git disagrees with."
+
+_MERGE_CLAIM_IN_TEXT = re.compile(_MERGE_SUBJECT_BRANCH.pattern.removeprefix("^"))
+# THE SAME PARSER, UNANCHORED (Thoth: "reuse Khnum's cited-sha parser — one parser, not
+# two"): `_MERGE_SUBJECT_BRANCH` is anchored to a commit SUBJECT's own start; graph prose
+# carries the identical "merge <branch>(<sha>)" shape anywhere mid-paragraph (a decision
+# quoting a commit's own message), so this strips the `^` and lets `.finditer` find every
+# occurrence rather than only a string-initial one. Same two capture groups, same meaning.
+
+
+async def stale_unmerged_branches(
+    repo_root: Path, *, claimed: set[str], min_age_hours: float = 48.0,
+) -> list[dict[str, Any]]:
+    """`git branch --no-merged main`, minus anything already named by an OPEN held-work
+    Thread (`claimed` — the caller's own `capture.open_held_work()` branch set, this
+    function never queries the graph itself) and anything younger than `min_age_hours` — a
+    fresh branch mid-build is not yet a specimen of anything. THIS is the exact sweep that
+    actually rediscovered all three of Thoth's named specimens (by hand); nothing above
+    catches a branch that never even attempted a merge-shaped commit.
+
+    NEVER REFUSES (577988ed): a git failure, an unparseable date, or a non-repo root all
+    degrade to an empty list — a courtesy sweep, not a gate on anything."""
+    out = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "branch", "--no-merged", "main",
+         "--format=%(refname:short)%09%(committerdate:iso-strict)"],
+        cwd=repo_root, capture_output=True, text=True, timeout=10, check=False)
+    if out.returncode != 0:
+        return []
+    now = datetime.now(UTC)
+    stale: list[dict[str, Any]] = []
+    for line in out.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        branch, _, iso = line.partition("\t")
+        branch = branch.strip()
+        if not branch or branch == "main" or branch in claimed:
+            continue
+        try:
+            tip_at = datetime.fromisoformat(iso.strip())
+        except ValueError:
+            continue
+        age_hours = (now - tip_at).total_seconds() / 3600.0
+        if age_hours >= min_age_hours:
+            stale.append({"branch": branch, "age_hours": round(age_hours, 1),
+                         "committed_at": iso.strip()})
+    return stale
+
+
+async def _verify_graph_claim(
+    repo_root: Path, main_sha: str, branch: str, cited: str | None,
+) -> str | None:
+    """One graph-text mention, checked against `main`'s current tip (not an enclosing
+    commit — prose has none): None for anything unverifiable (branch gone, sha unresolvable,
+    a spurious non-branch match like "merge batch") so a caller only ever sees a PROVEN
+    mismatch, never noise from this regex's own false-positive surface. Cited sha preferred
+    over the branch's own tip, same reasoning as `_verify_one_merge_claim`'s docstring."""
+    if cited:
+        proof = await asyncio.to_thread(_is_ancestor, repo_root, cited, main_sha)
+        if proof is False:
+            return f"names {branch!r}, cites {cited[:8]}, but it is NOT an ancestor of main"
+        if proof is True:
+            return None  # verified — nothing to flag
+    exists = await asyncio.to_thread(
+        subprocess.run, ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_root, capture_output=True, text=True, timeout=5, check=False)
+    if exists.returncode != 0:
+        return None  # not a real local branch (or long since deleted) — unverifiable, not false
+    proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, main_sha)
+    if proof is not False:
+        return None  # True (verified) or None (inconclusive) — neither is a proven mismatch
+    return f"names {branch!r} but it is NOT an ancestor of main"
+
+
+async def audit_graph_merge_claims(
+    pool: asyncpg.Pool, repo_root: Path,
+) -> list[dict[str, Any]]:
+    """Every Decision/Thread whose own summary or rationale contains a "merge <branch>
+    (<sha>)"-shaped mention, checked against `main`'s CURRENT tip. Returns only PROVEN
+    mismatches (`_verify_graph_claim` swallows everything unverifiable) — each a dict with
+    `canonical` (the graph object naming the claim) and `note`. NEVER REFUSES: a git or DB
+    failure degrades to an empty list."""
+    head = await asyncio.to_thread(
+        subprocess.run, ["git", "rev-parse", "main"], cwd=repo_root,
+        capture_output=True, text=True, timeout=5, check=False)
+    if head.returncode != 0:
+        return []
+    main_sha = head.stdout.strip()
+    try:
+        rows = await pool.fetch(
+            "SELECT o.canonical, a.value #>> '{}' AS text FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type IN ('Decision','Thread') AND a.name IN ('summary','rationale') "
+            "AND a.value #>> '{}' ILIKE '%merge %'")
+    except Exception:  # noqa: BLE001 — a DB hiccup is unknown, never a crash
+        return []
+    findings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in rows:
+        text = r["text"] or ""
+        for m in _MERGE_CLAIM_IN_TEXT.finditer(text):
+            # PROSE, NOT A COMMIT SUBJECT: a trailing comma/period right after the branch
+            # name is common in a sentence ("...merge foo, ready for the batch") and was
+            # never a concern for the anchored, commit-subject-only original pattern.
+            branch = m.group(1).rstrip(",.;:")
+            cited = m.group(2)
+            key = f"{r['canonical']}:{branch}:{cited or ''}"
+            if key in seen:
+                continue
+            seen.add(key)
+            note = await _verify_graph_claim(repo_root, main_sha, branch, cited)
+            if note is not None:
+                findings.append({"canonical": r["canonical"], "note": note})
+    return findings
+
+
+async def landing_audit(actions: Actions, repo_root: Path) -> dict[str, Any]:
+    """THE LANDING AUDITOR, composed: `stale_unmerged_branches` (extends the held-work
+    surface, `capture.open_held_work`, rather than a parallel one — its branch list is the
+    'already claimed, not yet a specimen' exemption) plus `audit_graph_merge_claims`,
+    minting one typed obligation (`owner='thoth'`, the coordinator) per genuine finding.
+    `open_thread` is idempotent on the summary's own text (same primitive
+    `alarm_schema_drift` uses beside it), so a repeated run never re-pages the same
+    specimen twice — this is safe to call on every deploy, unaided.
+
+    NEVER REFUSES: every sub-check already fails open to an empty result on its own; a
+    thread-mint failure here is swallowed the same way `alarm_schema_drift`'s desk-brief
+    is, rather than compounding one alarm into a second, louder failure."""
+    from src.orchestrator.capture import open_held_work, open_thread
+
+    held = await open_held_work(actions.pool)
+    claimed = {h["branch"] for h in held if h.get("branch")}
+    stale = await stale_unmerged_branches(repo_root, claimed=claimed)
+    claims = await audit_graph_merge_claims(actions.pool, repo_root)
+    minted: list[str] = []
+    for s in stale:
+        summary = (f"LANDING AUDIT: branch {s['branch']!r} has sat unmerged into main for "
+                  f"~{s['age_hours']:.0f}h with no open held-work claim naming it")
+        with contextlib.suppress(Exception):
+            # NEVER pass branch= here: open_held_work() treats ANY open Thread naming a
+            # `branch` as a legitimate claim on it — this obligation's own existence would
+            # exempt the very branch it is flagging from ever being re-swept, a self-
+            # referential blind spot found live by this function's own idempotency test.
+            minted.append(str(await open_thread(
+                actions, summary, kind="obligation", owner="thoth",
+                source="landing-auditor")))
+    for c in claims:
+        summary = f"LANDING AUDIT: {c['canonical']} {c['note']}"
+        with contextlib.suppress(Exception):
+            minted.append(str(await open_thread(
+                actions, summary, kind="obligation", owner="thoth",
+                source="landing-auditor")))
+    return {"stale_unmerged_branches": stale, "graph_claim_mismatches": claims,
+            "obligations": minted}

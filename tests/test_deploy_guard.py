@@ -7,6 +7,7 @@ either guard exists to catch.
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,17 +18,21 @@ from src.orchestrator.deploy_guard import (
     _is_ancestor,
     alarm_schema_drift,
     alarm_unreviewed_boot,
+    audit_graph_merge_claims,
     check_diverged_since_last_deploy,
     check_schema_drift,
     check_unreviewed_boot,
     diverged_since_last_deploy,
+    landing_audit,
     local_ref_hygiene,
     merge_claim_hygiene,
     origin_visibility,
     schema_drift,
+    stale_unmerged_branches,
     unreviewed_boot,
     venv_import_hygiene,
 )
+from src.parsers.base import EvidenceClass
 
 
 def test_matching_versions_are_not_drift() -> None:
@@ -1218,3 +1223,144 @@ async def test_venv_import_hygiene_flags_a_mismatched_repo_root(tmp_path: Path) 
     assert "NOT the deploying tree" in note
     assert str(_REPO_ROOT) in note
     assert str(tmp_path.resolve()) in note
+
+
+# ── THE LANDING AUDITOR (Thoth dispatch msg 5339, thread 5256/5313) ─────────────────────────
+# `git init`'s own default branch is `master`, not this house's real `main` — every test
+# below says so explicitly rather than assume it.
+
+def _commit_dated(repo: Path, msg: str, when: str) -> str:
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-q", "-m", msg],
+        check=True, capture_output=True,
+        env={**__import__("os").environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when},
+    )
+    return _head(repo)
+
+
+@pytest.fixture
+def main_repo(small_repo: Path) -> Path:
+    _commit(small_repo, "root")
+    _git(small_repo, "branch", "-M", "main")
+    return small_repo
+
+
+async def test_stale_unmerged_branches_flags_an_old_unclaimed_branch(
+    main_repo: Path,
+) -> None:
+    _git(main_repo, "checkout", "-q", "-b", "seshat-old-lane")
+    _commit_dated(main_repo, "old work, never merged", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+    out = await stale_unmerged_branches(main_repo, claimed=set())
+    assert [s["branch"] for s in out] == ["seshat-old-lane"]
+    assert out[0]["age_hours"] > 48
+
+
+async def test_stale_unmerged_branches_exempts_a_held_work_claim(main_repo: Path) -> None:
+    _git(main_repo, "checkout", "-q", "-b", "seshat-old-lane")
+    _commit_dated(main_repo, "old work, claimed", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+    out = await stale_unmerged_branches(main_repo, claimed={"seshat-old-lane"})
+    assert out == []
+
+
+async def test_stale_unmerged_branches_exempts_a_fresh_branch(main_repo: Path) -> None:
+    """A branch mid-build, committed moments ago, is not yet a specimen of anything."""
+    _git(main_repo, "checkout", "-q", "-b", "seshat-fresh-lane")
+    _commit(main_repo, "just started")
+    _git(main_repo, "checkout", "-q", "main")
+    out = await stale_unmerged_branches(main_repo, claimed=set())
+    assert out == []
+
+
+async def test_stale_unmerged_branches_empty_when_everything_merged(main_repo: Path) -> None:
+    _git(main_repo, "checkout", "-q", "-b", "seshat-landed-lane")
+    _commit_dated(main_repo, "old work, actually landed", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+    _git(main_repo, "merge", "--no-ff", "-m", "merge seshat-landed-lane: real",
+        "seshat-landed-lane")
+    out = await stale_unmerged_branches(main_repo, claimed=set())
+    assert out == []
+
+
+async def test_stale_unmerged_branches_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
+    assert await stale_unmerged_branches(tmp_path, claimed=set()) == []
+
+
+async def test_audit_graph_merge_claims_catches_a_decision_naming_an_unlanded_branch(
+    actions: Actions, main_repo: Path,
+) -> None:
+    """decision 114b4052's own shape: prose says a branch is in, git disagrees — the
+    branch is real and exists locally, but was never actually merged into main."""
+    _git(main_repo, "checkout", "-q", "-b", "seshat-roster-review")
+    _commit(main_repo, "the real work")
+    _git(main_repo, "checkout", "-q", "main")
+    obj = await actions.create_or_find_object("Decision", "decision:auditgraph01", "test")
+    await actions.assert_property(
+        obj, "summary",
+        "accepted into merge seshat-roster-review, ready for the batch",
+        "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    out = await audit_graph_merge_claims(actions.pool, main_repo)
+    assert len(out) == 1
+    assert out[0]["canonical"] == "decision:auditgraph01"
+    assert "seshat-roster-review" in out[0]["note"] and "NOT an ancestor" in out[0]["note"]
+
+
+async def test_audit_graph_merge_claims_silent_when_actually_landed(
+    actions: Actions, main_repo: Path,
+) -> None:
+    _git(main_repo, "checkout", "-q", "-b", "seshat-real-lane")
+    _commit(main_repo, "the real work")
+    _git(main_repo, "checkout", "-q", "main")
+    _git(main_repo, "merge", "--no-ff", "-m", "merge seshat-real-lane: landed",
+        "seshat-real-lane")
+    obj = await actions.create_or_find_object("Decision", "decision:auditgraph02", "test")
+    await actions.assert_property(
+        obj, "summary", "merge seshat-real-lane: landed, all gates green",
+        "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    out = await audit_graph_merge_claims(actions.pool, main_repo)
+    assert out == []
+
+
+async def test_audit_graph_merge_claims_ignores_a_spurious_non_branch_match(
+    actions: Actions, main_repo: Path,
+) -> None:
+    """"merge batch"/"merge conflict"-shaped prose parses as a candidate branch name that
+    simply doesn't exist — unverifiable, never a false mismatch."""
+    obj = await actions.create_or_find_object("Decision", "decision:auditgraph03", "test")
+    await actions.assert_property(
+        obj, "summary", "accepted into his merge batch, nothing landed yet though",
+        "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    out = await audit_graph_merge_claims(actions.pool, main_repo)
+    assert out == []
+
+
+async def test_landing_audit_mints_one_obligation_and_is_idempotent(
+    actions: Actions, main_repo: Path,
+) -> None:
+    _git(main_repo, "checkout", "-q", "-b", "seshat-idempotent-lane")
+    _commit_dated(main_repo, "old, unclaimed", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+
+    first = await landing_audit(actions, main_repo)
+    assert len(first["stale_unmerged_branches"]) == 1
+    assert len(first["obligations"]) == 1
+
+    second = await landing_audit(actions, main_repo)
+    assert len(second["obligations"]) == 1
+    assert second["obligations"] == first["obligations"]  # same Thread, not a duplicate
+
+
+async def test_landing_audit_skips_a_branch_an_open_held_work_thread_already_claims(
+    actions: Actions, main_repo: Path,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    _git(main_repo, "checkout", "-q", "-b", "seshat-claimed-lane")
+    _commit_dated(main_repo, "old, but claimed", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+    await open_thread(actions, "still building seshat-claimed-lane",
+                      branch="seshat-claimed-lane")
+
+    out = await landing_audit(actions, main_repo)
+    assert out["stale_unmerged_branches"] == []
