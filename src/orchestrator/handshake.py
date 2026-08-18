@@ -943,13 +943,20 @@ async def session_end(
     the trigger's `_owner_live` freshness probe THE INSTANT the tab closes, instead of lingering
     live for up to `last_seen`'s 15-minute decay (the fleet carrying 277 stale ghosts this way).
 
+    NEVER A DELETE (#178 piece a): `mounts.release_session_mounts` SUSPENDS the row (last_seen
+    flips to the epoch sentinel — dead to every liveness probe immediately, the same effect a
+    DELETE always had) rather than removing it — SessionEnd firing does not always mean the
+    body is truly gone (a daemon re-adopt, a body the harness itself still lists). The row
+    survives, findable by `find_mount`, so a genuine re-mount PROMOTES IT BACK the ordinary
+    way instead of minting a fresh one.
+
     Deliberately NOT retire(): no `retired=true` certificate is stamped, and no undisposed-pile
     warning fires. retire() is a MIND's own deliberate, permanent farewell — it gates the RESUME
     lane forever and warns of reanimation if the name is worn again. SessionEnd is only the
     HARNESS observing that a process exited; the SAME session id can resume later
-    (`claude --resume`) and its automount re-earns the row from scratch, exactly as if this had
-    never fired. Only the SEAT (the durable mount row) is released — identity, lineage, and mail
-    are untouched.
+    (`claude --resume`) and its automount re-earns the SAME row (suspended, then promoted back
+    by the ordinary upsert), exactly as if this had never fired. Only the SEAT (the durable
+    mount row) is released — identity, lineage, and mail are untouched.
 
     Same anchor derivation as `automount` (`_derive_job_dir`: the harness's own
     ~/.claude/jobs/<sid[:8]> scheme) — a session that was never mounted (no row: a phantom/spare

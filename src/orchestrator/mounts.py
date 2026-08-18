@@ -19,6 +19,8 @@ import json
 import os
 import time
 import tomllib
+from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -129,6 +131,12 @@ async def release_mounts(pool: asyncpg.Pool, agent_id: str) -> int:
     return int(tag.rsplit(" ", 1)[-1])
 
 
+# the "suspended, no genuine sighting" sentinel — a real datetime, not a Postgres literal
+# string: asyncpg binds params by Python type before any server-side cast runs, so a bare
+# 'epoch' string fails to bind against a timestamptz column.
+SUSPENDED_AT = datetime.fromtimestamp(0, tz=UTC)
+
+
 async def release_session_mounts(
     pool: asyncpg.Pool, *, job_dir: str, session_id: str,
 ) -> int:
@@ -140,12 +148,104 @@ async def release_session_mounts(
     emptied registry then read as the seat's death, and the office door — correct on its
     own evidence — minted false successors at thoth's own office (a title-generator stub
     nearly took the throne). A row is an ADDRESS: only the addressed door's death may
-    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell."""
+    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell.
+
+    NEVER A DELETE (#178 piece a, Thoth dispatch msg 5224): this used to DELETE the row —
+    correct for LIVENESS (the row must stop answering any probe immediately, same law as
+    before) but wrong for the REGISTRY, because SessionEnd firing does not always mean the
+    body is actually gone (the exact resume-race class this function's own docstring
+    already guards elsewhere: `greeted_within_grace` catches the ordering race, this catches
+    the SURVIVAL case — a daemon re-adopt or a body the harness still lists). Suspends
+    instead: `last_seen` flips to the epoch sentinel (constitution #3 — heal with
+    compensating events, never DELETE), which reads exactly as dead to `is_live()` (same
+    immediate liveness effect the DELETE always had) while the ROW ITSELF survives, findable
+    by `find_mount`. A genuine re-adopt or resume then PROMOTES IT BACK the ordinary way —
+    `save_mount`'s own `ON CONFLICT (job_dir) DO UPDATE` refreshes `last_seen=now()` on the
+    SAME row, no different from any other re-mount. Idempotent: a row already suspended is
+    excluded from the receipt (re-suspending nothing is not a release)."""
     sid32 = (session_id or "").replace("-", "").strip().lower()
     n = await pool.fetchval(
-        "WITH gone AS (DELETE FROM agent_mounts WHERE job_dir=$1 OR session_key=$2 "
-        "RETURNING 1) SELECT count(*) FROM gone", job_dir, f"sid:{sid32}")
+        "WITH gone AS (UPDATE agent_mounts SET last_seen=$3 "
+        "WHERE (job_dir=$1 OR session_key=$2) AND last_seen IS DISTINCT FROM $3 "
+        "RETURNING 1) SELECT count(*) FROM gone",
+        job_dir, f"sid:{sid32}", SUSPENDED_AT)
     return int(n or 0)
+
+
+AgentsJsonFn = Callable[[], Awaitable[list[dict[str, Any]]]]
+ProcReadFn = Callable[[int], str | None]
+
+
+async def registry_census(
+    pool: asyncpg.Pool, *, agents_json: AgentsJsonFn | None = None,
+    read_exe: ProcReadFn | None = None, read_cwd: ProcReadFn | None = None,
+) -> dict[str, Any]:
+    """THE REGISTRY+/PROC CENSUS (#178 piece c, Thoth dispatch msg 5224) — the harness's
+    own live-body list (`claude agents --json`, trigger.py's `_claude_agents_json`, reused
+    verbatim rather than reinvented), each row VERIFIED against `/proc` (census.py's
+    `_proc_exe`/`_proc_cwd` — a harness row is trusted only once `/proc` confirms the pid
+    is really a claude body) — this is what "is a body live right now" answers going
+    forward. `agent_mounts` is the CACHE this reconciles against, never a second source of
+    truth: `matched` names rows the census confirms are real; `rowless` names live,
+    verified bodies with NO agent_mounts row at all (session_id prefix matches nothing) —
+    exactly the population #178 pieces (a)/(b) exist to close to zero.
+
+    OCCUPANCY, NOT IDENTITY (Ptah's framing, msg 5219 — the boundary this function must
+    never cross): this answers "is a body running, and what does the harness/OS say about
+    it" — it never resolves which AGENT LINEAGE holds a seat, never touches `holds` links
+    or `claim_name`'s own arbitration. A caller wanting IDENTITY reads the graph
+    (seats.py/agents.py); a caller wanting OCCUPANCY reads this. Conflating the two is
+    exactly the class of bug the two-body-problem ruling (719ed5b1) and this house's own
+    "never let one answer for the other" law both guard against.
+
+    Injectable (`agents_json`/`read_exe`/`read_cwd`) so tests drive this with fakes, same
+    seam discipline as census.py's own pgrep/proc functions — the real defaults (harness
+    subprocess + real /proc) are imported lazily to avoid a module-load-time cycle between
+    mounts.py (imported early, by agents.py among others) and trigger.py/census.py
+    (themselves importing agents.py). Fails open on a harness read failure — a census that
+    could not run reports `verified: []`, `blind: true`, never a false-empty population
+    read as "nothing is live" (same law as census.py's own pgrep=None handling)."""
+    from src.orchestrator import census as _census
+    from src.orchestrator.trigger import _claude_agents_json
+
+    agents_json = agents_json or _claude_agents_json
+    read_exe = read_exe or _census._proc_exe
+    read_cwd = read_cwd or _census._proc_cwd
+    try:
+        rows = await agents_json()
+    except (OSError, TimeoutError, ValueError):
+        return {"blind": True, "verified": [], "matched": [], "rowless": [],
+                "note": "the harness registry read failed — cannot census, not empty"}
+    verified: list[dict[str, Any]] = []
+    for r in rows:
+        sid = str(r.get("sessionId") or "")
+        if not sid:
+            continue
+        pid = r.get("pid")
+        exe = read_exe(int(pid)) if isinstance(pid, int) else None
+        if not _census._is_claude_body(exe):
+            continue  # the harness claims a body; /proc does not confirm it — not counted
+        verified.append({
+            "session_id": sid, "job_dir_key": sid[:8], "pid": pid,
+            "harness_cwd": r.get("cwd"), "harness_name": r.get("name"),
+            "proc_cwd": read_cwd(int(pid)) if isinstance(pid, int) else None,
+        })
+    db_rows = await pool.fetch("SELECT job_dir, agent_id, project, last_seen FROM agent_mounts")
+    by_key: dict[str, list[asyncpg.Record]] = defaultdict(list)
+    for row in db_rows:
+        by_key[Path(row["job_dir"]).name].append(row)
+    matched: list[dict[str, Any]] = []
+    rowless: list[dict[str, Any]] = []
+    for v in verified:
+        candidates = by_key.get(v["job_dir_key"], [])
+        if candidates:
+            matched.append({**v, "agent_id": candidates[0]["agent_id"],
+                            "project": candidates[0]["project"]})
+        else:
+            rowless.append(v)
+    return {"blind": False, "verified": verified, "matched": matched, "rowless": rowless,
+            "verified_count": len(verified), "matched_count": len(matched),
+            "rowless_count": len(rowless)}
 
 
 _MOUNT_COLS = (

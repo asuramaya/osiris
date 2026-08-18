@@ -198,6 +198,55 @@ async def test_reattach_resolves_project_from_the_seat_when_cwd_yields_none(
     srv._agents.pop("sid:bounced", None)  # leave no global residue for other tests
 
 
+# ═══ #178 piece (b): the transcript self-restore — no row survives under this anchor (or
+# its resume-bridge), but a REAL transcript proves the session actually ran before, so
+# _reattach restores rather than bouncing [unknown-anchor · TERMINAL] ═══
+
+
+async def test_reattach_self_restores_from_a_real_transcript_when_no_row_survives(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact live shape this piece exists for: a body genuinely ran before (a real
+    transcript proves it) but its agent_mounts row is gone — session_end's own release, a
+    daemon re-adopt, an evicted row. No prior MountRecord exists at all (unlike the bounce
+    tests above, which all start from a saved row) — restore must derive identity FROM
+    SCRATCH, off the transcript's own cwd, and mint a fresh row for this exact job_dir."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "restore1")
+    restored_cwd = str(tmp_path / "demo")
+    monkeypatch.setattr(
+        "src.ingest.sessions.cwd_of_transcript",
+        lambda root=None, job_dir=None: restored_cwd)
+
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None  # nothing yet
+    srv._agents.pop("sid:restored", None)
+    ident = await srv._reattach(actions.pool, "sid:restored", job_dir)
+    assert ident is not None
+    assert ident.agent_id == "agent:restore1"  # derived fresh off job_dir, not "" (the sentinel)
+    rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert rec is not None and rec.agent_id == ident.agent_id and rec.cwd == restored_cwd
+    srv._agents.pop("sid:restored", None)
+
+
+async def test_reattach_stays_none_when_no_transcript_exists_to_restore_from(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative control: no row, no bridge, AND no real transcript — genuinely never
+    mounted. Must stay None (the correct [unknown-anchor · TERMINAL] bounce), never invent
+    an identity from nothing."""
+    from src import mcp_server as srv
+
+    monkeypatch.setattr(
+        "src.ingest.sessions.cwd_of_transcript", lambda root=None, job_dir=None: None)
+
+    job_dir = str(tmp_path / "jobs" / "nevermnt")
+    srv._agents.pop("sid:nomatch", None)
+    ident = await srv._reattach(actions.pool, "sid:nomatch", job_dir)
+    assert ident is None
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None  # nothing minted
+
+
 async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
     """The explicit-mount leg of the binding (thread 33838160): the whisper tells a minted
     heir 're-mount with THIS anchor' — and automount left that very row BOUND to the heir's
@@ -1846,3 +1895,169 @@ async def test_undrop_dead_project_mount_refuses_to_overwrite_a_live_remount(
     assert "error" in result
     live = await mounts.find_mount(p, job_dir="/x/jobs/reuse0001")
     assert live is not None and live.agent_id == "agent:brandnew"
+
+
+# ═══ release_session_mounts — #178 piece (a): SUSPENDS (never deletes) ═══
+
+
+async def test_release_session_mounts_suspends_never_deletes(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/susp0001", agent_id="agent:susp0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:susp0001")
+    n = await mounts.release_session_mounts(p, job_dir="/x/jobs/susp0001",
+                                            session_id="susp0001")
+    assert n == 1
+    row = await mounts.find_mount(p, job_dir="/x/jobs/susp0001")
+    assert row is not None and row.agent_id == "agent:susp0001"  # the row SURVIVES
+    last_seen = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/susp0001'")
+    assert not mounts.is_live(last_seen)
+
+
+async def test_release_session_mounts_suspends_a_provisional_null_last_seen_row(
+    actions: Actions,
+) -> None:
+    """Regression: a provisional mount (automount's own whisper stage, alive=False) has
+    last_seen=NULL by design (migration 0028) — a bare `<>` comparison against the sentinel
+    is NULL under three-valued SQL logic, silently EXCLUDING every provisional row from ever
+    being suspended. Must use NULL-safe comparison (`IS DISTINCT FROM`)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/prov0001", agent_id="agent:prov0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:prov0001", alive=False)
+    assert await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/prov0001'") is None
+    n = await mounts.release_session_mounts(p, job_dir="/x/jobs/prov0001",
+                                            session_id="prov0001")
+    assert n == 1  # must count as released, not silently skipped
+    row = await mounts.find_mount(p, job_dir="/x/jobs/prov0001")
+    assert row is not None  # still survives, just suspended
+
+
+async def test_release_session_mounts_is_idempotent(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/idem0001", agent_id="agent:idem0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:idem0001")
+    first = await mounts.release_session_mounts(p, job_dir="/x/jobs/idem0001",
+                                                session_id="idem0001")
+    assert first == 1
+    second = await mounts.release_session_mounts(p, job_dir="/x/jobs/idem0001",
+                                                 session_id="idem0001")
+    assert second == 0  # already suspended — never re-counted as a fresh release
+
+
+async def test_a_suspended_row_promotes_back_on_the_ordinary_upsert(actions: Actions) -> None:
+    """"Let liveness promote it back" (Thoth's own words, msg 5224): a genuine re-mount for
+    the SAME job_dir is the normal ON CONFLICT upsert — no special restore path needed."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/promo0001", agent_id="agent:promo0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:promo0001")
+    await mounts.release_session_mounts(p, job_dir="/x/jobs/promo0001", session_id="promo0001")
+    suspended = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/promo0001'")
+    assert not mounts.is_live(suspended)
+
+    await mounts.save_mount(p, job_dir="/x/jobs/promo0001", agent_id="agent:promo0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:promo0001-again")
+    promoted = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/promo0001'")
+    assert mounts.is_live(promoted)
+
+
+# ═══ registry_census — #178 piece (c): the harness registry + /proc census, VERIFIED,
+# reconciled against agent_mounts (the cache, never a second source of truth) ═══
+
+_VERSIONS_EXE = "/home/x/.local/share/claude/versions/2.1.210"
+
+
+def _fake_agents_json(rows: list[dict]) -> object:
+    async def _f() -> list[dict]:
+        return rows
+    return _f
+
+
+async def test_registry_census_matches_a_verified_body_to_its_mount_row(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/abcdefgh", agent_id="agent:abcdefgh",
+                            project="osiris", cwd="/code/osiris", model=None,
+                            session_key="whisper:abcdefgh")
+    out = await mounts.registry_census(
+        p, agents_json=_fake_agents_json(
+            [{"sessionId": "abcdefgh-1234-5678-9abc-def012345678", "pid": 111,
+              "cwd": "/code/osiris", "name": "[OS] Test"}]),
+        read_exe=lambda pid: _VERSIONS_EXE, read_cwd=lambda pid: "/code/osiris")
+    assert out["blind"] is False
+    assert out["rowless"] == []
+    assert out["matched_count"] == 1
+    assert out["matched"][0]["agent_id"] == "agent:abcdefgh"
+    assert out["matched"][0]["project"] == "osiris"
+
+
+async def test_registry_census_flags_a_verified_body_with_no_row_as_rowless(
+    actions: Actions,
+) -> None:
+    """The exact population #178 pieces (a)/(b) exist to close to zero: the harness lists
+    a real, /proc-confirmed body, and agent_mounts has never heard of it."""
+    out = await mounts.registry_census(
+        actions.pool, agents_json=_fake_agents_json(
+            [{"sessionId": "rowless12-aaaa-bbbb-cccc-dddddddddddd", "pid": 222,
+              "cwd": "/code/ghost", "name": "[GH] Ghost"}]),
+        read_exe=lambda pid: _VERSIONS_EXE, read_cwd=lambda pid: "/code/ghost")
+    assert out["matched"] == []
+    assert out["rowless_count"] == 1
+    assert out["rowless"][0]["session_id"] == "rowless12-aaaa-bbbb-cccc-dddddddddddd"
+    assert out["rowless"][0]["job_dir_key"] == "rowless1"
+
+
+async def test_registry_census_drops_a_harness_row_proc_does_not_confirm(
+    actions: Actions,
+) -> None:
+    """The harness claims a body; /proc says the pid isn't really a claude binary (the
+    vanished-process race, or a process reusing a recycled pid) — never counted as
+    verified-live, matched or rowless."""
+    out = await mounts.registry_census(
+        actions.pool, agents_json=_fake_agents_json(
+            [{"sessionId": "unconfirmed-0000-0000-0000-000000000000", "pid": 333,
+              "cwd": "/code/x"}]),
+        read_exe=lambda pid: None, read_cwd=lambda pid: "/code/x")
+    assert out["verified_count"] == 0
+    assert out["matched"] == []
+    assert out["rowless"] == []
+
+
+async def test_registry_census_is_blind_not_empty_on_a_harness_read_failure(
+    actions: Actions,
+) -> None:
+    async def _raises() -> list[dict]:
+        raise TimeoutError("harness read timed out")
+
+    out = await mounts.registry_census(actions.pool, agents_json=_raises)
+    assert out["blind"] is True
+    assert out["verified"] == []
+    assert out["matched"] == []
+    assert out["rowless"] == []
+
+
+async def test_the_registry_census_mcp_tool_wraps_the_orchestrator(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import mcp_server as srv
+
+    async def _fake(pool: object, **kwargs: object) -> dict:
+        return {"blind": False, "verified": [], "matched": [], "rowless": [],
+                "verified_count": 0, "matched_count": 0, "rowless_count": 0}
+
+    monkeypatch.setattr(mounts, "registry_census", _fake)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.registry_census()
+    finally:
+        srv._pool = saved_pool
+    assert out["blind"] is False and "rowless_count" in out

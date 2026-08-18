@@ -580,7 +580,14 @@ def _tool_chars(t: Any) -> int:
 # LXXVII heir ix, #174/#175/#180-piece-1 wave): NO NEW TOOL — fleet()'s ghost_gap went
 # per-identity (false_live/false_dead, Khnum 18a5d81, #174) and the docstring grew with it.
 # Flagged by its author, raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 182_400
+# 182,400 -> 183,200 (measured at the merged tip: see the git log for the exact figure) (measured 182,732 exact). 129 -> 130 tools (2026-08-18, Seshat XXXV,
+# #178 piece c): ONE NEW TOOL — registry_census. The harness's own live-body list (`claude
+# agents --json`), each row verified against /proc, reconciled against agent_mounts (the
+# cache, never a second source of truth); `rowless` names the exact population #178's
+# pieces (a)/(b) exist to close to zero. Load-bearing (this IS the piece Thoth dispatched),
+# trimmed to the category rule's lean end first — flagged by its author, not raised beyond
+# the exact measured total, matching the immediately preceding precedent (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 183_200
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -673,4 +680,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 129
+    assert len(per_tool) == 130

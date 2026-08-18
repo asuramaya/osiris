@@ -774,13 +774,30 @@ async def _reattach(
         if rec is not None:
             adopted_from = rec.job_dir
     if rec is None:
-        return None
+        # #178 PIECE (B) — THE TRANSCRIPT SELF-RESTORE (Thoth dispatch msg 5224): no row
+        # survives under this anchor OR its resume-bridge (session_end's own release, a
+        # daemon re-adopt after a bounce, a genuinely evicted row) — but a REAL transcript
+        # proves this session actually ran before, which is proof enough to restore rather
+        # than bounce [unknown-anchor · TERMINAL] and force a fresh, unattributed re-mount.
+        # `cwd_of_transcript` is anchored-only (never a co-tenant's file — the same identity-
+        # path law `current_model` already follows): None here means genuinely never
+        # mounted, and the bounce below is the CORRECT answer, not a gap.
+        from src.ingest.sessions import cwd_of_transcript
+
+        restored_cwd = cwd_of_transcript(job_dir=job)
+        if restored_cwd is None:
+            return None
+        rec = mounts.MountRecord(job_dir=job, agent_id="", project=None, cwd=restored_cwd,
+                                 model=None)
     settings = get_settings()
     # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29);
     # fail-open — a store outage re-attaches with an unobserved model, never a bounce
     reading = await identity_reading(pool, cwd=rec.cwd, job_dir=rec.job_dir)
     ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir, store_reading=reading)
-    if _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
+    # rec.agent_id == "" is the piece-(b) self-restore's own sentinel (mounts.MountRecord
+    # minted above with no PRIOR row to have bound a seat on) — nothing to honor, the
+    # freshly-derived ident is definitionally the right answer, so this check must not fire.
+    if rec.agent_id and _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
         # a BOUND session (thread 33838160): the row points at a deliberately-worn SEAT of a
         # different lineage — honor it. Re-deriving from the transcript here was the flap
         # that stomped a claimed seat back to its session hash on every silent reconnect.
@@ -3220,6 +3237,22 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "
                             f"fleet(full=True) for the rest"}),
     }
+
+
+@mcp.tool()
+async def registry_census() -> dict[str, Any]:
+    """THE REGISTRY+/PROC CENSUS (#178 piece c) — the harness's own live-body list
+    (`claude agents --json`), each row verified against `/proc` (the pid really is a
+    claude body), reconciled against `agent_mounts`. `matched` are bodies with a real row;
+    `rowless` are verified-live bodies with NO row at all — the population #178's pieces
+    (a)/(b) exist to close. `blind: true` means the harness read itself failed (cannot
+    census, never read as "nothing is live").
+
+    OCCUPANCY, NOT IDENTITY: this answers "is a body running", never "which agent lineage
+    holds a seat" — read the graph (roster()/doors()) for that. Conflating the two is
+    exactly the two-body-problem class of bug (ruling 719ed5b1)."""
+    from src.orchestrator.mounts import registry_census as _registry_census
+    return await _registry_census(await _pool_get())
 
 
 @mcp.tool()
