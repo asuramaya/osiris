@@ -8,15 +8,19 @@ reports "unknown" (never a false zero) for a session that was never recovered.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from src.actions.core import Actions
 from src.ingest.cross_channel import (
+    _held_by_at,
+    _office_slug,
+    _resolve_seat,
     adoption_share,
     extract_harness_sends,
     recover_harness_exchanges,
 )
-from src.orchestrator.mounts import save_mount
+from src.orchestrator.seats import bind_holder, ensure_seat
 
 
 def _line(**kw: object) -> str:
@@ -74,7 +78,9 @@ def test_extract_never_reindexes_around_a_skipped_line() -> None:
 
 # --- recover_harness_exchanges: dry-run-first repair verb ------------------------------------
 
-async def _seed_soul(actions: Actions, anchor_sid: str, lines: list[str]) -> None:
+async def _seed_soul(
+    actions: Actions, anchor_sid: str, lines: list[str], *, source_path: str = "fake",
+) -> None:
     async with actions.pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
@@ -83,9 +89,9 @@ async def _seed_soul(actions: Actions, anchor_sid: str, lines: list[str]) -> Non
                 [(anchor_sid, i, ln.encode(), f"hash{i}") for i, ln in enumerate(lines)])
             await conn.execute(
                 "INSERT INTO soul_sessions (harness, anchor_sid, source_path, last_line_idx, "
-                " last_hash) VALUES ('claude-code', $1, 'fake', $2, $3) "
+                " last_hash) VALUES ('claude-code', $1, $2, $3, $4) "
                 "ON CONFLICT (harness, anchor_sid) DO NOTHING",
-                anchor_sid, len(lines), f"hash{len(lines) - 1}" if lines else None)
+                anchor_sid, source_path, len(lines), f"hash{len(lines) - 1}" if lines else None)
 
 
 async def test_recover_reports_an_error_when_nothing_is_soul_stored(actions: Actions) -> None:
@@ -118,10 +124,10 @@ async def test_recover_execute_writes_and_is_idempotent(actions: Actions) -> Non
         actions.pool, "anchorA3", dry_run=False, because="recovering the Ptah/Ra day")
     assert out["written"] == 1
     row = await actions.pool.fetchrow(
-        "SELECT anchor_sid, turn_index, to_raw, summary, message FROM harness_messages "
+        "SELECT anchor_sid, turn_index, harness_to, summary, message FROM harness_messages "
         "WHERE anchor_sid='anchorA3'")
     assert row["turn_index"] == 0
-    assert row["to_raw"] == "adbf9df793f4d1264"
+    assert row["harness_to"] == "adbf9df793f4d1264"
     assert row["message"] == "pick up here"
 
     # re-running (still no new soul lines) writes nothing new — idempotent per (anchor, turn)
@@ -134,15 +140,66 @@ async def test_recover_execute_writes_and_is_idempotent(actions: Actions) -> Non
     assert n == 1
 
 
-async def test_recover_resolves_to_raw_against_a_live_mount(actions: Actions) -> None:
-    await save_mount(actions.pool, job_dir="/home/x/.osiris/seats/ra/adbf9df7",
-                     agent_id="agent:ra-test", project="osiris", cwd="/x",
-                     model="claude-sonnet-5", session_key=None)
-    await _seed_soul(actions, "anchorA4", [_ASSISTANT_WITH_SEND])
+def test_office_slug_extracts_the_seat_handle_from_a_dashed_transcript_path() -> None:
+    path = ("/home/x/.claude/projects/-home-asuramaya--osiris-seats-ra/"
+            "adbf9df7-0000-0000-0000-000000000000.jsonl")
+    assert _office_slug(path) == "ra"
+
+
+def test_office_slug_is_none_for_a_session_with_no_established_office() -> None:
+    path = "/home/x/.claude/projects/-home-x-code-osiris/abc123.jsonl"
+    assert _office_slug(path) is None
+
+
+async def test_resolve_seat_finds_the_seat_by_its_office_slug(actions: Actions) -> None:
+    minted = await ensure_seat(actions, house=None, handle="ra-test-seat", source="test")
+    seat = minted["seat_id"]
+    path = ("/home/x/.claude/projects/-home-asuramaya--osiris-seats-ra-test-seat/"
+            "abc12345.jsonl")
+    assert await _resolve_seat(actions.pool, path) == seat
+
+
+async def test_resolve_seat_is_none_with_no_office_slug_in_the_path(actions: Actions) -> None:
+    assert await _resolve_seat(actions.pool, "fake") is None
+    assert await _resolve_seat(actions.pool, None) is None
+
+
+async def test_held_by_at_resolves_the_holder_at_the_turns_own_time(actions: Actions) -> None:
+    minted = await ensure_seat(actions, house=None, handle="succession-test-seat",
+                                source="test")
+    seat = minted["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:first-holder", source="test")
+    t1 = await actions.pool.fetchval(
+        "SELECT l.first_seen FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND l.valid_until IS NULL", seat)
+    await bind_holder(actions, seat_id=seat, agent_id="agent:second-holder", source="test")
+    t2 = await actions.pool.fetchval(
+        "SELECT l.first_seen FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' AND l.valid_until IS NULL", seat)
+    assert await _held_by_at(actions.pool, seat, t1) == "agent:first-holder"
+    assert await _held_by_at(actions.pool, seat, t2) == "agent:second-holder"
+
+
+async def test_recover_stamps_seat_and_the_point_in_time_holder(actions: Actions) -> None:
+    minted = await ensure_seat(actions, house=None, handle="recover-test-seat", source="test")
+    seat = minted["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:recover-holder", source="test")
+    observed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    line = _line(
+        type="assistant", timestamp=observed_at,
+        message={"content": [
+            {"type": "tool_use", "name": "SendMessage",
+             "input": {"to": "adbf9df793f4d1264", "message": "pick up here"}},
+        ]})
+    await _seed_soul(
+        actions, "anchorA4", [line],
+        source_path="/home/x/.claude/projects/-home-asuramaya--osiris-seats-recover-test-seat/"
+                    "abc12345.jsonl")
     await recover_harness_exchanges(actions.pool, "anchorA4", dry_run=False, because="test")
     row = await actions.pool.fetchrow(
-        "SELECT to_resolved FROM harness_messages WHERE anchor_sid='anchorA4'")
-    assert row["to_resolved"] == "agent:ra-test"
+        "SELECT seat, held_seat FROM harness_messages WHERE anchor_sid='anchorA4'")
+    assert row["seat"] == seat
+    assert row["held_seat"] == "agent:recover-holder"
 
 
 # --- adoption_share: honest "unknown", never a false zero ------------------------------------
@@ -168,7 +225,7 @@ async def test_adoption_share_computes_the_real_split(actions: Actions) -> None:
                      [_ASSISTANT_WITH_SEND, _ASSISTANT_MALFORMED_SEND])
     # give the malformed one a real message too, via direct insert, to get 3 harness sends
     await actions.pool.execute(
-        "INSERT INTO harness_messages (anchor_sid, turn_index, to_raw, message) "
+        "INSERT INTO harness_messages (anchor_sid, turn_index, harness_to, message) "
         "VALUES ('anchorB1', 5, 'x', 'm1'), ('anchorB1', 6, 'x', 'm2')")
     await recover_harness_exchanges(actions.pool, "anchorB1", dry_run=False, because="test")
     await actions.pool.execute(

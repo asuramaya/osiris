@@ -13,16 +13,32 @@ against this table, per anchor_sid.
 Reuses the soul store rather than re-parsing transcripts from disk — a session must
 already be soul-stored (SoulStore.ingest_path) before it can be recovered; this module
 never touches a jsonl file directly.
+
+Attribution is keyed on the SEAT, never `job_dir` fragments (decision d394c5f7, Thoth's
+ruling DM 5383, migration 0053): confirmed live that `job_dir` persists across
+`--resume`/compaction while a seat's own occupant can change mid-thread. `_office_slug`
+reads the seat handle out of `soul_sessions.source_path`'s own dashed project-directory
+name (present once a seat has gone through `establish_office`); `seat` and `held_seat`
+are recorded as two SEPARATE facts — the durable seat, and whoever the `holds` link says
+occupied it at the turn's own `observed_at` — never merged into one guess. The harness's
+own `to` field (SendMessage's 17-hex handle) lives in a different identifier space
+entirely and is stored verbatim as `harness_to`, audit data only, never mapped to an
+osiris id.
 """
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
 import asyncpg
 
+from src.orchestrator.seats import seats_by_handle
+
 _SEND_TOOL = "SendMessage"
+
+_SEAT_OFFICE_RE = re.compile(r"seats-([a-z0-9][a-z0-9_-]*)$")
 
 
 def extract_harness_sends(raw_lines: list[str]) -> list[dict[str, Any]]:
@@ -62,19 +78,44 @@ def extract_harness_sends(raw_lines: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-async def _resolve_session_ref(pool: asyncpg.Pool, ref: str) -> str | None:
-    """BEST EFFORT ONLY: the harness's own `to`/session identifiers are bare hex
-    fragments (a job_dir key or a full session id), never a osiris canonical — this
-    matches the SAME job_dir-basename convention `registry_census`/`SessionLocator`
-    already rely on (`anchor_sid` == `Path(job_dir).name`'s leading 8 chars). A ref that
-    matches nothing live (or historical) resolves to None — the raw value is never lost,
-    only the resolved column stays empty."""
-    frag = ref.strip().lower()[:8]
-    if len(frag) < 6:  # too short to trust as a real fragment match
+def _office_slug(source_path: str) -> str | None:
+    """The seat handle embedded in a harness transcript's own project-directory name.
+    Claude Code dashes the session's full `cwd` into that directory (ruling d394c5f7):
+    once a seat has gone through `establish_office`, its sessions run from
+    `~/.osiris/seats/<handle>/...`, which becomes `...--osiris-seats-<handle>...` —
+    durable across `--resume`/compaction (unlike `job_dir`, which is per-boundary) and
+    exactly what a mid-thread identity change (Ptah's own case) needs. Returns None for
+    a session that never ran from an established office — nothing to slug."""
+    parent = source_path.rsplit("/", 1)[0] if "/" in source_path else source_path
+    m = _SEAT_OFFICE_RE.search(parent)
+    return m.group(1) if m else None
+
+
+async def _resolve_seat(pool: asyncpg.Pool, source_path: str | None) -> str | None:
+    """The durable Seat canonical this session's office belongs to — never job_dir
+    fragments (ruling d394c5f7). None when the transcript carries no office slug, or
+    when the slug names a twin (2+ active seats sharing a handle) — an ambiguity is
+    reported, never silently arbitrated (`seats_by_handle`'s own law)."""
+    if not source_path:
         return None
+    slug = _office_slug(source_path)
+    if not slug:
+        return None
+    seats = await seats_by_handle(pool, slug)
+    return seats[0] if len(seats) == 1 else None
+
+
+async def _held_by_at(pool: asyncpg.Pool, seat: str, observed_at: datetime) -> str | None:
+    """WHO held `seat` at `observed_at` — the `holds` link's own temporal validity
+    (`first_seen`/`valid_until`), never "now" (ruling d394c5f7: record the point-in-time
+    holder distinct from the durable seat, so a mid-thread succession — Ptah's own case —
+    reads as two honest facts, not one merged guess)."""
     result = await pool.fetchval(
-        "SELECT agent_id FROM agent_mounts WHERE job_dir ~ ('/' || $1) "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", frag)
+        "SELECT f.canonical FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' "
+        "AND l.first_seen <= $2 AND (l.valid_until IS NULL OR l.valid_until > $2) "
+        "ORDER BY l.first_seen DESC LIMIT 1", seat, observed_at)
     return str(result) if result is not None else None
 
 
@@ -118,23 +159,23 @@ async def recover_harness_exchanges(
     if not todo:
         return {"found": len(found), "already_recovered": len(found) - len(todo),
                "written": 0, "sample": sample}
-    from_agent = await pool.fetchval(
-        "SELECT agent_id FROM agent_mounts WHERE job_dir ~ ('/' || $1) "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", anchor_sid[:8])
+    source_path = await pool.fetchval(
+        "SELECT source_path FROM soul_sessions WHERE anchor_sid=$1", anchor_sid)
+    seat = await _resolve_seat(pool, source_path)
     rows = []
     for r in todo:
-        to_resolved = await _resolve_session_ref(pool, r["to"])
         observed_at: datetime | None = None
         if r["observed_at"]:
             try:
                 observed_at = datetime.fromisoformat(r["observed_at"].replace("Z", "+00:00"))
             except ValueError:
                 observed_at = None
-        rows.append((anchor_sid, r["turn_index"], from_agent, r["to"], to_resolved,
+        held_seat = await _held_by_at(pool, seat, observed_at) if seat and observed_at else None
+        rows.append((anchor_sid, r["turn_index"], seat, held_seat, r["to"],
                      r["summary"], r["message"], observed_at))
     await pool.executemany(
         "INSERT INTO harness_messages "
-        "  (anchor_sid, turn_index, from_agent, to_raw, to_resolved, summary, message, "
+        "  (anchor_sid, turn_index, seat, held_seat, harness_to, summary, message, "
         "   observed_at) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
         "ON CONFLICT (anchor_sid, turn_index) DO NOTHING",
