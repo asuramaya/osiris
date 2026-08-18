@@ -1155,6 +1155,112 @@ async def test_retire_stale_handoffs_skips_a_candidate_with_a_truncated_walk(
     assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched
 
 
+async def test_retire_stale_handoffs_dry_run_names_the_population_without_writing(
+    actions: Actions,
+) -> None:
+    """#150 backlog disposition (Thoth msg 5254): dry_run=True must report the EXACT same
+    `retired` population a live call would touch — same query, same lineage_root walk —
+    but never call assert_property, so a preview can be trusted byte-for-byte against the
+    execute that follows it."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    old = await _settle_as(
+        actions.pool, "agent:dryformat",
+        decisions=[{"summary": "dryformat's own state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    old_id = old["accepted"]["decisions"][0]["id"]
+    await _succeed(actions, "agent:dryformat-g40-g40", "agent:dryformat")
+
+    preview = await srv._retire_stale_handoffs(
+        actions.pool, "agent:dryformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC),
+        dry_run=True)
+    assert old_id in preview["retired"]
+    assert preview["dry_run"] is True
+    assert await _is_handoff_value(actions.pool, old_id) == "true"  # UNTOUCHED by the preview
+
+    receipt = await srv._retire_stale_handoffs(
+        actions.pool, "agent:dryformat-g40-g40", uuid_mod.UUID(int=0), datetime.now(UTC))
+    assert receipt["retired"] == preview["retired"]
+    assert receipt["dry_run"] is False
+    assert await _is_handoff_value(actions.pool, old_id) == "false"  # the live run DOES write
+
+
+# ═══ _retire_handoff_backlog — the fleet-wide #150 disposition, Thoth msg 5254 ═══
+# composed entirely from _retire_stale_handoffs (one lineage-root walk implementation,
+# never a second mutation path); groups every live is_handoff='true' record by root and
+# keeps the newest per root.
+
+async def test_retire_handoff_backlog_keeps_newest_per_root_and_leaves_others_alone(
+    actions: Actions,
+) -> None:
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    older = await _settle_as(
+        actions.pool, "agent:backlogfleet",
+        decisions=[{"summary": "backlogfleet's older state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    older_id = older["accepted"]["decisions"][0]["id"]
+    newer = await _settle_as(
+        actions.pool, "agent:backlogfleet",
+        decisions=[{"summary": "backlogfleet's newer state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    newer_id = newer["accepted"]["decisions"][0]["id"]
+
+    lone = await _settle_as(
+        actions.pool, "agent:backlogsolo",
+        decisions=[{"summary": "backlogsolo's only state of the board", "kind": "choice",
+                   "is_handoff": True}])
+    lone_id = lone["accepted"]["decisions"][0]["id"]
+
+    preview = await srv._retire_handoff_backlog(actions.pool, datetime.now(UTC), dry_run=True)
+    assert preview["ok"] is True
+    assert preview["dry_run"] is True
+    receipt_for_fleet = next(r for r in preview["receipts"] if r["keep"] == newer_id)
+    assert older_id in receipt_for_fleet["retired"]
+    assert newer_id not in receipt_for_fleet["retired"]
+    assert not any(lone_id in r["retired"] for r in preview["receipts"])
+    # dry run never writes
+    assert await _is_handoff_value(actions.pool, older_id) == "true"
+    assert await _is_handoff_value(actions.pool, newer_id) == "true"
+    assert await _is_handoff_value(actions.pool, lone_id) == "true"
+
+    executed = await srv._retire_handoff_backlog(actions.pool, datetime.now(UTC), dry_run=False)
+    assert executed["ok"] is True
+    assert await _is_handoff_value(actions.pool, older_id) == "false"
+    assert await _is_handoff_value(actions.pool, newer_id) == "true"  # kept
+    assert await _is_handoff_value(actions.pool, lone_id) == "true"  # untouched, only one
+
+
+async def test_retire_handoff_backlog_refuses_whole_run_on_any_incomplete_walk(
+    actions: Actions,
+) -> None:
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    cur = "agent:backlogdeep0"
+    for i in range(1, 5):
+        nxt = f"agent:backlogdeep{i}"
+        await _succeed(actions, nxt, cur)
+        cur = nxt
+    deep_handoff = await _settle_as(
+        actions.pool, cur,
+        decisions=[{"summary": "a deep-chain lineage's own state of the board",
+                   "kind": "choice", "is_handoff": True}])
+    deep_id = deep_handoff["accepted"]["decisions"][0]["id"]
+
+    receipt = await srv._retire_handoff_backlog(
+        actions.pool, datetime.now(UTC), dry_run=True, max_hops=2)
+    assert receipt["ok"] is False
+    assert cur in receipt["incomplete_authors"]
+    assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched, whole run refused
+
+
 # ═══ _resolve_acked_handoff_threads — the retroactive backfill, msg 4673/decision 4bf6d835 ═══
 # ack_handoff's own status-resolution fix (this same dispatch) only covers FUTURE acks; this
 # is the one-time cleanup for the population that accumulated before it existed. Same shape
