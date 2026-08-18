@@ -1548,7 +1548,16 @@ async def cmd_deploy(
                   f"— {exc}. NOTHING was restarted.", file=sys.stderr)
             return 1
     try:
-        from src.orchestrator.deploy_guard import check_diverged_since_last_deploy
+        from src.orchestrator.deploy_guard import (
+            _DEPLOY_CURSOR_KEY,
+            check_diverged_since_last_deploy,
+        )
+        from src.orchestrator.monitor import get_cursor
+
+        # Captured BEFORE `record_deploy` below overwrites this same cursor to the NEW
+        # HEAD (obligation 8752024d) — merge_claim_hygiene needs the ref THIS deploy is
+        # walking FROM, not the one it's about to record itself as having reached.
+        previously_deployed = await get_cursor(pool, _DEPLOY_CURSOR_KEY)
 
         diverged = await check_diverged_since_last_deploy(pool, repo_root=root)
         if diverged:
@@ -1644,7 +1653,7 @@ async def cmd_deploy(
         )
         print(await origin_visibility(root))
         print(await local_ref_hygiene(root))
-        print(await merge_claim_hygiene(root))
+        print(await merge_claim_hygiene(root, since=previously_deployed))
         print(await venv_import_hygiene(root))
 
         from scripts.push_guard import hook_status
