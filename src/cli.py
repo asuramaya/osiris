@@ -1541,9 +1541,14 @@ async def cmd_deploy(
         else:
             print("compositions: up to date")
 
-        from src.orchestrator.deploy_guard import local_ref_hygiene, origin_visibility
+        from src.orchestrator.deploy_guard import (
+            local_ref_hygiene,
+            merge_claim_hygiene,
+            origin_visibility,
+        )
         print(await origin_visibility(root))
         print(await local_ref_hygiene(root))
+        print(await merge_claim_hygiene(root))
 
         from scripts.push_guard import hook_status
         print(hook_status(root))

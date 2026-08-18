@@ -21,6 +21,7 @@ from src.orchestrator.deploy_guard import (
     check_unreviewed_boot,
     diverged_since_last_deploy,
     local_ref_hygiene,
+    merge_claim_hygiene,
     origin_visibility,
     schema_drift,
     unreviewed_boot,
@@ -964,3 +965,58 @@ async def test_local_ref_hygiene_includes_tags_as_intended(small_repo: Path) -> 
 async def test_local_ref_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
     note = await local_ref_hygiene(tmp_path)
     assert "UNKNOWN" in note
+
+
+# ── merge_claim_hygiene (Sekhmet's fd3a703 specimen, msg 5201, thread #175/#180) ────────────
+
+async def test_merge_claim_hygiene_verifies_a_real_merge(small_repo: Path) -> None:
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-x")
+    _commit(small_repo, "the actual work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
+    note = await merge_claim_hygiene(small_repo)
+    assert note == "merge claim: 'feature-x' verified — an actual ancestor of HEAD"
+
+
+async def test_merge_claim_hygiene_catches_a_false_claim(small_repo: Path) -> None:
+    """Sekhmet's own specimen, reproduced exactly: a branch named in the subject that was
+    never actually merged — fd3a703 claimed sekhmet-launch-resume-fix and never contained
+    it. A plain commit whose SUBJECT follows the convention but whose PARENT is not the
+    named branch's tip is indistinguishable from that incident by prose alone."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-y")
+    _commit(small_repo, "work nobody actually merged")
+    _git(small_repo, "checkout", "-q", "-")
+    _commit(small_repo, "merge feature-y: claims the merge, never happened")
+    note = await merge_claim_hygiene(small_repo)
+    assert note == ("merge claim: ⚠ HEAD's subject names 'feature-y' but it is NOT an "
+                    "ancestor — the exact shape of fd3a703's own specimen (named, never merged)")
+
+
+async def test_merge_claim_hygiene_nothing_to_verify_off_a_plain_commit(
+    small_repo: Path,
+) -> None:
+    _commit(small_repo, "just ordinary work, no merge claim in the subject")
+    note = await merge_claim_hygiene(small_repo)
+    assert "nothing to verify" in note
+
+
+async def test_merge_claim_hygiene_unverifiable_when_the_named_branch_is_gone(
+    small_repo: Path,
+) -> None:
+    """The common, innocent case: a merged feature branch gets deleted afterward. Absence of
+    the branch must never read as a false claim — it is simply unverifiable now."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-z")
+    _commit(small_repo, "work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge feature-z: cleaned up after", "feature-z")
+    _git(small_repo, "branch", "-D", "feature-z")
+    note = await merge_claim_hygiene(small_repo)
+    assert "no longer exists locally" in note and "not assumed false" in note
+
+
+async def test_merge_claim_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) -> None:
+    note = await merge_claim_hygiene(tmp_path)
+    assert "nothing to verify" in note

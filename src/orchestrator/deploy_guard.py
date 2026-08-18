@@ -442,3 +442,53 @@ async def local_ref_hygiene(repo_root: Path) -> str:
     stray_note = (f"{len(stray)} ref(s) outside refs/heads|tags|remotes: {', '.join(stray)}"
                   if stray else "no refs outside refs/heads, refs/tags, or refs/remotes")
     return f"ref hygiene: {stray_note}; {counts_note}"
+
+
+_MERGE_SUBJECT_BRANCH = re.compile(r"^merge\s+([^\s:]+)")  # stop at whitespace OR a directly-
+# attached colon ("merge foo: did the thing") — both shapes appear in this house's own log
+
+
+async def merge_claim_hygiene(repo_root: Path) -> str:
+    """THE UNVERIFIED CLAIM (Sekhmet's specimen, msg 5201, thread #175/#180): commit fd3a703's
+    own subject line read "merge sekhmet-launch-resume-fix + ratchet ..." — but
+    `sekhmet-launch-resume-fix`'s tip was never actually an ancestor of fd3a703; the merge
+    claimed a branch it never contained. This house's merge commits follow one convention
+    consistently (sampled 20 recent: every single one) — the subject starts `merge
+    <branch-name>` — so the claim is MECHANICALLY CHECKABLE: `git merge-base --is-ancestor
+    <branch> HEAD` is either true or it isn't, no prose-reading required.
+
+    NEVER REFUSES (577988ed, same fail-open discipline as `origin_visibility`/
+    `local_ref_hygiene` beside it): a git failure, HEAD not being a merge subject shape, or
+    the named branch no longer existing (deleted after merging, the common case) all degrade
+    to a quiet 'nothing to verify' or 'unknown', never a blocked deploy — this is read-only
+    corroboration of a claim already made, not a gate on making one.
+
+    ONLY THE FIRST NAMED BRANCH is checked: the convention names exactly one real branch per
+    merge (a "five-branch wave" commit still only merges ONE branch as its actual second git
+    parent — the rest of the subject is prose about a ratchet or a batch, not more branches),
+    and Sekhmet's own specimen was a single mis-claim, not a list."""
+    head = await asyncio.to_thread(
+        subprocess.run, ["git", "rev-parse", "HEAD"], cwd=repo_root,
+        capture_output=True, text=True, timeout=5, check=False)
+    if head.returncode != 0:
+        return "merge claim: HEAD unknown, nothing to verify"
+    subject = (await asyncio.to_thread(
+        subprocess.run, ["git", "log", "-1", "--format=%s"], cwd=repo_root,
+        capture_output=True, text=True, timeout=5, check=False)).stdout.strip()
+    match = _MERGE_SUBJECT_BRANCH.match(subject)
+    if not match:
+        return "merge claim: HEAD's subject doesn't name a branch, nothing to verify"
+    branch = match.group(1)
+    exists = await asyncio.to_thread(
+        subprocess.run, ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_root, capture_output=True, text=True, timeout=5, check=False)
+    if exists.returncode != 0:
+        return (f"merge claim: HEAD names {branch!r} but that branch no longer exists locally "
+                "— unverifiable, not assumed false")
+    proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, head.stdout.strip())
+    if proof is None:
+        return f"merge claim: {branch!r} named, ancestry check inconclusive — unknown, not assumed"
+    if proof:
+        return f"merge claim: {branch!r} verified — an actual ancestor of HEAD"
+    return (f"merge claim: ⚠ HEAD's subject names {branch!r} but it is NOT an ancestor — "
+            "the exact shape of fd3a703's own specimen (named, never merged)")
