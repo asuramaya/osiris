@@ -16,8 +16,10 @@ store.py's `_chain_hash`) now computes directly over these raw bytes rather than
 `str.encode("utf-8")` re-derivation — one less place fidelity could silently drift.
 
 Existing rows (if any — this table is young, task #51 shipped 2026-08-17) cast cleanly:
-`raw_line::bytea` re-encodes the current `text` value through the server's own UTF8
-encoding, which is exactly what `_chain_hash`'s own prior `.encode("utf-8")` step already
+`convert_to(raw_line, 'UTF8')` re-encodes the current `text` value through the server's own
+UTF8 encoding (NOT `::bytea` — that cast parses text as bytea INPUT SYNTAX and rejected the
+live rows on first deploy, 2026-08-18; convert_to is the exact inverse of downgrade's
+convert_from), which is exactly what `_chain_hash`'s own prior `.encode("utf-8")` step already
 assumed every stored row could survive.
 
 Revision ID: 0052
@@ -33,7 +35,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TABLE soul_lines ALTER COLUMN raw_line TYPE bytea USING raw_line::bytea")
+        "ALTER TABLE soul_lines ALTER COLUMN raw_line TYPE bytea USING convert_to(raw_line, 'UTF8')")
 
 
 def downgrade() -> None:
