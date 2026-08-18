@@ -3072,6 +3072,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `ghost_status` ('false_dead' when the SAME cwd also shows no live graph node above —
     harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own.
 
+    `landing_audit`: a read-only glance at deploy_guard.landing_audit's own counts — branches
+    unmerged into main with no held-work claim, and Decision/Thread text claiming a landing
+    git disagrees with. Durable obligations mint at deploy time; this is just the count.
+
     PROJECT GROUPING NORMALIZES THROUGH `merged_into` (task #180 piece 2 (f)): a raw label
     naming a project that has since been folded into another (repo:henry->repo:shellbiz)
     renders under the SURVIVOR's live label, not the dead one — best-effort, degrades to the
@@ -3274,6 +3278,30 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "rowless_count": census_report.get("rowless_count", 0),
         "bodies": bodies,
     }
+    # THE LANDING AUDIT, READ-ONLY GLANCE (Thoth dispatch msg 5339): `osiris deploy` mints
+    # the durable obligations (deploy_guard.landing_audit); this is just the at-a-glance
+    # count so a coordinator sees it here too, without a second call or waiting for orient's
+    # open-obligations list. Same fail-open law as os_bodies/harness_registry beside it.
+    try:
+        from src.orchestrator import capture as _capture
+        from src.orchestrator.deploy_guard import (
+            _REPO_ROOT as _DG_REPO_ROOT,
+        )
+        from src.orchestrator.deploy_guard import (
+            audit_graph_merge_claims,
+            stale_unmerged_branches,
+        )
+        _held = await _capture.open_held_work(pool)
+        _claimed = {h["branch"] for h in _held if h.get("branch")}
+        landing_audit: dict[str, Any] = {
+            "stale_unmerged_branches": len(
+                await stale_unmerged_branches(_DG_REPO_ROOT, claimed=_claimed)),
+            "graph_claim_mismatches": len(
+                await audit_graph_merge_claims(pool, _DG_REPO_ROOT)),
+        }
+    except Exception:  # noqa: BLE001
+        landing_audit = {"stale_unmerged_branches": 0, "graph_claim_mismatches": 0,
+                         "error": "landing audit glance unavailable"}
     from src.orchestrator.seats import fleet_occupancy
     seats = await fleet_occupancy(pool)
     # WHISPER HEALTH (task #179): recent whisper/session-end/precompact/stophook alarm
@@ -3347,6 +3375,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
         "whisper_health": whisper,
         "harness_registry": harness_registry,
+        "landing_audit": landing_audit,
         "pool_health": pool_health,
         # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
         # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
