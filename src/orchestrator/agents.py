@@ -1542,22 +1542,34 @@ async def nearest_handoff_ancestor(
     return None, False  # max_hops exhausted — stopped looking, not "nothing to find"
 
 
+_LOCK_TIMEOUT = "5s"  # #172: a genuinely wedged holder fails waiters loud, not silent
+
+
 @asynccontextmanager
 async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None]:
     """Serialize generation-minting per LINEAGE (a pg advisory lock on the root). Two
     concurrent seam observers minted Soundwave VI and VII in the SAME SECOND with identical
     seam strings (2026-07-14): each walked the head, each minted, and the loser's head-walk
     found the winner's fresh mint — so the race STACKED generations instead of converging.
-    The lock lives on one dedicated connection (advisory locks are session-scoped in PG);
-    the caller must re-read its evidence INSIDE the lock so the loser sees the winner's
-    write and concludes no-op."""
-    async with pool.acquire() as conn:
-        await conn.execute("SELECT pg_advisory_lock(hashtext($1))", f"mint:{lineage_root}")
+    The caller must re-read its evidence INSIDE the lock so the loser sees the winner's
+    write and concludes no-op.
+
+    XACT-scoped (#172, the fleet-wide wedge 2026-08-18 00:08-00:23Z): pg_advisory_lock on a
+    borrowed pool connection relied on a Python finally to unlock — a cancelled/wedged
+    coroutine could return the connection to the pool still holding it (advisory locks are
+    session-scoped, unaffected by asyncpg's connection.reset()). pg_advisory_xact_lock inside
+    an explicit transaction dies with the transaction instead — no finally needed — and a
+    short SET LOCAL lock_timeout makes a genuinely wedged holder fail waiters loud."""
+    key = f"mint:{lineage_root}"
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         try:
-            yield
-        finally:
-            await conn.execute(
-                "SELECT pg_advisory_unlock(hashtext($1))", f"mint:{lineage_root}")
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
+        except asyncpg.exceptions.LockNotAvailableError as exc:
+            raise TimeoutError(
+                f"mint_lock: {key!r} still held past {_LOCK_TIMEOUT} — another mint is "
+                "genuinely in flight (or wedged)") from exc
+        yield
 
 
 # For the source_model property, the resolution METHOD is the provenance, and (ruling 17516660)
