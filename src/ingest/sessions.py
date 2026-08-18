@@ -586,6 +586,33 @@ def locate_current_transcript(
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+def cwd_of_transcript(root: Path | None = None, job_dir: str | None = None) -> str | None:
+    """This session's own cwd, read directly off its transcript — never a mount row (#178
+    piece b's self-restore primitive: a job_dir with NO agent_mounts row still has a real
+    cwd recorded in its own transcript's turns, PROVIDED the session genuinely ran before).
+    `anchored_only=True` always (via `locate_current_transcript`): a neighbor's transcript
+    read as ours would restore the WRONG identity — worse than refusing to restore at all,
+    the same law `current_model`'s own identity-path callers already follow. None when no
+    transcript anchors to `job_dir` (genuinely never mounted) or none of its lines ever
+    carried a `cwd` field (malformed/empty transcript)."""
+    root = root or (Path.home() / ".claude/projects")
+    path = locate_current_transcript(root, job_dir, anchored_only=True)
+    if path is None:
+        return None
+    try:
+        lines = path.read_text("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for raw in lines:
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(d, dict) and d.get("cwd"):
+            return str(d["cwd"])
+    return None
+
+
 def model_of_transcript(path: Path) -> tuple[str | None, list[str], bool]:
     """(current model, distinct-model history, operator-swapped) for ONE transcript: the tail
     gives the current model (cheap on a large file), the whole file gives the swap history AND

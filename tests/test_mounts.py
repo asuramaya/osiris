@@ -198,6 +198,55 @@ async def test_reattach_resolves_project_from_the_seat_when_cwd_yields_none(
     srv._agents.pop("sid:bounced", None)  # leave no global residue for other tests
 
 
+# ═══ #178 piece (b): the transcript self-restore — no row survives under this anchor (or
+# its resume-bridge), but a REAL transcript proves the session actually ran before, so
+# _reattach restores rather than bouncing [unknown-anchor · TERMINAL] ═══
+
+
+async def test_reattach_self_restores_from_a_real_transcript_when_no_row_survives(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact live shape this piece exists for: a body genuinely ran before (a real
+    transcript proves it) but its agent_mounts row is gone — session_end's own release, a
+    daemon re-adopt, an evicted row. No prior MountRecord exists at all (unlike the bounce
+    tests above, which all start from a saved row) — restore must derive identity FROM
+    SCRATCH, off the transcript's own cwd, and mint a fresh row for this exact job_dir."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / "jobs" / "restore1")
+    restored_cwd = str(tmp_path / "demo")
+    monkeypatch.setattr(
+        "src.ingest.sessions.cwd_of_transcript",
+        lambda root=None, job_dir=None: restored_cwd)
+
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None  # nothing yet
+    srv._agents.pop("sid:restored", None)
+    ident = await srv._reattach(actions.pool, "sid:restored", job_dir)
+    assert ident is not None
+    assert ident.agent_id == "agent:restore1"  # derived fresh off job_dir, not "" (the sentinel)
+    rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert rec is not None and rec.agent_id == ident.agent_id and rec.cwd == restored_cwd
+    srv._agents.pop("sid:restored", None)
+
+
+async def test_reattach_stays_none_when_no_transcript_exists_to_restore_from(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative control: no row, no bridge, AND no real transcript — genuinely never
+    mounted. Must stay None (the correct [unknown-anchor · TERMINAL] bounce), never invent
+    an identity from nothing."""
+    from src import mcp_server as srv
+
+    monkeypatch.setattr(
+        "src.ingest.sessions.cwd_of_transcript", lambda root=None, job_dir=None: None)
+
+    job_dir = str(tmp_path / "jobs" / "nevermnt")
+    srv._agents.pop("sid:nomatch", None)
+    ident = await srv._reattach(actions.pool, "sid:nomatch", job_dir)
+    assert ident is None
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is None  # nothing minted
+
+
 async def test_mount_tool_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
     """The explicit-mount leg of the binding (thread 33838160): the whisper tells a minted
     heir 're-mount with THIS anchor' — and automount left that very row BOUND to the heir's

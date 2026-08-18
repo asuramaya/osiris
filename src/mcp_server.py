@@ -774,13 +774,30 @@ async def _reattach(
         if rec is not None:
             adopted_from = rec.job_dir
     if rec is None:
-        return None
+        # #178 PIECE (B) — THE TRANSCRIPT SELF-RESTORE (Thoth dispatch msg 5224): no row
+        # survives under this anchor OR its resume-bridge (session_end's own release, a
+        # daemon re-adopt after a bounce, a genuinely evicted row) — but a REAL transcript
+        # proves this session actually ran before, which is proof enough to restore rather
+        # than bounce [unknown-anchor · TERMINAL] and force a fresh, unattributed re-mount.
+        # `cwd_of_transcript` is anchored-only (never a co-tenant's file — the same identity-
+        # path law `current_model` already follows): None here means genuinely never
+        # mounted, and the bounce below is the CORRECT answer, not a gap.
+        from src.ingest.sessions import cwd_of_transcript
+
+        restored_cwd = cwd_of_transcript(job_dir=job)
+        if restored_cwd is None:
+            return None
+        rec = mounts.MountRecord(job_dir=job, agent_id="", project=None, cwd=restored_cwd,
+                                 model=None)
     settings = get_settings()
     # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29);
     # fail-open — a store outage re-attaches with an unobserved model, never a bounce
     reading = await identity_reading(pool, cwd=rec.cwd, job_dir=rec.job_dir)
     ident = resolve_identity(cwd=rec.cwd, job_dir=rec.job_dir, store_reading=reading)
-    if _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
+    # rec.agent_id == "" is the piece-(b) self-restore's own sentinel (mounts.MountRecord
+    # minted above with no PRIOR row to have bound a seat on) — nothing to honor, the
+    # freshly-derived ident is definitionally the right answer, so this check must not fire.
+    if rec.agent_id and _generation(rec.agent_id)[0] != _generation(ident.agent_id)[0]:
         # a BOUND session (thread 33838160): the row points at a deliberately-worn SEAT of a
         # different lineage — honor it. Re-deriving from the transcript here was the flap
         # that stomped a claimed seat back to its session hash on every silent reconnect.
