@@ -3988,7 +3988,7 @@ async def test_mint_lock_wedged_waiter_fails_loud_named(
     task = asyncio.create_task(_hold())
     await holder_ready.wait()
     try:
-        with pytest.raises(TimeoutError):
+        with pytest.raises(LockWedged):
             async with mint_lock(actions.pool, "agent:wedge-timeout"):
                 pass
     finally:

@@ -1560,13 +1560,15 @@ async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None
     session-scoped, unaffected by asyncpg's connection.reset()). pg_advisory_xact_lock inside
     an explicit transaction dies with the transaction instead — no finally needed — and a
     short SET LOCAL lock_timeout makes a genuinely wedged holder fail waiters loud."""
+    from src.orchestrator.seats import LockWedged
+
     key = f"mint:{lineage_root}"
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         try:
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
         except asyncpg.exceptions.LockNotAvailableError as exc:
-            raise TimeoutError(
+            raise LockWedged(
                 f"mint_lock: {key!r} still held past {_LOCK_TIMEOUT} — another mint is "
                 "genuinely in flight (or wedged)") from exc
         yield
