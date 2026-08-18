@@ -68,17 +68,38 @@ _LIVE_SECS = 900
 _OPERATOR_ACTORS = {"operator", "analyst:operator", "console"}
 
 
+# fleet-wide wedge, #172 (2026-08-18 00:08-00:23Z): pg_advisory_lock on a BORROWED pool
+# connection relies on a Python finally to unlock — a cancelled/wedged coroutine can return
+# the connection to the pool still holding the lock (advisory locks are session-scoped, not
+# reset by asyncpg's connection.reset()), and the next unrelated borrower inherits it. Every
+# advisory lock in this file is now XACT-scoped (pg_advisory_xact_lock inside an explicit
+# transaction): the lock dies with the transaction — COMMIT, ROLLBACK, or the connection
+# dropping on cancellation all release it, no finally required. A short SET LOCAL
+# lock_timeout means a genuinely wedged holder makes waiters fail LOUD with a named error
+# instead of silently parking for however long the fleet keeps retrying.
+_LOCK_TIMEOUT = "5s"
+
+
+class LockWedged(TimeoutError):
+    """An advisory lock wasn't acquired within lock_timeout — named so a caller (or the
+    fleet reading the error) can tell "someone else is genuinely still working this key"
+    apart from a generic timeout or a connection failure."""
+
+
 @asynccontextmanager
 async def _seat_lock(pool: asyncpg.Pool, house: str, handle: str) -> AsyncIterator[None]:
     """Serialize ensure_seat per (house, handle) — the same advisory-lock discipline as
     mint_lock (two concurrent ensures would otherwise both find nothing and mint twins)."""
     key = f"seat:{house or ''}/{handle.lower()}"
-    async with pool.acquire() as conn:
-        await conn.execute("SELECT pg_advisory_lock(hashtext($1))", key)
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         try:
-            yield
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
+        except asyncpg.exceptions.LockNotAvailableError as exc:
+            raise LockWedged(
+                f"_seat_lock: {key!r} still held past {_LOCK_TIMEOUT} — another "
+                "ensure_seat is genuinely in flight (or wedged)") from exc
+        yield
 
 
 @asynccontextmanager
@@ -92,14 +113,16 @@ async def _peer_lock(pool: asyncpg.Pool, *canonicals: str) -> AsyncIterator[None
     peer_seats(A, B) racing a peer_seats(B, C) — always acquire their shared seat (B) in the
     same order and never deadlock against each other."""
     keys = sorted({f"peer:{c}" for c in canonicals})
-    async with pool.acquire() as conn:
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         for key in keys:
-            await conn.execute("SELECT pg_advisory_lock(hashtext($1))", key)
-        try:
-            yield
-        finally:
-            for key in reversed(keys):
-                await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+            try:
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
+            except asyncpg.exceptions.LockNotAvailableError as exc:
+                raise LockWedged(
+                    f"_peer_lock: {key!r} still held past {_LOCK_TIMEOUT} — another "
+                    "peer_seats is genuinely in flight (or wedged)") from exc
+        yield
 
 
 async def find_seat(pool: asyncpg.Pool, *, house: str | None, handle: str) -> str | None:
