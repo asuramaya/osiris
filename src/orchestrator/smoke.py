@@ -9,6 +9,7 @@ Kept deliberately dumb: no retries, no thresholds, no alarms of its own — a pr
 what it saw, the caller (the MCP tool wrapper, or the CLI) decides what to do about it."""
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -63,13 +64,57 @@ async def smoke_pool(pool: asyncpg.Pool) -> str:
         return f"error: {e}"
 
 
+async def whisper_health(pool: asyncpg.Pool, *, window_hours: int = 24) -> dict[str, Any]:
+    """READ-ONLY (kept dumb, same law as every other probe here): the whisper/session-end/
+    precompact/stophook hooks each file a failure into the EXISTING blind-spot channel
+    (task #34, `capture.record_hook_failure`) when they fail — this only reads that back,
+    adding no new counter or table (task #179). `error_count` is the number of failure
+    assertions across `capture.HOOK_ALARM_SURFACES` within `window_hours`; `last_error`
+    names which surface, what it said, and when. `ok` is `error_count == 0` — a hook that
+    never failed in the window leaves nothing here to find, same as a route that was never
+    hit. This is NOT a positive probe (it cannot prove the whisper is UP, only that it
+    hasn't confessed to being down) — `cmd_deploy`'s own synthetic /automount check is the
+    closest thing to an active probe."""
+    from src.orchestrator.capture import HOOK_ALARM_SURFACES
+
+    since = datetime.now(UTC) - timedelta(hours=window_hours)
+    error_count = 0
+    last_error: dict[str, Any] | None = None
+    try:
+        for surface in HOOK_ALARM_SURFACES:
+            obj_id = await pool.fetchval(
+                "SELECT o.id FROM objects o WHERE o.type='BlindSpot' AND EXISTS "
+                "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+                " AND a.name='surface' AND a.value #>> '{}' = $1)", surface)
+            if obj_id is None:
+                continue
+            rows = await pool.fetch(
+                "SELECT value #>> '{}' AS text, observed_at FROM assertions "
+                "WHERE object_id=$1 AND name='cannot_see' AND observed_at > $2 "
+                "ORDER BY observed_at DESC", obj_id, since)
+            error_count += len(rows)
+            if rows and (last_error is None or rows[0]["observed_at"] > last_error["when"]):
+                last_error = {"surface": surface, "text": rows[0]["text"],
+                             "when": rows[0]["observed_at"]}
+    except Exception as e:  # noqa: BLE001 - report, never raise past this probe
+        return {"window_hours": window_hours, "ok": False,
+               "error": f"whisper_health probe itself failed: {e}"}
+    out: dict[str, Any] = {"window_hours": window_hours, "error_count": error_count,
+                           "ok": error_count == 0}
+    if last_error is not None:
+        out["last_error"] = {**last_error, "when": last_error["when"].isoformat()}
+    return out
+
+
 async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]:
-    """The whole picture: every chrome route + the pool, composed. `ok` is a single boolean a
-    deploy script can branch on without re-deriving the per-surface detail."""
+    """The whole picture: every chrome route + the pool + the whisper/hook alarm channel,
+    composed. `ok` is a single boolean a deploy script can branch on without re-deriving
+    the per-surface detail."""
     chrome = await smoke_chrome(client)
     db = await smoke_pool(pool)
-    ok = db == "ok" and all(v == "ok" for v in chrome.values())
-    return {"chrome": chrome, "db": db, "ok": ok}
+    whisper = await whisper_health(pool)
+    ok = db == "ok" and all(v == "ok" for v in chrome.values()) and whisper["ok"]
+    return {"chrome": chrome, "db": db, "whisper": whisper, "ok": ok}
 
 
 async def call_mcp_smoke(url: str) -> dict[str, Any] | str:
@@ -95,4 +140,10 @@ def summarize_failures(chrome: dict[str, str], mcp_result: dict[str, Any] | str)
             fails.append(f"osiris-mcp pool: {mcp_result.get('db')}")
         fails += [f"osiris-mcp's own chrome view {r}: {s}"
                   for r, s in (mcp_result.get("chrome") or {}).items() if s != "ok"]
+        whisper = mcp_result.get("whisper")
+        if isinstance(whisper, dict) and not whisper.get("ok"):
+            last = whisper.get("last_error")
+            detail = f" — last: {last['surface']}: {last['text']}" if last else ""
+            fails.append(f"whisper/hook alarms: {whisper.get('error_count', '?')} in "
+                        f"{whisper.get('window_hours', '?')}h{detail}")
     return fails

@@ -20,6 +20,7 @@ from src.cli import (
     _composition_gaps,
     _find_repo_root,
     _real_install_user_units,
+    _synthetic_automount_probe,
     _wait_for_health,
     _wait_for_smoke,
     alembic_gap_note,
@@ -1109,6 +1110,144 @@ async def _fake_wait_for_smoke() -> tuple[list[str], float]:
     return [], 0.0
 
 
+async def _fake_check_whisper_ok() -> tuple[bool, str]:
+    return True, "whisper probe: /automount round-tripped clean"
+
+
+# --- task #179: the deploy refuses to record on a bad whisper probe, same law as the -------
+# migration gate --------------------------------------------------------------------------
+
+async def test_cmd_deploy_refuses_to_record_when_the_whisper_probe_fails(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _bad_probe() -> tuple[bool, str]:
+        return False, "whisper probe: REFUSED — /automount returned 500: boom"
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the whisper probe refused first")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_unreachable,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_bad_probe)
+    assert out == 1
+    assert "REFUSED" in buf.getvalue()
+    assert "NOT recording this deploy" in buf.getvalue()
+
+
+async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    calls: list[Any] = []
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        calls.append(repo_root)
+        return "cafef00d"
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, record_deploy=_record_deploy,
+                           wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok)
+    assert calls == [tmp_path]
+    assert out == 0
+
+
+# --- _synthetic_automount_probe: the pure verdict logic, mocked transport ------------------
+
+async def test_synthetic_automount_probe_ok_on_a_clean_200() -> None:
+    import httpx
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"mounted": True})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test",
+    ) as client:
+        ok, note = await _synthetic_automount_probe(client)
+    assert ok is True
+    assert "round-tripped clean" in note
+
+
+async def test_synthetic_automount_probe_refuses_on_a_non_200() -> None:
+    import httpx
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/automount":
+            return httpx.Response(500, text="internal error")
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test",
+    ) as client:
+        ok, note = await _synthetic_automount_probe(client)
+    assert ok is False
+    assert "REFUSED" in note and "500" in note
+
+
+async def test_synthetic_automount_probe_refuses_on_a_200_with_an_error_body(
+) -> None:
+    """The exact silent-failure shape 33a3573 fixed once already (task #179's own headline):
+    a route that degrades to 200-with-error must never read as success here."""
+    import httpx
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/automount":
+            return httpx.Response(200, json={"error": "something went wrong"})
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test",
+    ) as client:
+        ok, note = await _synthetic_automount_probe(client)
+    assert ok is False
+    assert "something went wrong" in note
+
+
+async def test_synthetic_automount_probe_refuses_on_a_network_failure() -> None:
+    import httpx
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test",
+    ) as client:
+        ok, note = await _synthetic_automount_probe(client)
+    assert ok is False
+    assert "REFUSED" in note
+
+
+async def test_synthetic_automount_probe_still_refuses_when_cleanup_itself_fails() -> None:
+    """The /session-end cleanup call is best-effort — its own failure must never flip a
+    genuinely successful /automount into a false refusal, and must never crash the probe."""
+    import httpx
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/automount":
+            return httpx.Response(200, json={"mounted": True})
+        raise httpx.ConnectError("session-end unreachable")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler), base_url="http://test",
+    ) as client:
+        ok, note = await _synthetic_automount_probe(client)
+    assert ok is True
+    assert "round-tripped clean" in note
+
+
 async def test_cmd_deploy_refuses_on_a_dirty_src_tree(actions: Actions, tmp_path: Path) -> None:
     def _dirty(root: Path) -> list[tuple[str, str]]:
         return [(" M", "src/orchestrator/handshake.py")]
@@ -1153,7 +1292,8 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
         out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                                pool=actions.pool, list_tools=_list_tools,
                                wait_for_health=_fake_wait_for_health,
-                               wait_for_smoke=_fake_wait_for_smoke)
+                               wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [list(DEPLOY_UNITS)]
     # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
     # gap-reporting path without asserting exact names (that's composition_gap_notes' own
@@ -1193,7 +1333,8 @@ async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, record_deploy=_record_deploy,
                          wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [(actions.pool, tmp_path)]
     assert "deploy ledger: recorded deadbeef" in buf.getvalue()
 
@@ -1228,7 +1369,8 @@ async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert "deploy ledger: HEAD unknown — not recorded" in buf.getvalue()
 
 
@@ -1390,7 +1532,8 @@ async def test_cmd_deploy_applies_pending_migrations_before_restarting(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, migration_state=_state, run_migrations=_run,
                          wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert order == ["migrate", "restart"]
     assert "0037" in buf.getvalue() and "0038" in buf.getvalue() and "applied" in buf.getvalue()
 
@@ -1450,7 +1593,8 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
     assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in text
     assert "deploytwina -> repo:DeployTwinA" in text
@@ -1478,7 +1622,8 @@ async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert "casefold auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
@@ -1518,7 +1663,8 @@ async def test_cmd_deploy_remote_url_automerge_executes_by_default(
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
     assert "remote_url auto-merge: EXECUTED — 1 candidate(s)" in text
     assert "/home/x/code/REPOS/deployremotea -> repo:deployremotea" in text
@@ -1544,7 +1690,8 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
     with redirect_stdout(buf):
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert "remote_url auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
@@ -1684,7 +1831,8 @@ async def test_cmd_deploy_calls_install_units_before_restarting(
         await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                          pool=actions.pool, install_units=_install,
                          wait_for_health=_fake_wait_for_health,
-                         wait_for_smoke=_fake_wait_for_smoke)
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
     assert order == ["install", "restart"]
     assert "unit: installed (new) osiris-mcp.service" in buf.getvalue()
 

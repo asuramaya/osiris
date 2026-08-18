@@ -39,6 +39,7 @@ from src.orchestrator.capture import (
     reclassify_thread,
     record_blind_spot,
     record_decision,
+    record_hook_failure,
     record_tension,
     resolve_thread,
     thread_notes,
@@ -935,6 +936,39 @@ async def test_blind_spot_registers_holds_and_is_idempotent(actions: Actions) ->
     b3 = await record_blind_spot(actions, "webkit-rendering", "different rig, different gap",
                                  repo="osiris")
     assert b3 != b1
+
+
+async def test_record_hook_failure_files_through_the_blind_spot_channel(
+    actions: Actions,
+) -> None:
+    """task #179: a hook failure is exactly the 'shape of my own ignorance' record_blind_spot
+    already exists for — this must land as a BlindSpot on repo:osiris, findable the same
+    way any other blind spot is."""
+    b = await record_hook_failure(actions, surface="whisper/automount",
+                                  cannot_see="automount route failed for session xyz: boom")
+    assert b is None  # never returns the object id — callers only need "it's filed"
+    obj = await actions.pool.fetchrow(
+        "SELECT o.id, o.type FROM objects o WHERE EXISTS "
+        "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='surface' AND a.value #>> '{}' = 'whisper/automount')")
+    assert obj is not None and obj["type"] == "BlindSpot"
+    props = await _props(actions.pool, obj["id"])
+    assert "boom" in props["cannot_see"]
+    assert "journalctl" in props["verify_with"]
+
+
+async def test_record_hook_failure_never_raises(actions: Actions) -> None:
+    """The never-raises guarantee is the whole point: this runs inside an already-failing
+    except block in every caller (task #179's four hook sites) — a second failure here
+    (e.g. a bogus actions object) must stay silent, never propagate."""
+    class _BrokenActions:
+        pool = actions.pool
+
+        async def create_or_find_object(self, *a: object, **kw: object) -> None:
+            raise RuntimeError("simulated: the alarm channel itself is down")
+
+    await record_hook_failure(_BrokenActions(), surface="hook/stophook",  # type: ignore[arg-type]
+                              cannot_see="should never raise")
 
 
 async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Actions) -> None:
