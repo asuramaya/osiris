@@ -580,7 +580,7 @@ def _tool_chars(t: Any) -> int:
 # LXXVII heir ix, #174/#175/#180-piece-1 wave): NO NEW TOOL — fleet()'s ghost_gap went
 # per-identity (false_live/false_dead, Khnum 18a5d81, #174) and the docstring grew with it.
 # Flagged by its author, raised once here at the merged tip (45e72476).
-# 182,400 -> 183,200 (measured at the merged tip: see the git log for the exact figure) (measured 182,732 exact). 129 -> 130 tools (2026-08-18, Seshat XXXV,
+# 182,400 -> 183,200 (measured 183,130 exact at the merged tip d65d396+84ab414) (measured 182,732 exact). 129 -> 130 tools (2026-08-18, Seshat XXXV,
 # #178 piece c): ONE NEW TOOL — registry_census. The harness's own live-body list (`claude
 # agents --json`), each row verified against /proc, reconciled against agent_mounts (the
 # cache, never a second source of truth); `rowless` names the exact population #178's
