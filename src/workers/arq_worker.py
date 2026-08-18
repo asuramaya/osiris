@@ -543,6 +543,9 @@ async def embed_pass(ctx: dict[str, Any]) -> int:
         report = await embed_backfill(actions.pool, embedder)
     except Exception as exc:  # a model hiccup must not kill the cron
         _log.warning("embed pass failed: %r", exc)
+        from src.orchestrator.capture import record_embed_load_failure
+
+        await record_embed_load_failure(actions, cannot_see=f"embed_backfill failed: {exc!r}")
         return 0
     if report["embedded"] or report["dropped"]:
         _log.info("embed pass: %s", report)

@@ -1781,6 +1781,32 @@ async def record_hook_failure(actions: Actions, *, surface: str, cannot_see: str
         pass
 
 
+# thread 5cd49217 (Thoth DM 5287): the SAME blind-spot channel HOOK_ALARM_SURFACES already
+# uses, for the OTHER silent-forever failure that surfaced beside it — embed_pass's own
+# `except Exception: _log.warning(...)` swallowed every semantic-embedding load failure
+# into a log line nobody watches. `smoke.embed_health` is this surface's own read side,
+# same shape as `whisper_health`.
+EMBED_ALARM_SURFACE = "embed/model2vec-load"
+_EMBED_ALARM_VERIFY_WITH = ("journalctl --user -u osiris-worker | grep -i embed_pass — the "
+                            "cron logs the real exception on every failed tick too")
+
+
+async def record_embed_load_failure(actions: Actions, *, cannot_see: str) -> None:
+    """File a semantic-embedding load failure (task #149's sticky latch closing, or any
+    other embed_backfill exception) into the blind-spot channel — `embed_pass`'s own
+    generic `except Exception` used to log-and-return-0 with nothing else watching.
+    RATE-LIMITED BY CONSTRUCTION, same as `record_hook_failure`: idempotent per
+    (repo, surface), so a hundred identical cron ticks collapse onto one graph object
+    (the assertion history keeps every telling, which is what a health reader counts).
+    NEVER RAISES — called from inside an already-failing cron tick; a second failure here
+    must stay silent, never mask or replace the first."""
+    try:
+        await record_blind_spot(actions, EMBED_ALARM_SURFACE, cannot_see,
+                                verify_with=_EMBED_ALARM_VERIFY_WITH, repo="osiris")
+    except Exception:  # noqa: BLE001 — an alarm that itself fails must stay silent, never loud
+        pass
+
+
 async def kill_superstition(
     actions: Actions, statement: str, *, killed_by: str, repo: str | None = None,
     source: str = _SOURCE,

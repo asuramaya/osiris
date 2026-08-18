@@ -106,6 +106,38 @@ async def whisper_health(pool: asyncpg.Pool, *, window_hours: int = 24) -> dict[
     return out
 
 
+async def embed_health(pool: asyncpg.Pool, *, window_hours: int = 24) -> dict[str, Any]:
+    """READ-ONLY, same law and same shape as `whisper_health` above: reads
+    `capture.EMBED_ALARM_SURFACE` back from the SAME blind-spot channel (task #34) that
+    `embed_pass` (src/workers/arq_worker.py) files into on a load failure — thread
+    5cd49217 (Thoth DM 5287), the semantic door silently latching closed forever with
+    nothing watching. `ok` is `error_count == 0` in the window; `last_error` names what the
+    most recent failed tick said. NOT a positive probe (cannot prove the door is open, only
+    that nothing has confessed to it being closed recently)."""
+    from src.orchestrator.capture import EMBED_ALARM_SURFACE
+
+    since = datetime.now(UTC) - timedelta(hours=window_hours)
+    try:
+        obj_id = await pool.fetchval(
+            "SELECT o.id FROM objects o WHERE o.type='BlindSpot' AND EXISTS "
+            "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+            " AND a.name='surface' AND a.value #>> '{}' = $1)", EMBED_ALARM_SURFACE)
+        if obj_id is None:
+            return {"window_hours": window_hours, "error_count": 0, "ok": True}
+        rows = await pool.fetch(
+            "SELECT value #>> '{}' AS text, observed_at FROM assertions "
+            "WHERE object_id=$1 AND name='cannot_see' AND observed_at > $2 "
+            "ORDER BY observed_at DESC", obj_id, since)
+    except Exception as e:  # noqa: BLE001 - report, never raise past this probe
+        return {"window_hours": window_hours, "ok": False,
+               "error": f"embed_health probe itself failed: {e}"}
+    out: dict[str, Any] = {"window_hours": window_hours, "error_count": len(rows),
+                           "ok": len(rows) == 0}
+    if rows:
+        out["last_error"] = {"text": rows[0]["text"], "when": rows[0]["observed_at"].isoformat()}
+    return out
+
+
 async def registry_rowless_warning(pool: asyncpg.Pool) -> str | None:
     """WARNING, never a failure (Thoth DM 5257, whisper-health follow-through): reads
     `mounts.registry_census`'s own `rowless` population back — verified-live harness
@@ -135,17 +167,34 @@ async def registry_rowless_warning(pool: asyncpg.Pool) -> str | None:
 
 async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]:
     """The whole picture: every chrome route + the pool + the whisper/hook alarm channel
-    + the registry rowless count, composed. `ok` is a single boolean a deploy script can
-    branch on without re-deriving the per-surface detail — `warnings` (a list, empty when
-    clean) never feeds it: a warning names something worth a glance, never a reason to
-    fail a deploy."""
+    + the registry rowless count + the semantic-embed alarm channel, composed. `ok` is a
+    single boolean a deploy script can branch on without re-deriving the per-surface
+    detail — `warnings` (a list, empty when clean) never feeds it: a warning names
+    something worth a glance, never a reason to fail a deploy (embed's own door has always
+    degraded gracefully — fn_search's lexical doors still answer with it closed)."""
     chrome = await smoke_chrome(client)
     db = await smoke_pool(pool)
     whisper = await whisper_health(pool)
+    embed = await embed_health(pool)
     rowless_warning = await registry_rowless_warning(pool)
+    warnings = [w for w in (rowless_warning, _embed_warning(embed)) if w]
     ok = db == "ok" and all(v == "ok" for v in chrome.values()) and whisper["ok"]
-    return {"chrome": chrome, "db": db, "whisper": whisper,
-            "warnings": [rowless_warning] if rowless_warning else [], "ok": ok}
+    return {"chrome": chrome, "db": db, "whisper": whisper, "embed": embed,
+            "warnings": warnings, "ok": ok}
+
+
+def _embed_warning(embed: dict[str, Any]) -> str | None:
+    """`embed_health`'s own verdict, rendered as one warning line when the door has
+    recently confessed to being closed — kept OUT of `ok` on purpose (see `smoke`'s own
+    docstring): a semantic-search outage is a degraded experience, never a liveness
+    failure."""
+    if embed.get("ok"):
+        return None
+    last = embed.get("last_error")
+    detail = f" — last: {last['text']}" if isinstance(last, dict) else ""
+    n = embed.get("error_count", "?")
+    h = embed.get("window_hours", "?")
+    return f"embed door closed: {n} in {h}h{detail}"
 
 
 async def call_mcp_smoke(url: str) -> dict[str, Any] | str:

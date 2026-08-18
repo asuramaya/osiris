@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -73,11 +74,67 @@ async def test_model2vec_embedder_embed_bounds_a_hung_load(monkeypatch: pytest.M
 
 async def test_model2vec_embedder_load_refuses_fast_once_latched() -> None:
     """The specimen this guards: three record_decision calls in a row each independently
-    hung — this is what stops call 2 and 3 from re-running the same doomed fetch."""
+    hung — this is what stops call 2 and 3 from re-running the same doomed fetch, WITHIN
+    the cooldown window (see the self-heal tests below for what happens past it)."""
     embedder = semantics.Model2VecEmbedder("fake/model")
     embedder._load_failed = True
+    embedder._failed_at = time.monotonic()
     with pytest.raises(RuntimeError, match="previously failed to load"):
         embedder._load()
+
+
+# --- the latch self-heals past a cooldown (thread 5cd49217, Thoth DM 5287): #149's original
+# design stayed closed for the whole process life — the operator's own "no babysitting"
+# complaint once the root cause (HF_HUB_OFFLINE missing on osiris-worker's unit) turned out
+# to be transient/fixable without a restart. ---
+
+async def test_model2vec_embedder_latch_reopens_after_the_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(semantics, "_RETRY_COOLDOWN_S", 0.05)
+    embedder = semantics.Model2VecEmbedder("fake/model")
+    embedder._load_failed = True
+    embedder._failed_at = time.monotonic() - 1.0  # well past the (shrunk) cooldown
+    embedder._m = "already-loaded-stand-in"  # skip the real model2vec import path
+    assert embedder._load() == "already-loaded-stand-in"
+    assert embedder._load_failed is False
+
+
+async def test_model2vec_embedder_latch_stays_shut_inside_the_cooldown() -> None:
+    embedder = semantics.Model2VecEmbedder("fake/model")
+    embedder._load_failed = True
+    embedder._failed_at = time.monotonic()  # just failed, well inside the window
+    with pytest.raises(RuntimeError, match="previously failed to load"):
+        embedder._load()
+
+
+async def test_embed_pass_files_an_alarm_on_a_load_failure(actions: Actions) -> None:
+    """thread 5cd49217 (Thoth DM 5287): embed_pass's own generic except-block used to
+    log-and-swallow a load failure with nothing else watching — this proves the new alarm
+    wiring lands the confession where smoke.embed_health can find it."""
+    from src.orchestrator.capture import EMBED_ALARM_SURFACE
+    from src.workers.arq_worker import embed_pass
+
+    await _decision(actions, "decision:embed-pass-alarm-test", "something worth embedding")
+
+    class _RaisingEmbedder:
+        model = "fake/raises"
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("simulated: model2vec previously failed to load")
+
+    semantics.set_embedder_for_tests(_RaisingEmbedder())
+    try:
+        ctx = {"cascade": SimpleNamespace(actions=actions)}
+        n = await embed_pass(ctx)
+    finally:
+        semantics.set_embedder_for_tests(None)
+    assert n == 0
+    obj = await actions.pool.fetchval(
+        "SELECT o.id FROM objects o WHERE o.type='BlindSpot' AND EXISTS "
+        "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='surface' AND a.value #>> '{}' = $1)", EMBED_ALARM_SURFACE)
+    assert obj is not None
 
 
 async def _decision(actions: Actions, canonical: str, summary: str) -> None:
