@@ -1282,6 +1282,42 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
     return False
 
 
+async def _resume_occupancy_gate(
+    resume: tuple[str, str, float, str], *, agents_json: Any,
+) -> str | None:
+    """IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave, operator's tonight-law:
+    mechanisms not patches, 7d6815bb/df646654): `_lineage_resume_candidate` (and
+    `_resume_guard` beside it) answer IDENTITY — whose session, graph-truth, via
+    `succession_chain`. Neither answers OCCUPANCY — whether a body is ACTUALLY SITTING
+    there right now. A `-p --resume` fired beside a live body forks the mind into two
+    processes both claiming the same identity; nothing upstream of this call catches
+    that, because nothing upstream asks the occupancy question at all. This is the ask,
+    right before ANY resume-spawn — two independent signals, matched differently on
+    purpose (a live body can be found by either without being findable by both):
+
+    `_confirm_listener` (task #176's own primitive, reused verbatim, never a second
+    matcher) checks BY SESSION ID against `claude agents --json` — catches a body the
+    graph's own candidate session id already names, wherever `_lineage_resume_candidate`
+    found it, at any hop. `census.live_bodies_by_cwd` checks BY OFFICE DIRECTORY via
+    /proc — catches a live claude process sitting in the exact office this resume would
+    land in, whatever session id it thinks it has (a manually-run `claude` that hasn't
+    self-mounted yet is invisible to the first signal, visible to this one).
+
+    Either signal firing refuses. Returns a short reason naming WHICH, or None when
+    neither finds anybody home (safe to resume) — never a silent block; the caller's own
+    receipt names exactly why."""
+    session_id, repo = resume[0], resume[1]
+    if await _confirm_listener({"sessionId": session_id, "short": ""}, agents_json):
+        return (f"a live body is already listed in `claude agents --json` for session "
+                f"{session_id[:8]}")
+    from src.orchestrator.census import live_bodies_by_cwd
+    bodies = await asyncio.to_thread(live_bodies_by_cwd)
+    if bodies is not None and bodies.get(repo):
+        pids = ", ".join(str(p) for p in bodies[repo])
+        return f"a live claude process (pid {pids}) is already sitting at {repo!r}"
+    return None
+
+
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
@@ -1633,6 +1669,14 @@ async def dispatch_dm(
         return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
                           "stays pull-only for now"}
+    # OCCUPANCY, THE OTHER HALF (task #178): identity above says WHOSE session this is;
+    # this asks whether anybody is ALREADY SITTING there. A `-p --resume` beside a live
+    # body forks the mind — refuse it here, before the spend, never after.
+    occupied = await _resume_occupancy_gate(graph_resume, agents_json=agents_json)
+    if occupied is not None:
+        return {"mode": "resume-refused-occupied",
+                "detail": f"{occupied} — refusing to fork a second mind beside it; the "
+                          "mail stays pull-only for now"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend

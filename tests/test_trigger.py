@@ -2615,6 +2615,90 @@ async def test_dispatch_dm_still_refuses_a_reassigned_door_end_to_end(
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
+# ═══ IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave) ═══════════════════════
+# `_lineage_resume_candidate`/`_resume_guard` answer IDENTITY (whose session, graph-truth).
+# `_resume_occupancy_gate` answers the OTHER question: is a body ALREADY SITTING there right
+# now. A `-p --resume` fired beside a live body forks the mind — these pin that it never does.
+
+
+async def test_dispatch_dm_refuses_to_fork_a_body_confirmed_via_agents_json(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`_confirm_listener` (task #176's own primitive, reused not reimplemented) matches BY
+    SESSION ID — a live `claude agents --json` row naming the exact candidate session
+    refuses the resume outright, before the spend, never after."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a session already listed in claude agents --json must never "
+                             "be forked by a second -p --resume")
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": FULL_SID, "id": FULL_SID[:8], "cwd": "/somewhere/else"}]
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
+                          agents_json=_agents_json)
+    assert d["mode"] == "resume-refused-occupied"
+    assert "claude agents --json" in d["detail"] and FULL_SID[:8] in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`census.live_bodies_by_cwd` matches BY OFFICE DIRECTORY via /proc — catches a live
+    claude process sitting in the exact office this resume would land in, whatever session
+    id it thinks it has (invisible to the session-id signal above, on purpose)."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a live process sitting at the office must never be forked "
+                             "by a second -p --resume")
+
+    from src.orchestrator import census
+    monkeypatch.setattr(census, "live_bodies_by_cwd",
+                        lambda **kw: {"/repo/demo": [999999]})
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "resume-refused-occupied"
+    assert "999999" in d["detail"] and "/repo/demo" in d["detail"]
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
+async def test_dispatch_dm_resumes_when_neither_occupancy_signal_fires(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The negative control: neither signal finds anybody home — the resume proceeds
+    exactly as before this gate existed."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no daemon job was found — nudge must never be reached")
+
+    from src.orchestrator import census
+    monkeypatch.setattr(census, "live_bodies_by_cwd", lambda **kw: {})
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d["mode"] == "resumed"
+    assert calls and calls[0][1].get("resume_session") == FULL_SID
+
+
 # ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
 # wake() adds ONE thing dispatch_dm doesn't have: the managed_by authority gate. These tests
 # pin the gate (both directions authorize, peers/unbound/seatless refuse, nothing is sent on
