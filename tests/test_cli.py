@@ -609,6 +609,59 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
 
 
+async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#173a's own door, mirrored through this CLI-facing lane (ruling 983ec87a, two doors
+    one receipt — launch_seat's own sibling fix): the seat's CURRENT holder (0 hops back)
+    has a real, anchored, resumable transcript that never wrote a single signed osiris
+    act. The testimony arm alone would refuse this resident-unknown; the zero-hop graph
+    door corroborates it via the graph's own session pointer + the seat's own launch
+    location, and the resume proceeds through THIS door too, not just launch_seat's."""
+    from src.cli import _cmd_launch_harness
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{_RESUME_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"booting"}\n' + b"x" * 16)  # no signed act
+    import os
+    import time as _time
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+
+    seat = await ensure_seat(actions, house="osiris", handle="clizerohop",
+                             anchor_cwd="/tmp/clizerohop-office", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:clizerohop01")
+    obj = await actions.create_or_find_object("Agent", "agent:clizerohop01", "test")
+    now = datetime(2026, 8, 18, tzinfo=UTC)
+    await actions.assert_property(obj, "seat_generation", "1", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", _RESUME_SID, "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    resumed: list[dict[str, Any]] = []
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        resumed.append({"repo": repo, "prompt": prompt, **kw})
+
+    async def _boom_spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("a graph-corroborated zero-hop candidate must never be minted")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await _cmd_launch_harness(
+        "clizerohop", model=None, pool=actions.pool, wake_default=None,
+        spawn=_boom_spawn, agents_json=_agents_json, resume_spawn=_resume_spawn,
+        settings=_resume_settings(sense))
+
+    assert out == 0
+    assert len(resumed) == 1
+    assert resumed[0]["repo"] == "/tmp/clizerohop-office"
+    assert resumed[0].get("resume_session") == _RESUME_SID
+
+
 async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_resumable(
     actions: Actions, tmp_path: Path,
 ) -> None:

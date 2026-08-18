@@ -950,13 +950,25 @@ def _zero_hop_graph_corroborates(
     never an ancestor's): the session id found there came straight off the GRAPH's own
     `session` property (succession_chain's fresh read of this exact lineage head's own
     mount-time stamp), not from re-scanning a transcript for testimony it may not have
-    written yet. Corroborated a SECOND, independent way before trusting the graph alone —
-    the candidate's own repo must land in the seat's own launch location (`launch_cwd`:
-    office, or tree_cwd when tree-bound — 1:1 with the seat by construction, #103); a
-    candidate whose repo points anywhere else fails here and falls through to the
-    ordinary "resident-unknown" refusal, unchanged. Callers outside the lineage-walk lane
-    never pass `hop`/`launch_cwd` — this always returns False for them, so `_resume_guard`
-    behaves exactly as before wherever this new context is unavailable."""
+    written yet.
+
+    REVIEW NOTE (Sekhmet XXI, reviewing this branch as a stranger's per Thoth's own
+    instruction): `resume[1]` is NOT independent evidence — trace `_lineage_resume_
+    candidate`'s own return (`(session, repo, mtime, "")`, `repo` being that function's
+    OWN `repo` KEYWORD ARGUMENT), and `launch_seat`'s one call site (`repo=launch_cwd`,
+    then `_resume_guard(..., launch_cwd=launch_cwd)`): `resume[1]` and `launch_cwd` are
+    the SAME value threaded through, so `resume[1] == launch_cwd` is true by construction
+    for every existing caller — never a real second signal, whatever this docstring used
+    to claim. Left in (rather than silently dropped) as a documented invariant a future
+    caller could violate by wiring `resume`/`launch_cwd` from different sources; the
+    ACTUAL gate here is just `hop == 0` — trusting the graph's own `session` pointer for
+    the lineage head's own current generation, once a launch location is known.
+    A GENUINE second signal (e.g. a fresh `agent_mounts` row for this exact holder whose
+    own `cwd` agrees) is possible and may be worth adding — flagged to Thoth rather than
+    redesigned here, mid-incident, in a branch under active review. Callers outside the
+    lineage-walk lane never pass `hop`/`launch_cwd` — this always returns False for them,
+    so `_resume_guard` behaves exactly as before wherever this new context is
+    unavailable."""
     return hop == 0 and launch_cwd is not None and resume[1] == launch_cwd
 
 
