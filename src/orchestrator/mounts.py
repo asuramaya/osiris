@@ -131,6 +131,12 @@ async def release_mounts(pool: asyncpg.Pool, agent_id: str) -> int:
     return int(tag.rsplit(" ", 1)[-1])
 
 
+# the "suspended, no genuine sighting" sentinel — a real datetime, not a Postgres literal
+# string: asyncpg binds params by Python type before any server-side cast runs, so a bare
+# 'epoch' string fails to bind against a timestamptz column.
+SUSPENDED_AT = datetime.fromtimestamp(0, tz=UTC)
+
+
 async def release_session_mounts(
     pool: asyncpg.Pool, *, job_dir: str, session_id: str,
 ) -> int:
@@ -142,11 +148,27 @@ async def release_session_mounts(
     emptied registry then read as the seat's death, and the office door — correct on its
     own evidence — minted false successors at thoth's own office (a title-generator stub
     nearly took the throne). A row is an ADDRESS: only the addressed door's death may
-    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell."""
+    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell.
+
+    NEVER A DELETE (#178 piece a, Thoth dispatch msg 5224): this used to DELETE the row —
+    correct for LIVENESS (the row must stop answering any probe immediately, same law as
+    before) but wrong for the REGISTRY, because SessionEnd firing does not always mean the
+    body is actually gone (the exact resume-race class this function's own docstring
+    already guards elsewhere: `greeted_within_grace` catches the ordering race, this catches
+    the SURVIVAL case — a daemon re-adopt or a body the harness still lists). Suspends
+    instead: `last_seen` flips to the epoch sentinel (constitution #3 — heal with
+    compensating events, never DELETE), which reads exactly as dead to `is_live()` (same
+    immediate liveness effect the DELETE always had) while the ROW ITSELF survives, findable
+    by `find_mount`. A genuine re-adopt or resume then PROMOTES IT BACK the ordinary way —
+    `save_mount`'s own `ON CONFLICT (job_dir) DO UPDATE` refreshes `last_seen=now()` on the
+    SAME row, no different from any other re-mount. Idempotent: a row already suspended is
+    excluded from the receipt (re-suspending nothing is not a release)."""
     sid32 = (session_id or "").replace("-", "").strip().lower()
     n = await pool.fetchval(
-        "WITH gone AS (DELETE FROM agent_mounts WHERE job_dir=$1 OR session_key=$2 "
-        "RETURNING 1) SELECT count(*) FROM gone", job_dir, f"sid:{sid32}")
+        "WITH gone AS (UPDATE agent_mounts SET last_seen=$3 "
+        "WHERE (job_dir=$1 OR session_key=$2) AND last_seen IS DISTINCT FROM $3 "
+        "RETURNING 1) SELECT count(*) FROM gone",
+        job_dir, f"sid:{sid32}", SUSPENDED_AT)
     return int(n or 0)
 
 

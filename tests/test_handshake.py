@@ -493,7 +493,8 @@ async def test_session_end_releases_the_seat_the_same_way_retire_does(
     """The ghost-seat fix (heinrich's filing, thread 1fe6811c): SessionEnd is the harness's
     REAL close signal (Stop fires per-turn and cannot mean this) — releasing the durable mount
     row the instant the tab closes, instead of leaving it to age out of `last_seen`'s 15-minute
-    window."""
+    window. #178 piece (a): "released" means SUSPENDED, never deleted — the row survives
+    (findable, restorable), only its liveness reads dead immediately."""
     from src.orchestrator import mounts
     from src.orchestrator.handshake import session_end
 
@@ -501,14 +502,23 @@ async def test_session_end_releases_the_seat_the_same_way_retire_does(
     _transcript(root, "/w/sibling-nine")
     mounted = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
                               actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
-    assert await mounts.find_mount(
-        actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None
+    job_dir = str(tmp_path / "jobs" / SID[:8])
+    assert await mounts.find_mount(actions.pool, job_dir=job_dir) is not None
 
     mounts._GREETS.clear()  # a TRUE close: long after any greeting, not the resume race
     out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
 
     assert out["agent"] == mounted["agent"] and out["released"] == 1
-    assert await mounts.find_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is None
+    # the row SURVIVES — #178 piece (a) never deletes — but its liveness is dead immediately
+    row = await mounts.find_mount(actions.pool, job_dir=job_dir)
+    assert row is not None
+    last_seen = await actions.pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", job_dir)
+    assert not mounts.is_live(last_seen)
+    # a second session_end call on the same (now-suspended) row is a genuine no-op — never
+    # re-counted as a fresh release (idempotent, matching the file's own "gone" receipt law)
+    again = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
+    assert again["released"] == 0
     # NOT a retire(): no permanent certificate — the Agent object is untouched
     assert await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "

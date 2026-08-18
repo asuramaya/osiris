@@ -1877,6 +1877,77 @@ async def test_undrop_dead_project_mount_refuses_to_overwrite_a_live_remount(
     assert live is not None and live.agent_id == "agent:brandnew"
 
 
+# ═══ release_session_mounts — #178 piece (a): SUSPENDS (never deletes) ═══
+
+
+async def test_release_session_mounts_suspends_never_deletes(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/susp0001", agent_id="agent:susp0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:susp0001")
+    n = await mounts.release_session_mounts(p, job_dir="/x/jobs/susp0001",
+                                            session_id="susp0001")
+    assert n == 1
+    row = await mounts.find_mount(p, job_dir="/x/jobs/susp0001")
+    assert row is not None and row.agent_id == "agent:susp0001"  # the row SURVIVES
+    last_seen = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/susp0001'")
+    assert not mounts.is_live(last_seen)
+
+
+async def test_release_session_mounts_suspends_a_provisional_null_last_seen_row(
+    actions: Actions,
+) -> None:
+    """Regression: a provisional mount (automount's own whisper stage, alive=False) has
+    last_seen=NULL by design (migration 0028) — a bare `<>` comparison against the sentinel
+    is NULL under three-valued SQL logic, silently EXCLUDING every provisional row from ever
+    being suspended. Must use NULL-safe comparison (`IS DISTINCT FROM`)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/prov0001", agent_id="agent:prov0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:prov0001", alive=False)
+    assert await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/prov0001'") is None
+    n = await mounts.release_session_mounts(p, job_dir="/x/jobs/prov0001",
+                                            session_id="prov0001")
+    assert n == 1  # must count as released, not silently skipped
+    row = await mounts.find_mount(p, job_dir="/x/jobs/prov0001")
+    assert row is not None  # still survives, just suspended
+
+
+async def test_release_session_mounts_is_idempotent(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/idem0001", agent_id="agent:idem0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:idem0001")
+    first = await mounts.release_session_mounts(p, job_dir="/x/jobs/idem0001",
+                                                session_id="idem0001")
+    assert first == 1
+    second = await mounts.release_session_mounts(p, job_dir="/x/jobs/idem0001",
+                                                 session_id="idem0001")
+    assert second == 0  # already suspended — never re-counted as a fresh release
+
+
+async def test_a_suspended_row_promotes_back_on_the_ordinary_upsert(actions: Actions) -> None:
+    """"Let liveness promote it back" (Thoth's own words, msg 5224): a genuine re-mount for
+    the SAME job_dir is the normal ON CONFLICT upsert — no special restore path needed."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/promo0001", agent_id="agent:promo0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:promo0001")
+    await mounts.release_session_mounts(p, job_dir="/x/jobs/promo0001", session_id="promo0001")
+    suspended = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/promo0001'")
+    assert not mounts.is_live(suspended)
+
+    await mounts.save_mount(p, job_dir="/x/jobs/promo0001", agent_id="agent:promo0001",
+                            project="p", cwd="/w/p", model=None,
+                            session_key="whisper:promo0001-again")
+    promoted = await p.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/x/jobs/promo0001'")
+    assert mounts.is_live(promoted)
+
+
 # ═══ registry_census — #178 piece (c): the harness registry + /proc census, VERIFIED,
 # reconciled against agent_mounts (the cache, never a second source of truth) ═══
 
