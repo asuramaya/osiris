@@ -3437,7 +3437,7 @@ async def test_fleet_surfaces_cross_channel_adoption_for_a_recovered_seat(
         "INSERT INTO fleet_messages (from_agent, to_project, body) "
         "VALUES ($1, 'osiris', 'one osiris send')", recovered)
     await actions.pool.execute(
-        "INSERT INTO harness_messages (anchor_sid, turn_index, to_raw, message) "
+        "INSERT INTO harness_messages (anchor_sid, turn_index, harness_to, message) "
         "VALUES ('adoptrec1', 0, 'x', 'm1'), ('adoptrec1', 1, 'x', 'm2'), "
         "       ('adoptrec1', 2, 'x', 'm3')")
 
