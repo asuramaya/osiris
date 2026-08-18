@@ -659,6 +659,77 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
     assert "spawned" in out_text  # the pre-existing fresh-spawn confirmation still prints
 
 
+async def _resumable_seat_no_signed_testimony(
+    actions: Actions, tmp_path: Path, *, handle: str, agent_id: str, anchor_cwd: str,
+) -> Path:
+    """Same graph shape as `_resumable_seat` — a real, uncompacted transcript the seat's own
+    `session` property points at — but with NO signed testimony anywhere in it: thread
+    ef88e2bb's own specimen (ferryman's real, sizeable transcript, 0 hops back, nothing
+    that scans as signed), the `resident-unknown` class."""
+    import os
+    import time as _time
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{_RESUME_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"just harness chrome, nothing signed"}\n'
+                  + b"x" * 16)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+
+    seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent_id)
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    await actions.assert_property(obj, "seat_generation", "1", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", _RESUME_SID, "test", now, 0.9,
+                                  evidence_class="self_declared")
+    return sense
+
+
+async def test_cmd_launch_harness_refuses_outright_when_resident_is_unknown_never_mints_a_stranger(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIX FOR ef88e2bb (operator, 2026-08-17): a resumable session with NO signed
+    testimony anywhere — an ABSENCE of evidence, not a positive finding of a different
+    mind — must refuse the WHOLE launch. Before this fix it fell through to the same
+    `claude --bg` mint as a genuine crossed-registry finding, exactly how ferryman's real,
+    resumable session got a stranger minted over it."""
+    from src.cli import _cmd_launch_harness
+
+    sense = await _resumable_seat_no_signed_testimony(
+        actions, tmp_path, handle="cliunknown", agent_id="agent:cliunknown01",
+        anchor_cwd="/tmp/cliunknown-office")
+
+    async def _boom_spawn(*a: Any, **k: Any) -> None:
+        raise AssertionError("resident-unknown must refuse the launch, never mint a stranger")
+
+    async def _boom_resume(*a: Any, **k: Any) -> None:
+        raise AssertionError("resident-unknown must refuse, never resume blind either")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []  # only the pre-resume already-live check may ever call this
+
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await _cmd_launch_harness(
+            "cliunknown", model=None, pool=actions.pool, wake_default=None,
+            spawn=_boom_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
+            settings=_resume_settings(sense))
+
+    assert out == 1  # refused, not the ordinary success-with-fresh-spawn path
+    err = buf.getvalue()
+    assert "REFUSING" in err
+    assert _RESUME_SID in err
+    assert "claude -p --resume" in err and _RESUME_SID in err.split("claude -p --resume")[1]
+
+
 # ═══ tree_cwd (task #135/#136, 2026-08-03, ruling 983ec87a): `osiris launch` had drifted
 # from launch_seat's own #103 update — hardcoded to `office`, never reading `tree_cwd` at
 # all. Same three proofs test_trigger.py already carries for launch_seat itself, mirrored

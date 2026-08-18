@@ -1955,7 +1955,16 @@ async def launch_seat(
     Whether `osiris launch` should ALSO offer a persistent resumed window is a real,
     separate policy fork, named as thread (owner=operator) rather than decided here.
     `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for this branch's tests,
-    parallel to `spawn`/`agents_json`/`cost_reader` above."""
+    parallel to `spawn`/`agents_json`/`cost_reader` above.
+
+    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
+    7d6815bb — mirrored in `_cmd_launch_harness`, ruling 983ec87a's "two doors, one
+    receipt"): a `resident-unknown` gate is an ABSENCE of signed testimony, not a positive
+    finding of a different mind — it used to fall through to the same fresh mint as a real
+    `crossed-registry` finding, minting strangers over ferryman's and halcyon's actually-
+    resumable heads. It now refuses the WHOLE launch (`status: refused-resume-unknown`),
+    spawning nothing, naming the exact `claude -p --resume <sid>` a human can run by hand.
+    `crossed-registry` still falls through to fresh — that session was never this seat's."""
     pool = actions.pool
     from src.orchestrator.agents import _generation, house_of
     from src.orchestrator.seats import held_seat, seat_receipt
@@ -2160,6 +2169,23 @@ async def launch_seat(
             assert holder is not None
             gate, refusal = await _resume_guard(
                 pool, resume, _generation(holder)[0], seat_id=target_seat, st=st)
+            if gate == "resident-unknown":
+                # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb — self-healing
+                # over manual bandaids): an ABSENCE of signed testimony is not evidence this
+                # head belongs to someone else — it is exactly the case a resumable session
+                # (ferryman gen 8, 2MB, 0 hops back) was refused for and then a stranger was
+                # minted OVER it anyway. "crossed-registry" (a POSITIVE finding of a
+                # different mind) still falls through to a fresh mint below — that session
+                # genuinely isn't this seat's, so a fresh body under this seat's own name is
+                # legitimate. "resident-unknown" gets no such pass: refuse the WHOLE launch,
+                # spawn nothing, name the exact command a human can run to confirm it
+                # themselves — never silently degrade into "mint a stranger."
+                return {"status": "refused-resume-unknown", "seat": target_seat,
+                        "session": resume[0], "body_exists": False, "can_receive": False,
+                        "detail": f"{refusal} — refusing rather than minting a stranger "
+                                  f"over a possibly-resumable head; run `claude -p --resume "
+                                  f"{resume[0]}` by hand to confirm it yourself, or clear "
+                                  "the seat's stale session pointer if it's truly dead"}
             if gate is not None:
                 resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
                 resume = None

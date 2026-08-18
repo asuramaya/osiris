@@ -537,7 +537,17 @@ async def _cmd_launch_harness(
     on it); every path that falls through to a fresh spawn still gets it, exactly as before
     this lane existed. The resume attempt's own reason (`resume_log`) prints separately,
     named every time win or lose — Thoth's own rule for launch_seat's identical receipt
-    ("a correct decision made silently is indistinguishable from a broken one")."""
+    ("a correct decision made silently is indistinguishable from a broken one").
+
+    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
+    7d6815bb): a `resident-unknown` gate — an ABSENCE of signed testimony, not a positive
+    finding of a different mind — used to fall through to the same fresh `--bg` mint as a
+    genuine `crossed-registry` finding, exactly the bug that spawned strangers over
+    ferryman's and halcyon's real, resumable heads. Now it refuses the WHOLE launch instead,
+    spawning nothing and naming the exact `claude -p --resume <sid>` a human can run to
+    confirm the session themselves. `crossed-registry` (a positively different mind) still
+    falls through to fresh — that session was never this seat's, so a fresh body under its
+    name is legitimate."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.trigger import (
@@ -598,6 +608,19 @@ async def _cmd_launch_harness(
         assert holder is not None
         gate, refusal = await _resume_guard(
             pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st)
+        if gate == "resident-unknown":
+            # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
+            # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
+            # ABSENCE of signed testimony is not evidence this head belongs to someone
+            # else. "crossed-registry" (a POSITIVE finding) still falls through to a
+            # fresh mint below; "resident-unknown" refuses the WHOLE launch instead —
+            # nothing spawned, the exact resume command named.
+            print(f"osiris launch: REFUSING — {handle!r} has a possibly-resumable "
+                  f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
+                  f"{resume[0]}` by hand to confirm it yourself; osiris will not mint "
+                  "a fresh mind over a resumable head it merely couldn't verify.",
+                  file=sys.stderr)
+            return 1
         if gate is not None:
             resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
             resume = None
