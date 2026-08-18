@@ -390,7 +390,8 @@ def main() -> None:
     name = " ".join(argv[1:] if expand else argv)
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-edgar-formd")
         try:
             actions = Actions(pool)
             result = (

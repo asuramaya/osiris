@@ -171,7 +171,8 @@ def main() -> None:  # pragma: no cover - CLI
     os.chdir(Path(__file__).resolve().parent.parent)
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:init")
         try:
             _print_next_steps(await init(Actions(pool), canon=not args.compositions_only))
         finally:

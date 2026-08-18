@@ -195,7 +195,8 @@ def main() -> None:  # pragma: no cover - CLI
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-gitlog")
         try:
             print(await ingest_repo(Actions(pool), path, limit=limit))
         finally:

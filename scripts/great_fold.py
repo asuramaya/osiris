@@ -62,7 +62,9 @@ async def _main() -> None:
         raise SystemExit(1)
     # the HOUSE pool, never bare asyncpg: its jsonb codecs are what Actions' event
     # writes encode through — the bare pool refuses the first kernel write
-    pool = await create_pool(get_settings().database_url, min_size=1, max_size=4)
+    pool = await create_pool(
+        get_settings().database_url, min_size=1, max_size=4,
+        application_name="osiris-script:great-fold")
     try:
         actions = Actions(pool)
         if args.cmd == "survey":

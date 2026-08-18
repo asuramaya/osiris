@@ -54,7 +54,9 @@ async def _glance(cwd: Path) -> list[str]:
     import asyncpg
 
     project, intent = _pin(cwd)
-    conn = await asyncpg.connect(DSN, timeout=2.0)
+    conn = await asyncpg.connect(
+        DSN, timeout=2.0,
+        server_settings={"application_name": "osiris-hook:fleet-glance"})
     try:
         row = await conn.fetchrow(
             "SELECT agent_id, model FROM agent_mounts WHERE cwd=$1 "

@@ -38,7 +38,9 @@ async def run(apply: bool, seats: list[str]) -> None:
     if refusal is not None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
-    pool = await create_pool(DSN, min_size=1, max_size=2)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=2,
+        application_name="osiris-script:backfill-charter-seat-key")
     actions = Actions(pool)
     only = set(seats) or None
     out = await migrate_charter_to_seat(actions, dry_run=not apply, only_seats=only)

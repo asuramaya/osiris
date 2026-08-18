@@ -399,7 +399,8 @@ def main() -> None:
     top = int(argv[2]) if len(argv) > 2 else 25
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-etherscan")
         try:
             out = await aim_address(Actions(pool), address, chain_id=chain_id, top=top)
             print(f"traced: {out}")

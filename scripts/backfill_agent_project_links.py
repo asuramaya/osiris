@@ -38,7 +38,9 @@ async def run(apply: bool, bases: list[str], actor: str) -> None:
     if refusal is not None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
-    pool = await create_pool(DSN, min_size=1, max_size=2)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=2,
+        application_name="osiris-script:backfill-agent-project-links")
     actions = Actions(pool)
     only = set(bases) or None
     out = await backfill_agent_project_links(actions, actor=actor, dry_run=not apply,

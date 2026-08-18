@@ -259,7 +259,8 @@ def main() -> None:
     local = None if src.startswith("http") else list(parse_jsonl(Path(src).read_text()))
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-opensanctions")
         try:
             ents = await fetch_ftm(src, limit=limit) if local is None else local
             counts = await ingest_ftm(Actions(pool), ents, case_id=case_id, limit=limit)

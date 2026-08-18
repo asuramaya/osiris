@@ -386,7 +386,9 @@ async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:smoke-chaos")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris smoke --chaos: could not reach postgres — {exc}", file=sys.stderr)
             return 1
@@ -429,7 +431,9 @@ async def cmd_boot_status(*, pool: asyncpg.Pool | None = None) -> int:
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:boot-status")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris boot-status: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -462,7 +466,9 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:seed")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris seed: could not reach postgres at {settings.database_url} — {exc}. "
                   "Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -886,7 +892,9 @@ async def cmd_launch(
         settings = settings or get_settings()
         wake_default = settings.osiris_wake_model
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=2)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:launch")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris launch: could not reach postgres at {settings.database_url} — "
                   f"{exc}.", file=sys.stderr)
@@ -1424,7 +1432,9 @@ async def cmd_migrate(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=2)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:migrate")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris migrate: could not reach postgres at {settings.database_url} — "
                   f"{exc}.", file=sys.stderr)
@@ -1631,7 +1641,9 @@ async def cmd_deploy(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=2)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:deploy")
         except Exception as exc:  # noqa: BLE001
             print(f"osiris deploy: REFUSED — could not reach postgres to check migrations "
                   f"— {exc}. NOTHING was restarted.", file=sys.stderr)
@@ -1840,7 +1852,9 @@ async def cmd_merge(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:merge")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris merge: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -1914,7 +1928,9 @@ async def cmd_unmerge(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:unmerge")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris unmerge: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -1958,7 +1974,9 @@ async def cmd_retention(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:retention")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retention: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
@@ -2014,7 +2032,9 @@ async def cmd_charter_for(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:charter-for")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris charter-for: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -2083,7 +2103,9 @@ async def cmd_amend_practice(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:amend-practice")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris amend-practice: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
@@ -2141,7 +2163,9 @@ async def cmd_annotate_thread(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:annotate-thread")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris annotate-thread: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
@@ -2186,7 +2210,9 @@ async def cmd_rematerialize(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rematerialize")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris rematerialize: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
@@ -2238,7 +2264,9 @@ async def cmd_amend_decision(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:amend-decision")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris amend-decision: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
@@ -2343,7 +2371,9 @@ async def cmd_mint_seat(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:mint-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris mint-seat: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -2418,7 +2448,9 @@ async def cmd_new(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:new")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris new: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
@@ -2504,7 +2536,9 @@ async def cmd_bootstrap(
         apply_dev_fallback()
         settings = get_settings()
         try:
-            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:bootstrap")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris bootstrap: could not reach postgres at {settings.database_url} "
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)

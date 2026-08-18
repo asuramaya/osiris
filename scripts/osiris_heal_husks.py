@@ -32,7 +32,8 @@ async def main() -> None:
     if refusal is not None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
-    pool = await create_pool(get_settings().database_url)
+    pool = await create_pool(
+        get_settings().database_url, application_name="osiris-script:heal-husks")
     try:
         out = await heal_husks(Actions(pool), husks, apply=apply)
         print(json.dumps(out, indent=2, default=str))

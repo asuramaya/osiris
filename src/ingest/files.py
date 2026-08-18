@@ -177,7 +177,8 @@ def main() -> None:  # pragma: no cover - CLI
     path = sys.argv[1] if len(sys.argv) > 1 else "."
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-files")
         try:
             print(await ingest_files(Actions(pool), path))
         finally:

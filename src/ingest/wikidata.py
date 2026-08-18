@@ -363,7 +363,8 @@ def main() -> None:
     argv = [a for a in argv if a != "--rel"]
 
     async def run() -> None:
-        pool = await create_pool(get_settings().database_url)
+        pool = await create_pool(
+            get_settings().database_url, application_name="osiris-script:ingest-wikidata")
         actions = Actions(pool)
         try:
             if argv and argv[0] == "enrich":

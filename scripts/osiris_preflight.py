@@ -105,7 +105,9 @@ async def collect_miner() -> dict | None:
     import asyncpg
     from src.orchestrator.monitor import miner_health
 
-    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:preflight-miner"})
     try:
         blob = await miner_health(pool)
     finally:
@@ -138,7 +140,9 @@ async def collect_schema_drift() -> str | None:
     import asyncpg
     from src.orchestrator.deploy_guard import check_schema_drift
 
-    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:preflight-schema-drift"})
     try:
         return await check_schema_drift(pool)
     finally:
@@ -241,7 +245,9 @@ async def brief_operator(fails: list[str]) -> None:
     import asyncpg
     from src.orchestrator.mailbox import send_message
 
-    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:preflight-brief"})
     try:
         body = ("PREFLIGHT REGRESSION — the survival matrix has holes:\n- "
                 + "\n- ".join(fails)

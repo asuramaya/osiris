@@ -145,7 +145,8 @@ async def _run_loop(poll_secs: float = 2.0) -> None:  # pragma: no cover - proce
     settings = get_settings()
     register_default_collectors()  # wire the vantage-bound collectors at the satellite
     vantages = [v.strip() for v in settings.osiris_satellite_vantages.split(",") if v.strip()]
-    pool = await create_pool(settings.database_url)
+    pool = await create_pool(
+        settings.database_url, application_name="osiris-script:satellite")
     actions = Actions(pool)
     logger.info(
         "satellite %s up; vantages=%s; collectors=%s",

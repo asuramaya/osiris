@@ -21,7 +21,8 @@ from src.ontology.ingest import ingest_bundle
 
 async def _main(domain: str) -> None:
     settings = get_settings()
-    pool = await create_pool(settings.database_url)
+    pool = await create_pool(
+        settings.database_url, application_name="osiris-script:ontology-ingest")
     try:
         actions = Actions(pool)
         case_name = f"mitre-attack-{domain}"
