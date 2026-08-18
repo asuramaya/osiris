@@ -31,6 +31,104 @@ def _isolated_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     monkeypatch.setenv("OSIRIS_STATUSLINE_CACHE_DIR", str(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_heartbeat_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """thread #180: `_fetch_counts` now tries the `/heartbeat` HTTP route BEFORE any of the
+    `_counts`-patching this file's tests already rely on — on a box where a real osiris-mcp
+    happens to be listening on :8790 (this dev box, most of the time), an unredirected
+    default would make every one of those tests silently hit the LIVE shared server instead
+    of the fake `_counts` they installed. Point it at a guaranteed-closed port instead, same
+    isolation shape as `_isolated_cache_dir` above — `_heartbeat_via_http` degrades to None
+    on any connection failure by design, so this exercises the real fallback path, not a
+    mock of it."""
+    monkeypatch.setattr(sl, "HEARTBEAT", "http://127.0.0.1:1/heartbeat")
+
+
+# ── thread #180: the `/heartbeat` HTTP route, tried before any direct connection ───────────
+
+def test_heartbeat_via_http_returns_none_when_the_route_is_unreachable() -> None:
+    """HEARTBEAT is redirected to a guaranteed-closed port by the autouse fixture above —
+    this proves the degrade path directly: connection failure is a quiet None, never a
+    raised exception `_fetch_counts` would have to catch."""
+    assert sl._heartbeat_via_http("proj", "deadbeef", "claude-fable-5", "claude-fable-5",
+                                  None, intent_hint=None) is None
+
+
+def test_heartbeat_via_http_parses_a_real_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful route response maps 1:1 into the SAME tuple shape `_counts` returns —
+    the caller (`_fetch_counts`) must not be able to tell the two paths apart."""
+    payload = {
+        "briefs": 1, "mail": 2, "dm": 3, "flight": 0, "souls": 4, "wakes": 5, "owed": 6,
+        "owed_here": 1, "sick": ["x"], "spend": [1.5, 10.0, 0],
+        "resolved_project": "proj", "resolved_intent": "intent", "resolved_seat_handle": "Ra I",
+    }
+
+    class _FakeResp:
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+    result = sl._heartbeat_via_http("proj", "deadbeef", "claude-fable-5", "claude-fable-5",
+                                    None, intent_hint=None)
+    assert result == (1, 2, 3, 0, 4, 5, 6, 1, ["x"], (1.5, 10.0, 0), "proj", "intent", "Ra I")
+
+
+def test_heartbeat_via_http_a_malformed_response_is_also_a_quiet_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResp:
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"briefs": 1}'  # missing every other required key
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+    assert sl._heartbeat_via_http("proj", "deadbeef", "x", "x", None, intent_hint=None) is None
+
+
+async def test_fetch_counts_never_touches_the_direct_connect_path_when_http_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of thread #180: a successful route answer must short-circuit BEFORE
+    `_counts` (and therefore before any `asyncpg.connect`) ever runs."""
+    async def _unreachable(*a: object, **k: object) -> tuple[int, ...]:
+        raise AssertionError("must never be called — the HTTP route already answered")
+
+    monkeypatch.setattr(sl, "_counts", _unreachable)
+    monkeypatch.setattr(
+        sl, "_heartbeat_via_http",
+        lambda *a, **k: (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None))
+    counts, slow = await sl._fetch_counts("proj", "deadbeef", "claude-fable-5",
+                                          "claude-fable-5", None, intent_hint=None)
+    assert slow is False
+    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
+
+
+async def test_fetch_counts_falls_back_to_direct_connect_when_http_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed route answer (already the default under this file's autouse redirect) must
+    fall straight through to the EXISTING `_counts` path, unchanged behavior."""
+    async def fake_counts(*a: object, **k: object) -> tuple[int, ...]:
+        return (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
+
+    monkeypatch.setattr(sl, "_counts", fake_counts)
+    counts, slow = await sl._fetch_counts("proj", "deadbeef", "claude-fable-5",
+                                          "claude-fable-5", None, intent_hint=None)
+    assert slow is False
+    assert counts == (0, 0, 0, 0, 1, 0, 0, 0, [], (0.0, 10.0, 0), "proj", None, None)
+
+
 async def test_a_timeout_then_success_reports_slow_not_a_clean_line(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

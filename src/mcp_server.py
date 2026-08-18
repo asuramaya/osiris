@@ -6885,6 +6885,51 @@ async def succession_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+@mcp.custom_route("/heartbeat", methods=["POST"])
+async def heartbeat_route(request: Any) -> Any:
+    """The statusline's server half (thread #180, 2026-08-18): every rendering tab used to
+    fork a fresh `asyncpg.connect()` per render — Thoth's own measurement, 138 tx/s and 23
+    backends against an idle fleet of 16, "20 backend forks/s from statusline alone" at
+    fleet scale. `compute_heartbeat` is the SAME logic `scripts/osiris_statusline.py`'s own
+    `_counts` has always run (see that module for the long-standing WHY of each resolution
+    step); this just runs it against the ALREADY-WARM shared pool instead of a cold
+    per-process connection, and calls `live_succession` directly instead of the script's own
+    HTTP round-trip to `/succession` (pointless when both ends are this same process).
+
+    Localhost-only, fail-open like the whisper: the script tries this route first and falls
+    straight back to its own direct-connect path on ANY failure — timeout, connection
+    refused, malformed response — so a route outage costs one render's worth of the OLD
+    per-process-connection cost, never a blocked or broken statusline."""
+    from starlette.responses import JSONResponse
+
+    from src.orchestrator.agents import live_succession
+    from src.orchestrator.heartbeat import compute_heartbeat
+
+    try:
+        body = await request.json()
+        session_id = str(body.get("session_id") or "")
+
+        async def _succeed(sid: str, model: str) -> str | None:
+            out = await live_succession(Actions(await _pool_get()), session_id=sid,
+                                        observed_model=model)
+            minted = out.get("minted")
+            if minted:
+                _evict_stale_minds(out.get("from"))
+                return str(minted)
+            return None
+
+        result = await compute_heartbeat(
+            await _pool_get(), project_hint=str(body.get("project_hint") or ""),
+            session_id=session_id, model_id=str(body.get("model_id") or ""),
+            model_raw=str(body.get("model_raw") or ""),
+            window_size=body.get("window_size"),
+            intent_hint=(str(body.get("intent_hint") or "") or None),
+            lease_secs=get_settings().osiris_mail_lease_secs, on_succession=_succeed)
+        return JSONResponse(result._asdict())
+    except Exception as e:  # noqa: BLE001 — the chrome falls back to its own connect; never block
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @mcp.custom_route("/spawn", methods=["POST"])
 async def spawn_route(request: Any) -> Any:
     """SubagentStart/SubagentStop's server half: the harness announces a spawn the moment it

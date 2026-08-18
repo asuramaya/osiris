@@ -7,8 +7,12 @@ last hour, and a LIVE model-identity check (the swap confession moved into the c
 demotion is visible the turn it happens — ruling f2ae6346's banner, made permanent).
 
 Claude Code pipes session JSON on stdin; we print one line and exit. HARD BUDGET: this runs
-per render, so one connection, one query, ~1s timeout, and ANY failure degrades to a quiet
-minimal line — the statusline must never block or break the window it serves.
+per render, so ~1s timeout and ANY failure degrades to a quiet minimal line — the statusline
+must never block or break the window it serves. ONE INGRESS (thread #180, 2026-08-18): the
+counts/heartbeat-bump query tries `/heartbeat` on the MCP server's own warm shared pool
+FIRST — Thoth's measurement, "20 backend forks/s from statusline alone" at fleet scale — and
+only falls back to this process's own fresh `asyncpg.connect()` (one connection, one query,
+the ORIGINAL budget) when that route is unreachable or a server predates it.
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 # when nothing is declared, and `main()` renders silence for that state, never an alarm.
 CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
 SUCCESSION = os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession")
+HEARTBEAT = os.environ.get("OSIRIS_HEARTBEAT_URL", "http://127.0.0.1:8790/heartbeat")
 LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"  # kill switch if a terminal balks
 LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
 CACHE_TTL_SECS = float(os.environ.get("OSIRIS_STATUSLINE_CACHE_TTL") or "5")
@@ -136,99 +141,67 @@ async def _counts(
     connect_timeout: float = 1.0,
 ) -> tuple[int, int, int, int, int, int, int, int, list[str],
            tuple[float, float, int], str | None, str | None, str | None]:
+    """THE DIRECT-CONNECT FALLBACK PATH (thread #180, 2026-08-18: the HTTP-first path lives
+    in `_heartbeat_via_http`/`_fetch_counts` above this function's own call site, never
+    reached when the route answers). The resolution logic itself — the heartbeat bump, the
+    succession-owned model stamp, msg 3949/3951's seat fallback, ruling e9ef7373's single
+    `surface.fetch` authority — moved to `src.orchestrator.heartbeat.compute_heartbeat` so
+    BOTH this fallback and the `/heartbeat` server route run the exact same code; only the
+    connection source and the succession call differ."""
     import asyncpg
+    from src.orchestrator.heartbeat import compute_heartbeat
+
+    async def _succeed(sid: str, model: str) -> str | None:
+        return _succession(sid, model)
 
     conn = await asyncpg.connect(DSN, timeout=connect_timeout)
     try:
-        agent = None
-        if session_id:
-            # THE HEARTBEAT: a tab rendering its chrome is ALIVE — bump its registry row so
-            # the wake dispatch never mints a twin beside a tab the operator is actively
-            # driving (msg-78 lesson: 'live' must mean the tab, not the last osiris call).
-            # The row's model is now succession-owned (ruling a882b334): first render STAMPS
-            # it (COALESCE fills a NULL only); any later divergence is a live model seam —
-            # the mind changed under this tab — and the SERVER mints the heir and moves the
-            # row, so the chrome never overwrites the one signal that witnesses the seam.
-            # NORMALIZED id: the payload decorates variants (claude-opus-4-8[1m] = the same
-            # weights at 1M context) that transcripts record bare — same mind, never a seam
-            bare = model_id.split("[", 1)[0].strip()
-            # the ONE session→row lookup (mounts.find_session_row, task #33): the old
-            # inline anchor-name match missed any window whose durable anchor wears
-            # another name — that window rendered identity-less (dm 0, desk 0)
-            from src.orchestrator.mounts import find_session_row
-            found = await find_session_row(conn, session_id)
-            row0 = None
-            if found is not None:
-                row0 = await conn.fetchrow(
-                    "UPDATE agent_mounts SET last_seen=now(), "
-                    "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,''), "
-                    "context_window_size=COALESCE($4, context_window_size) "
-                    "WHERE job_dir = $1 RETURNING agent_id, model",
-                    found["job_dir"], bare, model_raw, window_size)
-            agent = row0["agent_id"] if row0 else None
-            stored = row0["model"] if row0 else None
-            if agent and bare and stored and stored.split("[", 1)[0].strip() != bare:
-                agent = _succession(session_id, bare) or agent
-        agent = agent or ""
-
-        # THE SEAT FALLBACK (Thoth's catch, msg 3949/3951): a `.osiris` CLIMB from `cwd`
-        # answers nothing for the bare seat-office container — it's a CHILD directory (the
-        # office) that would answer, never an ancestor, and a climb only ever looks upward.
-        # "resolve the displayed identity the way everything else is supposed to — through
-        # the pin, THEN the seat, then the graph": the pin already ran (project_hint/
-        # intent_hint, computed by the caller before this call); this is the SEAT leg, run
-        # ONLY when the pin left a gap, on the SAME connection this call already opened —
-        # no separate query budget spent for the common case where the climb already
-        # answered. `house` (not the seat's own handle) fills `resolved_project`
-        # deliberately: house IS project for a seat-derived identity (ruling 577988ed), so
-        # the label and the numbers beside it stay about the SAME thing, never a silent mix
-        # of a seat's name against a different project's counts.
-        #
-        # THE WINDOW TAG NEEDS A SEPARATE FIELD (ruling b8a18059, same resolution chain as
-        # the mount-guard fix this session): 577988ed's reasoning stays right about the
-        # NUMBERS (they must be about `house`, never a silent mix), but the operator reads
-        # this line to answer "which MIND am I talking to", and `house` alone answers a
-        # different question ("whose counts are these"). resolved_seat_handle rides beside
-        # resolved_project rather than replacing it — the render layer decides how to show
-        # both together; this layer only resolves the extra fact. Looked up whenever an
-        # `agent` is known (not gated on resolved_project being None) because the handle is
-        # needed even on the common path where the pin climb already answered the project.
-        resolved_project = project_hint or None
-        resolved_intent = intent_hint
-        resolved_seat_handle: str | None = None
-        if agent:
-            from src.orchestrator.seats import held_seat, seat_facts
-
-            seat = await held_seat(conn, agent)
-            if seat:
-                resolved_seat_handle = seat.get("handle")
-                if resolved_project is None:
-                    resolved_project = seat.get("house")
-                if resolved_intent is None and seat.get("seat_id"):
-                    facts = await seat_facts(conn, seat["seat_id"])
-                    anchor = facts.get("anchor_cwd")
-                    if anchor:
-                        from src.orchestrator.agents import read_project_model
-                        resolved_intent = read_project_model(anchor)
-
-        # ONE AUTHORITY PER FACT, and now one AUTHORITY PER RULE too (ruling e9ef7373,
-        # thread 109b6c48 — the render analog of the write-verb receipt law): this script
-        # owns no fact-SQL and no presentation rule (thresholds/gates/severity) anymore —
-        # surface.fetch is the single batched read every ambient number and every dark-
-        # until-it-matters/metered-gate/dm-lights-alone rule comes from.
-        from src.orchestrator import surface
-
-        seg = await surface.fetch(conn, project=resolved_project or "", agent=agent or None,
-                                  lease_secs=LEASE_SECS)
-        return (seg.briefs_mine.data["briefs"], seg.mail.data["mail"], seg.mail.data["dm"],
-                seg.mail.data["flight"], seg.live.data["souls"], seg.wakes.data["wakes"],
-                seg.owed.data["owed"], seg.owed_here.data["owed_here"],
-                seg.sensing.data["sick"],
-                (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
-                 seg.spend.data.get("blind", 0)),
-                resolved_project, resolved_intent, resolved_seat_handle)
+        result = await compute_heartbeat(
+            conn, project_hint=project_hint, session_id=session_id, model_id=model_id,
+            model_raw=model_raw, window_size=window_size, intent_hint=intent_hint,
+            lease_secs=LEASE_SECS, on_succession=_succeed)
+        return tuple(result)  # type: ignore[return-value]
     finally:
         await conn.close()
+
+
+def _heartbeat_via_http(
+    project_hint: str, session_id: str, model_id: str, model_raw: str,
+    window_size: int | None, *, intent_hint: str | None, timeout: float = 1.0,
+) -> tuple[int, int, int, int, int, int, int, int, list[str],
+           tuple[float, float, int], str | None, str | None, str | None] | None:
+    """ONE INGRESS (thread #180, 2026-08-18): the `/heartbeat` route runs this SAME logic
+    against the MCP server's own already-warm shared pool instead of a fresh per-process
+    connection — Thoth's own measurement, "20 backend forks/s from statusline alone" at
+    fleet scale (msg 5205). Tried FIRST; None on ANY failure (route down, timeout,
+    malformed JSON, a stale server predating this route) falls straight through to the
+    existing direct-connect `_counts` path below, unchanged — a route outage costs exactly
+    what today already costs, never more. Blocking urllib, same as `_succession` above —
+    this script runs one coroutine, nothing else is waiting on the event loop."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        payload = json.dumps({
+            "project_hint": project_hint, "session_id": session_id, "model_id": model_id,
+            "model_raw": model_raw, "window_size": window_size, "intent_hint": intent_hint,
+        }).encode()
+        req = urllib.request.Request(
+            HEARTBEAT, data=payload, headers={"Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            out = json.load(resp)
+    except (OSError, urllib.error.URLError, ValueError):
+        return None
+    if "error" in out:
+        return None
+    try:
+        return (out["briefs"], out["mail"], out["dm"], out["flight"], out["souls"],
+                out["wakes"], out["owed"], out["owed_here"], out["sick"],
+                tuple(out["spend"]), out["resolved_project"], out["resolved_intent"],
+                out["resolved_seat_handle"])
+    except KeyError:
+        return None
 
 
 async def _fetch_counts(
@@ -242,7 +215,15 @@ async def _fetch_counts(
     actually down and gets no second knock; only a TIMEOUT earns one, because a timeout is
     the one failure mode that means "maybe just slow." Returns (counts, slow) — slow=True
     only when the FIRST attempt timed out and the retry succeeded; callers still see
-    "unreachable" when both attempts fail (the retry's own exception propagates)."""
+    "unreachable" when both attempts fail (the retry's own exception propagates).
+
+    The HTTP route (thread #180) is tried first, outside this retry law entirely — its own
+    failure (of any kind) just means "fall back to the direct-connect path exactly as it
+    already worked before this route existed," never a slow/unreachable verdict of its own."""
+    via_http = _heartbeat_via_http(project_hint, session_id, model_id, model_raw, window_size,
+                                    intent_hint=intent_hint)
+    if via_http is not None:
+        return via_http, False
     try:
         return await asyncio.wait_for(
             _counts(project_hint, session_id, model_id, model_raw, window_size,
