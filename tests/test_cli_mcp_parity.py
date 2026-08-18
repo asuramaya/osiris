@@ -74,6 +74,10 @@ CLI_ONLY_PARAMS = {
     ("bootstrap", "project"): "bootstrap_project itself takes this override; the MCP "
         "tool's own wrapper never exposes it, always inferring from cwd's basename — a "
         "gap on that side, not an inconsistency to hide here",
+    ("smoke", "chaos"): "the crash replay SIGKILLs osiris-mcp/osiris-worker and fires a "
+        "session-end storm — an operator/manager-hand operational act (every worker "
+        "charter says 'you NEVER restart services'); deliberately unreachable from any "
+        "MCP tool a seat could call mid-turn (Sekhmet bfa2bd2, #178 residual)",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
