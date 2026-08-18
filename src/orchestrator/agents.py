@@ -1969,8 +1969,13 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     `_validate_repo_name` was declared "the single choke point" for every legitimate
     SoftwareProject mint, but was never actually wired into THIS path (nor mint_heir's,
     ingest_files', bootstrap's, or correct_project_name's own mints) — 4 of 5 live mint
-    sites bypassed it entirely, which is exactly how a bare '?' got through. Reuses that
-    SAME regex here rather than inventing a second, possibly-diverging definition. Returns
+    sites bypassed it entirely, which is exactly how a bare '?' got through. ALL 5 NOW
+    COVERED (thread 09bde57e's own successor wave — the three remaining gaps this
+    docstring named): ingest_files (src/ingest/files.py) and bootstrap (bootstrap.py)
+    each now refuse loudly (return `{"error": ...}`) BEFORE minting; correct_project_name
+    (projects.py) validates the majority-vote `settled` name it's about to bless as
+    canonical, even though it mints no new object. Reuses that SAME regex here rather
+    than inventing a second, possibly-diverging definition. Returns
     None rather than raising: this runs deep inside ordinary mount/succession traffic,
     where a caller-side exception would be a much louder failure than a malformed label
     deserves — the caller simply has nothing to link works_in to this turn, same as an

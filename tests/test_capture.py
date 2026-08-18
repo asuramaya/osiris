@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
@@ -182,6 +183,77 @@ async def test_link_repo_refuses_a_placeholder_that_is_not_a_well_formed_name(
         await link_repo(actions, obj, "   ", datetime.now(UTC))  # strips to empty
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+# --- EVERY SoftwareProject mint door refuses a degenerate bare label (thread 05793d4a's own
+# census, closed by Thoth's dispatch msg 5157): task #107 declared _validate_repo_name "the
+# single choke point" but it was only ever wired into SOME of the live mint sites. The full
+# census, enumerated here so a SIXTH site is caught by reading this list rather than by
+# another live "?" incident:
+#   1. capture.py's _mint_or_find_repo/link_repo — validated from birth (task #107, tested
+#      immediately above this block).
+#   2. agents.py's _resolve_or_mint_project (register_agent/mint_heir) — validated by the
+#      bare-label guard (0991a06); own dedicated tests in test_agents.py
+#      (test_register_agent_never_mints_a_bare_question_mark_project et al).
+#   3. lineage.py's register_spawn/register_swarm — validated (thread db14d8be), but LOGS
+#      AND SKIPS the mint rather than raising (deep background traffic, no receipt field to
+#      carry a refusal on) — own dedicated tests in test_lineage.py/test_spawns.py.
+#   4. project_identity.py's create_project — validated from birth (task #107); own tests
+#      in test_project_identity.py.
+#   5. neighborhoods.py's census_trees (via _mint_or_find_repo directly) — validated from
+#      birth; own tests in test_neighborhoods.py.
+# THE THREE THAT WERE MISSING, closed here: ingest_files (src/ingest/files.py), bootstrap
+# (bootstrap.py), and correct_project_name (projects.py, which mints no NEW object but
+# still needed the guard on the historical value it's about to bless as canonical). ----
+
+
+async def test_ingest_files_refuses_a_degenerate_toplevel_basename(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import files as files_mod
+
+    monkeypatch.setattr(files_mod, "_git", lambda path, *args: "/tmp/?\n")
+    out = await files_mod.ingest_files(actions, "/tmp/?")
+    assert "error" in out
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_bootstrap_project_refuses_a_degenerate_explicit_project(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.bootstrap import bootstrap_project
+
+    out = await bootstrap_project(actions, ".", project="?", source="analyst:test")
+    assert "error" in out
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_correct_project_name_refuses_to_bless_a_malformed_majority_value(
+    actions: Actions,
+) -> None:
+    """A fossil from before this guard existed: the object's own history has voted a
+    degenerate '?' into the majority. correct_project_name's self-proving authority
+    (no operator sign-off needed) must not let that entrench it as canonical."""
+    from src.orchestrator.projects import correct_project_name
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:probe-cpn", "session")
+    now = datetime.now(UTC)
+    # two RAW variants of the same degenerate value ("?" vs " ? ") — both strip().casefold()
+    # to "?", so correct_project_name sees a provable case/whitespace correction, exactly
+    # the shape it's designed to self-authorize, and reaches the new guard on `settled`.
+    # "?" wins the majority vote 2-1 (not tied), so the tie-refusal branch never fires.
+    await actions.assert_property(proj, "name", "?", "helper:a", now, 0.9)
+    await actions.assert_property(proj, "name", "?", "helper:b", now, 0.9)
+    await actions.assert_property(
+        proj, "name", " ? ", "helper:c", now + timedelta(seconds=1), 0.9)
+    out = await correct_project_name(actions, project="repo:probe-cpn", actor="analyst:test")
+    assert "error" in out
+    assert "malformed" in out["error"]
+    current = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND name='name'", proj)
+    assert current == 3  # nothing new asserted — all three rows stand exactly as before
 
 
 async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Actions) -> None:

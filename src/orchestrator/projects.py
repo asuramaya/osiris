@@ -828,6 +828,20 @@ async def correct_project_name(
                          "stated reason.",
                 "vote": dict(counts)}
     settled = ranked[0][0]
+    # task #107's choke point (capture.py's `_validate_repo_name`), reused verbatim: this
+    # verb mints no NEW SoftwareProject (it only re-asserts a value already present in
+    # `row`'s own assertion history), but the value it's about to bless as CANONICAL still
+    # needs to be well-formed — a caller could otherwise settle onto a garbage historical
+    # value (e.g. a path or placeholder some earlier bypass let through) and this verb's
+    # own "self-proving" authority would entrench it rather than catch it.
+    from src.orchestrator.capture import _validate_repo_name
+    try:
+        _validate_repo_name(settled, settled)
+    except ValueError as exc:
+        return {"error": f"{row['canonical']}'s own majority historical name is malformed "
+                         f"({exc}) — correct_project_name refuses to bless it as canonical; "
+                         "use rename_project with an explicit declaration instead.",
+                "distinct_names": distinct_raw}
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "name", settled, actor, now, _CONF,
                                   evidence_class=_EC)
