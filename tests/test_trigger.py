@@ -483,11 +483,22 @@ FULL_SID = "abcd1234-0000-4000-8000-000000000000"
 
 
 async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
-                                 transcript_bytes: int = 16) -> Path:
+                                 transcript_bytes: int = 16, *,
+                                 bind_seat: bool = True) -> Path:
     """An owner for project demo: a durable mount (made STALE so it isn't 'live') whose job_dir
     anchors a real transcript under the sense root — the transcript AGED too, because under
     the adapter's law mid-turn means the TRANSCRIPT is moving (a fresh mtime would read as a
-    working mind and correctly refuse to resume). Returns the sense root."""
+    working mind and correctly refuse to resume). Returns the sense root.
+
+    ALSO seats agent:abcd1234 with an office at the SAME cwd and asserts the graph's own
+    `session`/`seat_generation` properties (task #178: dispatch_dm's resume selection now
+    reads `_lineage_resume_candidate` — graph truth, via `succession_chain` — never
+    `agent_mounts` alone; a fixture that only wrote the mount row is invisible to it).
+    `bind_seat=False` skips the seat-binding half only — a caller that ALSO calls
+    `_managed_pair` for agent:abcd1234 must bind its own seat there instead (`bind_holder`
+    never invalidates an agent's holds on a DIFFERENT seat, only a different agent's hold
+    on the SAME seat — two calls would leave abcd1234 holding two seats at once, breaking
+    seat-scoped lookups like the pair rate cap)."""
     import os
     import time as _time
 
@@ -510,7 +521,39 @@ async def _stale_resumable_owner(actions: Actions, tmp_path: Path,
                             project="demo", cwd="/repo/demo", model=None, session_key=None)
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    if bind_seat:
+        from src.orchestrator.seats import bind_holder, ensure_seat
+        seat = (await ensure_seat(actions, house="demo", handle="StaleOwner",
+                                  source="test"))["seat_id"]
+        await bind_holder(actions, seat_id=seat, agent_id="agent:abcd1234")
+        await _office(actions, seat, "/repo/demo")
+    obj = await actions.create_or_find_object("Agent", "agent:abcd1234", "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
     return sense
+
+
+async def _seat_and_graph_session(
+    actions: Actions, *, agent_id: str = "agent:abcd1234", cwd: str = "/repo/demo",
+    session: str = FULL_SID, handle: str = "RawFixtureOwner",
+) -> str:
+    """The graph-truth counterpart a raw `mounts.save_mount`-only fixture never had (task
+    #178): a Seat with an office at `cwd`, bound to `agent_id`, plus the graph's own
+    `session`/`seat_generation` properties `_lineage_resume_candidate` reads. Returns the
+    seat_id."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+    seat = (await ensure_seat(actions, house="demo", handle=handle,
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id=agent_id)
+    await _office(actions, seat, cwd)
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", session, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    return str(seat)
 
 
 async def test_live_owner_gets_delivery_not_a_twin(actions: Actions, tmp_path: Path) -> None:
@@ -888,6 +931,7 @@ async def test_dispatch_dm_refusal_names_no_anchored_transcript_when_nothing_was
                             agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
                             model=None, session_key=None)
     await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    await _seat_and_graph_session(actions)
     msg_id = await _dm_to_owner(actions)
 
     async def _boom(*a: Any, **kw: Any) -> None:
@@ -898,7 +942,7 @@ async def test_dispatch_dm_refusal_names_no_anchored_transcript_when_nothing_was
                           settings=_settings(enabled=True, sense=str(tmp_path / "nowhere")),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
     assert d["mode"] == "resume-refused-no-anchor"
-    assert "no anchored transcript at all" in d["detail"]
+    assert "no transcript found on disk" in d["detail"]
 
 
 async def test_dispatch_dm_refusal_names_the_ceiling_when_a_real_session_is_too_large(
@@ -1770,6 +1814,7 @@ async def test_a_seat_addressed_dm_reaches_the_holder(
     seat = await actions.create_or_find_object("Seat", "seat:demo-charter", "session")
     holder = await actions.create_or_find_object("Agent", "agent:abcd1234", "session")
     await actions.create_link(holder, seat, "holds", "session", NOW, 0.9)
+    await _office(actions, "seat:demo-charter", "/repo/demo")
     out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
                              to_agent="seat:demo-charter", body="for the seat")
     calls: list[dict[str, Any]] = []
@@ -2136,6 +2181,7 @@ async def test_a_crossed_registry_never_leaks_the_envelope_or_the_resume(
                             agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
                             model=None, session_key=None)
     await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    await _seat_and_graph_session(actions)
     msg_id = await _dm_to_owner(actions)
 
     async def _jobs(ids: set) -> dict[str, Any]:
@@ -2161,7 +2207,13 @@ async def test_an_absent_transcript_refuses_as_unknown_never_as_a_found_mismatch
     mismatch. Same registry shape as the crossed-registry test above (a mounted door, a
     resumable candidate) but the transcript's content is unsigned harness noise, not a
     signature naming a stranger — so this must refuse as `resident-unknown`, never
-    `crossed-registry`, and the detail text must never claim a different mind was found."""
+    `crossed-registry`, and the detail text must never claim a different mind was found.
+
+    ONE HOP BACK, deliberately (task #178's own zero-hop graph door would otherwise
+    legitimately RESUME this exact unsigned-but-graph-corroborated shape at hop 0 — see
+    `test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_not_a_refusal`
+    for that composed case; this test's own point is unrelated to hop count, so it moves
+    one hop back to stay clear of that door and keep testing what it always tested)."""
     import os
     import time as _time
 
@@ -2179,6 +2231,16 @@ async def test_an_absent_transcript_refuses_as_unknown_never_as_a_found_mismatch
                             agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
                             model=None, session_key=None)
     await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    await _seat_and_graph_session(actions)
+    # a fresher-mounted successor with NO graph session of its own — wakeable_identity
+    # picks it as wake_target (freshest mount), pushing the unsigned transcript above to
+    # hop 1 in `_lineage_resume_candidate`'s own walk from there
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234ii"),
+                            agent_id="agent:abcd1234-ii", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    succ = await actions.create_or_find_object("Agent", "agent:abcd1234-ii", "test")
+    await actions.assert_property(succ, "succeeded_from", "agent:abcd1234", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
     msg_id = await _dm_to_owner(actions)
 
     async def _jobs(ids: set) -> dict[str, Any]:
@@ -2276,10 +2338,17 @@ def test_resident_of_deeper_sync_respects_its_own_cap(tmp_path: Path) -> None:
 
 async def _mounted_deep_agent(
     actions: Actions, tmp_path: Path, *, agent_id: str = "agent:abcd1234",
-    cwd: str = "/repo/demo", seat_id: str | None = None,
+    cwd: str = "/repo/demo", seat_id: str | None = None, graph_identity: bool = True,
 ) -> tuple[Path, Path]:
     """A registry row + a transcript whose signed act sits beyond the tail — the halcyon
-    shape. Returns (sense_root, transcript_path)."""
+    shape. Returns (sense_root, transcript_path).
+
+    `graph_identity=True` (default) ALSO seats `agent_id` with an office at `cwd` and
+    asserts the graph's own `session`/`seat_generation` properties (task #178:
+    dispatch_dm's resume selection reads `_lineage_resume_candidate` — graph truth —
+    never `agent_mounts` alone). Callers that test `_registry_corroborates`/`_resident_*`
+    DIRECTLY (never through `dispatch_dm`) pass `graph_identity=False` — those unit tests
+    exercise their own `job_dir`/`seat_id` plumbing and don't need a Seat at all."""
     from src.orchestrator import mounts
     from src.orchestrator.mounts import _harness_slug
 
@@ -2296,6 +2365,17 @@ async def _mounted_deep_agent(
     if seat_id is not None:
         await actions.pool.execute(
             "UPDATE agent_mounts SET seat_id=$1 WHERE job_dir=$2", seat_id, str(job_dir))
+    if graph_identity:
+        from src.orchestrator.seats import bind_holder, ensure_seat
+        seat = (await ensure_seat(actions, house="demo", handle=f"Deep{agent_id[-6:]}",
+                                  source="test"))["seat_id"]
+        await bind_holder(actions, seat_id=seat, agent_id=agent_id)
+        await _office(actions, seat, cwd)
+        obj = await actions.create_or_find_object("Agent", agent_id, "test")
+        await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                      evidence_class="self_declared")
+        await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                      evidence_class="self_declared")
     return sense, t
 
 
@@ -2451,6 +2531,13 @@ async def test_a_dm_still_wakes_the_true_successor_after_a_real_completed_succes
     await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "eeee2222"),
                             agent_id="agent:abcd1234-ii", project="demo", cwd="/repo/demo",
                             model=None, session_key=None)
+    succ_obj = await actions.create_or_find_object("Agent", "agent:abcd1234-ii", "test")
+    await actions.assert_property(succ_obj, "seat_generation", "2", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(succ_obj, "session", succ_sid, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(succ_obj, "succeeded_from", "agent:abcd1234", "test", NOW,
+                                  0.9, evidence_class="self_declared")
     msg_id = await _dm_to_owner(actions)
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -2487,6 +2574,7 @@ async def test_dispatch_dm_still_refuses_when_deep_history_is_a_different_mind(
                             agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
                             model=None, session_key=None)
     await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    await _seat_and_graph_session(actions)
     msg_id = await _dm_to_owner(actions)
 
     async def _boom(*a: Any, **kw: Any) -> None:
@@ -2594,8 +2682,10 @@ async def test_dispatch_dm_pair_scoped_cap_ignores_unrelated_project_wakes(
     """The actual fix, wired: a managed pair's own cap check must not be starved by OTHER
     traffic sharing the same project (msg 984's measured incident) — only wakes between
     THIS pair count against it."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
-    await _managed_pair(actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    await _office(actions, worker_seat, "/repo/demo")
     # flood the project-wide wake count — enough to blow a project-scoped cap of 1, none of
     # it involving this pair
     for i in range(3):
@@ -2624,7 +2714,7 @@ async def test_dispatch_dm_pair_scoped_cap_still_bounds_the_pingpong(
     """The unit changed; the bound itself must not have. A wake already recorded for THIS
     pair, within the window, still caps the next one — the ping-pong halts exactly as
     before, just scoped correctly now."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     await _managed_pair(actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
     prior = await send_message(actions.pool, from_agent="agent:sender", from_project="demo",
                                to_agent="agent:abcd1234", body="earlier assignment")
@@ -2797,7 +2887,7 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
     worker knocking on ITS OWN manager is authorized, and the mail reaches the manager's
     seat via the SAME dispatch path send() uses — CONFIRMED landed via the outcome-read
     (ruling 986b12f0), not merely queued."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
     # thread 96f62338: attendance is an explicit stamp now, not inferred from managed_by —
@@ -2829,9 +2919,10 @@ async def test_wake_authorizes_worker_to_manager(actions: Actions, tmp_path: Pat
 async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path: Path) -> None:
     """Ruling 16722273: the gate is bidirectional. A manager knocking DOWN on its own
     worker is just as authorized as the reverse — only peers and strangers refuse."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    await _office(actions, worker_seat, "/repo/demo")
     _land_marker(sense, _wake_marker("agent:sender", manager_seat, "Manager"))
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
@@ -2850,7 +2941,7 @@ async def test_wake_is_FROZEN_when_the_flag_is_off(actions: Actions, tmp_path: P
     the exact case the gate would otherwise let through, is refused with 'refused-wake-frozen'
     and NOTHING is sent: no marker, no DM, no spawn. The flag flips only once a sanctioned
     inter-agent API replaces the lane."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     _worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
 
@@ -2872,11 +2963,12 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
     success, not a SEEN one. When the marker never appears in the target's transcript (the
     ordinary case in these tests, since the mocked spawn/nudge writes nothing real), wake()
     must NOT claim "delivered" — it downgrades honestly to "queued", unconfirmed."""
-    sense = await _stale_resumable_owner(actions, tmp_path)
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     # knock DOWN on a worker (abcd1234), the injectable direction — a manager target would be
     # pull-only by the human-attended guard and never reach the marker-downgrade path this pins.
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    await _office(actions, worker_seat, "/repo/demo")
 
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         pass  # never writes the marker anywhere — nothing "lands"

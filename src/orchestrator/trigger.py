@@ -1036,6 +1036,13 @@ def _gate_name(detail: str) -> str:
         return "ceiling"
     if "no anchored transcript" in detail:
         return "no-anchor"
+    # `_lineage_resume_candidate`'s OWN log wording (task #178) — the same "nothing to
+    # resume at this hop" fact, phrased differently because it comes from a lineage-walk
+    # entry, never from `_resume_miss_reason`'s single-mount-row prose.
+    if "no transcript found on disk" in detail:
+        return "no-anchor"
+    if "never mounted, no session to check" in detail:
+        return "no-anchor"
     if detail.startswith("retired"):
         return "retired"
     return "unknown"
@@ -1584,15 +1591,44 @@ async def dispatch_dm(
     if not st.osiris_dm_resume:
         return {"mode": "held",
                 "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
-    if resume is None:
+    # THE SELECTION SWAP (task #178, Seshat's own specimen tonight — an old generation's
+    # 103MB transcript picked over her real, current session): `resume` above (from
+    # `_agent_resumable`) is `agent_mounts`-keyed, freshest-mounted-row-wins — the exact
+    # shared-anchor defect `_lineage_resume_candidate`'s own docstring documents for a
+    # `--bg`-launched seat (one durable per-seat mount row, overwritten by whichever
+    # generation mounts most recently, blind to which one is the TRUE current lineage
+    # head). It stays correct for the MID-TURN check above (an activity probe, not an
+    # identity claim) but must never pick WHICH session `-p --resume` actually targets.
+    # From here down, `_lineage_resume_candidate` — the SAME graph-truth primitive
+    # launch_seat already uses — walks `succession_chain`'s own `session` property
+    # instead: identity from the graph, never the registry's own amnesia. Started from
+    # `wake_target`, NOT `target`: `target` is living_head's DECLARED successor, which
+    # can be a real, active, but never-mounted Agent object with no `succeeded_from`
+    # backward link for `succession_chain` to walk at all (thread 28842543's own shape,
+    # the reason `wake_target` exists) — `wake_target` is wake's own already-resolved
+    # answer to "which identity can actually be resumed", the correct root for this walk
+    # exactly as `_agent_resumable` above was rooted on it too.
+    from src.orchestrator.seats import seat_facts
+    launch_cwd = None
+    if seat_id is not None:
+        facts = await seat_facts(pool, seat_id)
+        launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
+    graph_outcome = await _lineage_resume_candidate(
+        pool, wake_target, st, repo=launch_cwd) if launch_cwd else [
+            "no seat/office known for this addressee — a resume needs a launch location"]
+    graph_log = graph_outcome[1] if isinstance(graph_outcome, tuple) else graph_outcome
+    graph_resume = graph_outcome[0] if isinstance(graph_outcome, tuple) else None
+    if graph_resume is None:
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
-        miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
+        miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
         return {"mode": f"resume-refused-{_gate_name(miss_reason)}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
-    session_id, repo = resume[0], resume[1]
-    gate, refusal = await _resume_guard(pool, resume, base, seat_id=seat_id, st=st)
+    session_id, repo = graph_resume[0], graph_resume[1]
+    hop = len(graph_log) - 1
+    gate, refusal = await _resume_guard(
+        pool, graph_resume, base, seat_id=seat_id, st=st, hop=hop, launch_cwd=launch_cwd)
     if gate is not None:
         return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
