@@ -3035,7 +3035,13 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     it changes nothing about what `live` means (still the mount registry's belief, exactly as
     before). `ghost_gap` is where the graph's `live` count exceeds it: a closed tab mid-decay,
     or a phantom mount that registered identity but never backed an actual session — either way
-    invisible to a query that only ever asks the graph, visible here the instant you look."""
+    invisible to a query that only ever asks the graph, visible here the instant you look.
+
+    `whisper_health` (task #179) is the SessionStart whisper/session-end/precompact/stophook
+    alarm channel read back — recent failure count + last error over a 24h window, from the
+    SAME blind-spot mechanism (task #34) each hook's own except-block files into on a
+    failure. `ok: true` means no hook has confessed to failing recently, not that the
+    whisper is definitely up — it is a read of the alarm log, not an active probe."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3136,6 +3142,16 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                 if (gap := n_live - os_bodies.get(p, 0)) > 0}
     from src.orchestrator.seats import fleet_occupancy
     seats = await fleet_occupancy(pool)
+    # WHISPER HEALTH (task #179): recent whisper/session-end/precompact/stophook alarm
+    # counts, read off the SAME blind-spot channel every other unverifiable-from-here gap
+    # uses (task #34) — a session mounting via fleet() sees at a glance whether the door
+    # it just walked through has been failing. Best-effort, same fail-open shape as
+    # os_bodies: a probe failure here must never break fleet() itself.
+    try:
+        from src.orchestrator.smoke import whisper_health as _whisper_health
+        whisper = await _whisper_health(pool)
+    except Exception:  # noqa: BLE001
+        whisper = {"ok": True, "error": "whisper_health probe unavailable"}
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -3144,6 +3160,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
         "os_bodies": os_bodies,
         **({"ghost_gap": ghost_gap} if ghost_gap else {}),
+        "whisper_health": whisper,
         # OCCUPANCY (9f566244 piece B): every active Seat, VACANT ones included — the
         # agent tree above is rooted at Agent objects, so a seat with no holder AT ALL
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
@@ -6832,6 +6849,17 @@ async def automount_route(request: Any) -> Any:
         # never silent again: the hook can only print this; the journal must carry the trace
         sid = body.get("session_id") if isinstance(body, dict) else "?"
         logging.getLogger("osiris.whisper").exception("automount route failed for %s", sid)
+        # THE GRAPH MUST CARRY IT TOO (task #179 — the log-only trail above is exactly how
+        # this outage went unseen for two weeks): file the SAME failure into the existing
+        # blind-spot channel (task #34) so orient()/fleet()/smoke can all see it without
+        # anyone reading a server log by hand.
+        try:
+            from src.orchestrator.capture import record_hook_failure
+            await record_hook_failure(
+                Actions(await _pool_get()), surface="whisper/automount",
+                cannot_see=f"automount route failed for session {sid}: {e}")
+        except Exception:  # noqa: BLE001 — the alarm itself must never break the response
+            pass
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
@@ -6847,6 +6875,7 @@ async def session_end_route(request: Any) -> Any:
     missed release costs at most one ghost window, never a blocked session close."""
     from starlette.responses import JSONResponse
 
+    body: Any = None
     try:
         body = await request.json()
         session_id = str(body.get("session_id") or "")
@@ -6855,6 +6884,14 @@ async def session_end_route(request: Any) -> Any:
         out = await handshake.session_end(Actions(await _pool_get()), session_id=session_id)
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: a session must always be able to end
+        sid = body.get("session_id") if isinstance(body, dict) else "?"
+        try:
+            from src.orchestrator.capture import record_hook_failure
+            await record_hook_failure(
+                Actions(await _pool_get()), surface="hook/session-end",
+                cannot_see=f"session-end route failed for session {sid}: {e}")
+        except Exception:  # noqa: BLE001 — the alarm itself must never break the response
+            pass
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
@@ -6948,6 +6985,7 @@ async def sweep_route(request: Any) -> Any:
     from starlette.responses import JSONResponse
 
     global _arq
+    body: Any = None
     try:
         body = await request.json()
         transcript = str(body.get("transcript_path") or "")
@@ -6970,6 +7008,14 @@ async def sweep_route(request: Any) -> Any:
         # recovers a dropped attempt on a lineage B7 has already swept once and gone blind to.
         # It still must never block the dying mind — a hook that can refuse a death is worse
         # than a lost extraction — so this route stays fail-open either way.
+        sid = body.get("session_id") if isinstance(body, dict) else "?"
+        try:
+            from src.orchestrator.capture import record_hook_failure
+            await record_hook_failure(
+                Actions(await _pool_get()), surface="hook/precompact",
+                cannot_see=f"sweep route (precompact) failed for session {sid}: {e}")
+        except Exception:  # noqa: BLE001 — the alarm itself must never break the response
+            pass
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

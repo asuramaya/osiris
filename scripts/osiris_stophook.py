@@ -816,7 +816,35 @@ def _stage_a(payload: dict[str, Any], pct: int | None = None) -> None:
     skipped, never guessed."""
     try:
         asyncio.run(asyncio.wait_for(_stage_a_async(payload, pct), timeout=1.5))
-    except Exception:  # noqa: BLE001 — never turn a clean stop into a broken one
+    except Exception as exc:  # noqa: BLE001 — never turn a clean stop into a broken one
+        _alarm_stop_hook_failure(f"_stage_a_async failed: {exc}")
+
+
+async def _alarm_stop_hook_failure_async(cannot_see: str) -> None:
+    import asyncpg
+    from src.actions.core import Actions
+    from src.orchestrator.capture import record_hook_failure
+
+    # a FRESH, short-lived pool — never the connection that just failed, and never the
+    # shared pool other paths in this hook use, so an alarm write can never itself become
+    # the thing that makes a stop slow or unsafe.
+    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1, timeout=1.0)
+    try:
+        await record_hook_failure(Actions(pool), surface="hook/stophook",
+                                  cannot_see=cannot_see)
+    finally:
+        await pool.close()
+
+
+def _alarm_stop_hook_failure(cannot_see: str) -> None:
+    """File a stop-hook failure into the graph (task #179), the SAME never-block guarantee
+    as `_stage_a`: a failure HERE costs a missed alarm, never a broken stop. This is the
+    one place in this file that swallows a failure without EVER logging it anywhere
+    (main()'s two DB-down branches allow the stop silently) — the alarm channel closes
+    that, matching the whisper/session-end/precompact routes' own new alarm calls."""
+    try:
+        asyncio.run(asyncio.wait_for(_alarm_stop_hook_failure_async(cannot_see), timeout=1.0))
+    except Exception:  # noqa: BLE001 — an alarm that itself fails must stay silent, never loud
         pass
 
 
@@ -838,7 +866,8 @@ def main() -> None:
     try:
         n, senders, window, bands, project = asyncio.run(
             asyncio.wait_for(_deliverable(cwd, session_id), timeout=1.5))
-    except Exception:  # noqa: BLE001 — graph down = allow the stop; the chrome still shows it
+    except Exception as exc:  # noqa: BLE001 — graph down = allow the stop; chrome still shows it
+        _alarm_stop_hook_failure(f"_deliverable failed for session {session_id or '?'}: {exc}")
         _stage_a(payload)
         return
     if n:
@@ -880,7 +909,8 @@ def main() -> None:
     try:
         boxes = asyncio.run(
             asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
-    except Exception:  # noqa: BLE001 — graph down = allow the stop, same as the mail check
+    except Exception as exc:  # noqa: BLE001 — graph down = allow the stop, same as mail check
+        _alarm_stop_hook_failure(f"_offload_boxes failed for session {session_id or '?'}: {exc}")
         _stage_a(payload, good_pct)
         return
     verdict = _offload_verdict(

@@ -1400,6 +1400,51 @@ async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None
 RecordDeploy = Callable[[asyncpg.Pool, Path], Awaitable[str | None]]
 WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
 WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
+CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
+
+
+async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
+    """The pure verdict logic, `client`-injected (same pattern `smoke_chrome` uses) so it's
+    testable against an `httpx.MockTransport` with no live server — `_real_check_whisper_
+    probe` is the thin real-client wrapper cmd_deploy actually calls. POSTs a THROWAWAY
+    /automount call, then immediately /session-end to release whatever row it minted —
+    this probe leaves nothing behind. Non-200, a network failure, OR a 200 whose own body
+    carries `{"error": ...}` (the exact silent-failure shape 33a3573 fixed once already,
+    task #179's own headline) all refuse — the route degrading gracefully to a 200-with-
+    error would defeat the entire point of this gate."""
+    import uuid as _uuid
+
+    sid = f"deploy-probe-{_uuid.uuid4().hex[:12]}"
+    try:
+        r = await client.post("/automount", json={"session_id": sid, "cwd": "/tmp"})
+        try:
+            await client.post("/session-end", json={"session_id": sid})
+        except Exception:  # noqa: BLE001 — best-effort cleanup, never the gate's own verdict
+            pass
+        if r.status_code != 200:
+            return False, (f"whisper probe: REFUSED — /automount returned "
+                          f"{r.status_code}: {r.text[:200]}")
+        body = r.json()
+        if isinstance(body, dict) and body.get("error"):
+            return False, (f"whisper probe: REFUSED — /automount returned 200 with an "
+                          f"error body: {body['error']}")
+        return True, "whisper probe: /automount round-tripped clean"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"whisper probe: REFUSED — /automount round-trip failed: {exc}"
+
+
+async def _real_check_whisper_probe() -> tuple[bool, str]:
+    """POST a THROWAWAY /automount call against the just-restarted server (task #179) —
+    the same law as the migration gate: a deploy that cannot prove the whisper's own
+    server half actually works must not be recorded as a success, only reported."""
+    import httpx
+
+    from src.config.settings import get_settings
+
+    settings = get_settings()
+    base = f"http://{settings.osiris_mcp_host}:{settings.osiris_mcp_port}"
+    async with httpx.AsyncClient(base_url=base, timeout=10.0) as client:
+        return await _synthetic_automount_probe(client)
 
 
 async def cmd_deploy(
@@ -1412,6 +1457,7 @@ async def cmd_deploy(
     wait_for_health: WaitForHealth = _wait_for_health,
     wait_for_smoke: WaitForSmoke = _wait_for_smoke,
     install_units: InstallUserUnits = _real_install_user_units,
+    check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1432,7 +1478,10 @@ async def cmd_deploy(
     reads straight off disk, so nothing here can hold it back (msg 1481) — and (thread
     6a78e64b leg 2) diffs the MCP tool list before vs after the restart, so a deploy names
     exactly which verbs are arriving rather than leaving that to be discovered by accident.
-    (6) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
+    (6) POSTs a THROWAWAY /automount to the just-restarted server (task #179) and REFUSES to
+    record the deploy on anything but a clean round-trip — same law as the migration gate:
+    the ledger must never claim a deploy the whisper's own server half cannot actually serve.
+    (7) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
     boot guard confesses against; a raw restart or a reboot never calls this, so the ledger
     and reality staying in sync is itself evidence the deploy went through this ritual.
 
@@ -1505,10 +1554,6 @@ async def cmd_deploy(
             return 1
         print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
 
-        deployed_head = await record_deploy(pool, root)
-        print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
-              "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
-
         health_ready, health_waited = await wait_for_health()
         if health_ready:
             print(f"health: up after {health_waited:.0f}s" if health_waited
@@ -1517,6 +1562,17 @@ async def cmd_deploy(
             print(f"health: NOT UP after waiting {health_waited:.0f}s (ceiling) — the "
                   "console did not come up; this is a real startup failure, not a "
                   "smoke-timing false-alarm")
+
+        whisper_ok, whisper_note = await check_whisper_probe()
+        print(whisper_note)
+        if not whisper_ok:
+            print("osiris deploy: NOT recording this deploy — the whisper's own server "
+                  "half cannot be trusted after a restart it cannot itself verify.")
+            return 1
+
+        deployed_head = await record_deploy(pool, root)
+        print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
+              "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
 
         fails, waited = await wait_for_smoke()
         if fails:

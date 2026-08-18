@@ -1752,6 +1752,35 @@ async def record_blind_spot(
     return b
 
 
+# every hook surface task #179 files an alarm for — the SAME strings a health reader
+# (src/orchestrator/smoke.py's whisper_health) looks these objects up by
+HOOK_ALARM_SURFACES: tuple[str, ...] = (
+    "whisper/automount", "hook/session-end", "hook/precompact", "hook/stophook",
+)
+_HOOK_ALARM_VERIFY_WITH = ("check the server log (journalctl -u osiris-mcp, tag "
+                          "'osiris.whisper' for the whisper route) for the full traceback")
+
+
+async def record_hook_failure(actions: Actions, *, surface: str, cannot_see: str) -> None:
+    """File a session-lifecycle hook's failure into the SAME channel `record_blind_spot`
+    already gives every other unverifiable-from-here gap (task #34; task #179's own
+    dispatch: 'the SessionStart whisper 500'd on the majority of arrivals... swallowed by
+    fail-open'). A hook mid-failure cannot investigate itself, only confess — this is that
+    confession. `surface` should be one of `HOOK_ALARM_SURFACES`, so `whisper_health`'s
+    read side finds it; a caller passing something else still records, just outside that
+    reader's known set. RATE-LIMITED BY CONSTRUCTION, not a counter: `record_blind_spot`
+    is idempotent per (repo, surface) — a hundred identical failures collapse onto the
+    SAME graph object (its assertion history keeps every telling, which is what
+    `whisper_health` counts), never a hundred new rows. NEVER RAISES — this runs inside an
+    already-failing `except` block in every caller; a second failure here must stay
+    silent, never mask or replace the first."""
+    try:
+        await record_blind_spot(actions, surface, cannot_see,
+                                verify_with=_HOOK_ALARM_VERIFY_WITH, repo="osiris")
+    except Exception:  # noqa: BLE001 — an alarm that itself fails must stay silent, never loud
+        pass
+
+
 async def kill_superstition(
     actions: Actions, statement: str, *, killed_by: str, repo: str | None = None,
     source: str = _SOURCE,
