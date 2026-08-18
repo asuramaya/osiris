@@ -572,7 +572,11 @@ def _tool_chars(t: Any) -> int:
 # thread 5156: _wire_informs' cross-join repair verb, dry_run=True default; live dry-run 1020
 # edges across 60 projects, execution operator-gated). Flagged by its author, raised once
 # here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 181_600
+# 181,600 -> 182,000 (measured 181,843 exact). Tool count unchanged at 129 (2026-08-18 ~01:55,
+# Thoth LXXVII heir ix, #172/#173a/#179 wave): NO NEW TOOL — fleet()'s docstring grew by the
+# whisper_health field (Imhotep d72281c, #179: hook failures alarmed and read back). Flagged by
+# its author ("~250 chars, not raised"), raised once here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 182_000
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
