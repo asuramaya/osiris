@@ -41,6 +41,7 @@ from src.cli import (
     cmd_rematerialize,
     cmd_retention,
     cmd_seed,
+    cmd_smoke_chaos,
     cmd_unmerge,
     commit_deployed_notes,
     composition_drift_notes,
@@ -1293,6 +1294,131 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
                            check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [tmp_path]
     assert out == 0
+
+
+# --- CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — osiris_deploy_chaos_gate ---------
+# OFF by default (every test above ran with it unset — 159 unaffected). These pin the ONE
+# new step, fully injected: chaos.py's own control flow has its own dedicated test suite
+# (tests/test_chaos.py); this only tests that cmd_deploy WIRES it correctly.
+
+async def test_cmd_deploy_skips_the_chaos_gate_by_default(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _boom_chaos_gate(pool: Any) -> dict[str, Any]:
+        raise AssertionError("the chaos gate must never run when osiris_deploy_chaos_gate "
+                             "is unset (OFF by default, the same law as osiris_trigger_"
+                             "enabled)")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok,
+                           chaos_gate=_boom_chaos_gate)
+    assert out == 0
+
+
+async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_DEPLOY_CHAOS_GATE", "1")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _ok_chaos_gate(pool: Any) -> dict[str, Any]:
+        return {"ok": True, "findings": [], "storm_fired": 25, "recovery_elapsed_secs": 3.0}
+
+    calls: list[Any] = []
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        calls.append(repo_root)
+        return "cafef00d"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_record_deploy,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok,
+                               chaos_gate=_ok_chaos_gate)
+    assert out == 0
+    assert calls == [tmp_path]
+    assert "chaos replay: all invariants held" in buf.getvalue()
+
+    import json as _json
+
+    cursor = await actions.pool.fetchval(
+        "SELECT cursor FROM watermarks WHERE key='chaos-replay:last'")
+    assert cursor is not None
+    assert _json.loads(cursor)["ok"] is True
+
+
+async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_violation(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_DEPLOY_CHAOS_GATE", "1")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _bad_chaos_gate(pool: Any) -> dict[str, Any]:
+        return {"ok": False, "findings": ["a stranger was minted over a listed body"],
+                "storm_fired": 25, "recovery_elapsed_secs": 3.0}
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the chaos gate refused first")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_unreachable,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok,
+                               chaos_gate=_bad_chaos_gate)
+    assert out == 1
+    text = buf.getvalue()
+    assert "REFUSED" in text and "a stranger was minted over a listed body" in text
+    assert "NOT recording this deploy" in text
+
+
+# --- cmd_smoke_chaos — the standalone `osiris smoke --chaos` entry point --------------------
+
+async def test_cmd_smoke_chaos_records_the_ledger_and_prints_the_findings(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_real_chaos_gate(pool: Any) -> dict[str, Any]:
+        return {"ok": False, "findings": ["1 advisory lock(s) held after recovery"],
+                "storm_fired": 10, "recovery_elapsed_secs": 2.0,
+                "automount_probes_total": 4}
+
+    import src.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "_real_chaos_gate", _fake_real_chaos_gate)
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_smoke_chaos(pool=actions.pool)
+    assert out == 1
+    assert "1 advisory lock(s) held after recovery" in buf.getvalue()
+
+    cursor = await actions.pool.fetchval(
+        "SELECT cursor FROM watermarks WHERE key='chaos-replay:last'")
+    assert cursor is not None
+    import json as _json
+    assert _json.loads(cursor)["ok"] is False
 
 
 # --- _synthetic_automount_probe: the pure verdict logic, mocked transport ------------------

@@ -295,6 +295,12 @@ class Settings(BaseSettings):
     # fallback (thread c171a3de) — for an incident, or a harness build that lacks --bg. A
     # launch_seat caller's own `substrate` argument always wins over this fleet-wide default.
     osiris_launch_substrate: str = "harness"
+    # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same law as
+    # osiris_trigger_enabled/osiris_pit_watch_enabled: a mechanism that SIGKILLs a live
+    # service earns its own kill switch, never inherits one. When on, `osiris deploy` runs
+    # `src.orchestrator.chaos.chaos_replay` as an additional gate after its own ordinary
+    # graceful restart — see cmd_deploy's own docstring for exactly what it checks.
+    osiris_deploy_chaos_gate: bool = False
     # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
     # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
     # switch, never inherits one. When on, a tick alarms on any managed_by pair's ask-graded

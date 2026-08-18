@@ -331,7 +331,9 @@ def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
            + [f"~{n} changed" for n in changed])
 
 
-async def cmd_smoke() -> int:
+async def cmd_smoke(*, chaos: bool = False) -> int:
+    if chaos:
+        return await cmd_smoke_chaos()
     fails, warnings = await _run_smoke_probes_full()
     if not fails:
         print("smoke: all green (8 chrome routes + the live mcp pool)")
@@ -342,6 +344,69 @@ async def cmd_smoke() -> int:
     for w in warnings:
         print("WARNING:", w)
     return 0 if not fails else 1
+
+
+CHAOS_LEDGER_KEY = "chaos-replay:last"
+
+
+async def _real_chaos_gate(pool: asyncpg.Pool) -> dict[str, Any]:
+    """The real wiring `osiris smoke --chaos` and `cmd_deploy`'s own chaos gate share — the
+    only place either caller passes `chaos_replay` its real, un-injected side effects.
+    `automount_probe` reuses `_real_check_whisper_probe` unchanged (the same throwaway
+    /automount+/session-end round trip `cmd_deploy`'s ordinary whisper check already makes,
+    just polled repeatedly here instead of once)."""
+    from src.orchestrator.chaos import (
+        DEFAULT_CHAOS_UNITS,
+        _real_fire_storm,
+        _real_kill_units,
+        chaos_replay,
+    )
+
+    return await chaos_replay(
+        pool, units=DEFAULT_CHAOS_UNITS, kill=_real_kill_units,
+        restart=_real_restart_services, fire_storm=_real_fire_storm,
+        automount_probe=_real_check_whisper_probe)
+
+
+async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
+    """`osiris smoke --chaos` — runs the crash replay standalone (never as a side effect of
+    an ordinary `osiris smoke`) and records the numbers to the deploy ledger's own cursor
+    store (`CHAOS_LEDGER_KEY`) whether it passes or fails, so `cmd_deploy`'s own gate (and
+    a human reading the ledger later) never has to re-derive them from scrollback."""
+    import json
+
+    from src.orchestrator.monitor import set_cursor
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4)
+        except Exception as exc:  # noqa: BLE001
+            print(f"osiris smoke --chaos: could not reach postgres — {exc}", file=sys.stderr)
+            return 1
+    try:
+        report = await _real_chaos_gate(pool)
+        await set_cursor(pool, CHAOS_LEDGER_KEY, json.dumps(report))
+        if report["ok"]:
+            print(f"chaos replay: all invariants held — {report['storm_fired']} session-end(s) "
+                  f"fired concurrently with the kill, recovered in "
+                  f"{report['recovery_elapsed_secs']:.0f}s, "
+                  f"{report['automount_probes_total']} /automount probe(s) during the window "
+                  f"all 200")
+        else:
+            print("CHAOS REPLAY FINDINGS:")
+            for f in report["findings"]:
+                print(" -", f)
+        return 0 if report["ok"] else 1
+    finally:
+        if owns_pool:
+            await pool.close()
 
 
 # --- boot-status -------------------------------------------------------------------------------
@@ -1419,6 +1484,7 @@ RecordDeploy = Callable[[asyncpg.Pool, Path], Awaitable[str | None]]
 WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
 WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
+ChaosGate = Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]]
 
 
 async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
@@ -1476,6 +1542,7 @@ async def cmd_deploy(
     wait_for_smoke: WaitForSmoke = _wait_for_smoke,
     install_units: InstallUserUnits = _real_install_user_units,
     check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
+    chaos_gate: ChaosGate = _real_chaos_gate,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1609,6 +1676,34 @@ async def cmd_deploy(
             print("osiris deploy: NOT recording this deploy — the whisper's own server "
                   "half cannot be trusted after a restart it cannot itself verify.")
             return 1
+
+        # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same
+        # law as osiris_trigger_enabled/osiris_pit_watch_enabled: a mechanism that SIGKILLs
+        # a live service earns its own kill switch, never inherits one. When on, runs a
+        # SECOND, harsher restart cycle (kill -9 + a concurrent session-end storm, not the
+        # graceful `restart` above) and refuses the deploy outright on any finding — this
+        # is a GATE (577988ed's fail-open clause is for infrastructure this can't control,
+        # never for a genuine invariant violation this module exists to catch).
+        from src.config.settings import get_settings as _get_deploy_settings
+
+        if _get_deploy_settings().osiris_deploy_chaos_gate:
+            import json
+
+            from src.orchestrator.monitor import set_cursor
+
+            chaos_report = await chaos_gate(pool)
+            await set_cursor(pool, "chaos-replay:last", json.dumps(chaos_report))
+            if chaos_report["ok"]:
+                print(f"chaos replay: all invariants held — {chaos_report['storm_fired']} "
+                      f"session-end(s) fired concurrently with the kill, recovered in "
+                      f"{chaos_report['recovery_elapsed_secs']:.0f}s")
+            else:
+                print("osiris deploy: REFUSED — the chaos replay gate found a real "
+                      "invariant violation:")
+                for f in chaos_report["findings"]:
+                    print("  -", f)
+                print("NOT recording this deploy.")
+                return 1
 
         deployed_head = await record_deploy(pool, root)
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
@@ -2461,8 +2556,14 @@ def _build_parser() -> argparse.ArgumentParser:
                               epilog="example: osiris attach Khnum")
     p_attach.add_argument("handle")
 
-    sub.add_parser("smoke", description=_d("the same deploy-time liveness probe the fleet runs"),
-                  epilog="example: osiris smoke")
+    p_smoke = sub.add_parser(
+        "smoke", description=_d("the same deploy-time liveness probe the fleet runs"),
+        epilog="example: osiris smoke\nexample: osiris smoke --chaos")
+    p_smoke.add_argument(
+        "--chaos", action="store_true",
+        help="crash replay (Thoth msg 5338): kill osiris-mcp/osiris-worker hard, fire a "
+             "concurrent session-end storm, restart, then assert the #178 invariants hold "
+             "under a real crash, never just a graceful restart")
 
     sub.add_parser("boot-status", description=_d(
         "name every active seat with no compiled managed section, "
@@ -2773,7 +2874,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "attach":
         return asyncio.run(cmd_attach(args.handle))
     if args.command == "smoke":
-        return asyncio.run(cmd_smoke())
+        return asyncio.run(cmd_smoke(chaos=args.chaos))
     if args.command == "boot-status":
         return asyncio.run(cmd_boot_status())
     if args.command == "seed":
