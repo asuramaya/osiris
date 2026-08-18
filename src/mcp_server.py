@@ -6313,6 +6313,92 @@ async def _retire_stale_handoffs(
     return {"retired": retired, "skipped_incomplete_walk": skipped, "dry_run": dry_run}
 
 
+async def _retire_handoff_backlog(
+    pool: asyncpg.Pool, now: datetime, *, dry_run: bool = True, max_hops: int = 200,
+) -> dict[str, Any]:
+    """THE ACTUAL #150 BACKLOG DISPOSITION (Thoth msg 5254), fleet-wide, composed entirely
+    from `_retire_stale_handoffs` (never a second SQL mutation path — the same one caller
+    the operator already authorized the shape of, just driven once per lineage instead of
+    once per manual invocation).
+
+    Finds every live is_handoff='true' record, groups it by `lineage_root` (edge-walked,
+    the decision 61cb1f02/1cb389be fix), and — within any root with more than one record —
+    keeps the NEWEST (by is_handoff's own `observed_at`) and would-retire the rest.
+
+    REFUSES THE WHOLE RUN, same law as `_retire_stale_handoffs` itself, if ANY author in
+    the population has an incomplete `lineage_root` walk: `{"ok": False, "reason": ...,
+    "incomplete_authors": [...]}`, nothing touched. This is the exact guard that made the
+    2026-08-17 measurement (220 records, Thoth's own lineage fragmenting into 12 fake roots
+    at the old max_hops=64 ceiling) call the backlog UNSAFE TO RUN — re-verify this box is
+    empty before ever trusting `dry_run=False` here, the population moves every session.
+
+    `dry_run=True` (the default — a fleet-wide mutation defaults SAFE) previews every
+    per-root disposition without writing, by threading `dry_run` straight into each
+    `_retire_stale_handoffs` call; `dry_run=False` executes them for real, root by root.
+    Returns `{"ok": True, "dry_run": ..., "roots_total": ..., "roots_disposed": ...,
+    "would_keep": ..., "receipts": [{"root", "keep", "retired"}, ...]}` — `receipts` names
+    exactly which record was kept per root and which were (or would be) retired, so a
+    reviewer can spot-check before authorizing the live run.
+
+    REVERSAL: identical to `_retire_stale_handoffs`'s own — is_handoff is asserted, never
+    deleted; restoring any retired record is a fresh assert_property('is_handoff', 'true')
+    on that one object id, no bespoke undo mechanism needed. No merge/unmerge involved —
+    this never touches object identity, only the is_handoff property on records that stay
+    exactly the objects they always were."""
+    rows = await pool.fetch(
+        "SELECT o.id AS object_id, "
+        "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='is_handoff' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AS source_id, "
+        "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='is_handoff' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        " AS observed_at "
+        "FROM objects o WHERE EXISTS ("
+        "  SELECT 1 FROM current_assertions a2 WHERE a2.object_id = o.id "
+        "  AND a2.name = 'is_handoff') "
+        "AND (SELECT a3.value #>> '{}' FROM current_assertions a3 "
+        "     WHERE a3.object_id=o.id AND a3.name='is_handoff' "
+        "     ORDER BY a3.confidence DESC, a3.observed_at DESC LIMIT 1) = 'true'")
+    root_cache: dict[str, tuple[str, bool]] = {}
+    by_root: dict[str, list[tuple[uuid.UUID, str, datetime]]] = {}
+    incomplete_authors: set[str] = set()
+    for r in rows:
+        src = r["source_id"]
+        if src not in root_cache:
+            root_cache[src] = await lineage_root(pool, src, max_hops=max_hops)
+        root, complete = root_cache[src]
+        if not complete:
+            incomplete_authors.add(src)
+            continue
+        by_root.setdefault(root, []).append((r["object_id"], src, r["observed_at"]))
+    if incomplete_authors:
+        return {
+            "ok": False,
+            "reason": "at least one author's lineage_root walk did not reach a true origin "
+                      "within the hop bound — refusing the whole disposition rather than "
+                      "risk mis-bucketing that author's records (same law as "
+                      "_retire_stale_handoffs's own actor-walk refusal).",
+            "incomplete_authors": sorted(incomplete_authors),
+        }
+    receipts: list[dict[str, Any]] = []
+    for root, members in by_root.items():
+        if len(members) <= 1:
+            continue
+        newest = max(members, key=lambda m: m[2])
+        keep_id, keep_actor, _ = newest
+        receipt = await _retire_stale_handoffs(
+            pool, keep_actor, keep_id, now, max_hops=max_hops, dry_run=dry_run)
+        receipts.append({"root": root, "keep": str(keep_id)[:8], "retired": receipt["retired"]})
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "roots_total": len(by_root),
+        "roots_disposed": len(receipts),
+        "would_keep": len(by_root),
+        "receipts": receipts,
+    }
+
+
 async def _resolve_acked_handoff_threads(
     pool: asyncpg.Pool, actor: str, now: datetime, *, repo: str | None = None,
 ) -> list[str]:
