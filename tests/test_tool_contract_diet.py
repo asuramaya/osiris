@@ -594,7 +594,11 @@ def _tool_chars(t: Any) -> int:
 # identity, one call) with a #174-style `ghost_status` per body. Trimmed to the lean end
 # first (two passes), then flagged by its author, not raised beyond the exact measured
 # total, matching the immediately preceding precedent.
-TOOL_CONTRACT_CEILING_CHARS = 183_600
+# 183,600 -> 184,400 (measured 184,220 exact). 130 tools unchanged (2026-08-18 ~05:20, Thoth
+# LXXVII heir ix, #180 piece 2 merge): NO NEW TOOL — fleet()'s docstring grew with pool_health
+# (pg_stat_activity by application_name + tx_total) and merged_into grouping (Khnum d061a5a).
+# Flagged by its author, raised once here at the merged tip (45e72476).
+TOOL_CONTRACT_CEILING_CHARS = 184_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
