@@ -1972,6 +1972,72 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "desk, not lint's own act"}
         for r in held_past_deadline])
 
+    # STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — RECURRENCE DETECTION): the
+    # write-side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs
+    # onto its heir, decision 5b217d13, 2026-08-04) closed the LEAK; backfill_agent_
+    # project_links repairs the historical debt it left behind (906 measured at the time,
+    # down to 2 by the time this check was written) — but nothing watched for the CLASS
+    # recurring (a future mint path this fix never reached, or a regression in it). Same
+    # enumeration backfill_agent_project_links itself uses — an Agent that is NOT its
+    # lineage's living_head yet still carries a live works_in/governs edge — read-only
+    # here; the repair stays that verb's own job, this only counts.
+    from src.orchestrator.folds import living_head
+
+    off_head_rows = await pool.fetch(
+        "SELECT DISTINCT f.canonical AS agent, f.status AS status, p.canonical AS project "
+        "FROM links l "
+        "JOIN objects f ON f.id=l.from_id AND f.type='Agent' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type IN ('works_in','governs') "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    off_head_bases = {_generation(str(r["agent"]))[0] for r in off_head_rows}
+    off_head_of: dict[str, str] = {b: await living_head(pool, b) for b in off_head_bases}
+    stale_links = [r for r in off_head_rows
+                   if str(r["agent"]) != off_head_of[_generation(str(r["agent"]))[0]]]
+    land("stale-off-head-link", "warn", [
+        {"subject": r["agent"],
+         "detail": f"{r['agent']} ({r['status']}) still carries a live works_in/governs "
+                   f"edge to {r['project']} though "
+                   f"{off_head_of[_generation(str(r['agent']))[0]]} is this lineage's "
+                   "living head now — backfill_agent_project_links is the repair; this "
+                   "only counts (thread 20af2c95's own recurrence tripwire)"}
+        for r in stale_links])
+
+    # STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — RECURRENCE DETECTION): the SAME
+    # anomaly `stale_current_flags`'s own read door surfaces (an assertion still carrying
+    # `is_current=true` though a real `supersedes` FK already points at it from another row)
+    # — folded into the standing lint wall so a future session finds this without knowing
+    # to call that door by name. NOT a live write-path bug (verified: both of
+    # assert_property's supersession paths, actions/core.py:265-269 same-source and :346-349
+    # cross-source, flip `is_current=false` on the superseded row in the SAME transaction as
+    # the write, unconditionally) — the live population (123,914 at last count, d8225e71) is
+    # migration-0047 backfill debt (pre-existing rows the migration's own backfill never
+    # reached), not ongoing accrual. Still `warn`, not `info`: khepri's own specimen (seat:
+    # ddafff44) proved this actively BLOCKS retire_assertion/reconcile_seat_identity on an
+    # affected object, a live consequence orphan-link's own historical debt never has.
+    # repair_stale_current_flags is the batched backfill; this only counts. Same pre-
+    # limited-fetch shape as orphan-link (thread 187323d9's own fix): the population is
+    # five figures, so the DEFAULT unfiltered call fetches only `_LINT_CAP` rows (matching
+    # what land() would ever display anyway); a call naming check='stale-current-flag'
+    # fetches its true, full total instead — land()'s own counts[check]=len(rows) must
+    # see the FULL row set to report honestly, never the pre-limited sample.
+    stale_flag_total = await pool.fetchval(
+        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+        "WHERE a.is_current")
+    stale_flag_fetch = stale_flag_total if check_filter == "stale-current-flag" else _LINT_CAP
+    stale_flags = await pool.fetch(
+        "SELECT a.id AS stale_id, a.object_id, a.name "
+        "FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+        "WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1", stale_flag_fetch)
+    land("stale-current-flag", "warn", [
+        {"subject": str(r["object_id"]),
+         "detail": f"assertion {r['stale_id']} ({r['name']}) on {r['object_id']} still "
+                   "reads is_current=true though a real supersedes FK already points at "
+                   "it — repair_stale_current_flags is the batched repair; this only "
+                   "counts (thread 09bde57e's own recurrence tripwire)"}
+        for r in stale_flags])
+    counts["stale-current-flag"] = int(stale_flag_total or 0)
+
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
         # a per-check ask paginates ONE check's full set — "capped" now names how much of
