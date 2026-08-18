@@ -1199,10 +1199,40 @@ async def _resolve_wake_address(
     return target, seat_id
 
 
+async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
+    """A session-shaped body actually backs `job`, confirmed against `claude agents --json`
+    — the harness's own front-end view, which shows every live body BY CONSTRUCTION
+    (`_claude_agents_json`'s own docstring). The daemon's {ok:true} on `nudge` means it
+    ACCEPTED the envelope into its own queue, never that a live reader is there to receive
+    it: a job the daemon still lists after its own body already exited, or one whose body
+    outlived the daemon's own GENERATION (a respawned daemon does not always inherit every
+    prior job cleanly), both accept without anyone home. Matched the same way
+    `claude_daemon.job_for` matches a job to an identity (short id, full session id, or its
+    8-char prefix) so the two never drift. Fails open to False (never raises) — an
+    `agents_json` read failure reads as 'cannot confirm', never as a false positive."""
+    sid = str(job.get("sessionId") or "")
+    short = str(job.get("short") or "")
+    ids = {i for i in (short, sid, sid[:8] if sid else "") if i}
+    if not ids:
+        return False
+    try:
+        rows = await agents_json()
+    except (OSError, TimeoutError, ValueError):
+        return False
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rsid = str(r.get("sessionId") or "")
+        rid = str(r.get("id") or "")
+        if rid in ids or rsid in ids or (rsid and rsid[:8] in ids):
+            return True
+    return False
+
+
 async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
-    poke: Any = None, jobs: Any = None, nudge: Any = None,
+    poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
 ) -> dict[str, str]:
     """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
@@ -1211,7 +1241,16 @@ async def dispatch_dm(
       nudged             — the mail envelope was injected into the addressee's live
                            backgrounded session via the HARNESS DAEMON (the visible hop:
                            the operator's front renders daemon-owned turns natively —
-                           thread 4261a0d8, the ghost problem's fix)
+                           thread 4261a0d8, the ghost problem's fix) AND a matching
+                           session-shaped body is confirmed live in `claude agents --json`
+      queued-no-listener — the daemon ACCEPTED the envelope ({ok:true}) but no
+                           session-shaped body confirms it in `claude agents --json` — a
+                           job the daemon still lists after its body exited, or one that
+                           outlived the daemon's own generation, can both accept without
+                           anyone home (task #176, practice 2c45d78e: UNKNOWN, never
+                           smoothed into either 'nudged' or a resolved failure). Queue
+                           semantics are UNCHANGED — the backstop sweep still retries
+                           at-least-once, exactly as before this verdict existed
       resumed            — the addressee's own session was continued with the mail as its
                            next turn (the fallback push when the daemon doesn't hold it)
       poked              — typed into the addressee's manager-hosted OPEN window (rare now)
@@ -1231,6 +1270,7 @@ async def dispatch_dm(
     spawn = spawn or _spawn_claude
     windows = windows or _manager_windows
     poke = poke or _poke_window
+    agents_json = agents_json or _claude_agents_json
     if jobs is None or nudge is None:
         # THE INJECT SEAM (ruling 85fba696, superseding 482c3d0f): `nudge` defaults to
         # claude_daemon.reply — the daemon turn-injection channel, disclosed to Anthropic and
@@ -1450,11 +1490,32 @@ async def dispatch_dm(
             # an actually-submitted turn in ~0.3s in the one case checked — fast enough that
             # 'nudged' stays the honest label for it — but the wording no longer claims the
             # turn already happened, only that the daemon took it.
+            #
+            # THE THIRD STATE (task #176, 2026-08-18, practice 2c45d78e): {ok:true} still
+            # cannot distinguish "injected into a live reader" from "handed to a daemon with
+            # nobody home" — a job the daemon still lists after its own body exited, or one
+            # that outlived the daemon's own GENERATION, both accept without anyone there to
+            # receive it. `_confirm_listener` cross-checks `claude agents --json` (the
+            # harness's own front-end view, which shows every live body BY CONSTRUCTION) for
+            # a session-shaped body actually matching this job. QUEUE SEMANTICS UNCHANGED:
+            # the agent_wakes row above is written the SAME WAY regardless of this check
+            # (at-least-once across successions stays correct) — this only decides what the
+            # RECEIPT honestly claims, never whether or how the message redelivers.
             shown = job.get("name") or job.get("short") or "the job"
+            if not await _confirm_listener(job, agents_json):
+                return {"mode": "queued-no-listener",
+                        "detail": f"the harness daemon ACCEPTED the mail envelope for "
+                                  f"{shown}, but no session-shaped body confirms it in "
+                                  "`claude agents --json` — the daemon queued it; whether "
+                                  "or when it is actually read is UNKNOWN, never a resolved "
+                                  "failure (practice 2c45d78e); the backstop sweep retries, "
+                                  "unchanged"}
             return {"mode": "nudged",
                     "detail": f"the harness daemon ACCEPTED the mail envelope as {shown}'s "
-                              "next turn (typically lands within a second or two, per "
-                              "measurement — visible live in the agents view once it does)"}
+                              "next turn AND a matching session-shaped body is confirmed "
+                              "live in `claude agents --json` (typically lands within a "
+                              "second or two, per measurement — visible live in the agents "
+                              "view once it does)"}
         # the daemon refused (version seam, dead socket, missing key) — fall open
     # the poke lane: a manager-hosted OPEN window holding this lineage's session gets
     # the mail typed in as a turn — never a second process beside an open window
