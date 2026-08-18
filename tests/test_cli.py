@@ -1392,6 +1392,45 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
     assert "NOT recording this deploy" in text
 
 
+# --- THE HALCYON GATE (operator ruling 921eabcf, addendum to 6b1efacb, 2026-08-18) ----------
+# always-on (no kill switch), runs BEFORE the chaos gate — a cheap read, not a SIGKILL.
+
+async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE HALCYON SPECIMEN ITSELF: a generation carrying false_mint=true with a live
+    mount must block a deploy from recording — the deploy-time analogue of graph_lint's
+    own `false-mint-live` check, no kill switch (a plain read, always on)."""
+    from src.orchestrator import mounts
+
+    victim = await actions.create_or_find_object("Agent", "agent:dh0001", "test")
+    await actions.assert_property(victim, "false_mint", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/dh0001", agent_id="agent:dh0001",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the false-mint-live gate refused first")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_unreachable,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 1
+    text = buf.getvalue()
+    assert "REFUSED" in text and "false-mint-live" in text and "agent:dh0001" in text
+    assert "NOT recording this deploy" in text
+
+
 # --- cmd_smoke_chaos — the standalone `osiris smoke --chaos` entry point --------------------
 
 async def test_cmd_smoke_chaos_records_the_ledger_and_prints_the_findings(

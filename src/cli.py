@@ -1485,6 +1485,7 @@ WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
 WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
 ChaosGate = Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]]
+CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[str]]]
 
 
 async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
@@ -1517,6 +1518,26 @@ async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
         return False, f"whisper probe: REFUSED — /automount round-trip failed: {exc}"
 
 
+async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[str]:
+    """DEPLOY GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb, 2026-08-18:
+    "prevent weird forking like that and reject it architecturally"): a generation
+    carrying false_mint=true with a LIVE mount is the exact zero-turn phantom fold
+    blindness the halcyon incident named — this must read ZERO before a deploy is
+    recorded. Same query graph_lint's own `false-mint-live` check runs (compositions.py's
+    `_fn_lint`), duplicated here as a plain, fast, single-purpose query rather than
+    routing a deploy gate through the full lint composition machinery for one check.
+    Returns the offending canonicals (empty = clean)."""
+    rows = await pool.fetch(
+        "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  = 'true' "
+        "AND EXISTS (SELECT 1 FROM agent_mounts m WHERE m.agent_id=o.canonical "
+        "  AND m.last_seen > now() - interval '900 seconds') "
+        "ORDER BY o.canonical")
+    return [r["canonical"] for r in rows]
+
+
 async def _real_check_whisper_probe() -> tuple[bool, str]:
     """POST a THROWAWAY /automount call against the just-restarted server (task #179) —
     the same law as the migration gate: a deploy that cannot prove the whisper's own
@@ -1543,6 +1564,7 @@ async def cmd_deploy(
     install_units: InstallUserUnits = _real_install_user_units,
     check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
     chaos_gate: ChaosGate = _real_chaos_gate,
+    check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1675,6 +1697,18 @@ async def cmd_deploy(
         if not whisper_ok:
             print("osiris deploy: NOT recording this deploy — the whisper's own server "
                   "half cannot be trusted after a restart it cannot itself verify.")
+            return 1
+
+        # THE HALCYON GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb,
+        # 2026-08-18): "prevent weird forking like that and reject it architecturally" —
+        # a false_mint generation with a LIVE mount must read ZERO before a deploy is
+        # recorded, always on (no kill switch — this is a cheap read, not a SIGKILL).
+        false_mint_live = await check_false_mint_live(pool)
+        if false_mint_live:
+            print("osiris deploy: REFUSED — false-mint-live: a generation carries "
+                  "false_mint=true with a live mount (the halcyon shape) — "
+                  f"{', '.join(false_mint_live)}. reinstate_generation is the repair "
+                  "door. NOT recording this deploy.")
             return 1
 
         # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same
