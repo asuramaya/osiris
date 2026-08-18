@@ -13,6 +13,15 @@ No semantic filtering: every line is stored exactly as it appears, including
 compaction-summary and meta lines. re_materialize() is the acceptance test this piece
 stands or falls on — a store that cannot hand a transcript back byte-for-byte is not a
 soul store, just another index.
+
+RAW BYTES, NOT TEXT (0052, thread 173cbf11, Thoth DM 5350): a real transcript can carry a
+literal NUL byte (0x00) — measured live, thousands of them across two ordinary sessions —
+which Postgres `text`/`varchar` columns cannot hold AT ALL, a hard server limitation, not
+a query bug. `soul_lines.raw_line` is `bytea`; every line is read, hashed, stored, and
+rematerialized as raw bytes end to end, so nothing here can silently mangle a byte the
+source file actually carried. `raw_lines()`/`re_materialize()`/`mining_view()` still hand
+callers `str` (decoded utf-8, errors='replace' as a last resort) — the text-processing
+consumers (session mining, JSON parsing) never need to know the storage layer changed.
 """
 from __future__ import annotations
 
@@ -29,11 +38,26 @@ from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
 _HARNESS = "claude-code"
 
 
-def _read_source(source_path: str) -> str:
+def _read_source(source_path: str) -> bytes:
     """Kept in a sync helper for the blocking-call lint, same as transcript_store.py's
     own `_stat` — the read is still blocking either way, this only satisfies ASYNC240's
-    syntactic check on the call site."""
-    return Path(source_path).read_text("utf-8", errors="replace")
+    syntactic check on the call site. Raw bytes, not text (0052) — the ONLY way to carry
+    a source byte (a literal NUL included) through untouched."""
+    return Path(source_path).read_bytes()
+
+
+def _split_lines(content: bytes) -> list[bytes]:
+    """`content.split(b"\\n")`, minus the phantom trailing empty element a terminating
+    newline would otherwise produce — matches `str.splitlines()`'s own behavior for the
+    ordinary `\\n`-terminated case (every real transcript), without decoding to text
+    first (0052: decoding here is exactly the step that used to normalize away an
+    embedded NUL's exact byte position)."""
+    if not content:
+        return []
+    lines = content.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    return lines
 
 
 def _dest_mtime(path: Path) -> datetime | None:
@@ -45,20 +69,23 @@ def _dest_mtime(path: Path) -> datetime | None:
         return None
 
 
-def _write_dest(path: Path, content: str) -> None:
-    """Sync helper, same blocking-call-lint reasoning as `_read_source`."""
+def _write_dest(path: Path, content: bytes) -> None:
+    """Sync helper, same blocking-call-lint reasoning as `_read_source`. Raw bytes
+    (0052) — the write side of the same byte-exact promise `_read_source` makes."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path.write_bytes(content)
 
 
-def _chain_hash(prev_hash: str | None, raw_line: str) -> str:
+def _chain_hash(prev_hash: str | None, raw_line: bytes) -> str:
     """sha256(prev_hash_bytes + raw_line_bytes) — a gap or a tampered line breaks the
     chain from that point on, detectable by re-walking and recomputing, never by trusting
-    a stored hash in isolation."""
+    a stored hash in isolation. Hashes the RAW BYTES directly (0052) — no
+    `str.encode("utf-8")` re-derivation step to silently diverge from what was actually
+    stored."""
     h = hashlib.sha256()
     if prev_hash is not None:
         h.update(prev_hash.encode("utf-8"))
-    h.update(raw_line.encode("utf-8"))
+    h.update(raw_line)
     return h.hexdigest()
 
 
@@ -83,8 +110,8 @@ class SoulStore:
         re-running over an unchanged file appends nothing (progress already covers every
         line). Returns the count of NEW lines ingested. Never re-reads or re-hashes lines
         already stored: the chain resumes from last_hash, exactly where it left off."""
-        text = _read_source(source_path)
-        lines = text.splitlines()
+        content = _read_source(source_path)
+        lines = _split_lines(content)
         since, prev_hash = await self._progress(anchor_sid)
         new_lines = lines[since:]
         if not new_lines:
@@ -152,13 +179,16 @@ class SoulStore:
         transcript from stored lines alone, byte-for-byte reconstructable from the
         store — no read of the source file. None when nothing has been ingested for this
         session. Callers wanting the newline-joined text (mod a possible trailing
-        newline the source may or may not have carried) get exactly that."""
+        newline the source may or may not have carried) get exactly that. Decodes the
+        stored raw bytes (0052) to `str` at this boundary — `errors='replace'` only ever
+        matters for a genuinely non-UTF-8 source, never for the NUL-byte class this
+        module exists to survive (NUL is valid UTF-8)."""
         rows = await self.pool.fetch(
             "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
             "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
         if not rows:
             return None
-        return "\n".join(r["raw_line"] for r in rows)
+        return "\n".join(bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows)
 
     async def raw_lines(self, anchor_sid: str) -> list[str] | None:
         """The stored lines as a plain list, in order — the SAME shape
@@ -167,13 +197,14 @@ class SoulStore:
         input came from a file or from here. None when nothing has been ingested (never
         an empty list — the two are different facts: 'not ingested' vs 'ingested,
         genuinely empty', though the latter can't happen since ingest_path only ever
-        writes a session that had at least one line)."""
+        writes a session that had at least one line). Decodes the stored raw bytes (0052)
+        to `str` at this boundary, same as `re_materialize`."""
         rows = await self.pool.fetch(
             "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
             "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
         if not rows:
             return None
-        return [r["raw_line"] for r in rows]
+        return [bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows]
 
     async def mining_view(self, anchor_sid: str) -> list[dict[str, Any]] | None:
         """THE MINING VIEW (task #51 piece 3, ruling 62dc6397): soul_lines projected into
@@ -228,12 +259,13 @@ class SoulStore:
 
     async def _verified_lines(
         self, anchor_sid: str,
-    ) -> tuple[list[str] | None, dict[str, Any] | None]:
+    ) -> tuple[list[bytes] | None, dict[str, Any] | None]:
         """Walk soul_lines in order, verifying the hash chain AS it collects — a break is
         a NAMED state (the second element), never a silent partial result. Returns
         (lines, None) on a clean chain, (None, break_receipt) on the first gap/mismatch,
         (None, None) when nothing was ever ingested for this session — three distinct
-        outcomes, never conflated."""
+        outcomes, never conflated. Raw bytes (0052) — `rematerialize_to_disk`'s own
+        byte-exact promise starts here."""
         rows = await self.pool.fetch(
             "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
             "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
@@ -241,7 +273,7 @@ class SoulStore:
         if not rows:
             return None, None
         expected_prev: str | None = None
-        lines: list[str] = []
+        lines: list[bytes] = []
         for i, row in enumerate(rows):
             if row["line_idx"] != i:
                 return None, {
@@ -309,9 +341,9 @@ class SoulStore:
         if lines is None:
             return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
                              "materialize"}
-        content = "\n".join(lines) + "\n"
+        content = b"\n".join(lines) + b"\n"
         _write_dest(target, content)
         return {
             "written": str(target), "lines": len(lines),
-            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "sha256": hashlib.sha256(content).hexdigest(),
         }

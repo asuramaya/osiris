@@ -41,11 +41,11 @@ async def store(actions: Actions) -> SoulStore:
 # --- pure hash chain -----------------------------------------------------
 
 def test_chain_hash_is_deterministic_and_order_sensitive() -> None:
-    a = _chain_hash(None, "line0")
-    b = _chain_hash(a, "line1")
+    a = _chain_hash(None, b"line0")
+    b = _chain_hash(a, b"line1")
     assert a != b
-    assert _chain_hash(None, "line0") == a  # deterministic
-    assert _chain_hash("line1", "line0") != b  # prev_hash matters, not just content
+    assert _chain_hash(None, b"line0") == a  # deterministic
+    assert _chain_hash("line1", b"line0") != b  # prev_hash matters, not just content
 
 
 # --- ingest + read back ---------------------------------------------------
@@ -58,7 +58,7 @@ async def test_ingest_stores_every_line_verbatim(store: SoulStore, tmp_path: Pat
     rows = await store.pool.fetch(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
         "AND anchor_sid='deadbeef' ORDER BY line_idx")
-    assert [r["raw_line"] for r in rows] == lines
+    assert [bytes(r["raw_line"]).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(5))
 
 
@@ -101,7 +101,7 @@ async def test_verify_chain_false_on_a_tampered_line(store: SoulStore, tmp_path:
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
     await store.ingest_path(str(p), "b16b00b5")
     await store.pool.execute(
-        "UPDATE soul_lines SET raw_line='TAMPERED' "
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea "
         "WHERE harness='claude-code' AND anchor_sid='b16b00b5' AND line_idx=1")
     assert await store.verify_chain("b16b00b5") is False
 
@@ -207,6 +207,34 @@ async def test_rematerialize_to_disk_is_byte_identical_across_a_compaction_bound
     assert receipt["sha256"] == hashlib.sha256(dest.read_text().encode()).hexdigest()
 
 
+async def test_ingest_survives_an_embedded_nul_byte(store: SoulStore, tmp_path: Path) -> None:
+    """THE ACCEPTANCE TEST FOR 0052 (thread 173cbf11, Thoth DM 5350): a real transcript
+    line carrying a literal NUL byte — Postgres `text` cannot hold 0x00 at all, confirmed
+    live on both of Thoth's own named transcripts (Ptah 4780, Ra 18591 NUL bytes).
+    Ingest must not raise, the hash chain must verify clean, and rematerialize must
+    reproduce the exact bytes, NUL included — `bytea` end to end is the whole fix."""
+    lines = _synthetic_lines(2)
+    poisoned = json.dumps({"type": "user", "message": {"content": "binary garbage: "}})
+    poisoned_bytes = poisoned.encode() + b"\x00\x00\x00binary tail"
+    source = tmp_path / "poisoned.jsonl"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(lines).encode() + b"\n" + poisoned_bytes + b"\n"
+    source.write_bytes(content)
+
+    n = await store.ingest_path(str(source), "nu11byte")
+    assert n == 3
+    assert await store.verify_chain("nu11byte") is True
+
+    rows = await store.raw_lines("nu11byte")
+    assert rows is not None and rows[2] == poisoned_bytes.decode()
+
+    dest = tmp_path / "recovered.jsonl"
+    receipt = await store.rematerialize_to_disk("nu11byte", dest=str(dest))
+    assert "error" not in receipt
+    assert dest.read_bytes() == content
+    assert dest.read_bytes().count(b"\x00") == 3
+
+
 async def test_rematerialize_to_disk_defaults_dest_to_the_recorded_source_path(
     store: SoulStore, tmp_path: Path,
 ) -> None:
@@ -278,7 +306,7 @@ async def test_rematerialize_to_disk_writes_nothing_on_a_broken_chain(
     source = _write_transcript(tmp_path / "s" / "b0e0be00-session.jsonl", lines)
     await store.ingest_path(str(source), "b0e0be00")
     await store.pool.execute(
-        "UPDATE soul_lines SET raw_line='TAMPERED' WHERE harness='claude-code' "
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea WHERE harness='claude-code' "
         "AND anchor_sid='b0e0be00' AND line_idx=2")
 
     dest = tmp_path / "d" / "target.jsonl"
