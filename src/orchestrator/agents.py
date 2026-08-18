@@ -1660,8 +1660,8 @@ async def _report_half_healed_phantom(
         kind="obligation", owner="operator", source=_HALF_HEAL_SRC)
 
 
-async def _is_occupied_by_a_live_body(
-    actions: Actions, agent_id: str, *, agents_json: Any = None,
+async def is_occupied_by_a_live_body(
+    pool: asyncpg.Pool, agent_id: str, *, agents_json: Any = None,
     read_exe: Any = None, read_cwd: Any = None,
 ) -> bool:
     """OCCUPANCY, never IDENTITY (#178's own boundary, Ptah's framing msg 5219) — does
@@ -1675,6 +1675,10 @@ async def _is_occupied_by_a_live_body(
     `agent_has_acted` decides a candidate is foldable, never instead of it (a body that
     both acted AND is occupied is doubly protected, not double-counted).
 
+    Public (not `_`-prefixed) and pool-based, not Actions-based — read-only, and
+    `mailbox.py`'s own send() eligibility gate needs this exact same check without
+    wrapping a pool in an Actions it never writes through.
+
     Injectable (`agents_json`/`read_exe`/`read_cwd`), same seam discipline as
     `registry_census` itself — the real defaults fire on every production mint, an
     accepted cost (a subprocess + a bounded /proc walk) for a safety-critical check on a
@@ -1682,7 +1686,7 @@ async def _is_occupied_by_a_live_body(
     from src.orchestrator.mounts import registry_census
 
     census = await registry_census(
-        actions.pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     return agent_id in {m.get("agent_id") for m in census.get("matched", [])}
 
 
@@ -1734,7 +1738,7 @@ async def _fold_zero_turn_ancestors(
     would be unsafe, not merely overdue).
 
     OCCUPANCY CHECKED BEFORE EVERY FOLD (obligation 6b1efacb, halcyon specimen, 2026-08-
-    18): `_is_occupied_by_a_live_body` runs alongside `agent_has_acted` — a candidate
+    18): `is_occupied_by_a_live_body` runs alongside `agent_has_acted` — a candidate
     generation whose OWN `agent_mounts` row backs a harness-confirmed live body is never
     folded, whatever its graph-activity says. A mint-then-immediate-fold sequence (this
     walk's own second door, or the 15-minute sweep) used to have only `agent_has_acted`
@@ -1768,8 +1772,8 @@ async def _fold_zero_turn_ancestors(
         if await agent_has_acted(actions, cur_id, exclude=[cur_oid, grand_oid],
                                  settled_after=minted_at):
             break  # a real mind lived here — nothing to fold
-        if await _is_occupied_by_a_live_body(
-            actions, cur_id, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd,
+        if await is_occupied_by_a_live_body(
+            actions.pool, cur_id, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd,
         ):
             break  # a harness-confirmed live body sits here — young, not a phantom
         do = EvidenceClass.DIRECT_OBSERVATION
