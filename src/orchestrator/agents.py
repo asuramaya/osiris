@@ -1660,8 +1660,39 @@ async def _report_half_healed_phantom(
         kind="obligation", owner="operator", source=_HALF_HEAL_SRC)
 
 
+async def is_occupied_by_a_live_body(
+    pool: asyncpg.Pool, agent_id: str, *, agents_json: Any = None,
+    read_exe: Any = None, read_cwd: Any = None,
+) -> bool:
+    """OCCUPANCY, never IDENTITY (#178's own boundary, Ptah's framing msg 5219) — does
+    `agent_id`'s own `agent_mounts` row back a body the HARNESS confirms is actually
+    running RIGHT NOW (`registry_census`'s own `matched` set — harness roster AND /proc
+    both agree)? THE HALCYON SPECIMEN (thread 6b1efacb, 2026-08-18): agent_has_acted only
+    ever asks whether this generation left a GRAPH trace — a body minted and phantom-
+    folded 4-6 seconds later, before its own first MCP write could register as an 'act',
+    is graph-silent but genuinely alive. A generation this returns True for is YOUNG,
+    never a phantom, whatever its own graph-activity looks like — checked BEFORE
+    `agent_has_acted` decides a candidate is foldable, never instead of it (a body that
+    both acted AND is occupied is doubly protected, not double-counted).
+
+    Public (not `_`-prefixed) and pool-based, not Actions-based — read-only, and
+    `mailbox.py`'s own send() eligibility gate needs this exact same check without
+    wrapping a pool in an Actions it never writes through.
+
+    Injectable (`agents_json`/`read_exe`/`read_cwd`), same seam discipline as
+    `registry_census` itself — the real defaults fire on every production mint, an
+    accepted cost (a subprocess + a bounded /proc walk) for a safety-critical check on a
+    path that is not a hot loop."""
+    from src.orchestrator.mounts import registry_census
+
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    return agent_id in {m.get("agent_id") for m in census.get("matched", [])}
+
+
 async def _fold_zero_turn_ancestors(
-    actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, now: datetime,
+    actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, now: datetime, *,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> tuple[str, uuid.UUID]:
     """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (operator ruling d3531cd8, 2026-07-27):
     'the mind claiming to be your predecessor didn't have any TURNS' is not a predecessor —
@@ -1704,7 +1735,15 @@ async def _fold_zero_turn_ancestors(
     — decision ee012ebc) is NOT treated as done: it is reported via
     _report_half_healed_phantom and the walk still halts there, but never silently, and
     never auto-completed (see that helper's own docstring for why finishing it here
-    would be unsafe, not merely overdue)."""
+    would be unsafe, not merely overdue).
+
+    OCCUPANCY CHECKED BEFORE EVERY FOLD (obligation 6b1efacb, halcyon specimen, 2026-08-
+    18): `is_occupied_by_a_live_body` runs alongside `agent_has_acted` — a candidate
+    generation whose OWN `agent_mounts` row backs a harness-confirmed live body is never
+    folded, whatever its graph-activity says. A mint-then-immediate-fold sequence (this
+    walk's own second door, or the 15-minute sweep) used to have only `agent_has_acted`
+    to ask, and a body 4-6 seconds old has usually made no graph write of its own yet —
+    graph-silent is not the same fact as dead."""
     cur_id, cur_oid = ancestor_id, ancestor_oid
     for _ in range(64):
         meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
@@ -1733,6 +1772,10 @@ async def _fold_zero_turn_ancestors(
         if await agent_has_acted(actions, cur_id, exclude=[cur_oid, grand_oid],
                                  settled_after=minted_at):
             break  # a real mind lived here — nothing to fold
+        if await is_occupied_by_a_live_body(
+            actions.pool, cur_id, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd,
+        ):
+            break  # a harness-confirmed live body sits here — young, not a phantom
         do = EvidenceClass.DIRECT_OBSERVATION
         conf = confidence_for(do)
         # ATOMIC (decision ee012ebc's own fix, applied here too — thread 685d24a0):
@@ -1761,6 +1804,139 @@ async def _fold_zero_turn_ancestors(
                                  heir_oid=grand_oid, now=now)
         cur_id, cur_oid = grandancestor, grand_oid
     return cur_id, cur_oid
+
+
+async def _skip_false_mint_ancestors(
+    actions: Actions, agent_id: str, oid: uuid.UUID,
+) -> tuple[str, uuid.UUID]:
+    """THE REANIMATION FIX (obligation 6b1efacb, halcyon specimen, 2026-08-18):
+    `register_agent`'s reanimation-of-retired path hands `_fold_zero_turn_ancestors` the
+    RETIRED object ITSELF as the presumed ancestor to fold from — but that function's own
+    contract treats an ALREADY false_mint starting node as a terminal halt (correct MID-
+    WALK, where it means "a prior fold already resolved this and I should stop here"),
+    so it returned the phantom completely unchanged, and the reanimated heir's
+    `succeeded_from` chained onto a folded phantom instead of a real mind — the halcyon
+    xxiii specimen exactly (minted FROM the already-folded xxii, then itself folded 4-6s
+    later by the SAME defect this file's other half fixes).
+
+    Walks FORWARD past any CONSECUTIVE false_mint ancestors via their own `succeeded_from`,
+    landing on the first ELIGIBLE (non-false_mint) ancestor, or the lineage root if the
+    whole visible chain is false_mint. A no-op when `agent_id` itself isn't false_mint —
+    every OTHER mint path (this is called only from the reanimation arm) is unaffected.
+    Same 64-hop bound as every other succeeded_from walk in this file."""
+    cur_id, cur_oid = agent_id, oid
+    for _ in range(64):
+        flagged = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            cur_oid)
+        if str(flagged).lower() != "true":
+            return cur_id, cur_oid
+        pred = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            cur_oid)
+        if not pred:
+            return cur_id, cur_oid  # a false-minted root — nothing eligible above it
+        pred_oid = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", pred)
+        if pred_oid is None:
+            return cur_id, cur_oid
+        cur_id, cur_oid = pred, pred_oid
+    return cur_id, cur_oid
+
+
+async def reinstate_generation(
+    actions: Actions, agent_id: str, *, because: str, actor: str,
+) -> dict[str, Any]:
+    """THE FOLD'S INVERSE (obligation 6b1efacb, halcyon specimen, 2026-08-18) —
+    `_fold_zero_turn_ancestors` has no undo today; this is it, built for exactly the
+    incident that named it: a genuinely live generation wrongly phantom-folded.
+
+    Retracts `false_mint`/`retired` on `agent_id` (a fresh assertion of `false` on each —
+    the SAME append-only law every property in this codebase follows, never a rewrite of
+    the fold's own record, which stays walkable) and re-links `succeeded_from` to the
+    NEAREST ELIGIBLE (non-false_mint) ancestor in its own chain — walking PAST any
+    ancestor that was ITSELF correctly, separately folded (never blindly restoring the
+    immediate predecessor, which may still be a legitimate phantom this door has no
+    business un-folding). Moves the seat binding — any active `holds` link anywhere in
+    this lineage — onto `agent_id`, the exact inverse of the fold's own `follow_binding`
+    call, so a seat-addressed DM reaches the reinstated generation immediately.
+
+    RECEIPT-VERIFIED: returns exactly what changed (`{"false_mint": {"old","new"}, ...}`),
+    never a bare success flag — a repair door with no visible effect is worse than one
+    that refuses outright.
+
+    REFUSES, WRITES NOTHING, when `agent_id` names no known Agent object, or when it is
+    not currently false_mint/retired at all — reinstating a generation that was never
+    folded is not this door's job, and a caller asking for it almost certainly named the
+    wrong id."""
+    oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if oid is None:
+        return {"ok": False, "detail": f"{agent_id!r} is not a known Agent object"}
+    was_false_mint = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+    was_retired = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='retired' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+    if str(was_false_mint).lower() != "true" and str(was_retired).lower() != "true":
+        return {"ok": False,
+                "detail": f"{agent_id!r} is not currently false_mint or retired — "
+                          "nothing to reinstate"}
+    old_predecessor = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
+    # WALK PAST any consecutive false_mint ancestor to the nearest ELIGIBLE one — the same
+    # walk _skip_false_mint_ancestors does for the reanimation path, applied here to the
+    # PREDECESSOR chain instead of the entry id (this function's own `agent_id` is the
+    # one being un-folded, not the one being skipped).
+    eligible, eligible_oid = old_predecessor, None
+    hops = 0
+    while eligible and hops < 64:
+        e_oid = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", eligible)
+        if e_oid is None:
+            eligible = None
+            break
+        fm = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1", e_oid)
+        if str(fm).lower() != "true":
+            eligible_oid = e_oid
+            break
+        nxt = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            e_oid)
+        eligible = nxt
+        hops += 1
+
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    changed: dict[str, Any] = {
+        "false_mint": {"old": was_false_mint, "new": "false"},
+        "retired": {"old": was_retired, "new": "false"},
+    }
+    from src.orchestrator.seats import follow_binding
+    async with actions.atomic() as a:
+        await a.assert_property(oid, "false_mint", False, actor, now, conf,
+                                evidence_class=do.value)
+        await a.assert_property(oid, "retired", False, actor, now, conf,
+                                evidence_class=do.value)
+        await a.assert_property(oid, "reinstated_because", because, actor, now, conf,
+                                evidence_class=do.value)
+        if eligible and eligible != old_predecessor:
+            await a.assert_property(oid, "succeeded_from", eligible, actor, now, conf,
+                                    evidence_class=do.value)
+            if eligible_oid is not None:
+                await a.assert_property(eligible_oid, "succeeded_by", agent_id, actor, now,
+                                        conf, evidence_class=do.value)
+            changed["succeeded_from"] = {"old": old_predecessor, "new": eligible}
+        await follow_binding(a, ancestor_oid=oid, heir=agent_id, heir_oid=oid, now=now)
+    return {"ok": True, "agent_id": agent_id, "because": because, "changed": changed}
 
 
 _AGENT_PROJECT_LINK_TYPES = ("works_in", "governs")
@@ -2680,6 +2856,16 @@ async def register_agent(
                 a = await actions.create_or_find_object("Agent", identity.agent_id, src)
                 identity.model_succession = None
                 mint_because = None
+        if mint_because == "reanimation-of-retired":
+            # THE REANIMATION FIX (obligation 6b1efacb, halcyon specimen, 2026-08-18):
+            # `identity.agent_id`/`a` here IS the retired object itself — handing it to
+            # `_fold_zero_turn_ancestors` unchanged used to chain the new heir onto a
+            # FOLDED PHANTOM whenever the retiree also happened to be false_mint (its own
+            # first-iteration halt treats an already-false_mint starting node as "a prior
+            # fold already resolved this", correct MID-WALK, wrong as an ENTRY POINT).
+            # Skip forward past any false_mint ancestors first, landing on the nearest
+            # ELIGIBLE one before the fold walk ever runs.
+            identity.agent_id, a = await _skip_false_mint_ancestors(actions, identity.agent_id, a)
         if mint_because:
             # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off
             # the front of the chain BEFORE minting — succeeded_from must land on whoever

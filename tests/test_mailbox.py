@@ -1122,6 +1122,48 @@ async def test_a_dm_to_a_dead_lineage_fails_loudly_never_parks(actions: Actions)
     assert ok2["to_agent"] == "agent:00fresh1"
 
 
+async def test_a_dm_to_a_flagged_dead_id_delivers_when_a_live_body_still_occupies_it(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE HALCYON ESCAPE HATCH (obligation 6b1efacb, 2026-08-18): a retired/false_mint
+    stamp is a BELIEF (exactly the zero-turn fold's own blindness this obligation's other
+    half fixes) — when the harness/OS confirms a live body still sits at that id, the DM
+    must still reach it, never hard-refuse on a stamp the OS itself contradicts."""
+    from src.orchestrator import mounts
+
+    p = actions.pool
+    head = await actions.create_or_find_object("Agent", "agent:0live901", "test")
+    await actions.assert_property(head, "false_mint", True, "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(head, "retired", True, "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
+    # basename against sessionId[:8]).
+    await mounts.save_mount(p, job_dir="/x/jobs/0liv9012", agent_id="agent:0live901",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    from src.orchestrator import trigger
+
+    async def _fake_agents_json(**kw: object) -> list[dict[str, object]]:
+        return [{"sessionId": "0liv9012-0000-4000-8000-000000000000", "pid": 555,
+                 "cwd": "/repo/demo", "name": "[OS] StillLive"}]
+    monkeypatch.setattr(trigger, "_claude_agents_json", _fake_agents_json)
+
+    from src.orchestrator import census
+
+    monkeypatch.setattr(
+        census, "_proc_exe",
+        lambda pid: "/home/x/.local/share/claude/versions/2.1.210")
+    monkeypatch.setattr(census, "_proc_cwd", lambda pid: "/repo/demo")
+
+    ok = await send_message(p, from_agent="agent:5e4de001", from_project="x",
+                            to_agent="agent:0live901", body="are you still there")
+    assert ok["to_agent"] == "agent:0live901"
+    assert ok["lineage_head"] == "agent:0live901"
+    assert ok["redirect"] is not None
+    assert ok["redirect"]["delivered_despite_flag"] in ("retired", "false_mint")
+
+
 async def test_desk_briefs_scope_to_the_senders_lineage(actions: Actions) -> None:
     """The scoped desk (operator ruling, 2026-07-16): an agent's chrome counts ITS OWN
     unanswered briefs — lineage-wide — never the fleet's backlog."""

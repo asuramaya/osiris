@@ -480,14 +480,28 @@ async def send_message(
         # KNOWN-dead (retired / false_mint), the mail can never be read under any of its
         # addresses — fail LOUDLY, naming who was found and why, instead of parking it.
         # An id the graph merely hasn't met stays deliverable (registration can lag).
+        occupied_despite_flag: str | None = None
         if lineage:
             why = await _dm_ineligibility(pool, lineage)
             if why in ("retired", "false_mint"):
-                raise ValueError(
-                    f"undeliverable: '{requested or to_a}' resolves to {lineage}, whose "
-                    f"lineage head is {why} — no eligible living head exists, so this DM "
-                    "would park on a phantom lane forever. Check fleet() for who actually "
-                    "lives, or broadcast to the project room instead.")
+                # THE HALCYON ESCAPE HATCH (obligation 6b1efacb, 2026-08-18): a
+                # retired/false_mint STAMP is a belief, not a pulse — the exact zero-turn
+                # fold blindness this obligation's other half fixes can leave a
+                # GENUINELY LIVE, harness-confirmed body wearing a flagged-dead id. A DM
+                # to that body must still reach it (or at minimum name the occupancy in
+                # the receipt), never hard-refuse solely on a stale/wrong stamp when the
+                # OS itself can be asked directly. Refuse only when NO living head exists
+                # anywhere — occupancy is checked BEFORE the refusal, never instead of it.
+                from src.orchestrator.agents import is_occupied_by_a_live_body
+                if await is_occupied_by_a_live_body(pool, lineage):
+                    occupied_despite_flag = why
+                else:
+                    raise ValueError(
+                        f"undeliverable: '{requested or to_a}' resolves to {lineage}, "
+                        f"whose lineage head is {why} — no eligible living head exists, "
+                        "so this DM would park on a phantom lane forever. Check fleet() "
+                        "for who actually lives, or broadcast to the project room "
+                        "instead.")
         gate_seat = await agent_seat(pool, to_a)
         if require_seat and gate_seat is None:
             raise ValueError(
@@ -508,6 +522,13 @@ async def send_message(
         if lineage and lineage != to_a:
             redirect = {"addressed": to_a, "addressed_seat": gate_seat,
                        "delivered": lineage, "delivered_seat": seat}
+        if occupied_despite_flag is not None:
+            redirect = {**(redirect or {"addressed": to_a, "delivered": lineage}),
+                       "delivered_despite_flag": occupied_despite_flag,
+                       "delivered_despite_flag_reason": "a live, harness-confirmed body "
+                                                        "occupies this id — delivered "
+                                                        "anyway rather than parked on a "
+                                                        "belief the OS itself contradicts"}
     # OWNERSHIP STAMPED AT DISPATCH (Phase 1c): resolved BEFORE any write, same law as the
     # require_seat gate just above — an ambiguous or unknown thread ref must refuse loudly,
     # never park a message whose ownership claim silently didn't land.

@@ -1000,8 +1000,9 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
     """The graph audits ITSELF — report-only, never writes. THE CHECKS: contradiction
     (near-tie multi-source winners — the resolver is coin-flipping a fact), laundering (an
     agent carrying a fact above its origin grade), lineage integrity (succession cycles,
-    dangling heir pointers, heirs without ancestry, retired-yet-live agents, healed false
-    mints), orphan links (live links into merged/retired objects), stale obligations (open
+    dangling heir pointers, heirs without ancestry, retired-yet-live/false-minted-yet-
+    live agents, healed false mints), orphan links (live links into merged/retired objects),
+    stale obligations (open
     duties older than `stale_days`), attribution anomalies (writes from agent ids the graph
     never registered — the impersonation class), phantom twins (an anonymous un-spawned
     agent mounted at a Seat's office beside a different holder lineage), parallel lives (a

@@ -1339,6 +1339,58 @@ async def test_register_agent_recovers_succeeded_from_after_a_simulated_bounce(
     assert reconstructed.succeeded_from == "agent:0806072e"  # recovered, not lost
 
 
+async def test_reanimation_of_a_false_minted_retiree_skips_to_the_eligible_ancestor(
+    actions: Actions,
+) -> None:
+    """THE HALCYON XXIII SPECIMEN (obligation 6b1efacb, 2026-08-18): the retired object
+    reanimation mints FROM can itself be false_mint (a real, live generation the phantom
+    fold wrongly ate — see the sibling occupancy fix in this same file). Before this fix,
+    the new heir's succeeded_from chained onto that folded phantom (register_agent handed
+    `_fold_zero_turn_ancestors` the phantom itself, and that function's own already-
+    false_mint halt returned it unchanged); now it skips forward to the nearest ELIGIBLE
+    ancestor instead."""
+    root = _anchored("claude-opus-4-8")
+    root_id = await register_agent(actions, root, actor="analyst:operator")
+    heir = _anchored("claude-fable-5")
+    heir_id = await register_agent(actions, heir, actor="analyst:operator")
+    assert heir.agent_id == "agent:0806072e-ii"
+    assert heir.succeeded_from == root.agent_id
+
+    # THE WRONGFUL FOLD: heir was a genuinely live generation, but got phantom-folded
+    # anyway (the exact bug this obligation's other half fixes) — false_mint AND retired,
+    # succeeded_from left pointing at the real root underneath it. BACKDATED past
+    # `_SEAM_DEBOUNCE_SECS` (900s) — a fresh heal still inside that window is
+    # `mint_heir`'s own "not every heal is a death" reuse case (the SAME numeral is
+    # deliberately recycled, ruling d3531cd8's own point); the real halcyon specimen's
+    # own 30-minute gap between fold and reanimation is well past it, and this fixture
+    # must match that shape or `mint_heir`'s grave-avoidance loop reuses "-ii" instead of
+    # minting a genuinely new "-iii" — a different, already-covered code path.
+    stale_now = datetime.now(UTC) - timedelta(seconds=1000)
+    await actions.assert_property(heir_id, "false_mint", True, "test", stale_now, 0.9,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    await actions.assert_property(heir_id, "retired", True, "test", stale_now, 0.9,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+
+    # THE LIVE BODY REMOUNTS — addressed by the RETIRED generation's own id directly
+    # (matching production: a reattach's session resolves to the specific generation it
+    # was last known as, not the lineage's base id — `lineage_head` itself would skip a
+    # false_mint node reached via the BASE's own succeeded_by walk, so starting there
+    # would never reproduce this specimen at all).
+    reanimated = AgentIdentity(agent_id="agent:0806072e-ii", session="0806072e-ii",
+                               project="sibling-two", model="claude-fable-5",
+                               cwd="/w/sibling-two", model_method="job_dir",
+                               model_history=("claude-fable-5",))
+    a3 = await register_agent(actions, reanimated, actor="analyst:operator")
+    assert a3 != heir_id and a3 != root_id
+    assert reanimated.agent_id == "agent:0806072e-iii"
+    # THE FIX: succeeded_from skips the false-minted -ii, lands on the real root — never
+    # chains a live heir onto a folded phantom.
+    assert reanimated.succeeded_from == root.agent_id
+    assert await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='minted_because'", a3) == "reanimation-of-retired"
+
+
 async def test_remount_of_a_retired_identity_mints_an_heir(actions: Actions) -> None:
     """The reanimation door under the mint ruling: a retired face is never re-worn — the
     arriving context is minted the next generation; the retirement stands on the ancestor."""
@@ -3784,6 +3836,64 @@ async def test_fold_zero_turn_ancestors_leaves_a_witnessed_mint_alone(actions: A
     assert await _false_mint(actions, heir) is None
 
 
+async def test_fold_zero_turn_ancestors_never_folds_a_body_the_harness_confirms_is_live(
+    actions: Actions,
+) -> None:
+    """THE HALCYON FIX (obligation 6b1efacb, 2026-08-18): a candidate with NO graph acts of
+    its own but a live, harness-confirmed `agent_mounts` row is never folded — occupancy is
+    a SECOND, independent witness beside `agent_has_acted`, not a replacement for it. Before
+    this fix, exactly this shape (a body minted 4-6 seconds before its own first MCP write)
+    was indistinguishable from a genuine zero-turn phantom."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0010", "test")
+    phantom, phantom_oid = await mint_heir(
+        actions, "agent:zt0010", root, because="compaction", succession=None)
+    # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
+    # basename against sessionId[:8]) — "zt0010ii" is 8 characters on purpose.
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/zt0010ii", agent_id=phantom, project="demo",
+        cwd="/repo/demo", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "zt0010ii-0000-4000-8000-000000000000", "pid": 444,
+                 "cwd": "/repo/demo", "name": "[OS] Halcyon"}]
+
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now, agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/repo/demo")
+    assert restored_id == phantom and restored_oid == phantom_oid
+    assert await _false_mint(actions, phantom) is None
+
+
+async def test_fold_zero_turn_ancestors_still_folds_the_same_shape_when_unoccupied(
+    actions: Actions,
+) -> None:
+    """The negative control: an identical fixture with NO live harness body still folds
+    exactly as before — the new check only ever WITHHOLDS a fold, never forces one."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0011", "test")
+    phantom, phantom_oid = await mint_heir(
+        actions, "agent:zt0011", root, because="compaction", succession=None)
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/zt0011ii", agent_id=phantom, project="demo",
+        cwd="/repo/demo", model=None, session_key=None)
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now, agents_json=_empty_agents_json)
+    assert restored_id == "agent:zt0011" and restored_oid == root
+    assert await _false_mint(actions, phantom) == "true"
+
+
 async def test_fold_zero_turn_ancestors_walks_a_chain_of_phantoms(actions: Actions) -> None:
     """root -> A (compaction, silent) -> B (live-swap, silent): folding from B walks BOTH
     phantoms and lands on root, not just the nearest one."""
@@ -3850,6 +3960,153 @@ async def test_fold_zero_turn_ancestors_is_idempotent(actions: Actions) -> None:
     assert second == (phantom, phantom_oid), (
         "calling it again ON THE PHANTOM ITSELF halts at the phantom, already folded — "
         "same contract as the live call sites, which always start from the CURRENT head")
+
+
+# ═══════════ reinstate_generation — THE FOLD'S INVERSE (obligation 6b1efacb, 2026-08-18) ═══
+
+async def test_reinstate_generation_undoes_a_wrongful_fold(actions: Actions) -> None:
+    """THE HALCYON REPAIR, minimal shape: a genuinely live generation was phantom-folded
+    anyway — reinstate_generation retracts false_mint/retired, re-points succeeded_from
+    back at its real predecessor, and moves the seat forward onto it."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir, reinstate_generation
+    from src.orchestrator.seats import bind_holder, ensure_seat, seat_receipt
+
+    root = await actions.create_or_find_object("Agent", "agent:ri0001", "test")
+    victim, victim_oid = await mint_heir(actions, "agent:ri0001", root, because="compaction",
+                                         succession=None)
+    seat = (await ensure_seat(actions, house="demo", handle="Ri1", source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id=victim)
+
+    now = datetime.now(UTC)
+    restored_id, _ = await _fold_zero_turn_ancestors(actions, victim, victim_oid, now)
+    assert restored_id == "agent:ri0001"  # the wrongful fold, reproduced
+    assert await _false_mint(actions, victim) == "true"
+
+    receipt = await reinstate_generation(
+        actions, victim, because="halcyon specimen: live body, wrongly folded", actor="test")
+    assert receipt["ok"] is True
+    assert receipt["changed"]["false_mint"]["new"] == "false"
+    assert receipt["changed"]["retired"]["new"] == "false"
+    assert await _false_mint(actions, victim) == "false"
+    retired_now = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='retired' ORDER BY confidence DESC, observed_at DESC LIMIT 1", victim_oid)
+    assert retired_now == "false"
+    # THE SEAT MOVES BACK: the fold's own follow_binding sent it to root; reinstating
+    # brings it home to the reinstated generation.
+    sr = await seat_receipt(actions.pool, seat)
+    assert sr is not None and sr["holder"] == victim
+
+
+async def test_reinstate_generation_skips_a_still_legitimately_folded_ancestor(
+    actions: Actions,
+) -> None:
+    """root -> A (genuine zero-turn phantom, correctly folded) -> B (wrongly folded, a
+    real generation). Reinstating B must re-link past A (still, correctly, false_mint) to
+    root — never blindly restore the immediate predecessor, which this door has no
+    business un-folding on its own."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir, reinstate_generation
+
+    root = await actions.create_or_find_object("Agent", "agent:ri0002", "test")
+    a_id, a_oid = await mint_heir(actions, "agent:ri0002", root, because="compaction",
+                                  succession=None)
+    now = datetime.now(UTC)
+    folded_a, folded_a_oid = await _fold_zero_turn_ancestors(actions, a_id, a_oid, now)
+    assert folded_a == "agent:ri0002"  # A genuinely was a phantom — correctly folded
+
+    # B is minted from the (correctly) folded A, exactly as the reanimation path's own
+    # entry point would hand it in — then wrongly zero-turn-folded itself (B genuinely
+    # took no turns either, in this fixture; the WRONGFUL part is that A's own real
+    # ancestor, root, is the eligible landing spot, not A itself).
+    b_id, b_oid = await mint_heir(actions, a_id, a_oid, because="reanimation-of-retired",
+                                  succession=None)
+    do_fold = await _fold_zero_turn_ancestors(actions, b_id, b_oid, now)
+    assert do_fold == (a_id, a_oid), "B folds, the walk halts at A (already false_mint)"
+    assert await _false_mint(actions, b_id) == "true"
+    b_pred = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", b_oid)
+    assert b_pred == a_id  # B's own record still names A as predecessor — A is the phantom to skip
+
+    receipt = await reinstate_generation(
+        actions, b_id, because="halcyon specimen: chained onto a folded phantom",
+        actor="test")
+    assert receipt["ok"] is True
+    # skipped A, landed on root
+    assert receipt["changed"]["succeeded_from"]["new"] == "agent:ri0002"
+    assert await _false_mint(actions, a_id) == "true"  # A stays folded — untouched
+
+
+async def test_reinstate_generation_refuses_an_unknown_id(actions: Actions) -> None:
+    from src.orchestrator.agents import reinstate_generation
+
+    receipt = await reinstate_generation(
+        actions, "agent:no-such-id", because="test", actor="test")
+    assert receipt["ok"] is False
+    assert "not a known Agent object" in receipt["detail"]
+
+
+async def test_reinstate_generation_refuses_a_generation_never_folded(actions: Actions) -> None:
+    from src.orchestrator.agents import reinstate_generation
+
+    await actions.create_or_find_object("Agent", "agent:ri0003", "test")
+    receipt = await reinstate_generation(
+        actions, "agent:ri0003", because="test", actor="test")
+    assert receipt["ok"] is False
+    assert "nothing to reinstate" in receipt["detail"]
+
+
+async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachable(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE TEST (obligation 6b1efacb, halcyon 2026-08-18): replays the
+    incident's own shape end to end — a fresh compaction mint, immediately followed by
+    TWO independent doors both racing to fold it (mount's own call site AND the
+    automount/session-start door, plus what the 15-minute sweep would find if it fired
+    in between) — while a live, harness-confirmed body already occupies the generation's
+    own agent_mounts row. Before the occupancy fix, both doors folded it (4-6 seconds
+    apart, exactly the specimen's own timing); now NEITHER does, and a DM sent straight
+    at it delivers rather than refusing on a stamp that was never applied."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+    from src.orchestrator.mailbox import send_message
+
+    root = await actions.create_or_find_object("Agent", "agent:dd0001", "test")
+    body, body_oid = await mint_heir(actions, "agent:dd0001", root, because="compaction",
+                                     succession=None)
+    # THE LIVE BODY, seconds into its own existence — matched by the SAME 8-char job_dir
+    # key registry_census uses (sessionId[:8] against agent_mounts.job_dir's own basename).
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/dd0001ii", agent_id=body, project="demo",
+        cwd="/repo/demo", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "dd0001ii-0000-4000-8000-000000000000", "pid": 777,
+                 "cwd": "/repo/demo", "name": "[OS] DoubleDoor"}]
+
+    common = {
+        "agents_json": _agents_json,
+        "read_exe": lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        "read_cwd": lambda pid: "/repo/demo",
+    }
+    now = datetime.now(UTC)
+
+    # DOOR 1 — mount's own call site.
+    door1_id, door1_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
+    assert door1_id == body and door1_oid == body_oid  # untouched
+
+    # DOOR 2 — automount/session-start, moments later, same live body still occupying.
+    door2_id, door2_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
+    assert door2_id == body and door2_oid == body_oid  # STILL untouched — no fold happened
+
+    assert await _false_mint(actions, body) is None
+
+    # THE ACCEPTANCE: reachable by DM, no refusal, no redirect needed (it was never
+    # flagged dead in the first place).
+    ok = await send_message(actions.pool, from_agent="agent:sender01", from_project="x",
+                            to_agent=body, body="are you there")
+    assert ok["to_agent"] == body
+    assert ok.get("redirect") is None
 
 
 async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Actions) -> None:
