@@ -4056,6 +4056,59 @@ async def test_reinstate_generation_refuses_a_generation_never_folded(actions: A
     assert "nothing to reinstate" in receipt["detail"]
 
 
+async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachable(
+    actions: Actions,
+) -> None:
+    """THE ACCEPTANCE TEST (obligation 6b1efacb, halcyon 2026-08-18): replays the
+    incident's own shape end to end — a fresh compaction mint, immediately followed by
+    TWO independent doors both racing to fold it (mount's own call site AND the
+    automount/session-start door, plus what the 15-minute sweep would find if it fired
+    in between) — while a live, harness-confirmed body already occupies the generation's
+    own agent_mounts row. Before the occupancy fix, both doors folded it (4-6 seconds
+    apart, exactly the specimen's own timing); now NEITHER does, and a DM sent straight
+    at it delivers rather than refusing on a stamp that was never applied."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+    from src.orchestrator.mailbox import send_message
+
+    root = await actions.create_or_find_object("Agent", "agent:dd0001", "test")
+    body, body_oid = await mint_heir(actions, "agent:dd0001", root, because="compaction",
+                                     succession=None)
+    # THE LIVE BODY, seconds into its own existence — matched by the SAME 8-char job_dir
+    # key registry_census uses (sessionId[:8] against agent_mounts.job_dir's own basename).
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/dd0001ii", agent_id=body, project="demo",
+        cwd="/repo/demo", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "dd0001ii-0000-4000-8000-000000000000", "pid": 777,
+                 "cwd": "/repo/demo", "name": "[OS] DoubleDoor"}]
+
+    common = {
+        "agents_json": _agents_json,
+        "read_exe": lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        "read_cwd": lambda pid: "/repo/demo",
+    }
+    now = datetime.now(UTC)
+
+    # DOOR 1 — mount's own call site.
+    door1_id, door1_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
+    assert door1_id == body and door1_oid == body_oid  # untouched
+
+    # DOOR 2 — automount/session-start, moments later, same live body still occupying.
+    door2_id, door2_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
+    assert door2_id == body and door2_oid == body_oid  # STILL untouched — no fold happened
+
+    assert await _false_mint(actions, body) is None
+
+    # THE ACCEPTANCE: reachable by DM, no refusal, no redirect needed (it was never
+    # flagged dead in the first place).
+    ok = await send_message(actions.pool, from_agent="agent:sender01", from_project="x",
+                            to_agent=body, body="are you there")
+    assert ok["to_agent"] == body
+    assert ok.get("redirect") is None
+
+
 async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Actions) -> None:
     """RETROACTIVE CLEANUP (msg 1398: 'Fold existing zero-turn phantoms') — finds an
     already-superseded, already-silent generation the going-forward fix never saw (it
