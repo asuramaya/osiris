@@ -7225,6 +7225,48 @@ async def heartbeat_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+@mcp.custom_route("/stop", methods=["POST"])
+async def stop_route(request: Any) -> Any:
+    """The Stop hook's server half (task #180 piece 2 (b), msg 5253): every stop-hook
+    invocation used to open its OWN `asyncpg.connect()` — up to two per call (the mail
+    check always, the offload-ritual box check conditionally) — the SAME per-process-fork
+    cost `/heartbeat` already fixed for the statusline, on a different trigger. Fires on
+    every turn boundary, fleet-wide.
+
+    ONE ROUTE, TWO PHASES (`body["phase"]`): the hook's own `main()` decides whether to
+    check offload boxes at ALL only after computing a context-occupancy percentage from the
+    'deliverable' phase's own window AND the harness transcript locally — the two DB reads
+    are genuinely conditional on each other's caller-side result, not always-both, so this
+    stays two round-trips (same as today) rather than one route always paying for a box
+    check that most turns never need. `compute_stop_deliverable`/`compute_stop_offload`
+    (src/orchestrator/stophook_logic.py) are the SAME implementation the hook's own direct-
+    connect fallback calls — one body, never two drifting copies.
+
+    Localhost-only, fail-open like every route beside it: the hook tries this route first
+    and falls straight back to its own direct-connect path on ANY failure — a route outage
+    costs exactly what today already costs, never more."""
+    from starlette.responses import JSONResponse
+
+    from src.orchestrator.stophook_logic import compute_stop_deliverable, compute_stop_offload
+
+    try:
+        body = await request.json()
+        phase = str(body.get("phase") or "")
+        cwd = str(body.get("cwd") or "")
+        session_id = str(body.get("session_id") or "")
+        pool = await _pool_get()
+        out: Any
+        if phase == "deliverable":
+            out = await compute_stop_deliverable(pool, cwd=cwd, session_id=session_id)
+        elif phase == "offload":
+            out = await compute_stop_offload(pool, session_id=session_id, cwd=cwd)
+        else:
+            return JSONResponse({"error": f"unknown phase {phase!r}"}, status_code=400)
+        return JSONResponse({"result": out})
+    except Exception as e:  # noqa: BLE001 — the hook falls back to its own connect; never block
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @mcp.custom_route("/spawn", methods=["POST"])
 async def spawn_route(request: Any) -> Any:
     """SubagentStart/SubagentStop's server half: the harness announces a spawn the moment it

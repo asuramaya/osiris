@@ -28,6 +28,17 @@ from src.orchestrator.mailbox import send_message
 from src.orchestrator.mounts import find_mount, save_mount
 from src.orchestrator.seats import bind_holder
 
+
+@pytest.fixture(autouse=True)
+def _no_real_stop_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """task #180 piece 2 (b): every test in this file calls `_deliverable`/`_offload_boxes`
+    directly, bypassing `_stop_via_http` entirely — but a FUTURE test exercising `main()`
+    on a box where a real osiris-mcp happens to be listening on :8790 (this dev box, most
+    of the time) would otherwise silently hit the LIVE shared server. Same isolation shape
+    as test_statusline.py's own `_no_real_heartbeat_route`."""
+    monkeypatch.setattr(stophook, "STOP_URL", "http://127.0.0.1:1/stop")
+
+
 # ═══════════ THE PURE POLICY — acceptance (a)-(d) ═══════════
 
 def test_a_above_alarm_and_unwritten_blocks_naming_the_boxes() -> None:
@@ -1332,3 +1343,77 @@ def test_stage_a_never_raises_when_the_database_is_unreachable(
     """Acceptance: a stop with mail machinery down still stops clean."""
     monkeypatch.setattr(stophook, "DSN", "postgresql://u:p@127.0.0.1:1/osiris")
     stophook._stage_a({"cwd": "/nowhere", "session_id": "deadbeef0000"})  # must not raise
+
+
+# ═══════════ task #180 piece 2 (b): `_stop_via_http`, tried before any direct connect ══════
+
+def test_stop_via_http_returns_none_when_the_route_is_unreachable() -> None:
+    """STOP_URL is redirected to a guaranteed-closed port by the autouse fixture above —
+    proves the degrade path directly: connection failure is a quiet None, never a raised
+    exception the caller would have to catch."""
+    assert stophook._stop_via_http("deliverable", cwd="/nowhere", session_id="x") is None
+
+
+def test_stop_via_http_parses_a_real_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"result": {"n": 2, "senders": ["agent:x"], "window": 200000,
+                          "bands": {"ask": 1, "fyi": 1}, "project": "osiris"}}
+
+    class _FakeResp:
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+    result = stophook._stop_via_http("deliverable", cwd="/repo", session_id="x")
+    assert result == payload["result"]
+
+
+def test_stop_via_http_a_server_side_error_is_also_a_quiet_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResp:
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"error": "unknown phase"}'
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResp())
+    assert stophook._stop_via_http("bogus", cwd="/repo", session_id="x") is None
+
+
+def test_stop_via_http_a_legitimate_null_offload_result_still_reaches_the_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 'offload' phase's own None (an unresolvable session) IS None, indistinguishable
+    from a route failure at this layer on purpose (both degrade the caller to its own
+    direct-connect fallback — worst case one redundant DB round-trip, never a wrong
+    answer). This test proves the response was genuinely PARSED (the fake urlopen was
+    actually called), not short-circuited by the OSError path."""
+    called = []
+
+    class _FakeResp:
+        def __enter__(self) -> _FakeResp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"result": null}'
+
+    def _fake_urlopen(*a: object, **k: object) -> _FakeResp:
+        called.append(True)
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    assert stophook._stop_via_http("offload", cwd="/repo", session_id="x") is None
+    assert called == [True]

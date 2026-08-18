@@ -47,6 +47,34 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 # long synthesis outlives the 15-min lease. The mailbox's redelivery semantics are
 # UNCHANGED (at-least-once holds for everyone else); only the stop-block relents.
 STOP_GRACE_SECS = 3600
+# ONE INGRESS (task #180 piece 2 (b)): the shared MCP server's /stop route, same shape as
+# the statusline's OSIRIS_HEARTBEAT_URL — tried first, falls straight back to this script's
+# own direct-connect path on ANY failure.
+STOP_URL = os.environ.get("OSIRIS_STOP_URL", "http://127.0.0.1:8790/stop")
+
+
+def _stop_via_http(
+    phase: str, *, cwd: str, session_id: str, timeout: float = 1.0,
+) -> dict[str, Any] | None:
+    """Blocking urllib POST to `/stop` — same pattern as osiris_statusline.py's own
+    `_heartbeat_via_http`. None on ANY failure (route down, timeout, malformed response, a
+    stale server predating this route) falls straight through to the caller's own direct-
+    connect path, unchanged."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        payload = json.dumps({"phase": phase, "cwd": cwd, "session_id": session_id}).encode()
+        req = urllib.request.Request(
+            STOP_URL, data=payload, headers={"Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            out = json.load(resp)
+    except (OSError, urllib.error.URLError, ValueError):
+        return None
+    if "error" in out or "result" not in out:
+        return None
+    return out["result"]
 
 
 async def _deliverable(
@@ -69,53 +97,14 @@ async def _deliverable(
     in the block reason. Resolved here (not by the caller) so it rides the SAME connection
     and agent_id lookup, one round trip, not two."""
     import asyncpg
+    from src.orchestrator.stophook_logic import compute_stop_deliverable
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
-        # the ONE session→row lookup (mounts.find_session_row, task #33) — this hook's
-        # inline anchor-name match was the mail arc's silent half: a re-anchored window
-        # was never nagged, so its mail sat while the session lived
-        from src.orchestrator.mounts import find_session_row
-        from src.orchestrator.seats import resolve_project
-        row = await find_session_row(conn, session_id or "")
-        if row is None or not row["agent_id"]:
-            # (the old `return 0, None` here was a 2-tuple against a 3-tuple signature —
-            # the unmounted path "worked" only because the caller's fail-open ate the
-            # unpack error; now it declines honestly)
-            return 0, [], None, {}, None
-        project = await resolve_project(conn, str(row["agent_id"]), cwd)
-        # `m.from_agent <> $1` on the broadcast leg: THE SELF-ECHO (Metron V, msgs 444/446) —
-        # without it this hook BLOCKED a turn to make an agent read its own outbound, six
-        # times in one night. Mirrors mailbox._DELIVERABLE_TO_READER; keep them in step —
-        # including THE ROLLUP: a DM parked on any generation of the reader's lineage is
-        # the reader's (the base strips a trailing roman suffix, agents._generation's rule).
-        me = str(row["agent_id"])
-        root, sep, suffix = me.rpartition("-")
-        base = root if sep and root and suffix and set(suffix) <= set("ivxlcdm") else me
-        n_row = await conn.fetchrow(
-            "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
-            " count(*) FILTER (WHERE m.grade='ask') AS asks, "
-            " count(*) FILTER (WHERE m.grade='fyi') AS fyis "
-            "FROM fleet_messages m "
-            "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$1 "
-            "WHERE ((m.to_agent=$1) "
-            "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
-            "   OR (m.to_project=$2 AND m.to_agent IS NULL AND m.from_agent <> $1)) "
-            "AND m.read_at IS NULL "
-            # THE SETTLE-STATE ROLLUP (mailbox._DELIVERABLE_TO_READER; keep in step): has
-            # ANY generation of my lineage already settled this, not just my own exact id.
-            "AND NOT EXISTS (SELECT 1 FROM message_recipients r3 WHERE r3.message_id=m.id "
-            "  AND (r3.agent_id=$1 OR r3.agent_id=$4 OR r3.agent_id LIKE $4 || '-%') "
-            "  AND r3.read_at IS NOT NULL) "
-            "AND (r.delivered_at IS NULL OR r.delivered_at < now() - make_interval(secs => $3))",
-            row["agent_id"], project, STOP_GRACE_SECS, base)
-        n = int(n_row["n"]) if n_row else 0
-        senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
-        bands = ({"ask": int(n_row["asks"] or 0), "fyi": int(n_row["fyis"] or 0)}
-                 if n_row else {})
-        return n, senders, row["context_window_size"], bands, project
+        out = await compute_stop_deliverable(conn, cwd=cwd, session_id=session_id)
     finally:
         await conn.close()
+    return out["n"], out["senders"], out["window"], out["bands"], out["project"]
 
 
 # ═══════════ THE OFFLOAD RITUAL (queue item 4, #49 piece 3) ═══════════
@@ -155,24 +144,11 @@ async def _offload_boxes(
     settle_boxes, exactly like the MCP wrapper; settle_boxes itself stays pure and
     unchanged, shared unmodified with that call site."""
     import asyncpg
-    from src.orchestrator.settle import settle_boxes
+    from src.orchestrator.stophook_logic import compute_stop_offload
 
     conn = await asyncpg.connect(DSN, timeout=1.0)
     try:
-        from src.orchestrator.mounts import find_session_row
-        row = await find_session_row(conn, session_id or "")
-        if row is None or not row["agent_id"] or not row["mounted_at"]:
-            return None
-        from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
-        from src.orchestrator.seats import held_seat
-
-        charter_cwd = cwd
-        seat = await held_seat(conn, str(row["agent_id"]))
-        if seat and seat.get("handle"):
-            charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
-        return await settle_boxes(conn, agent_id=str(row["agent_id"]),
-                                  mounted_at=row["mounted_at"], cwd=charter_cwd,
-                                  seat_id=seat["seat_id"] if seat else None)
+        return await compute_stop_offload(conn, session_id=session_id, cwd=cwd)
     finally:
         await conn.close()
 
@@ -896,13 +872,19 @@ def main() -> None:
         return
     cwd = payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     session_id = payload.get("session_id") or ""
-    try:
-        n, senders, window, bands, project = asyncio.run(
-            asyncio.wait_for(_deliverable(cwd, session_id), timeout=1.5))
-    except Exception as exc:  # noqa: BLE001 — graph down = allow the stop; chrome still shows it
-        _alarm_stop_hook_failure(f"_deliverable failed for session {session_id or '?'}: {exc}")
-        _stage_a(payload)
-        return
+    via_http = _stop_via_http("deliverable", cwd=cwd, session_id=session_id)
+    if via_http is not None:
+        n, senders, window, bands, project = (
+            via_http["n"], via_http["senders"], via_http["window"], via_http["bands"],
+            via_http["project"])
+    else:
+        try:
+            n, senders, window, bands, project = asyncio.run(
+                asyncio.wait_for(_deliverable(cwd, session_id), timeout=1.5))
+        except Exception as exc:  # noqa: BLE001 — graph down = allow the stop; chrome still shows it
+            _alarm_stop_hook_failure(f"_deliverable failed for session {session_id or '?'}: {exc}")
+            _stage_a(payload)
+            return
     if n:
         who = f" (from {', '.join(senders[:4])})" if senders else ""
         # the bands, spoken without guessing (thread f9449d8d): asks lead, fyis are named
@@ -939,13 +921,18 @@ def main() -> None:
     if _offload_already_blocked(session_id, hard=hard):
         _stage_a(payload, good_pct)
         return
-    try:
-        boxes = asyncio.run(
-            asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
-    except Exception as exc:  # noqa: BLE001 — graph down = allow the stop, same as mail check
-        _alarm_stop_hook_failure(f"_offload_boxes failed for session {session_id or '?'}: {exc}")
-        _stage_a(payload, good_pct)
-        return
+    via_http = _stop_via_http("offload", cwd=cwd, session_id=session_id)
+    if via_http is not None:
+        boxes = via_http
+    else:
+        try:
+            boxes = asyncio.run(
+                asyncio.wait_for(_offload_boxes(session_id, cwd), timeout=1.5))
+        except Exception as exc:  # noqa: BLE001 — graph down = allow the stop, same as mail check
+            _alarm_stop_hook_failure(
+                f"_offload_boxes failed for session {session_id or '?'}: {exc}")
+            _stage_a(payload, good_pct)
+            return
     verdict = _offload_verdict(
         pct=pct, window_assumed=window_assumed, already_blocked=False, boxes=boxes, hard=hard)
     if verdict:
