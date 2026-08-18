@@ -8,6 +8,7 @@ ATTACHES with a one-time token — refusals loud, nothing written.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,10 +16,15 @@ from typing import Any
 
 import pytest
 from src.actions.core import Actions
-from src.orchestrator.agents import mint_heir
+from src.orchestrator import agents as agents_mod
+from src.orchestrator import seats as seats_mod
+from src.orchestrator.agents import mint_heir, mint_lock
 from src.orchestrator.handshake import automount
 from src.orchestrator.mounts import save_mount
 from src.orchestrator.seats import (
+    LockWedged,
+    _peer_lock,
+    _seat_lock,
     attach_session,
     bind_holder,
     ensure_seat,
@@ -3849,3 +3855,142 @@ async def test_vacate_holder_refuses_an_already_vacant_seat(actions: Actions) ->
     out = await vacate_holder(actions, seat_id="seat:vh4empty", actor="test",
                               because="dead")
     assert "nothing to vacate" in out["error"]
+
+
+# #172 (2026-08-18 00:08-00:23Z): pg_advisory_lock on a borrowed pool connection wedged the
+# fleet — a cancelled/wedged holder returned its connection to the pool still owning the
+# lock (advisory locks are session-scoped, untouched by asyncpg's connection.reset()), and
+# the next unrelated borrower inherited it. _seat_lock/_peer_lock/mint_lock are now
+# XACT-scoped: the lock dies with the transaction, no finally required.
+
+
+async def test_seat_lock_releases_even_when_the_holder_is_cancelled(
+    actions: Actions,
+) -> None:
+    holder_ready = asyncio.Event()
+
+    async def _hold_forever() -> None:
+        async with _seat_lock(actions.pool, "osiris", "wedge-cancel"):
+            holder_ready.set()
+            await asyncio.sleep(30)
+
+    task = asyncio.create_task(_hold_forever())
+    await holder_ready.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # the cancelled holder's xact rolled back with it — the key is free, not still owned
+    async with actions.pool.acquire() as conn:
+        key = "seat:osiris/wedge-cancel"
+        got_it = await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key)
+        assert got_it is True
+        await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+
+    # a fresh holder proceeds without waiting on a ghost
+    async with asyncio.timeout(2):
+        async with _seat_lock(actions.pool, "osiris", "wedge-cancel"):
+            pass
+
+
+async def test_peer_lock_releases_even_when_the_holder_is_cancelled(
+    actions: Actions,
+) -> None:
+    holder_ready = asyncio.Event()
+
+    async def _hold_forever() -> None:
+        async with _peer_lock(actions.pool, "seat:pw1", "seat:pw2"):
+            holder_ready.set()
+            await asyncio.sleep(30)
+
+    task = asyncio.create_task(_hold_forever())
+    await holder_ready.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with actions.pool.acquire() as conn:
+        for key in ("peer:seat:pw1", "peer:seat:pw2"):
+            got_it = await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key)
+            assert got_it is True
+        for key in ("peer:seat:pw1", "peer:seat:pw2"):
+            await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+
+    async with asyncio.timeout(2):
+        async with _peer_lock(actions.pool, "seat:pw1", "seat:pw2"):
+            pass
+
+
+async def test_mint_lock_releases_even_when_the_holder_is_cancelled(
+    actions: Actions,
+) -> None:
+    holder_ready = asyncio.Event()
+
+    async def _hold_forever() -> None:
+        async with mint_lock(actions.pool, "agent:wedge-cancel"):
+            holder_ready.set()
+            await asyncio.sleep(30)
+
+    task = asyncio.create_task(_hold_forever())
+    await holder_ready.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with actions.pool.acquire() as conn:
+        key = "mint:agent:wedge-cancel"
+        got_it = await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key)
+        assert got_it is True
+        await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", key)
+
+    async with asyncio.timeout(2):
+        async with mint_lock(actions.pool, "agent:wedge-cancel"):
+            pass
+
+
+async def test_seat_lock_wedged_waiter_fails_loud_named(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A holder that is genuinely still working the key (not cancelled, not dead) makes a
+    waiter fail LOUD past lock_timeout with a named error — never park silently."""
+    monkeypatch.setattr(seats_mod, "_LOCK_TIMEOUT", "200ms")
+    holder_ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with _seat_lock(actions.pool, "osiris", "wedge-timeout"):
+            holder_ready.set()
+            await release.wait()
+
+    task = asyncio.create_task(_hold())
+    await holder_ready.wait()
+    try:
+        with pytest.raises(LockWedged):
+            async with _seat_lock(actions.pool, "osiris", "wedge-timeout"):
+                pass
+    finally:
+        release.set()
+        await task
+
+
+async def test_mint_lock_wedged_waiter_fails_loud_named(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agents_mod, "_LOCK_TIMEOUT", "200ms")
+    holder_ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        async with mint_lock(actions.pool, "agent:wedge-timeout"):
+            holder_ready.set()
+            await release.wait()
+
+    task = asyncio.create_task(_hold())
+    await holder_ready.wait()
+    try:
+        with pytest.raises(TimeoutError):
+            async with mint_lock(actions.pool, "agent:wedge-timeout"):
+                pass
+    finally:
+        release.set()
+        await task
