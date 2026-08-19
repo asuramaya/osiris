@@ -9,9 +9,12 @@ from typing import Any
 
 import scripts.gate_hook as gate_hook
 from scripts.gate_hook import (
+    _RATCHET_TEST_NODEID,
     DERIVATION_TRACE_QUESTION,
+    _is_merge_context,
     _is_receipt_shaped,
     _module_imports,
+    _pytest_sole_failure_is_ratchet_ceiling,
     _status_word,
     classify_test_files,
     cmd_precommit,
@@ -793,3 +796,191 @@ def test_venv_bin_does_not_resolve_past_a_symlinked_interpreter(tmp_path: Path) 
         capture_output=True, text=True, check=True,
     )
     assert proc.stdout.strip() == str(fake_venv_bin)
+
+
+# --- thread 1a0f91bb: the ratchet-lag standing-law fork, DECIDED (the gate tolerates the
+# split rather than demanding the ratchet move in the same commit as a merge) and ENCODED,
+# not documented around. Dispatch 5399 LEG 1. ------------------------------------------------
+
+def _git(repo: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "gate-hook-test@example.com")
+    _git(repo, "config", "user.name", "gate hook test")
+
+
+def _commit(repo: Path, msg: str) -> None:
+    _git(repo, "commit", "-q", "--allow-empty", "-m", msg)
+
+
+def test_is_merge_context_false_for_a_plain_single_parent_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _commit(repo, "first")
+    _commit(repo, "second")
+    assert _is_merge_context(repo) is False
+
+
+def test_is_merge_context_true_for_a_landed_merge_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _commit(repo, "base")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side work")
+    _git(repo, "checkout", "-q", "-")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    assert _is_merge_context(repo) is True
+
+
+def test_is_merge_context_true_mid_merge_before_the_merge_commit_lands(
+    tmp_path: Path,
+) -> None:
+    """MERGE_HEAD exists from the moment a conflict-free `git merge` starts until the merge
+    commit itself is made — this is the LIVE pre-commit path's own signal (the commit hasn't
+    happened yet, so there is no parent count to read from HEAD)."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _commit(repo, "base")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "side work")
+    _git(repo, "checkout", "-q", "-")
+    _git(repo, "merge", "-q", "--no-ff", "--no-commit", "side")
+    assert _is_merge_context(repo) is True
+
+
+def test_pytest_sole_failure_is_ratchet_ceiling_true_for_an_exact_solo_match() -> None:
+    out = (
+        f"FAILED {_RATCHET_TEST_NODEID} - AssertionError: tool contract grew to 200000 "
+        "chars\n1 failed, 40 passed in 3.2s"
+    )
+    assert _pytest_sole_failure_is_ratchet_ceiling(out) is True
+
+
+def test_pytest_sole_failure_is_ratchet_ceiling_false_when_anything_else_also_fails() -> None:
+    """#133's own real specimens (a74ce7a/ff72377): a merge that ALSO broke something else
+    must still refuse — never a blanket pass-through for merge commits generally."""
+    out = (
+        f"FAILED {_RATCHET_TEST_NODEID} - AssertionError: ...\n"
+        "FAILED tests/test_mounts.py::test_something_unrelated - AssertionError: ...\n"
+        "2 failed, 39 passed in 3.2s"
+    )
+    assert _pytest_sole_failure_is_ratchet_ceiling(out) is False
+
+
+def test_pytest_sole_failure_is_ratchet_ceiling_false_for_a_different_solo_failure() -> None:
+    out = "FAILED tests/test_mounts.py::test_unrelated - AssertionError: ...\n1 failed, 40 passed"
+    assert _pytest_sole_failure_is_ratchet_ceiling(out) is False
+
+
+def test_status_word_names_ratchet_debt_distinctly_never_a_plain_ok() -> None:
+    assert _status_word(True, "RATCHET-DEBT — merge commit exceeds the ceiling") \
+        == "RATCHET-DEBT"
+
+
+def test_run_gates_ratchet_ceiling_solo_failure_on_a_merge_is_debt_not_failed(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook, "_is_merge_context", lambda repo_root: True)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_a.py").write_text("")
+
+    class _FakeProc:
+        returncode = 1
+        stdout = (
+            f"FAILED {_RATCHET_TEST_NODEID} - AssertionError: over ceiling\n"
+            "1 failed, 5 passed"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", lambda cmd, **kw: _FakeProc())
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert ok is True  # never refused
+    assert msg.startswith("RATCHET-DEBT")
+    assert _status_word(ok, msg) == "RATCHET-DEBT"
+
+
+def test_run_gates_ratchet_ceiling_solo_failure_on_a_non_merge_commit_still_fails(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The same exact pytest output, but NOT a merge commit — a real, ordinary regression
+    (the growth the commit itself caused) and must still refuse."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook, "_is_merge_context", lambda repo_root: False)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_a.py").write_text("")
+
+    class _FakeProc:
+        returncode = 1
+        stdout = (
+            f"FAILED {_RATCHET_TEST_NODEID} - AssertionError: over ceiling\n"
+            "1 failed, 5 passed"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", lambda cmd, **kw: _FakeProc())
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert ok is False
+    assert _status_word(ok, msg) == "FAILED"
+
+
+def test_report_marks_ratchet_debt_as_pass_but_names_it_distinctly(capsys: Any) -> None:
+    results = {
+        "ruff": (True, ""), "mypy": (True, ""),
+        "pytest": (True, "RATCHET-DEBT — merge commit exceeds the ceiling\n1 failed, 5 passed"),
+    }
+    all_ok = gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert all_ok is True  # never refuses
+    assert "RATCHET DEBT" in out.splitlines()[0]
+    assert "pytest: RATCHET-DEBT" in out
+
+
+# --- main(): the escape hatch (dispatch 5399) — an internal bug in this diagnostic's own
+# code fails OPEN, never blocks a commit --------------------------------------------------
+
+def test_main_fails_open_on_an_internal_error_in_precommit(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    def _boom(*, enforce: bool | None = None) -> int:
+        raise RuntimeError("a bug in the diagnostic itself")
+
+    monkeypatch.setattr(gate_hook, "cmd_precommit", _boom)
+    assert gate_hook.main([]) == 0
+    err = capsys.readouterr().err
+    assert "INTERNAL ERROR" in err
+    assert "failing OPEN" in err
+
+
+def test_main_fails_open_on_an_internal_error_in_audit(monkeypatch: Any, capsys: Any) -> None:
+    def _boom(rev_range: str) -> int:
+        raise RuntimeError("a bug in the diagnostic itself")
+
+    monkeypatch.setattr(gate_hook, "cmd_audit", _boom)
+    assert gate_hook.main(["--audit", "a..b"]) == 0
+    err = capsys.readouterr().err
+    assert "INTERNAL ERROR" in err
+
+
+def test_main_a_real_gate_failure_still_refuses_normally(monkeypatch: Any) -> None:
+    """The escape hatch must never swallow a GENUINE gate failure — only an unhandled
+    exception inside the diagnostic's own code reaches the fail-open branch."""
+    monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
+    monkeypatch.setattr(
+        gate_hook, "run_gates",
+        lambda root, changed: {"ruff": (False, "boom"), "mypy": (True, ""), "pytest": (True, "")})
+    monkeypatch.setattr(gate_hook, "_staged_diff_digest", lambda root=None: "same")
+    from src.config.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "osiris_gate_hook_enforce", True)
+    assert gate_hook.main([]) == 1

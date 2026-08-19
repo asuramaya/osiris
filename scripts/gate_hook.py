@@ -312,6 +312,41 @@ def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     return ok, out.strip()
 
 
+_RATCHET_TEST_NODEID = (
+    "tests/test_tool_contract_diet.py::test_tool_contract_stays_under_the_ceiling"
+)
+
+
+def _is_merge_context(repo_root: Path) -> bool:
+    """True for the commit-about-to-land in TWO cases: (1) live pre-commit, mid `git merge`
+    — `MERGE_HEAD` exists from the moment a merge starts conflict-free until the merge
+    commit itself lands, the standard git signal for "this commit, once made, will have 2+
+    parents"; (2) `--audit`'s retroactive replay, where the commit already exists at HEAD in
+    its own disposable worktree — read its actual parent count instead. Scoped this narrow
+    on purpose (thread 1a0f91bb): a NON-merge commit that happens to exceed the ratchet
+    ceiling is a real, ordinary regression and must still refuse — this only recognizes the
+    one named pattern where the growth landed via a merge whose own follow-up "ratchet:"
+    commit (this house's established practice) has not landed yet."""
+    ok, out = _run(["git", "rev-parse", "--verify", "-q", "MERGE_HEAD"], repo_root)
+    if ok and out.strip():
+        return True
+    ok, out = _run(["git", "rev-list", "--parents", "-n", "1", "HEAD"], repo_root)
+    if not ok or not out.strip():
+        return False
+    return len(out.split()) > 2  # HEAD's own sha + >=2 parent shas
+
+
+def _pytest_sole_failure_is_ratchet_ceiling(out: str) -> bool:
+    """True iff pytest's own `-q` "FAILED <nodeid> - ..." lines name EXACTLY the ratchet
+    ceiling test and nothing else. Never a blanket exemption for merge commits generally —
+    a merge that ALSO breaks something else (#133's own real specimens, a74ce7a/ff72377)
+    must still refuse; only this one named, narrow failure shape is eligible."""
+    failed = [line for line in out.splitlines() if line.startswith("FAILED ")]
+    if len(failed) != 1:
+        return False
+    return failed[0].split(" ", 2)[1] == _RATCHET_TEST_NODEID
+
+
 def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool, str]]:
     """ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
     pytest is the one gate that must be scoped, or it re-imports the 209s full-suite cost
@@ -369,6 +404,20 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 results["pytest"] = (
                     True, f"SKIPPED (partial) — ran {len(test_files)} clean, omitted "
                           f"{omitted}\n{out}")
+            elif (not ok and _pytest_sole_failure_is_ratchet_ceiling(out)
+                    and _is_merge_context(repo_root)):
+                # thread 1a0f91bb, decided: the gate TOLERATES the split rather than
+                # demanding the ratchet move in the same commit as a merge (impossible to
+                # author freely into a merge commit's own tree without amending it) -- never
+                # refused, but never a plain "ok" either, so the debt cannot go unnoticed.
+                results["pytest"] = (
+                    True,
+                    "RATCHET-DEBT — merge commit exceeds the tool-contract ceiling before "
+                    "its own follow-up \"ratchet:\" commit lands (thread 1a0f91bb's named "
+                    "pattern; this house's practice raises the ceiling as a deliberate "
+                    "later commit, never atomically with the growth-causing merge). NOT "
+                    "refused — but the VERY NEXT commit must raise TOOL_CONTRACT_CEILING_"
+                    f"CHARS, or this stops being tolerated.\n{out}")
             else:
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (ok, f"[{' '.join(test_files)}]{tail}\n{out}")
@@ -389,12 +438,17 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
 
 
 def _status_word(ok: bool, detail: str) -> str:
-    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" — never collapses a not-run result into the
-    same word as a genuine pass (Thoth DM 2957), and never collapses a hang into the same
-    word as a real assertion failure (Thoth DM 2948)."""
+    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" / "RATCHET-DEBT" — never collapses a not-run
+    result into the same word as a genuine pass (Thoth DM 2957), never collapses a hang into
+    the same word as a real assertion failure (Thoth DM 2948), and never collapses a known,
+    narrowly-scoped ratchet-lag pass-through into a plain "ok" either (thread 1a0f91bb)."""
     if not ok:
         return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
-    return "SKIPPED" if detail.startswith("SKIPPED") else "ok"
+    if detail.startswith("SKIPPED"):
+        return "SKIPPED"
+    if detail.startswith("RATCHET-DEBT"):
+        return "RATCHET-DEBT"
+    return "ok"
 
 
 def changed_files_staged(repo_root: Path = REPO_ROOT) -> list[str]:
@@ -549,12 +603,14 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
         verdict = "FAIL"
     elif "SKIPPED" in statuses.values():
         verdict = "PASS (UNVERIFIED — see SKIPPED below, not the same as a real pass)"
+    elif "RATCHET-DEBT" in statuses.values():
+        verdict = "PASS (RATCHET DEBT — see below, the next commit must raise the ceiling)"
     else:
         verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
         print(f"  {name}: {statuses[name]}")
-        if statuses[name] == "SKIPPED":
+        if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
             _print_skip_detail(out)
         elif not ok:
             for line in out.splitlines()[-15:]:
@@ -630,6 +686,7 @@ def cmd_audit(rev_range: str) -> int:
     fails: list[str] = []
     timeouts: list[str] = []
     skipped: list[str] = []
+    ratchet_debt: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gate-audit-") as tmp:
         tmp_path = Path(tmp)
         for i, sha in enumerate(shas, 1):
@@ -651,6 +708,8 @@ def cmd_audit(rev_range: str) -> int:
                 verdict = "FAIL"
             elif "SKIPPED" in statuses.values():
                 verdict = "UNVERIFIED"
+            elif "RATCHET-DEBT" in statuses.values():
+                verdict = "RATCHET-DEBT"
             else:
                 verdict = "PASS"
             print(f"[{i}/{len(shas)}] {short}: {verdict} "
@@ -665,8 +724,10 @@ def cmd_audit(rev_range: str) -> int:
                     fails.append(short)
             elif verdict == "UNVERIFIED":
                 skipped.append(short)
+            elif verdict == "RATCHET-DEBT":
+                ratchet_debt.append(short)
             for name, (ok2, out2) in results.items():
-                if statuses[name] == "SKIPPED":
+                if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
                     print(f"    {name} tail:")
                     _print_skip_detail(out2, indent="      ")
                 elif not ok2:
@@ -674,11 +735,15 @@ def cmd_audit(rev_range: str) -> int:
                     for line in out2.splitlines()[-10:]:
                         print(f"      {line}")
             _run(["git", "worktree", "remove", "--force", str(wt)], REPO_ROOT)
-    settled = len(shas) - len(fails) - len(timeouts) - len(skipped)
+    settled = len(shas) - len(fails) - len(timeouts) - len(skipped) - len(ratchet_debt)
     print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly and VERIFIED")
     if skipped:
         print(f"UNVERIFIED (passed, but at least one gate was skipped — not proof of "
               f"correctness, only absence of a caught problem): {', '.join(skipped)}")
+    if ratchet_debt:
+        print(f"RATCHET DEBT (merge landed over the tool-contract ceiling before its own "
+              f"follow-up ratchet-raise commit — thread 1a0f91bb, not refused but not a "
+              f"plain pass): {', '.join(ratchet_debt)}")
     if fails:
         print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
     if timeouts:
@@ -695,9 +760,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audit", metavar="A..B",
                          help="retroactive dry-audit over a commit range, e.g. db8e3e9..HEAD")
     args = parser.parse_args(argv)
-    if args.audit:
-        return cmd_audit(args.audit)
-    return cmd_precommit()
+    try:
+        if args.audit:
+            return cmd_audit(args.audit)
+        return cmd_precommit()
+    except Exception as exc:  # noqa: BLE001 — the escape hatch (dispatch 5399, LEG 1): with
+        # core.hooksPath wired fleet-wide, a bug INSIDE this diagnostic's own code must never
+        # be the thing that blocks every seat's commit. A genuine gate failure (ruff/mypy/
+        # pytest finding a real problem) is caught and returned as an ordinary nonzero exit
+        # by cmd_precommit/cmd_audit themselves and never reaches this branch — only an
+        # unhandled internal exception (a bug in gate_hook.py itself) does, and it fails
+        # OPEN, loudly, rather than wedging the shared tree.
+        print(f"gate_hook: INTERNAL ERROR ({type(exc).__name__}: {exc}) — failing OPEN, "
+              f"never blocking a commit for a bug in the diagnostic itself", file=sys.stderr)
+        return 0
 
 
 if __name__ == "__main__":
