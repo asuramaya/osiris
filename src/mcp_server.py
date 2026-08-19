@@ -3715,11 +3715,13 @@ async def wake_preflight(target: str) -> dict[str, Any]:
     `seat:<id>`, or `agent:<id>`.
 
     Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate clears —
-    a real wake() would resume this addressee now), `no-live-body` (vacant, retired, or
-    never mounted — nothing to wait for), or `refused-<gate>` (compaction / ceiling /
-    no-anchor / crossed-registry / resident-unknown / unknown — the last two are never
-    the same finding, f624d114). Read-only: checks nothing it cannot answer from the
-    graph and disk, sends nothing, spawns nothing."""
+    a real wake() would resume this addressee now), `fresh-heir-available` (past its own
+    compaction seam, but not a dead end — ruling 94c2e7e8: a real wake() boots a fresh
+    successor here rather than refusing), `no-live-body` (vacant, retired, or never
+    mounted — nothing to wait for), or `refused-<gate>` (ceiling / no-anchor / crossed-
+    registry / resident-unknown / unknown — the last two are never the same finding,
+    f624d114). Read-only: checks nothing it cannot answer from the graph and disk, sends
+    nothing, spawns nothing."""
     pool = await _pool_get()
     from src.orchestrator.trigger import (
         _resolve_wake_address,

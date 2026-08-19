@@ -1116,6 +1116,38 @@ async def wake_gate_preflight(
     if resume is None:
         miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
         gate = _gate_name(miss_reason)
+        # RESUME / NUDGE / FRESH-HEIR, NEVER A FOURTH WALL (ruling 94c2e7e8, dispatch
+        # 5398 leg 1): `_agent_resumable` is agent_mounts-keyed (the shared-anchor blind
+        # spot this file's own launch_seat/dispatch_dm docstrings already document) — a
+        # compaction miss here does not necessarily mean dispatch_dm's own graph-walked
+        # `_lineage_resume_candidate` agrees, so this checks the SAME primitive a real
+        # wake would, rather than reporting a refusal a real wake would not honor.
+        if gate == "compaction" and seat_id is not None:
+            from src.orchestrator.agents import _generation
+            from src.orchestrator.seats import seat_facts
+            facts = await seat_facts(pool, seat_id)
+            launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
+            if launch_cwd:
+                graph_outcome = await _lineage_resume_candidate(
+                    pool, wake_target, st, repo=launch_cwd)
+                graph_resume = (graph_outcome[0]
+                                if isinstance(graph_outcome, tuple) else None)
+                if graph_resume is not None:
+                    graph_log = graph_outcome[1]
+                    g_gate, g_refusal = await _resume_guard(
+                        pool, graph_resume, _generation(target)[0], seat_id=seat_id,
+                        st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
+                    if g_gate is None:
+                        return {"mode": "resumable", "status": "resumable",
+                                "detail": f"resumable now via the lineage walk — session "
+                                          f"{graph_resume[0][:8]}, no gate refuses it "
+                                          "(the shared-anchor mount row missed it; the "
+                                          "graph did not)"}
+            if facts.get("handle") and facts.get("anchor_cwd"):
+                return {"mode": "fresh-heir-available", "status": "fresh-heir-available",
+                        "detail": f"{miss_reason} — a real wake would boot a fresh "
+                                  f"successor at {facts['anchor_cwd']} instead of "
+                                  "refusing (its graph identity and office both resolve)"}
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
@@ -1322,6 +1354,7 @@ async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
+    fresh_spawn: Any = None,
 ) -> dict[str, str]:
     """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
@@ -1357,6 +1390,7 @@ async def dispatch_dm(
     send leg and a concurrent tick) can never double-fire one message."""
     st = settings or get_settings()
     spawn = spawn or _spawn_claude
+    fresh_spawn = fresh_spawn or _spawn_claude_bg
     windows = windows or _manager_windows
     poke = poke or _poke_window
     agents_json = agents_json or _claude_agents_json
@@ -1646,6 +1680,7 @@ async def dispatch_dm(
     # exactly as `_agent_resumable` above was rooted on it too.
     from src.orchestrator.seats import seat_facts
     launch_cwd = None
+    facts: dict[str, Any] | None = None
     if seat_id is not None:
         facts = await seat_facts(pool, seat_id)
         launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
@@ -1658,7 +1693,55 @@ async def dispatch_dm(
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
         miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
-        return {"mode": f"resume-refused-{_gate_name(miss_reason)}",
+        miss_gate = _gate_name(miss_reason)
+        # THE FRESH-HEIR FALLBACK (ruling 94c2e7e8, dispatch 5398 leg 1 — "the zero-
+        # tolerance compaction gate is the bug, not the seats"): resume / nudge /
+        # fresh-heir are the three outcomes every seat must land in, never a fourth
+        # silent wall. A generation whose OWN transcript sits too close to its own
+        # compaction seam to resume (resume_verdict's honest "nothing real to resume
+        # into") still has a real graph identity and a real office — SCOPED TO
+        # COMPACTION ONLY: the other gates (ceiling/no-anchor/crossed-registry/
+        # resident-unknown) are each a genuine "who this even is" uncertainty, and
+        # minting on top of THAT would repeat the exact stranger-over-a-live-head class
+        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location with
+        # the SAME fresh-mint boot prompt launch_seat's own fallthrough already uses —
+        # no separate carry-the-message prompt needed, `_bg_boot_prompt` already tells
+        # a fresh body to inbox() for its opening brief, and this very mail sits there
+        # addressed to the seat's own name.
+        handle = facts.get("handle") if facts else None
+        office = facts.get("anchor_cwd") if facts else None
+        house = facts.get("house") if facts else None
+        if (miss_gate == "compaction" and seat_id is not None and launch_cwd
+                and handle and office):
+            anchor = _launch_anchor(seat_id)
+            boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+            async with pool.acquire() as conn, conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, "
+                    "7445))", str(msg_id))
+                prior = await conn.fetchval(
+                    "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+                    "AND mode IN ('dm-reply','dm-resume','dm-poke','dm-fresh-heir')",
+                    msg_id)
+                if prior:
+                    return {"mode": "skipped-once-per-message",
+                            "detail": "another dispatcher already woke for this message"}
+                await conn.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'dm-fresh-heir')", project, sender, msg_id)
+            try:
+                await fresh_spawn(launch_cwd, name=f"[{_house_tag(house)}] {handle}",
+                                  model=st.osiris_wake_model or None, prompt=boot_prompt)
+            except OSError as exc:
+                return {"mode": "refused-spawn",
+                        "detail": f"fresh-heir spawn failed ({exc}) — {who}'s compacted "
+                                  "generation still holds the mail; nothing else spent"}
+            return {"mode": "fresh-heir",
+                    "detail": f"{who}'s own transcript sits past its resumable seam "
+                              f"({miss_reason}) — booted a fresh successor at {office} "
+                              "instead of refusing; its own first turn's inbox() finds "
+                              "this same mail"}
+        return {"mode": f"resume-refused-{miss_gate}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo = graph_resume[0], graph_resume[1]
@@ -1888,6 +1971,10 @@ async def _verify_landed(
 # reason so nothing is lost to the bucket.
 _WAKE_STATUS = {
     "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
+    # a seat past its own compaction seam wakes as its successor rather than staying
+    # unreachable (ruling 94c2e7e8, dispatch 5398 leg 1) — the fresh body's first turn
+    # is its own inbox() read, the same "next turn" framing "resumed" already carries.
+    "fresh-heir": "delivered",
     "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",

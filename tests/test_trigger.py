@@ -996,6 +996,34 @@ async def test_wake_gate_preflight_names_the_ceiling_before_any_attempt(
     assert "over the context ceiling" in d["detail"]
 
 
+async def test_wake_gate_preflight_reports_fresh_heir_available_past_the_seam(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """RESUME / NUDGE / FRESH-HEIR (ruling 94c2e7e8, dispatch 5398 leg 1): the read-only
+    preflight must agree with what a real dispatch_dm would do — a holder past its own
+    compaction seam is no longer a bare 'refused-compaction' wall, it is a real, actionable
+    outcome (a real wake would boot a fresh successor here)."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:wg0001", compacted=True)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:wg0001", manager_agent="agent:hm-wg0001",
+        worker_handle="Wg-Seam-Test", house="osiris")
+    await _office(actions, worker_seat, "/repo/demo")
+    # THE JOB_DIR ANCHOR (`_job_id`/`locate_current_transcript`): the transcript-locating
+    # gate matches on job_dir's OWN last path segment as a PREFIX of the session id, never
+    # on cwd — `_lineage_holder_with_session` always names its file FULL_SID.jsonl
+    # ("abcd1234-…"), so the job_dir here must end in "abcd1234" to anchor onto it.
+    await save_mount(actions.pool, job_dir="/x/jobs/abcd1234", agent_id="agent:wg0001",
+                     project="osiris", cwd="/repo/demo", model=None,
+                     session_key=None)
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:wg0001", seat_id=worker_seat,
+        settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1000))
+    assert d["mode"] == "fresh-heir-available"
+    assert d["status"] == "fresh-heir-available"
+    assert "/repo/demo" in d["detail"]
+
+
 async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> None:
     """No agent_mounts row at all — nothing to wait for, ever."""
     d = await trigger_module.wake_gate_preflight(
@@ -3252,6 +3280,100 @@ async def test_dispatch_dm_reports_queued_live_not_never_mounted_when_only_last_
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
     assert d["mode"] == "queued-live-unresolved"
     assert "has never mounted" not in d["detail"]
+
+
+# ═══ THE FRESH-HEIR FALLBACK (ruling 94c2e7e8, dispatch 5398 leg 1) ═══════════════════════
+# "the zero-tolerance compaction gate is the bug, not the seats" — a mail-triggered wake
+# whose addressee's own transcript sits past its resumable seam now boots a successor at
+# the seat's own office instead of refusing outright. Scoped to the compaction gate only;
+# the other gates stay genuine refusals (see the sibling test after this one).
+
+async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The halcyon-class defect, closed: a seat holder whose tail since its own last
+    compaction boundary is genuinely tiny (min_tail_bytes refuses it) is not a dead end —
+    dispatch_dm boots a fresh successor at the seat's own office (the SAME fresh-mint boot
+    prompt launch_seat's own fallthrough uses) rather than leaving the mail stranded."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:fh0001", compacted=True)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fh0001", manager_agent="agent:hm-fresh-heir",
+        worker_handle="Seam-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/seam-test-office")
+    # dispatch_dm's own wake_target resolution is agent_mounts-keyed (wakeable_identity),
+    # distinct from the graph `session` property the lineage walk reads below it — both
+    # must be present, the same shape a real launched-then-compacted seat leaves behind.
+    await save_mount(actions.pool, job_dir="/x/jobs/fh0001", agent_id="agent:fh0001",
+                     project="osiris", cwd="/tmp/seam-test-office", model=None,
+                     session_key=None)
+    out = await send_message(actions.pool, from_agent="agent:hm-fresh-heir",
+                             from_project="osiris", to_agent=worker_seat,
+                             body="please pick this up")
+    msg_id = int(out["id"])
+    booted: list[dict[str, Any]] = []
+
+    async def _fresh_spawn(repo: str, **kw: Any) -> None:
+        booted.append({"repo": repo, **kw})
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a tail closed at the seam itself must never be resumed")
+
+    d = await dispatch_dm(
+        actions.pool, addressee=worker_seat, msg_id=msg_id, sender="agent:hm-fresh-heir",
+        settings=_settings(enabled=True, dm_resume=True, min_tail_bytes=1000,
+                          sense=str(sense)),
+        spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
+        fresh_spawn=_fresh_spawn)
+
+    assert d["mode"] == "fresh-heir"
+    assert "seam" in d["detail"] and "/tmp/seam-test-office" in d["detail"]
+    assert len(booted) == 1
+    assert booted[0]["repo"] == "/tmp/seam-test-office"
+    assert "Seam-Test" in booted[0]["prompt"] and "claim_name" in booted[0]["prompt"]
+    row = await actions.pool.fetchrow(
+        "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id)
+    assert row is not None and row["mode"] == "dm-fresh-heir"
+
+
+async def test_dispatch_dm_never_mints_fresh_for_a_non_compaction_gate(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """SCOPED TO COMPACTION ONLY: a no-anchor/ceiling/crossed-registry/resident-unknown
+    refusal is a real identity uncertainty (here: a declared `session` with NO transcript
+    on disk at all — nothing to corroborate against, the no-anchor class) — minting on top
+    of it would repeat the exact stranger-over-a-live-head class Leg 3 (ruling 921eabcf
+    item 1) just closed. Only the compaction gate (a KNOWN identity, just an unresumable
+    tail) gets the fresh-heir door."""
+    sense = tmp_path / "projects"
+    sense.mkdir(parents=True, exist_ok=True)  # no transcript file written under it at all
+    obj = await actions.create_or_find_object("Agent", "agent:fh0002", "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fh0002", manager_agent="agent:hm-fresh-heir-2",
+        worker_handle="Unknown-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/unknown-test-office")
+    await save_mount(actions.pool, job_dir="/x/jobs/fh0002", agent_id="agent:fh0002",
+                     project="osiris", cwd="/tmp/unknown-test-office", model=None,
+                     session_key=None)
+    out = await send_message(actions.pool, from_agent="agent:hm-fresh-heir-2",
+                             from_project="osiris", to_agent=worker_seat,
+                             body="please pick this up")
+    msg_id = int(out["id"])
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a no-anchor refusal must never spawn anything")
+
+    d = await dispatch_dm(
+        actions.pool, addressee=worker_seat, msg_id=msg_id, sender="agent:hm-fresh-heir-2",
+        settings=_settings(enabled=True, dm_resume=True, min_tail_bytes=1,
+                          sense=str(sense)),
+        spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom, fresh_spawn=_boom)
+
+    assert d["mode"] == "resume-refused-no-anchor"
 
 
 def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
