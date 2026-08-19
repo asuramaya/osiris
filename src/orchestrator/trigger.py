@@ -2649,6 +2649,103 @@ async def launch_seat(
     return out
 
 
+async def _real_kill_pid(pid: int) -> None:
+    """SIGTERM, the real default — a graceful ask, not SIGKILL: a live turn gets the chance
+    to unwind (flush a partial write, let the harness mark the session cleanly ended)
+    rather than vanishing mid-syscall. Injectable so no test ever touches a real process."""
+    import signal
+    os.kill(pid, signal.SIGTERM)
+
+
+async def stop_seat(
+    actions: Actions, *, caller: str, target: str | None, reason: str = "",
+    kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
+    """STOP — the process-lifecycle inverse of launch_seat (#156's held half, ruling
+    94c2e7e8 leg 2: "reachable and stoppable are the same lane's two directions"). Ends a
+    LIVE body's own OS process (SIGTERM) — nothing more. Deliberately NOT a symmetric
+    'sleep' (the operator's own naming ruling, b3ccd3f6: no promised thaw-where-you-left-
+    off — a `stop`/`wake` pair would promise a resume nobody can guarantee across an
+    arbitrary gap). NEITHER does this gate future reachability on some new flag of its
+    own: the SAME occupancy authority (`is_occupied_by_a_live_body` / `registry_census`)
+    that already governs launch/fold/reanimation/send() reads the real OS state, so the
+    instant this process actually exits, that authority sees it gone — a later wake() or
+    launch() boots a fresh successor with no separate 'unstop' step to remember, ONE
+    occupancy authority for every door, never a second notion of it (ruling 921eabcf).
+
+    DOWNWARD-ONLY, mirroring launch_seat's own authority (a manager stops a seat it
+    manages) — a worker may never stop its own manager's body. `target=None` always
+    allowed (going quiet on purpose, pause_seat's own precedent) — the one case
+    authority never needs to arbitrate.
+
+    Refuses (nothing signaled) on: no seat, no managed_by edge (`refused-not-your-
+    worker`), or no harness/proc-CONFIRMED live body for the seat's current holder
+    (`no-live-body` — a stale mount row, or an already-dead process, is not something to
+    signal). `stopped_at`/`stopped_reason` land on the seat object (survives succession —
+    it names an EVENT, not a gate on the chair) as a plain, append-only assertion, never a
+    boolean flag a later caller has to remember to clear."""
+    pool = actions.pool
+    from src.orchestrator.mounts import registry_census
+    from src.orchestrator.seats import held_seat, seat_receipt
+    kill = kill or _real_kill_pid
+    self_stop = target is None
+    if self_stop:
+        target_seat = ((await held_seat(pool, caller)) or {}).get("seat_id")
+        if target_seat is None:
+            return {"status": "refused-no-seat",
+                    "detail": f"{caller} holds no seat — nothing to stop"}
+    else:
+        assert target is not None  # self_stop is False only when target was given
+        caller_held = await held_seat(pool, caller)
+        caller_seat = (caller_held or {}).get("seat_id")
+        if caller_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"{caller} holds no seat — stop is a seat-to-seat act; an "
+                              "unseated caller has no managed_by relationship to invoke "
+                              "it with"}
+        target_seat = await _seat_for_target(actions, target)
+        if target_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"'{target}' resolves to no living Seat"}
+        if not await _manages(pool, caller_seat, target_seat):
+            return {"status": "refused-not-your-worker",
+                    "detail": f"no active managed_by edge from {target_seat} up to "
+                              f"{caller_seat} — stop is DOWNWARD-ONLY, mirroring launch "
+                              "(78e3734e): a worker may never stop its own manager's body"}
+    holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+    if not holder:
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": "the seat has no current holder — nothing to stop"}
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
+    pid = match.get("pid") if match else None
+    if not isinstance(pid, int):
+        return {"status": "no-live-body", "seat": target_seat, "holder": holder,
+                "detail": f"{holder} carries no harness/proc-confirmed live body right "
+                          "now — nothing to signal (already dead, or never really live)"}
+    try:
+        await kill(pid)
+    except ProcessLookupError:
+        return {"status": "no-live-body", "seat": target_seat, "holder": holder, "pid": pid,
+                "detail": "the process was already gone by the time the signal landed"}
+    except OSError as exc:
+        return {"status": "refused-signal", "seat": target_seat, "holder": holder, "pid": pid,
+                "detail": f"the stop signal itself failed ({exc}) — nothing else changed"}
+    now = datetime.now(UTC)
+    oid = await actions.create_or_find_object("Seat", target_seat, caller)
+    await actions.assert_property(oid, "stopped_at", now.isoformat(), caller, now, 0.9,
+                                  evidence_class="self_declared")
+    if reason:
+        await actions.assert_property(oid, "stopped_reason", reason[:500], caller, now, 0.9,
+                                      evidence_class="self_declared")
+    return {"status": "stopped", "seat": target_seat, "holder": holder, "pid": pid,
+            "by": caller, **({"reason": reason} if reason else {}),
+            "detail": f"SIGTERM sent to {holder}'s live body (pid {pid}) — reachability "
+                      "afterward is governed entirely by the SAME occupancy authority "
+                      "launch()/wake() already consult; no separate release step exists"}
+
+
 async def _transcript_activity(
     pool: asyncpg.Pool, holder: str, st: Settings,
 ) -> tuple[bool, bool]:

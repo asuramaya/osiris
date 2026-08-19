@@ -614,7 +614,14 @@ def _tool_chars(t: Any) -> int:
 # LXXVII, khnum-scale-envelope merge): fleet()'s pool_health contract grew a `caps` envelope
 # (per-daemon pool cap / backends / utilization / max_connections headroom — the 1,000-worker
 # arithmetic, decision 6a745efa). Raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 187_800
+# 187,800 -> 189,400 (measured 188,986 exact). 131 -> 132 tools (2026-08-19, Sekhmet,
+# dispatch 5398 leg 2, ruling 94c2e7e8/b3ccd3f6): a genuinely NEW verb, `stop` — the
+# process-lifecycle inverse of launch(), #156's own held half, finally ships. Not prose
+# bloat on an existing tool; a new capability necessarily adds a new contract entry.
+# Both docstrings touched this same dispatch (wake_preflight's fresh-heir-available
+# status, stop() itself) were trimmed under the category rule first — this is the
+# remainder after that, not a reflex.
+TOOL_CONTRACT_CEILING_CHARS = 189_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -705,6 +712,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     123 -> 126 (2026-08-17, thread 5126, operator ruling df646654/fe8ec7ff — chronohorn's
     own wave): uningested_trees (the census door onto discover_trees, existing/tested/
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
-    coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
+    coordinator forms, same authority shape as reconcile_seat_identity's own pair).
+    131 -> 132 (2026-08-19, Sekhmet, dispatch 5398 leg 2, ruling 94c2e7e8/b3ccd3f6): stop —
+    launch()'s process-lifecycle inverse, #156's own held half, finally ships."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 131
+    assert len(per_tool) == 132

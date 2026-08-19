@@ -4858,3 +4858,137 @@ async def test_bg_session_cost_session_not_found(monkeypatch: Any) -> None:
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
     out = await trigger._bg_session_cost("nonexistent")
     assert out == {"priced": False, "reason": "session not found in claude agents --json"}
+
+
+# ═══ stop() — the process-lifecycle inverse of launch() (#156's held half, ruling
+# 94c2e7e8 leg 2 / b3ccd3f6's naming ruling, dispatch 5398) ═══════════════════════════════
+
+def _fake_census_agents_json(pid: int, *, cwd: str = "/repo/demo",
+                             session_id: str = "wg-9999-0000-4000-8000-000000000000",
+                             name: str = "[OS] StopTest") -> Any:
+    async def _read(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": session_id, "pid": pid, "cwd": cwd, "name": name}]
+    return _read
+
+
+def _fake_claude_exe(pid: int) -> str:
+    return "/home/x/.local/share/claude/versions/2.1.210"
+
+
+async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
+    actions: Actions,
+) -> None:
+    """The happy path: a seat's current holder has a real, harness+/proc-confirmed live
+    body — stop() signals its exact pid and records the event on the seat (survives
+    succession — it names an event, not a gate on the chair)."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop01", manager_agent="agent:stopm01",
+        worker_handle="Stop-Test", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/wg9999ii", agent_id="agent:stop01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+    killed: list[int] = []
+
+    async def _kill(pid: int) -> None:
+        killed.append(pid)
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm01", target=worker_seat,
+        agents_json=_fake_census_agents_json(4242, session_id="wg9999ii-0000-4000-8000-"
+                                             "000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d["pid"] == 4242 and d["holder"] == "agent:stop01"
+    assert killed == [4242]
+    row = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='stopped_at' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat)
+    assert row  # a real timestamp landed, not silence
+    _ = manager_seat
+
+
+async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing(
+    actions: Actions,
+) -> None:
+    """A stale mount row is not a live body — the SAME harness+/proc-confirmed occupancy
+    authority every other door in the fold/reanimation/send()/launch lane already
+    consults, never a second notion of 'live' (ruling 921eabcf)."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop02", manager_agent="agent:stopm02",
+        worker_handle="Stop-Test-2", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/nowhere", agent_id="agent:stop02",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _boom(pid: int) -> None:
+        raise AssertionError("nothing confirmed live — no signal should ever be sent")
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm02", target=worker_seat,
+        agents_json=_empty_agents_json, kill=_boom)
+
+    assert d["status"] == "no-live-body"
+
+
+async def test_stop_seat_is_downward_only_a_worker_cannot_stop_its_manager(
+    actions: Actions,
+) -> None:
+    """Mirrors launch_seat's own authority exactly (78e3734e) — the worker→manager
+    managed_by edge does not run the other way; nothing is ever signaled."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop03w", manager_agent="agent:stop03m")
+
+    async def _boom(pid: int) -> None:
+        raise AssertionError("downward-only: a worker stopping its manager must refuse first")
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stop03w", target=manager_seat, kill=_boom)
+
+    assert d["status"] == "refused-not-your-worker" and "DOWNWARD-ONLY" in d["detail"]
+
+
+async def test_stop_seat_self_target_needs_no_managed_by_edge(actions: Actions) -> None:
+    """`target=None` always stops the CALLER's own seat — pause_seat's own precedent, the
+    one case authority never has to arbitrate (no peer/edge check at all)."""
+    seat = (await ensure_seat(actions, house="demo", handle="SelfStopper",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:self01")
+    await save_mount(actions.pool, job_dir="/x/jobs/self9999", agent_id="agent:self01",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    killed: list[int] = []
+
+    async def _kill(pid: int) -> None:
+        killed.append(pid)
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:self01", target=None,
+        agents_json=_fake_census_agents_json(
+            777, session_id="self9999-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped" and killed == [777]
+
+
+async def test_stop_seat_reports_process_lookup_error_honestly(actions: Actions) -> None:
+    """A race (the body exits between the census read and the signal) is a real,
+    honestly-named outcome — never mistaken for a signal failure."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop04", manager_agent="agent:stopm04",
+        worker_handle="Stop-Test-4", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/wg8888ii", agent_id="agent:stop04",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _kill(pid: int) -> None:
+        raise ProcessLookupError()
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm04", target=worker_seat,
+        agents_json=_fake_census_agents_json(
+            5555, session_id="wg8888ii-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "no-live-body"
+    assert "already gone" in d["detail"]
