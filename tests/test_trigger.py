@@ -3417,6 +3417,38 @@ async def test_launch_hands_the_attach_line_on_the_idempotent_path_too(
     assert d["attach"]["command"] == 'python -m src.manager.attach "[OS] Anhur"'
 
 
+async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupies(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c) — the
+    halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on the same
+    seat, because launch_seat's own idempotency checks never consulted the single occupancy
+    authority (`is_occupied_by_a_live_body`) the fold/reanimation/send() doors already
+    share. A launch onto a seat whose CURRENT HOLDER that authority confirms is a live body
+    must refuse outright, before either spawn lane, regardless of substrate."""
+    from src.orchestrator import agents as agents_module
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:occ01", manager_agent="agent:occm01",
+        worker_handle="Halcyon-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/halcyon-test")
+
+    async def _occupied(pool: Any, agent_id: str, **kw: Any) -> bool:
+        return agent_id == "agent:occ01"
+    monkeypatch.setattr(agents_module, "is_occupied_by_a_live_body", _occupied)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:occm01", target=worker_seat,
+        spawn=_boom, resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-occupied"
+    assert d["holder"] == "agent:occ01"
+    assert d["body_exists"] is True and d["can_receive"] is True
+
+
 async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None:
     """task #68 (finding b): a freshly minted, never-launched seat has NO Agent bound to it
     at all — the old Agent-centric resolve_seat fallback returns no seat_id for such a seat
@@ -3745,7 +3777,10 @@ async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_li
         actions, caller="agent:hm03", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/bastet", "sessionId": "real-abc", "name": "[OS] Bastet"}]]))
+            # LEG 3 (ruling 921eabcf item 1): launch_seat now runs an occupancy check
+            # (is_occupied_by_a_live_body) BEFORE the twin check — one extra leading
+            # agents_json() call, empty because this seat's holder is unoccupied.
+            [[], [], [{"cwd": "/tmp/bastet", "sessionId": "real-abc", "name": "[OS] Bastet"}]]))
 
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -3787,7 +3822,8 @@ async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: A
         actions, caller="agent:hm05", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/khepri", "sessionId": "khepri-sess", "name": "[OS] Khepri"}]]),
+            # LEG 3's leading occupancy-check call (see Bastet test above for why).
+            [[], [], [{"cwd": "/tmp/khepri", "sessionId": "khepri-sess", "name": "[OS] Khepri"}]]),
         cost_reader=_fake_cost_reader(
             {"priced": False, "reason": "claude agents --json carries no cost field"}))
 
@@ -3834,7 +3870,8 @@ async def test_launch_harness_lane_records_a_real_price_if_the_reader_has_one(
         actions, caller="agent:hm06", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/wadjet", "sessionId": "wadjet-sess", "name": "[OS] Wadjet"}]]),
+            # LEG 3's leading occupancy-check call (see Bastet test above for why).
+            [[], [], [{"cwd": "/tmp/wadjet", "sessionId": "wadjet-sess", "name": "[OS] Wadjet"}]]),
         cost_reader=_fake_cost_reader({"priced": True, "cost_usd": 0.17}))
 
     assert d["status"] == "launched"

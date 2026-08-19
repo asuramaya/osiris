@@ -2221,6 +2221,24 @@ async def launch_seat(
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
 
+    # ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c —
+    # the halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on
+    # the same seat). Consult the SAME occupancy authority the fold/reanimation/send()
+    # doors already share (`is_occupied_by_a_live_body`, built at 3014910) rather than a
+    # second notion of occupancy — checked centrally, before either spawn lane, so a
+    # launch can never fork a second eligible head regardless of substrate.
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+    if current_holder and await is_occupied_by_a_live_body(
+        pool, current_holder, agents_json=agents_json,
+    ):
+        return {"status": "refused-occupied", "seat": target_seat, "holder": current_holder,
+                "body_exists": True, "can_receive": True, "attach": attach,
+                "detail": f"{handle} ({target_seat}) is already occupied by a live body "
+                          f"({current_holder}, confirmed via registry_census) — one seat, "
+                          "one live lineage head; refusing rather than forking a second "
+                          "eligible head. If this is stale, vacate_seat first."}
+
     st = settings or get_settings()
     lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
     # MODEL PRECEDENCE (task #68, finding #7, thread 20e4feb6): an explicit caller param wins,
