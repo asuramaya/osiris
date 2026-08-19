@@ -1,0 +1,12 @@
+# Daily outbox/audit_log retention reaper (msg 5397 leg 2) — batched DELETE of PUBLISHED
+# outbox rows older than 30 days and audit_log rows older than 90 days
+# (src/orchestrator/retention.py's own stated, documented horizons). The only caller
+# that ever passes execute=True on a schedule; confesses row counts into a
+# job:retention-reaper watermark either way.
+[Unit]
+Description=Osiris retention reaper
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_retention_reaper.py

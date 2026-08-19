@@ -83,4 +83,23 @@ async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
         "max_connections": max_connections,
         "fixed_budget": fixed_budget,
         "headroom": (max_connections - fixed_budget) if max_connections is not None else None,
+        "pg_autotune": await _last_scheduled_run(pool, "job:pg-autotune"),
+        "retention_reaper": await _last_scheduled_run(pool, "job:retention-reaper"),
     }
+
+
+async def _last_scheduled_run(pool: asyncpg.Pool, key: str) -> Any:
+    """The CONFESSION half of msg 5397's autotune/retention build — the before/after
+    (or row counts) the last scheduled run recorded into its own `job:%` watermark
+    (`osiris_fleet_glance.py`'s own sick-job convention), read back here so a caller of
+    `fleet()` sees what the machine last decided without a separate query. Best-effort:
+    no watermark row yet, or a malformed one, reads as None — never raises."""
+    import json
+
+    raw = await pool.fetchval("SELECT cursor FROM watermarks WHERE key=$1", key)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None

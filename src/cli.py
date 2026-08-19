@@ -1305,6 +1305,35 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
     return notes
 
 
+async def _run_pg_autotune_on_deploy(pool: asyncpg.Pool) -> str:
+    """Ruling 45b251ed leg (a) - recomputes Postgres GUCs from THIS host's live RAM/CPU
+    and the measured daemon envelope on every deploy, not just on the daily timer
+    (deploy/osiris-pg-autotune.timer). Fail-open like every other deploy-time check
+    beside it: a tuning failure degrades to a printed note, never blocks or fails the
+    deploy. Never restarts postgres itself; see pg_autotune.py's own docstring."""
+    try:
+        from src.orchestrator.pg_autotune import apply_tuning, plan_tuning
+        from src.orchestrator.pool_health import pg_activity_by_app
+
+        health = await pg_activity_by_app(pool)
+        fixed_budget = health.get("fixed_budget") or 56
+        plan = await plan_tuning(pool, fixed_budget=fixed_budget)
+        if not plan["changes"]:
+            return "pg autotune: current GUCs already within range - nothing to apply"
+        result = await apply_tuning(pool, plan)
+        bits = [f"{c['name']} {c['before']}->{c['after']}" for c in result["applied"]]
+        note = (f"pg autotune: applied {', '.join(bits)}" if bits
+                else "pg autotune: nothing reloadable to apply")
+        if result["deferred"]:
+            deferred_bits = [f"{c['name']} {c['before']}->{c['after']}"
+                              for c in result["deferred"]]
+            note += (f" | pending change requiring a human-run restart, persisted not "
+                     f"applied: {', '.join(deferred_bits)}")
+        return note
+    except Exception as exc:  # noqa: BLE001 - fail-open, never blocks a deploy
+        return f"pg autotune: could not tune ({exc}) - deploy continues"
+
+
 async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
     """#108 PIECE 3 WIRING, conservative first cut (scope: decision 2ee34a9d; build:
     Thoth's dispatch msg 4990/4973/4975) — a second post-migration deploy step beside
@@ -1797,6 +1826,7 @@ async def cmd_deploy(
         print(await local_ref_hygiene(root))
         print(await merge_claim_hygiene(root, since=previously_deployed))
         print(await venv_import_hygiene(root))
+        print(await _run_pg_autotune_on_deploy(pool))
 
         from src.actions.core import Actions as _Actions
 

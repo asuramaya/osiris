@@ -1,0 +1,13 @@
+# Daily Postgres GUC autotune (ruling 45b251ed) — derives shared_buffers/work_mem/
+# effective_cache_size/max_connections from THIS host's actual RAM/CPU and the measured
+# daemon envelope, applies every reloadable one live, persists any restart-required one
+# via ALTER SYSTEM for the next restart. NEVER restarts osiris-pg itself — see
+# src/orchestrator/pg_autotune.py's own docstring. Silent when nothing moves; confesses
+# before/after into a job:pg-autotune watermark either way.
+[Unit]
+Description=Osiris Postgres autotune
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_pg_autotune.py
