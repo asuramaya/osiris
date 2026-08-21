@@ -313,10 +313,6 @@ def _job_id(job_dir: str | None) -> str | None:
         i = parts.index("sessions")
         if i + 1 < len(parts):
             return parts[i + 1]
-    # Fallback: last non-tmp component
-    cleaned = [p for p in parts if p not in ("tmp", "", "/")]
-    if cleaned:
-        return cleaned[-1]
     return None
 
 
