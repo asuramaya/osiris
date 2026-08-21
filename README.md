@@ -1,7 +1,8 @@
 # Osiris 👁️
 
 [![MCP Server](https://img.shields.io/badge/MCP-Streamable--HTTP%20%3A8790-blue.svg?style=flat-square&logo=anthropic)](https://modelcontextprotocol.io/)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek_Harness-Cordis_Plugin-0066FF.svg?style=flat-square)](https://github.com/deepseek-ai)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek_Harness-DSH-0066FF.svg?style=flat-square)](https://github.com/deepseek-ai)
+[![Cordis Plugin](https://img.shields.io/badge/Cordis_Plugin-dsh--plugin-4E73DF.svg?style=flat-square)](dsh-plugin/)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Native_Hooks-black.svg?style=flat-square)](https://docs.anthropic.com/claude/docs/claude-code)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B_pg__trgm-336791.svg?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7%2B_EventBus-DC382D.svg?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
@@ -36,7 +37,7 @@ Osiris is a self-hosted, harness-agnostic, provenance-first entity-graph engine.
 
 ## 🏷️ Tags & Ecosystem
 
-`memory` · `claude-code` · `dsh-plugin` · `deepseek-harness` · `mcp` · `model-context-protocol` · `knowledge-graph` · `provenance` · `palantir-ontology` · `notion-databases` · `event-sourcing` · `autonomous-agents` · `fleet-coordination`
+`memory` · `cordis` · `dsh` · `dsh-plugin` · `deepseek-harness` · `deepseek` · `claude-code` · `cursor` · `mcp` · `model-context-protocol` · `agentic-ai` · `ai` · `llm` · `knowledge-graph` · `provenance` · `palantir-ontology` · `notion-databases` · `event-sourcing` · `autonomous-agents` · `fleet-coordination`
 
 ---
 
