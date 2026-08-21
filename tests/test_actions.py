@@ -18,13 +18,19 @@ async def test_create_or_find_is_idempotent(actions: Actions, case_id: str) -> N
     # (excluding the session-persistent Type catalog, task #97 — not this test's business)
     assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type <> 'Type'") == 1
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM object_events WHERE event_type='create'"
+        "SELECT count(*) FROM object_events oe "
+        "JOIN objects o ON o.id=oe.object_id "
+        "WHERE oe.event_type='create' AND o.type <> 'Type'"
     ) == 1
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM outbox WHERE event_type='object_created'"
+        "SELECT count(*) FROM outbox o "
+        "JOIN objects obj ON obj.id=o.object_id "
+        "WHERE o.event_type='object_created' AND obj.type <> 'Type'"
     ) == 1
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM audit_log WHERE action='create_object'"
+        "SELECT count(*) FROM audit_log a "
+        "JOIN objects obj ON obj.id=(a.payload->>'object_id')::uuid "
+        "WHERE a.action='create_object' AND obj.type <> 'Type'"
     ) == 1
     # case membership recorded once
     assert await actions.pool.fetchval(
