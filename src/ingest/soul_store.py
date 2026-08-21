@@ -33,9 +33,24 @@ from typing import Any
 
 import asyncpg
 
-from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+from src.ingest.harness import HarnessAdapter
 
 _HARNESS = "claude-code"
+
+# Default adapters for locating session files — tried in order
+_DEFAULT_ADAPTERS: list[HarnessAdapter] | None = None
+
+
+def _default_adapters() -> list[HarnessAdapter]:
+    global _DEFAULT_ADAPTERS
+    if _DEFAULT_ADAPTERS is None:
+        from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+        from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+        from src.ingest.harness.dsh import DshSessionAdapter
+        _DEFAULT_ADAPTERS = [
+            ClaudeJsonlAdapter(), DshSessionAdapter(), CrushSqliteAdapter(),
+        ]
+    return _DEFAULT_ADAPTERS
 
 
 def _read_source(source_path: str) -> bytes:
@@ -90,29 +105,61 @@ def _chain_hash(prev_hash: str | None, raw_line: bytes) -> str:
 
 
 class SoulStore:
-    """The append-only, content-bearing transcript store."""
+    """The append-only, content-bearing transcript store.
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    Harness-agnostic: accepts a list of HarnessAdapters to discover session files.
+    Defaults to Claude JSONL, DSH zstd, and Crush SQLite in order.
+    """
+
+    def __init__(
+        self, pool: asyncpg.Pool, adapters: list[HarnessAdapter] | None = None,
+    ) -> None:
         self.pool = pool
-        self._adapter = ClaudeJsonlAdapter()
+        self._adapters = adapters or _default_adapters()
 
-    async def _progress(self, anchor_sid: str) -> tuple[int, str | None]:
-        """(last_line_idx, last_hash) already ingested for this session, or (0, None)."""
+    def _detect_harness(self, source_path: str) -> str:
+        """Auto-detect harness from a source path by trying each adapter's discover_at.
+        Defaults to 'claude-code' for backward compatibility."""
+        from pathlib import Path
+        p = Path(source_path)
+        for adapter in self._adapters:
+            discover_at = getattr(adapter, "discover_at", None)
+            if discover_at is not None:
+                try:
+                    locator = discover_at(p)
+                    if locator is not None:
+                        return str(locator.harness)
+                except Exception:  # noqa: BLE001
+                    continue
+        return "claude-code"
+
+    async def _progress(
+        self, anchor_sid: str, harness: str = "claude-code",
+    ) -> tuple[int, str | None]:
+        """(last_line_idx, last_hash) already ingested for this session, or (0, None).
+        `harness` defaults to 'claude-code' for backward compatibility with existing rows."""
         row = await self.pool.fetchrow(
             "SELECT last_line_idx, last_hash FROM soul_sessions "
-            "WHERE harness=$1 AND anchor_sid=$2", _HARNESS, anchor_sid)
+            "WHERE harness=$1 AND anchor_sid=$2", harness, anchor_sid)
         if row is None:
             return 0, None
         return int(row["last_line_idx"]), row["last_hash"]
 
-    async def ingest_path(self, source_path: str, anchor_sid: str) -> int:
+    async def ingest_path(
+        self, source_path: str, anchor_sid: str, harness: str | None = None,
+    ) -> int:
         """Eat every line of `source_path` not yet ingested for `anchor_sid`. Idempotent —
         re-running over an unchanged file appends nothing (progress already covers every
         line). Returns the count of NEW lines ingested. Never re-reads or re-hashes lines
-        already stored: the chain resumes from last_hash, exactly where it left off."""
+        already stored: the chain resumes from last_hash, exactly where it left off.
+
+        `harness` names the harness that owns this transcript (e.g. 'claude-code', 'dsh',
+        'crush'). When None, it's auto-detected from `self._adapters` by matching
+        `source_path` to an adapter's discovery."""
+        harness = harness or self._detect_harness(source_path)
         content = _read_source(source_path)
         lines = _split_lines(content)
-        since, prev_hash = await self._progress(anchor_sid)
+        since, prev_hash = await self._progress(anchor_sid, harness=harness)
         new_lines = lines[since:]
         if not new_lines:
             return 0
@@ -120,7 +167,7 @@ class SoulStore:
         idx = since
         for raw_line in new_lines:
             line_hash = _chain_hash(prev_hash, raw_line)
-            rows.append((_HARNESS, anchor_sid, idx, raw_line, line_hash, prev_hash))
+            rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
             prev_hash = line_hash
             idx += 1
         async with self.pool.acquire() as conn:
@@ -141,7 +188,7 @@ class SoulStore:
                     "       last_line_idx = EXCLUDED.last_line_idx, "
                     "       last_hash = EXCLUDED.last_hash, "
                     "       source_path = EXCLUDED.source_path",
-                    _HARNESS, anchor_sid, source_path, idx, prev_hash,
+                    harness, anchor_sid, source_path, idx, prev_hash,
                 )
         return len(rows)
 
@@ -150,10 +197,14 @@ class SoulStore:
         """Discover this session's transcript via the same locator identity already
         uses, and ingest it. Returns lines newly ingested, 0 when nothing is found or
         nothing changed."""
-        locator = self._adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
-        if locator is None:
-            return 0
-        return await self.ingest_path(locator.source_path, locator.anchor_sid)
+        for adapter in self._adapters:
+            locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
+            if locator is not None:
+                harness = getattr(locator, "harness", "claude-code")
+                return await self.ingest_path(
+                    locator.source_path, locator.anchor_sid, harness=harness,
+                )
+        return 0
 
     async def verify_chain(self, anchor_sid: str) -> bool:
         """Re-walk every stored line and recompute the chain from scratch — the honest

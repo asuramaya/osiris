@@ -299,9 +299,9 @@ def _tail_lines(path: Path, nbytes: int = 512 * 1024) -> list[str]:
 
 
 def _job_id(job_dir: str | None) -> str | None:
-    """The session/job id from CLAUDE_JOB_DIR — the component right after `jobs` (the dir
-    is `…/jobs/<id>` or `…/jobs/<id>/tmp`). This id is the session UUID's leading segment,
-    which is exactly the transcript filename's prefix (<id>-….jsonl) — a precise anchor."""
+    """The session/job id from CLAUDE_JOB_DIR, DSH, or generic harness — the component right
+    after `jobs` or `sessions` (the dir is `…/jobs/<id>`, `…/sessions/<id>`, etc.). This
+    id is the session UUID's leading segment or slug — a precise anchor."""
     if not job_dir:
         return None
     parts = Path(job_dir).parts
@@ -309,6 +309,14 @@ def _job_id(job_dir: str | None) -> str | None:
         i = parts.index("jobs")
         if i + 1 < len(parts):
             return parts[i + 1]
+    if "sessions" in parts:
+        i = parts.index("sessions")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    # Fallback: last non-tmp component
+    cleaned = [p for p in parts if p not in ("tmp", "", "/")]
+    if cleaned:
+        return cleaned[-1]
     return None
 
 
@@ -630,16 +638,86 @@ def current_model(
     (current_model, swap_history, transcript_path). `swap_history` with >1 entry means the
     session was warm-swapped. Reads the tail for the current model, the whole file for the
     history (a session file is large but a one-shot probe can afford it). `anchored_only` refuses
-    the box-wide-hottest fallback (identity path — a neighbor's model must never read as ours)."""
+    the box-wide-hottest fallback (identity path — a neighbor's model must never read as ours).
+
+    Harness-agnostic: tries Claude Code's ~/.claude/projects/ first, then DSH's
+    ~/.dsh/sessions/ format (zstd-compressed JSONL)."""
     import os
 
     root = root or (Path.home() / ".claude/projects")
     job_dir = job_dir or os.environ.get("CLAUDE_JOB_DIR")
     path = locate_current_transcript(root, job_dir, anchored_only=anchored_only)
-    if path is None:
-        return None, [], None
-    cur, history, _op = model_of_transcript(path)
-    return cur, history, path
+    if path is not None:
+        cur, history, _op = model_of_transcript(path)
+        return cur, history, path
+    # Fallback: try DSH session format via the adapter
+    from src.ingest.harness.dsh import DshSessionAdapter
+    try:
+        adapter = DshSessionAdapter()
+        locator = adapter.discover(cwd=str(Path.cwd()), job_dir=job_dir)
+        if locator is not None:
+            lines = _decompress_dsh(locator.source_path)
+            if lines:
+                cur = _latest_model_dsh(lines)
+                history = _models_in_events_dsh(lines)
+                return cur, history, Path(locator.source_path)
+    except Exception:  # noqa: BLE001
+        pass
+    return None, [], None
+
+
+# ── DSH adapter helpers (harness-agnostic model reading) ────────────────
+
+def _decompress_dsh(source_path: str) -> list[str] | None:
+    """Decompress a zstd-compressed DSH session file. Returns lines or None."""
+    import shutil
+    import subprocess
+    path = Path(source_path)
+    if not path.is_file():
+        return None
+    zstd_path = shutil.which("zstd")
+    if zstd_path is None:
+        return None
+    try:
+        result = subprocess.run(
+            [zstd_path, "-dc", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        return [line for line in result.stdout.splitlines() if line.strip()]
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _models_in_events_dsh(lines: list[str]) -> list[str]:
+    """Extract distinct model sequence from DSH session events.
+    Reads request/header and request/context events for model info."""
+    models: list[str] = []
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        t = d.get("type", "")
+        if t == "request/header":
+            config = d.get("data", {}).get("header", {}).get("config", {})
+            model = (config.get("model", "") or "").split("/")[-1]
+            if model and model not in models:
+                models.append(model)
+        elif t == "request/context":
+            model = d.get("data", {}).get("model", "")
+            if model:
+                model = model.split("/")[-1]
+                if model and model not in models:
+                    models.append(model)
+    return models
+
+
+def _latest_model_dsh(lines: list[str]) -> str | None:
+    """Get the last-seen model from DSH session events."""
+    models = _models_in_events_dsh(lines)
+    return models[-1] if models else None
 
 
 def active_subagent(main: Path | None) -> tuple[str, Path] | None:

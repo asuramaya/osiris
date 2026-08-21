@@ -93,10 +93,13 @@ def merge_mcp(existing: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     return doc, changed
 
 
-def _statusline_command(osiris_home: Path) -> str:
-    py = osiris_home / ".venv" / "bin" / "python"
-    script = osiris_home / "scripts" / "osiris_statusline.py"
-    return f"{py} {script}"
+def _hook_command(osiris_home: Path, subcommand: str, *, venv: bool = False) -> str:
+    """Build a command string for the unified osiris_hook.py.
+    Most hooks are stdlib-only (system python, no venv dependency).
+    Statusline needs the venv for the MCP pool connection."""
+    py = (osiris_home / ".venv" / "bin" / "python") if venv else "python3"
+    script = osiris_home / "scripts" / "osiris_hook.py"
+    return f"{py} {script} {subcommand}"
 
 
 def _merge_hook(
@@ -139,56 +142,45 @@ def merge_settings(
     death rite's sweep ring, spawn=SubagentStart/Stop announcements. Returns (result,
     changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
-    # refreshInterval re-runs the chrome for PARKED sessions too — without it the statusline
-    # only renders on turns, so a parked agent's mail badge reads stale until the operator
-    # takes a turn with it (the Anubis-has-mail-and-nobody-knows complaint, 2026-07-10).
-    entry = {"type": "command", "command": _statusline_command(osiris_home), "padding": 0,
-             "refreshInterval": 10}
+    # Unified osiris_hook.py — one script, all lifecycle events.
+    # Statusline needs the venv (shares MCP server's warm pool).
+    entry = {"type": "command",
+             "command": _hook_command(osiris_home, "statusline", venv=True),
+             "padding": 0, "refreshInterval": 10}
     changed = doc.get("statusLine") != entry
     doc["statusLine"] = entry
-    py = osiris_home / ".venv" / "bin" / "python"
     if hook:
-        # the Stop mail-drain (operator-installed): the visible tab settles its own mailbox
-        # at turn-ends instead of a twin doing it invisibly.
-        script = osiris_home / "scripts" / "osiris_stophook.py"
         changed |= _merge_hook(
-            doc, "Stop", {"type": "command", "command": f"{py} {script}", "timeout": 10})
+            doc, "Stop",
+            {"type": "command",
+             "command": _hook_command(osiris_home, "stop", venv=True),
+             "timeout": 10})
     if whisper:
-        # the SessionStart whisper (operator's blessing 2026-07-08): every session wakes up
-        # already mounted and remembering Osiris — the hive-mind onboarding. Deliberately
-        # SYSTEM python: the whisper is stdlib-only and runs for projects with no venv.
-        wscript = osiris_home / "scripts" / "osiris_whisper.py"
         changed |= _merge_hook(
             doc, "SessionStart",
-            {"type": "command", "command": f"python3 {wscript}", "timeout": 10})
+            {"type": "command",
+             "command": _hook_command(osiris_home, "whisper"),
+             "timeout": 10})
     if anchor:
-        # the PreToolUse anchor-force + SPAWN STAMP (blessings 2026-07-08 / 2026-07-10):
-        # force the derived job_dir into every mount() (identity survives reconnects,
-        # co-located agents stay distinct) AND stamp sidechain calls with the harness's own
-        # agent_id so a spawn's writes land on the CHILD, never the seat that spawned it.
-        # STDLIB-only, fail-open, matches every osiris tool (the script self-filters).
-        ascript = osiris_home / "scripts" / "osiris_mount_anchor.py"
         changed |= _merge_hook(
             doc, "PreToolUse",
-            {"type": "command", "command": f"python3 {ascript}", "timeout": 5},
+            {"type": "command",
+             "command": _hook_command(osiris_home, "anchor"),
+             "timeout": 5},
             matcher="mcp__osiris__.*")
     if spawn:
-        # the spawn announcements (blessing 2026-07-10): SubagentStart/Stop post the child
-        # to /spawn the moment it exists — the parent (and the operator) is told, never
-        # surprised; the miner's disk round remains the convergence backstop.
-        sscript = osiris_home / "scripts" / "osiris_spawn.py"
         for event in ("SubagentStart", "SubagentStop"):
             changed |= _merge_hook(
                 doc, event,
-                {"type": "command", "command": f"python3 {sscript}", "timeout": 5})
+                {"type": "command",
+                 "command": _hook_command(osiris_home, "spawn"),
+                 "timeout": 5})
     if precompact:
-        # the death rite (blessing 2026-07-09, ruling a882b334): at the compaction seam, ring
-        # the worker's sweep so the dying mind's unrecorded turns are mined around the seam —
-        # the heir's first orient() shows them. STDLIB-only, fail-open, never blocks a compact.
-        pscript = osiris_home / "scripts" / "osiris_precompact.py"
         changed |= _merge_hook(
             doc, "PreCompact",
-            {"type": "command", "command": f"python3 {pscript}", "timeout": 5})
+            {"type": "command",
+             "command": _hook_command(osiris_home, "precompact"),
+             "timeout": 5})
     return doc, changed
 
 

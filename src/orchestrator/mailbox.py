@@ -601,6 +601,40 @@ async def send_message(
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     stamped = await _stamp_threads()
+    # GRAPH EDGES: write Message object + links so mail is traversable in the graph
+    try:
+        from datetime import UTC, datetime
+
+        from src.actions.core import Actions as _Actions
+        acts = _Actions(pool)
+        now = datetime.now(UTC)
+        msg_canon = f"message:{mid}"
+        msg_body = body[:800]  # cap for graph storage
+        msg_oid = await acts.create_or_find_object("Message", msg_canon, from_agent)
+        await acts.assert_property(msg_oid, "summary", msg_body[:160], from_agent, now, 1.0)
+        await acts.assert_property(msg_oid, "grade", grade or "fyi", from_agent, now, 1.0)
+        await acts.assert_property(msg_oid, "status", "sent", from_agent, now, 1.0)
+        from_oid = await acts.create_or_find_object("Agent", from_agent, from_agent)
+        await acts.create_link(msg_oid, from_oid, "sent_by", from_agent, now, 1.0)
+        if to_a:
+            target_type = "Seat" if to_a.startswith("seat:") else "Agent"
+            to_oid = await acts.create_or_find_object(target_type, to_a, from_agent)
+            await acts.create_link(msg_oid, to_oid, "addressed_to", from_agent, now, 1.0)
+        elif to_p:
+            proj_oid = await acts.create_or_find_object(
+                "SoftwareProject", f"repo:{to_p}", from_agent
+            )
+            await acts.create_link(msg_oid, proj_oid, "broadcast_to", from_agent, now, 1.0)
+        if reply_to is not None:
+            parent_msg_oid = await acts.create_or_find_object(
+                "Message", f"message:{reply_to}", from_agent
+            )
+            await acts.create_link(msg_oid, parent_msg_oid, "replies_to", from_agent, now, 1.0)
+        if thread is not None:
+            thread_oid = await acts.create_or_find_object("Thread", f"thread:{thread}", from_agent)
+            await acts.create_link(msg_oid, thread_oid, "in_thread", from_agent, now, 1.0)
+    except Exception:  # noqa: BLE001 — graph write is best-effort; the relational row already landed
+        pass
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),

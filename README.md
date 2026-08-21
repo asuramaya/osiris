@@ -1,245 +1,158 @@
 # Osiris
 
-**The memory an AI doesn't have.** A keyless, provenance-first entity-graph engine that
-turns a stream of records — *your own work, or the public record* — into durable, sourced,
-always-watched memory you compose by conversation. It remembers, it watches, and it tells
-you what changed while you were away. It does **not** act for you.
+**The persistent memory and coordination graph for AI agents.** A harness-agnostic, provenance-first entity-graph engine that turns work history, architectural decisions, loose ends, and public records into durable, queryable, graph-backed memory.
 
-Point it at your repositories and it becomes cross-project memory: every decision you made
-and why, every open thread, what drifted across a family of similar projects, and a
-heartbeat that notices the moment something changes. Point it at the public record and it
-becomes an entity-intelligence engine: companies, filings, sanctions, litigation, on-chain
-activity, fused into one graph. Same engine, same kinetic waist, same provenance — two
-proven faces.
-
-> **Status.** The kernel is real and proven (415 tests, real Postgres/Redis, `ruff` +
-> `mypy --strict` clean). It has deliberately reset **twice** toward *engine-as-product* —
-> the domain is never the identity, the engine is. The development log is kept in the open
-> in [`CLAUDE.md`](CLAUDE.md), and Osiris tracks its own git history *inside itself* (the
-> first and most-dogfooded use). This is a pre-`v0.2` working tree, honest about its edges.
+Osiris gives autonomous agents and human developers persistent continuity across sessions, context windows, compactions, and harness boundaries (DeepSeek Harness, Claude Code, Cursor, Windsurf, or custom agent frameworks).
 
 ---
 
-## Why it exists — the Osiris/Claude split
+## Why Osiris Exists
 
-An AI has intelligence but no persistent memory, no provenance, and no continuity — it
-can't remember last week, can't tell you *how* it knows a thing, and can't run while you're
-asleep. **Osiris is precisely those missing organs.** The division of labor:
+Modern LLM agent harnesses operate in transient contexts. When a context window compacts or a session ends, reasoning is lost, decisions are forgotten, and cross-session loose ends disappear into unstructured logs.
 
-- **Osiris is the brain and the alarm clock** — a durable graph (memory), where every fact
-  carries *how it was obtained* (provenance), watched by an autonomic loop (continuity).
-- **Claude is the intelligence**, in two modes: a **lens** (foreground, on-demand — you
-  ask, it reasons and drives) and a **tripwire** (background, always-on, flash-tier — it
-  narrates what changed, cheaply, 24/7).
-- **Neither has hands *over your systems*.** Osiris reads and tells; it never writes a file,
-  commits, pushes, or mutates anything you own. Acting is left to you, to `git`, to your own
-  tools — the last inch stays where trust already lives.
-- **It has exactly one hand, and it points inward.** With the wake trigger on, the worker can
-  *start a Claude session* in a repo that has unread fleet mail. It summons a mind; it does
-  not become one. It **ships off**, and [we will tell you what it cost us](#one-hand-the-wake-trigger).
+**Osiris provides the missing organs:**
 
-Everything below follows from that split.
+1. **Persistent Memory Graph** — An append-only, event-sourced entity graph in PostgreSQL + Redis holding every project, commit, decision, open thread, agent identity, and design reference.
+2. **Harness Agnosticity** — Operates over standard Model Context Protocol (MCP) and custom lightweight adapters. Whether running DeepSeek Harness (DSH), Claude Code, or any MCP-enabled agent, all agents share the exact same living graph.
+3. **Provenance & Evidence Taxonomy** — Every assertion and link carries an evidence grade (`SELF_DECLARED`, `AUTHORITATIVE_API`, `DIRECT_OBSERVATION`, `CO_OCCURRENCE`, `DERIVED`, `CORROBORATED`). Confidence is a verifiable projection of source provenance, never a heuristic guess.
+4. **First-Class Inter-Agent Mail & Fleet Coordination** — Graphed communication between agents with `Message` objects and typed graph links (`sent_by`, `addressed_to`, `broadcast_to`, `replies_to`, `in_thread`, `mentions`), with at-least-once delivery, prior-art detection, and multi-tenant seat management.
+5. **Granular, High-Efficiency Retrieval** — Replaces massive context-bloating dumps with lightweight queries: `get_status` (~360 chars), `graph_search` (scoped subgraph retrieval with neighborhood expansion), `get_decision_list`, `get_thread_list`, and `consult_canon`.
 
 ---
 
-## What the engine does
+## Architecture at a Glance
 
-- **Turns records into a provenance-graded graph.** Every property and link records its
-  **evidence class** — self-declared / authoritative-API / direct-observation /
-  co-occurrence / derived / corroborated — so *confidence is a projection of provenance,
-  not a guess*. The graph is an append-only, event-sourced ledger; a merge is a reversible
-  event.
-- **Resolves entities without ever guessing blindly.** Resolution is **candidate-gated** —
-  block on a cheap key, judge only the bounded candidates, never all-pairs — so it scales,
-  and it *never auto-merges a person*: it queues a review with its reasons.
-- **Comes alive with a heartbeat.** An autonomic *pulse* senses when a tracked source
-  changes, re-ingests only the delta, re-runs the lenses, and accumulates a *"what changed
-  while you were away"* digest. Off-the-clock insight you return to.
-- **Is composed by conversation.** Analyses are **compositions** — saved, forkable op-trees
-  over the neutral graph (Notion's model, grounded in Palantir's Object Set API) authored by
-  Claude from a sentence. Opinion lives in the composition *you* own, never welded into the
-  engine.
-- **Is driven two ways.** An [MCP](https://modelcontextprotocol.io) server (AI-facing) and a
-  FastAPI console (human-facing), over the same engine. The front end *is* the conversation:
-  a shared cursor means when Claude focuses something, your screen follows.
-
-The shape is **"Palantir × Notion, composed by conversation"**: an entity-ontology
-*substrate* (Palantir, with provenance) whose front end is a *composer* (Notion's neutral
-primitives), authored by an AI. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
+```
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                            AGENT HARNESSES                                  │
+  │   DeepSeek Harness (DSH)    │   Claude Code   │   Cursor / Windsurf / Custom │
+  │   (Cordis In-Process Plugin)│   (CLI / Hooks) │   (Standard MCP Clients)    │
+  └─────────────────────────────┴─────────────────┴─────────────────────────────┘
+                                       │ (MCP over HTTP / JSON-RPC :8790)
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                          SURFACES & RETRIEVAL                               │
+  │  FastMCP Server (130+ Tools)  ·  FastAPI Console (:8011)  ·  Composer / Lenses│
+  │  Granular Retrieval: get_status · graph_search · get_decision_list · get_mail│
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                       NARROW WAIST (Actions API)                            │
+  │   create_or_find_object · assert_property · create_link · merge · set_status│
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │                           EVENT-SOURCED KERNEL                              │
+  │   PostgreSQL 16 (Objects, Links, Assertions, Events)  ·  Redis 7 (Bus/Cache)│
+  │   Evidence Taxonomy  ·  Merge/Unmerge Algebra  ·  Autonomous Heartbeat Loop  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## The two proven faces
+## Key Capabilities
 
-### 1. Your own work — cross-project memory (the flagship)
+### 1. Granular Agent State & Graph-Aware Search
+Instead of consuming tens of thousands of tokens dumping entire project histories on every turn:
+- **`get_status`**: Ultra-lightweight glance (~360 chars) returning current identity, mail counters, and fleet pulse.
+- **`graph_search(query, project?, lineage?, max_depth?)`**: Lexical + semantic hybrid search scoped to a project or agent lineage, with 1–3 hop graph neighborhood expansion.
+- **`get_decision_list` / `get_thread_list`**: Paginated and filtered access to decisions and open obligations/tasks/questions.
+- **`consult_canon`**: Recalls design references and historical architecture essays on demand.
 
-Point Osiris at your repositories. It ingests each git history, tree, and decision, resolves
-*you* across repos even when you commit under different emails, and holds your work as one
-graph:
+### 2. Graphed Inter-Agent Mailbox
+Agents coordinate across project boundaries:
+- **Broadcasts (`to="<project>"`)** and **Direct Messages (`to_agent="<id>"`)**.
+- Every exchange mints a **`Message`** object in the ontology with typed graph relationships (`sent_by`, `addressed_to`, `replies_to`, `in_thread`).
+- **Prior-Art Inspection**: Dispatched messages and recorded rulings automatically check against standing decisions and practices to prevent re-deriving known solutions.
 
-- **Decisions & threads, mined from your own commit messages** — "why is it this way?" and
-  "what's still blocked?" become a *query*, not a re-read of hundreds of commits.
-- **Cross-repo identity resolution** — the same developer fragmented across personal and
-  GitHub no-reply emails is surfaced for review (never auto-merged).
-- **Family audit** — for a set of sibling projects, what *drifted*: which repos lack a
-  CONTRIBUTING, and — the deeper layer — whether the shared files actually *agree* (it found
-  a real family licensed inconsistently: MIT in one repo, AGPL in the others).
-- **The heartbeat** — a daemon that watches your repos and, the second a commit lands,
-  senses it, mines its decisions, and logs the finding — unattended.
-- **The design canon** — Palantir/Notion's models ingested as queryable memory, so you
-  *cite* a solved problem instead of re-deriving it (`consult_canon("no join")`).
-
-Osiris uses this on **itself** — its own genesis is a subject in its graph.
-
-### 2. The public record — entity intelligence
-
-Point Osiris at open bases and it federates them into one provenance-graded entity graph,
-keyless: SEC EDGAR (companies + Form D private placements), OpenSanctions (sanctions/PEP +
-OFAC crypto wallets), Wikidata, GLEIF (global LEI + ownership), OrgBook BC, CourtListener,
-ClinicalTrials.gov, and Etherscan (EVM on-chain — the one source needing a free key). It
-resolves the same company across `cik:` / `Qxxx` / `lei:` / `bc-reg:`, grades every claim,
-and emits a sourced, litigation-defensible dossier — identity, principals, financing,
-litigation, on-chain + sanctions exposure — every line tagged `source · how-obtained · date`.
-
-Same kernel, same resolution, same provenance as face #1. The domain is not the identity.
+### 3. Unified Lifecycle Hooks & Harness Adapters
+- **DeepSeek Harness (DSH)**: Zero-friction integration via the native Cordis plugin (`dsh-plugin`), providing automatic turn-start mounting, background status polling, and pre-compaction graph settlement.
+- **Claude Code**: Collapsed 13 legacy standalone subprocess hooks into a single, high-performance stdlib CLI (`scripts/osiris_hook.py`) communicating over fast HTTP endpoints (~30ms vs ~500ms).
+- **Harness Adapter Protocol**: Pluggable `HarnessAdapter` protocol supporting transcript reading and model swap discovery across formats.
 
 ---
 
 ## Quickstart
 
-### Track your projects (the flagship path)
+### 1. Prerequisites & Environment
+- Python 3.12+ (`uv` recommended)
+- PostgreSQL 16+ (with `pg_trgm`)
+- Redis 7+
 
 ```bash
+# Clone and sync dependencies
+git clone https://github.com/asuramaya/osiris.git
+cd osiris
 uv sync
+
+# Run database migrations
 DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
-# seed the default rooms + lenses and ingest the design canon (idempotent — a fresh DB is
-# otherwise an empty shell: no rooms, no compositions, no canon)
+
+# Initialize default ontology catalog and design canon
 uv run python -m src.init
-# ingest a repo WHOLE — history + file tree + mined decisions, one idempotent call
-uv run python -m src.ingest.project /path/to/your/repo
-# start the heartbeat over several repos (senses changes, builds the digest)
-OSIRIS_DEV_REPOS=/path/a,/path/b uv run python -m src.orchestrator.pulse --watch 600
 ```
 
-### Drive it with an AI
-
+### 2. Running the Server
 ```bash
-uv run python -m src.mcp_server        # stdio transport; add to your MCP client config
+# Start persistent MCP server on port 8790
+DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run python -m src.mcp_server
+
+# (Optional) Start the human-facing console on port 8011
+DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run uvicorn src.api.app:app --port 8011
 ```
-The repo ships a project-scoped [`.mcp.json`](.mcp.json), so Claude Code registers the `osiris`
-server automatically — no manual config. Then, in any MCP client: *"What decisions have I made
-across my repos, and what drifted in the family?"* — or, for the public-record face, *"Build a
-dossier on Celsius Network."*
 
-### Develop
+### 3. Connecting Agent Harnesses
 
-```bash
-cp .env.example .env && docker compose up -d && uv sync
-DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris uv run alembic upgrade head
-uv run pytest            # real Postgres/Redis via testcontainers, never mocks
-uv run ruff check src tests && uv run mypy --strict src/
+#### DeepSeek Harness (DSH)
+Add to your DSH configuration profile (e.g. `~/.dsh/profiles/web/cordis.patch.yml`):
+
+```yaml
+plugins:
+  "@deepseek-ai/dsh-mcp-client":
+    servers:
+      osiris:
+        type: streamable-http
+        url: http://127.0.0.1:8790/mcp
 ```
-Python 3.12 (uv), async throughout (asyncpg, httpx, arq), FastAPI, Postgres 16 + Redis 7.
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+#### Claude Code
+Add to your `~/.claude/settings.json` or project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "osiris": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8790/mcp"
+    }
+  }
+}
+```
 
 ---
 
-## Proof
+## The Agent Lifecycle Ritual
 
-Validated on real, hard targets — not toy fixtures:
+When working in an Osiris-backed project, agents follow a structured, low-overhead cycle:
 
-- **Osiris on itself** — its own git history is a subject in its graph; the `briefing`
-  lens orients a fresh session on arrival, the family audit found a real license
-  inconsistency across a sibling project family, and the heartbeat caught a live commit
-  and mined its decision *unattended*, the second it landed.
-- **Neuralink** — federated the entity, then surfaced the buried Form D financing swarm,
-  the SPV operators, the clinical footprint, and a disclosed-vs-operational geography
-  discrepancy — then *verified and killed* two tempting-but-false leads. The discipline
-  working.
-- **Sanctions fusion** — a live Etherscan trace of an OFAC-listed wallet fuses with the
-  federated sanctions base on a shared on-chain canonical; screening surfaces a sanctioned
-  counterparty it sent 34 ETH to.
-
-[`samples/`](samples/) ships literal dossier output for the public-record face — real
-dossiers, shown with their warts, because provenance is the point.
+1. **Mount** (`mount(cwd, job_dir)`): Connects the session to the persistent identity graph and binds to its designated seat.
+2. **Glance** (`get_status()`): Checks unread mail, active obligations, and fleet pulse (~360 chars).
+3. **Recall** (`graph_search(q)` / `consult_canon(q)`): Recalls prior rulings and architectural invariants before writing code.
+4. **Capture** (`record_decision(...)` / `open_thread(...)`): Records architectural rulings, choices, and open obligations as they occur.
+5. **Settle** (`settle(...)`): Flushes pending decisions, closes resolved threads, and seals the context window state before compaction.
 
 ---
 
-## What it can't do (yet, or by design)
+## Documentation Index
 
-- **It has no hands over your systems, on purpose.** It will not write to your repos, commit,
-  or act in them. It produces the sourced finding; you (or Claude with a shell) apply it.
-  Crossing into autonomous mutation of your systems is a
-  [trap it deliberately refuses](ROADMAP.md#deliberately-not-done-and-why). The one exception
-  is declared below, and it ships off.
-- **The public-record face reaches only the open *entity* commons** — by design (keyless),
-  it is weak on private *persons*. A [safety feature, not only a limitation](RESPONSIBLE_USE.md).
-- **Provenance makes errors auditable, not absent.** There is known entity-resolution and
-  extraction noise — read the tiers and sources, don't trust blindly. See
-  [`ROADMAP.md`](ROADMAP.md).
-- The heartbeat's *reflection* layer (flash-tier Claude narrating the meaning of a change)
-  is the active next step; today the pulse reports reliable facts, not yet interpretation.
+- [**Cross-Harness Architecture**](docs/CROSS_HARNESS.md) — Universal harness contract, adapter protocol, and multi-harness setup.
+- [**Installation & Setup**](docs/INSTALL.md) — Full installation guide, systemd units, Docker, and environment configuration.
+- [**System Architecture**](ARCHITECTURE.md) — Detailed kernel design, Actions waist, ontology schemas, and event sourcing.
+- [**Deployment Guide**](docs/DEPLOY.md) — Production operations, service daemon management, and envelope limits.
+- [**CLI & MCP Reference**](docs/CLI.md) — Complete command-line tools and MCP tool surface documentation.
+- [**Agent Ritual & Memory Laws**](docs/RITUAL.md) — Memory invariants, provenance rules, and context handoff practices.
 
 ---
 
-## One hand: the wake trigger
+## License & Responsible Use
 
-Everything above says Osiris has no hands. That is true of **your** systems and we intend to
-keep it true. But it would be dishonest to stop there, because Osiris can do one thing that
-looks a lot like acting, and you should hear it from us rather than find it in the source.
-
-**Osiris can summon a mind.** The fleet mailbox is pull-based — an agent only sees mail when
-it takes a turn — so a message to a project nobody is sitting in waits forever. The *wake
-trigger* closes that gap: the worker starts a headless `claude -p` session in that repo, and
-that session mounts, reads its inbox, and decides what to do. Osiris does not act. **It
-summons something that can.** The distinction is real, and it is also thin enough that you
-deserve to be told about it plainly.
-
-### What it cost us
-
-We shipped it, and it built a ghost farm.
-
-One unread letter — addressed *"to whoever mounts this project next"* — spawned **79 sessions
-over 18 hours**, on a project its owner had not opened in two days. Every wake behaved
-*correctly*: it read the letter, rightly judged the letter was not its to answer, politely
-left it alone — **and thereby summoned its replacement.** The letter's own politeness was the
-fuel. Across the fleet the trigger fired 818 times and minted 463 agents, and none of it was
-a malfunction. Every component did its job, and the *composition* of correct components was a
-perpetual-motion machine that ran on the operator's money.
-
-The bug was that **a rate is not a bound.** Every guard we had — per-project cap, hourly
-budget, grace window — measured wakes over a *sliding window*, so every one of them reset and
-fired again. The cap was working perfectly. That was the bug: it capped the *rate*, and
-nothing capped the *total*, so a message that could never be settled became a permanent alarm
-clock ticking at exactly the legal limit.
-
-### So it ships off, and here is the whole safety story
-
-- **`OSIRIS_TRIGGER_ENABLED` defaults to `false`.** A fresh clone cannot wake anything.
-- A **lifetime attempt cap per message** (not just a rate): a message that has failed three
-  times is escalated to the human and stops. A retry that has failed 79 times is not a retry,
-  it is a leak.
-- Rate cap per project, an hourly fleet budget, and a cheaper model tier for triage wakes.
-- **Every wake is recorded** in `agent_wakes` — the chain is visible and auditable after the
-  fact, which is how we found the farm.
-- A woken session gets only the tools you grant it (`OSIRIS_WAKE_ALLOWED_TOOLS`, default:
-  Osiris's own MCP surface — no shell, no file writes).
-- Kill switch: set `OSIRIS_TRIGGER_ENABLED=0` and restart the worker. It is off right now in
-  the author's own deployment, and it stays off until it is field-proven.
-
-If that trade is not one you want, **leave it off** — everything else in Osiris works without
-it. We are telling you this because a memory system whose whole thesis is *provenance* has no
-business hiding its own worst incident.
-
----
-
-## License & responsible use
-
-Licensed under **AGPL-3.0** (see [`LICENSE`](LICENSE)). The public-record face produces
-claims about real people and organizations; it is dual-use. Read
-[`RESPONSIBLE_USE.md`](RESPONSIBLE_USE.md) — intended use, the data-source licenses (notably
-OpenSanctions' non-commercial terms), and why "only public data" is both the ethic and the
-legal shield.
-
-*No warranty. Osiris surfaces and sources; it does not adjudicate truth. Every claim it
-emits must be read with its provenance and verified before you act or publish.*
+Osiris is open-source under the MIT License. See [LICENSE](LICENSE) and [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md) for ethical guidelines regarding keyless public entity federation.

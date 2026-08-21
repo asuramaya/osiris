@@ -181,8 +181,9 @@ class TranscriptStore:
         self.pool = pool
         from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
         from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+        from src.ingest.harness.dsh import DshSessionAdapter
         self._default_adapters = adapters or [
-            ClaudeJsonlAdapter(), CrushSqliteAdapter(),
+            ClaudeJsonlAdapter(), CrushSqliteAdapter(), DshSessionAdapter(),
         ]
 
     async def _freshness(

@@ -1,119 +1,195 @@
 <!-- topic: getting-started -->
 
-# INSTALL — zero to a mounted fleet
+# Installation & Setup
 
-The stranger's runbook: from `git clone` to a working console and a fleet of Claude
-sessions sharing one memory graph. Every step is copy-paste; nothing assumes you are the
-operator. The hosted topology, backups, and alerting live in [`DEPLOY.md`](DEPLOY.md) —
-this page gets one box from nothing to mounted.
+This guide takes you from an empty environment to a running Osiris instance with active agent connections across DeepSeek Harness, Claude Code, and other MCP-enabled environments.
 
-## 0. Prerequisites
+---
 
-- Linux, Python 3.12, [`uv`](https://docs.astral.sh/uv/), Docker (for Postgres/Redis;
-  the test gates also use it via testcontainers)
-- Claude Code, for the fleet half (the console works without it)
+## 1. Prerequisites
 
-## 1. Clone + dependencies
+- **OS**: Linux or macOS
+- **Python**: 3.12+ (managed with [`uv`](https://docs.astral.sh/uv/))
+- **Database**: PostgreSQL 16+ (with `pg_trgm` and optional `pgvector`)
+- **Cache/Queue**: Redis 7+
+- **Agent Harnesses** (one or more):
+  - [DeepSeek Harness (DSH)](https://github.com/deepseek-ai)
+  - Claude Code
+  - Cursor, Windsurf, OpenDevin, or any standard MCP client
+
+---
+
+## 2. Clone & Sync Dependencies
 
 ```bash
-git clone https://github.com/asuramaya/osiris && cd osiris
+git clone https://github.com/asuramaya/osiris.git
+cd osiris
 uv sync
 ```
 
-## 2. Substrate — Postgres 16 + Redis 7
+---
+
+## 3. Database & Redis Setup
+
+### Option A: Docker (Fastest)
 
 ```bash
-docker run -d --name osiris-pg -e POSTGRES_USER=osiris -e POSTGRES_PASSWORD=osiris \
-  -e POSTGRES_DB=osiris -p 127.0.0.1:5432:5432 postgres:16
-docker run -d --name osiris-redis -p 127.0.0.1:6379:6379 redis:7
-export DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5432/osiris
-export REDIS_URL=redis://127.0.0.1:6379/0
+# Start PostgreSQL 16 and Redis 7
+docker run -d --name osiris-pg \
+  -e POSTGRES_USER=osiris \
+  -e POSTGRES_PASSWORD=osiris \
+  -e POSTGRES_DB=osiris \
+  -p 127.0.0.1:5432:5432 \
+  postgres:16
+
+docker run -d --name osiris-redis \
+  -p 127.0.0.1:6379:6379 \
+  redis:7
+
+export DATABASE_URL="postgresql://osiris:osiris@127.0.0.1:5432/osiris"
+export REDIS_URL="redis://127.0.0.1:6379/0"
 ```
 
-Already have Postgres/Redis? Point the two URLs at them and skip the containers.
-
-## 3. Schema + seed
+### Option B: Existing PostgreSQL & Redis
+Export your connection strings:
 
 ```bash
-uv run alembic upgrade head   # the event-sourced kernel, to head
-uv run python -m src.init     # rooms + default compositions + the design canon (idempotent)
+export DATABASE_URL="postgresql://<user>:<password>@127.0.0.1:<port>/<dbname>"
+export REDIS_URL="redis://127.0.0.1:<port>/0"
 ```
 
-A fresh DB is an empty shell until `src.init` — without it the console lands on nothing.
+---
 
-## 4. The three surfaces (foreground first)
+## 4. Database Migrations & Initial Seeding
 
-Run each in its own terminal to see them work; step 5 makes them daemons.
+Run database schema migrations and seed default ontology catalog types and design canon:
 
 ```bash
-# the console + read API (the human lens; /membrane is the fleet's upward lane)
-uv run uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011
+# Apply all Alembic migrations
+uv run alembic upgrade head
 
-# the worker (cascade drain + watch + reaper — the tripwire)
+# Seed catalog types, default rooms, compositions, and design references
+uv run python -m src.init
+```
+
+---
+
+## 5. Starting the Core Services
+
+Run these services directly or manage them via systemd (see [Step 7](#7-systemd-service-management)):
+
+```bash
+# 1. Start the persistent FastMCP server (default port 8790)
+OSIRIS_MCP_TRANSPORT=streamable-http uv run python -m src.mcp_server
+
+# 2. Start the background worker (queue drain, lease cleanup, and digests)
 uv run arq src.workers.arq_worker.WorkerSettings
 
-# the MCP server (the fleet floodgate: ONE always-on process, one shared pool)
-OSIRIS_MCP_TRANSPORT=streamable-http uv run python -m src.mcp_server
+# 3. (Optional) Start the human-facing FastAPI console (default port 8011)
+uv run uvicorn --factory src.api.app:create_app --host 127.0.0.1 --port 8011
 ```
 
-Verify: `curl -s 127.0.0.1:8011/health` → `{"status":"ok"}`; console at
-<http://127.0.0.1:8011>, the read-only lens at <http://127.0.0.1:8011/membrane>; the MCP
-server listens at `http://127.0.0.1:8790/mcp` — `curl -s -o /dev/null -w '%{http_code}\n'
-127.0.0.1:8790/mcp` should print `406`: a bare GET carries no `Accept: text/event-stream`
-header, which the streamable-http transport correctly rejects, so 406 means the server is
-up and enforcing the protocol, not that something is broken. `curl: (7) Connection refused`
-is the actual failure signal.
+### Verifying Service Health
+- **Console**: `curl -s http://127.0.0.1:8011/health` → `{"status":"ok"}`
+- **MCP Server**: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8790/mcp` → `406` (406 indicates the streamable HTTP endpoint is active and awaiting client handshake).
 
-## 5. Keep them alive (systemd user units)
+---
 
-`deploy/user/` ships all four unit files. On a single-operator box they install as **user**
-units — running as you, against your own instance (the `/opt` system-unit form is in
-[`DEPLOY.md`](DEPLOY.md)). `osiris deploy` (re)installs these over
-`~/.config/systemd/user/` on every deploy after the first (thread e6fd3772 piece 3-infra); by
-hand, one time:
+## 6. Connecting Agent Harnesses
+
+### A. DeepSeek Harness (DSH)
+
+#### 1. Add MCP Server Bridge
+In your DSH profile configuration (e.g. `~/.dsh/profiles/web/cordis.patch.yml`):
+
+```yaml
+plugins:
+  "@deepseek-ai/dsh-mcp-client":
+    servers:
+      osiris:
+        type: streamable-http
+        url: http://127.0.0.1:8790/mcp
+```
+
+#### 2. (Optional) Install the Native DSH Cordis Plugin
+To enable in-process auto-mounting and automatic context-seam settlement:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/user/*.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now osiris-console osiris-pulse osiris-worker osiris-mcp
-loginctl enable-linger "$USER"   # survive logout / reboot
+cd dsh-plugin
+npm install
+npm run build
 ```
 
-Adjust `WorkingDirectory`, the venv path, and the DB/Redis URLs in each unit to your box;
-`osiris-pulse` senses the repos listed in its `OSIRIS_DEV_REPOS=` line.
+Add the plugin to your Cordis configuration:
+```yaml
+plugins:
+  "osiris-dsh-plugin":
+    path: "/path/to/osiris/dsh-plugin"
+    mcpUrl: "http://127.0.0.1:8790/mcp"
+```
 
-## 6. Wire your repos into the fleet
+---
 
-Box-wide (recommended — every project you open mounts osiris by default):
+### B. Claude Code
+
+Add Osiris to your Claude Code user config:
 
 ```bash
 claude mcp add --scope user --transport http osiris http://127.0.0.1:8790/mcp \
   --header 'X-Osiris-Job: ${CLAUDE_JOB_DIR}'
 ```
 
-Per-repo (pinned config, checked into that repo):
+Or add to project-specific `.mcp.json`:
 
-```bash
-uv run python -m src.orchestrator.onboard /path/to/repo --statusline
+```json
+{
+  "mcpServers": {
+    "osiris": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8790/mcp",
+      "headers": {
+        "X-Osiris-Job": "${CLAUDE_JOB_DIR}"
+      }
+    }
+  }
+}
 ```
 
-It creates-or-patches the repo's `.mcp.json` (merging around any servers already there;
-idempotent; refuses invalid JSON) and, with `--statusline`, `.claude/settings.json`; it
-prints the boot-sector stanza to paste into that repo's CLAUDE.md. `--dry-run` previews.
+---
 
-First Claude session inside the repo: `mount(cwd=<repo>, job_dir=$CLAUDE_JOB_DIR)` →
-`orient()` → `inbox()` — and if the repo carries markdown memory (a CLAUDE.md build log,
-DESIGN.md, essays), run the `bootstrap` MCP tool once: it indexes them into the graph as
-queryable Reference nodes and never edits your files.
+### C. Cursor & Windsurf
 
-## 7. Developing osiris itself
+In Cursor/Windsurf MCP configuration:
 
-```bash
-uv run pytest                  # real Postgres via testcontainers — Docker required
-uv run ruff check src tests
-uv run mypy src                # strict
+```json
+{
+  "mcpServers": {
+    "osiris": {
+      "url": "http://127.0.0.1:8790/mcp"
+    }
+  }
+}
 ```
 
-Backups (`deploy/backup.sh` / `restore.sh`), the full container stack, alert delivery, and
-the worker dead-man's-switch: [`DEPLOY.md`](DEPLOY.md).
+---
+
+## 7. Systemd Service Management (Production / Local Daemon)
+
+To keep Osiris running persistently in the background across reboots:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/user/*.service ~/.config/systemd/user/
+
+# Reload and enable units
+systemctl --user daemon-reload
+systemctl --user enable --now osiris-mcp osiris-worker osiris-pulse osiris-console
+
+# Allow user units to persist after logout
+loginctl enable-linger "$USER"
+```
+
+Check status:
+```bash
+systemctl --user status osiris-mcp osiris-worker
+```

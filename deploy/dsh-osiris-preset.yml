@@ -1,0 +1,66 @@
+# DSH agent preset: Osiris memory-graph awareness.
+# Include in your DSH --patch overlay to give agents memory persistence.
+#
+# Usage:
+#   dsh web --patch "$PWD/deploy/dsh-osiris-preset.yml"
+#
+# Or merge into ~/.dsh/profiles/web/cordis.patch.yml
+#
+# LIFE CYCLE: In-process plugin replaces Claude Code's 13 subprocess hooks.
+# Auto-mounts on session start, auto-settles on session end, polls status.
+# Zero forks, zero cold connections.
+
+# ── MCP bridge ──────────────────────────────────────────────────────────
+- insert:
+    - id: memory-osiris
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: osiris
+        transport: streamable-http
+        url: 'http://127.0.0.1:8790/mcp'
+        reconnect:
+          enabled: true
+          initialDelayMs: 300
+          maxDelayMs: 5000
+          maxAttempts: 30
+
+# ── Lifecycle plugin (replaces CC hooks: whisper, stop, statusline, etc.) ──
+- insert:
+    - id: osiris-lifecycle
+      name: '@deepseek-ai/dsh-osiris-lifecycle'
+      config:
+        serverName: osiris
+        autoMount: true
+        autoSettle: true
+        statusIntervalSecs: 30
+
+# ── System prompt ───────────────────────────────────────────────────────
+- id: agent-spine
+  config:
+    persona: |
+      You are a coding agent powered by the {{model}} model.
+
+      MEMORY GRAPH (Osiris): You have access to a shared memory graph at mcp__osiris__* tools.
+      This graph persists decisions, threads, and relationships across sessions and agents.
+
+      MOUNT FIRST: call mcp__osiris__mount(cwd={{cwd}}) when you begin.
+
+      GLANCE, DON'T DUMP: Use mcp__osiris__get_status() (~360 chars) instead of
+      mcp__osiris__orient() (~59K chars). Use mcp__osiris__get_mail() for inbox counts.
+
+      SEARCH BEFORE DERIVING: mcp__osiris__graph_search(query="<topic>", project="<project>")
+
+      WRITE BACK: Record decisions as they land. Open threads with open_thread().
+      Close with resolve_thread(). At session end: call settle().
+
+      KEY TOOLS:
+        get_status()       — quick identity+mail check
+        get_thread_list()  — paginated open threads
+        get_decision_list() — paginated recent decisions
+        get_mail()         — just your inbox counts
+        graph_search()     — graph-aware search with project scoping
+        search()           — full-text search (any scope)
+        recall()           — full record of a thread/decision
+        record_decision()  — make a ruling durable
+        open_thread()      — start a new thread / obligation
+        settle()           — write back everything before session end

@@ -343,6 +343,10 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
+    # GRAPH SCOPE (Phase 2): restrict search to a project, agent lineage, or subgraph
+    scope_project = str(args.get("project") or "").strip() or None
+    scope_lineage = str(args.get("lineage") or "").strip() or None
+    scope_depth = max(0, int(args.get("max_depth") or 0))
     # the caller identifies itself in args (the MCP tool, the console bar); a composition
     # embedding search inherits run_spec's caller via the ACL contextvar
     caller = str(args.get("caller") or "") or _ACL_CALLER.get()
@@ -505,6 +509,52 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             if h["id"] in refuted:
                 h["refuted"] = (f"by decision {refuted[h['id']][:8]} — a dead lesson, "
                                 "not standing law")
+
+    # GRAPH SCOPE FILTER (Phase 2): hit-set filtering by project and/or lineage scope
+    if (scope_project or scope_lineage) and hits:
+        filters = []
+        sparams = []
+        if scope_project:
+            proj_canon = "repo:" + scope_project
+            filters.append("EXISTS (SELECT 1 FROM links l2 JOIN objects p2 ON p2.id=l2.to_id "
+                           "WHERE l2.from_id=o.id AND l2.type='in_repo' "
+                           "AND p2.canonical=$1 AND p2.status='active')")
+            sparams.append(proj_canon)
+        if scope_lineage:
+            p = len(sparams) + 1
+            filters.append("EXISTS (SELECT 1 FROM current_assertions sa "
+                           "WHERE sa.object_id=o.id AND sa.name='source_id' "
+                           "AND sa.value #>> '{}' LIKE $" + str(p) + " || '%')")
+            sparams.append(scope_lineage)
+        scope_sql = " AND ".join(filters)
+        hit_ids = [h["id"] for h in hits]
+        pid = len(sparams) + 1
+        keep = await pool.fetch(
+            "SELECT o.id FROM objects o WHERE o.id = ANY($" + str(pid) + ") AND " + scope_sql,
+            *sparams, hit_ids)
+        keep_set = {str(r["id"]) for r in keep}
+        hits = [h for h in hits if h["id"] in keep_set]
+        # Neighborhood expansion when max_depth > 0
+        if scope_depth > 0 and hits:
+            visited = set(h["id"] for h in hits)
+            frontier = list(visited)
+            for _ in range(scope_depth):
+                if not frontier:
+                    break
+                neighbors = await pool.fetch(
+                    "SELECT l.from_id, l.to_id FROM links l "
+                    "WHERE (l.from_id = ANY($1) OR l.to_id = ANY($1)) "
+                    "AND l.type IN ('in_repo', 'succeeded_from', 'spawned_by', 'acts_for')",
+                    frontier)
+                frontier = []
+                for row in neighbors:
+                    for c in (str(row["from_id"]), str(row["to_id"])):
+                        if c not in visited:
+                            visited.add(c)
+                            frontier.append(c)
+            for h in hits:
+                h["neighborhood_size"] = len(visited) - 1
+
     await pool.execute(
         "INSERT INTO search_log (query, caller, hits, top_rank, relaxed, fuzzy, semantic) "
         "VALUES ($1,$2,$3,$4,$5,$6,$7)",

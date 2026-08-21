@@ -397,31 +397,26 @@ async def _seam_field(ctx: Context | None) -> str | None:
 mcp = BoundedMCP(
     "osiris",
     instructions=(
-        "Osiris is the durable memory a session doesn't have — the graph remembers what "
-        "you learn and decide after you're gone, and it is SHARED across the whole fleet of "
-        "Claude instances. FIRST, call mount(cwd=<your working dir>, job_dir=$CLAUDE_JOB_DIR) "
-        "to link in as a first-class agent — this attributes everything you write to YOU "
-        "(which instance, which model, which project) instead of an anonymous bucket. Then "
-        "orient() for your bearings (open threads, obligations, recent decisions), and "
-        "get_schema to learn the object/link types before you author a composition or read "
-        "a result. Write back AS YOU GO — record_decision the moment a ruling lands, "
-        "open_thread when work starts or blocks (kind='obligation' for a duty an action "
-        "minted), resolve_thread the moment it closes; never batch it for the session's "
-        "end. A session can be compacted or killed at ANY instant: the graph, not the "
-        "context window, is your memory, and anything not written back does not exist. "
-        "The fleet shares a MAILBOX: another agent can address a message to your project — "
-        "mount() and orient() report your unread count and inbox() reads it (pull, never "
-        "push: you perceive mail only when you check, so glance when you arrive). Reading "
-        "LEASES a message, it does not consume it: SETTLE what you handle — reply with "
-        "send(reply_to=<id>) or ack with inbox(ack=[ids]) — or it redelivers (at-least-once; "
-        "a dropped response is a duplicate, never a loss). send(to='operator') reaches the "
-        "HUMAN's desk: when a lateral exchange concludes (a finding, a division of labor, a "
-        "decision), record_decision it AND send the operator a three-line brief — the loop "
-        "may close, but never silently. "
-        "IDENTITY CHECK: the operator's standing choice is that sessions here run Fable 5. "
-        "Harness degradations silently swap the model mid-session; if your environment "
-        "says you are a different model, SAY SO to the operator in your first reply — "
-        "a rug-pull must be confessed, never inherited blind."
+        "Osiris is the durable memory an agent session doesn't have — the graph remembers "
+        "what you learn and decide after you're gone, and it is SHARED across the whole "
+        "fleet. "
+        "FIRST, call mount(cwd=<your working dir>) to link in as a first-class agent — this "
+        "attributes everything you write to YOU instead of an anonymous bucket. Pass a "
+        "durable job_dir if your harness provides one (Claude Code: ~/.claude/jobs/<id>, "
+        "DSH: auto-detected from workspace slug); without it you still mount but identity "
+        "is ephemeral across server restarts. "
+        "GLANCE, DON'T DUMP: use get_status() for a quick check (~360 chars) instead of "
+        "orient()'s full briefing (~59K chars). Use get_mail() for just your inbox counts. "
+        "get_thread_list(project) and get_decision_list(project) give paginated views. "
+        "SEARCH BEFORE DERIVING: graph_search(query, project=<name>) scopes results to a "
+        "project's subgraph — the same fused engine as search() but graph-aware. "
+        "WRITE BACK AS YOU GO: record_decision the moment a ruling lands, "
+        "open_thread when work starts or blocks (kind='obligation' for a duty), "
+        "resolve_thread the moment it closes. A session can die at any instant: the graph, "
+        "not the context window, is your memory. "
+        "The fleet shares a MAILBOX: another agent can address a message to your project. "
+        "mount()/orient()/get_status() report your unread count; inbox() reads it. "
+        "send(to='operator') reaches the HUMAN's desk."
     ),
 )
 # DECLARE THE listChanged CAPABILITY (see BoundedMCP/_nudge_tool_list_refresh above): FastMCP
@@ -1825,16 +1820,14 @@ async def mount(
     verbose: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
-    Pass your working directory `cwd` (names your project). For `job_dir`, pass the DURABLE
-    ANCHOR the Osiris whisper gave you at session start (a real path like
-    ~/.claude/jobs/<id>) — NOT the literal `$CLAUDE_JOB_DIR`, which is empty in plain
-    sessions. The anchor lets the server read your ACTUAL model off your transcript and, if
-    the MCP server ever bounces, RE-ATTACH you to yourself instead of minting a twin. Without
-    it you still mount, but a reconnect splits your identity. Registers an Agent object
-    (works_in your project, acts_for the principal) and attributes every decision/thread you
-    record to `agent:<you>` instead of the shared `session` bucket. Then call orient().
-    ALREADY MOUNTED (the whisper said so)? Skip this — orient() for bearings and proceed;
-    re-mounting is only for after an MCP bounce, with your anchor.
+    Pass your working directory `cwd` (names your project). For `job_dir`, pass a DURABLE
+    ANCHOR your harness gave you at session start. In Claude Code this is
+    `~/.claude/jobs/<id>`; in DSH (DeepSeek Harness) it's derived from the workspace slug.
+    Without an anchor you still mount, but a reconnect splits your identity. Registers an
+    Agent object (works_in your project, acts_for the principal) and attributes every
+    decision/thread you record to `agent:<you>` instead of the shared `session` bucket.
+    Then call orient(). ALREADY MOUNTED (the whisper said so)? Skip this — orient() for
+    bearings and proceed; re-mounting is only for after an MCP bounce, with your anchor.
 
     `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
     next' reminder) that terse mode (the default) drops — every structured fact survives
@@ -1844,8 +1837,8 @@ async def mount(
     caller never sets these by hand. They complete the revisit-resolution chain to match
     automount()'s own (#48 piece 1, decision 424c4158): a tab-view of a living session
     (`transcript_path` names a file that belongs to another session's mount row) and a
-    background-job fork (`bridge_session_id` from CLAUDE_CODE_BRIDGE_SESSION_ID) each
-    REBIND to their existing soul instead of minting a stranger — same as fork/ledger.
+    background-job fork (`bridge_session_id`) each
+    REBIND to their existing soul instead of minting a stranger.
     `transcript_path` ALSO feeds MODEL RESOLUTION directly now (thread 7304bfd8): a
     background-job fork's job_dir-based transcript search can land on a stub file or find
     nothing at all, while this caller-known path is the real one — passed straight
@@ -2685,6 +2678,188 @@ async def _project_briefing(
         _cap_text(out["open_threads"], "summary", exempt_when_true="is_handoff")
         _cap_text(out["recent_decisions"], "summary", exempt_when_true="is_handoff")
     return out
+
+
+
+# ---- Phase 2: GRANULAR GETTERS (graphy tool surface) -------------------
+
+@mcp.tool()
+async def get_status(ctx: Context | None = None) -> dict[str, Any]:
+    """Your identity, mail count, and fleet pulse -- the "glance". Returns only:
+    you, model, project, seat, mail, fleet_pulse. No threads, no succession."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    proj = ident.project if ident else None
+    reader = ident.agent_id if ident else ""
+    lease = get_settings().osiris_mail_lease_secs
+    counts = (await unread_counts(pool, proj, reader_agent=reader, lease_secs=lease)
+              if proj else {"total": 0, "ask": 0})
+    unread, asks = counts["total"], counts["ask"]
+    mail = (f"{unread} unread ({asks} ask something of you) -- inbox()"
+            if asks else f"{unread} unread -- inbox()") if unread else "none"
+    pulse = None
+    try:
+        pulse = await mounts.fleet_pulse(pool, lease_secs=lease)
+    except Exception:
+        pass
+    result = {"you": ident.agent_id if ident else "unmounted", "project": proj}
+    if ident:
+        sb = await seat_bearings(pool, ident.agent_id)
+        result["model"] = ident.model
+        if sb:
+            result.update(sb)
+    result["mail"] = mail
+    if pulse:
+        result["fleet_pulse"] = pulse
+    return result
+
+
+@mcp.tool()
+async def get_thread_list(
+    project: str, kind: str | None = None, owner: str | None = None,
+    limit: int = 10, offset: int = 0, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Open threads for a project, paginated. Returns {threads, total, more}.
+    kind filter: obligation/question/task. owner filter: agent id / 'operator'.
+    limit=0 for count only (no bodies)."""
+    pool = await _pool_get()
+    proj = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        f"repo:{project}")
+    if proj is None:
+        return {"error": f"no project {project!r}", "threads": [], "total": 0}
+    clauses = ["o.type='Thread' AND o.status='active'"]
+    params = [proj]
+    idx = 2
+    if kind:
+        clauses.append("(SELECT a.value #>> '{}' FROM current_assertions a "
+                       "WHERE a.object_id=o.id AND a.name='kind' "
+                       "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $" + str(idx))
+        params.append(kind)
+        idx += 1
+    if owner:
+        clauses.append("(SELECT a.value #>> '{}' FROM current_assertions a "
+                       "WHERE a.object_id=o.id AND a.name='owner' "
+                       "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $" + str(idx))
+        params.append(owner)
+        idx += 1
+    where = " AND ".join(clauses)
+    total = await pool.fetchval(
+        "SELECT count(*) FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE " + where, *params) or 0
+    if limit == 0:
+        return {"project": project, "threads": [], "total": total, "more": total}
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='summary' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='kind' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='owner' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner "
+        "FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE " + where + " "
+        "ORDER BY o.created_at DESC "
+        "OFFSET $" + str(idx) + " LIMIT $" + str(idx + 1),
+        *params, offset, limit)
+    threads = []
+    for r in rows:
+        threads.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
+                        "summary": (r["summary"] or "")[:200],
+                        "kind": r["kind"], "owner": r["owner"]})
+    more = max(0, total - offset - len(threads))
+    return {"project": project, "threads": threads, "total": total, "more": more,
+            "note": "recall(ref) for full text; orient() for the ranked wall"}
+
+
+@mcp.tool()
+async def get_decision_list(
+    project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Recent decisions for a project, paginated. Returns {decisions, total, more}.
+    limit=0 for count only."""
+    pool = await _pool_get()
+    proj = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        f"repo:{project}")
+    if proj is None:
+        return {"error": f"no project {project!r}", "decisions": [], "total": 0}
+    total = await pool.fetchval(
+        "SELECT count(*) FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Decision' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='superseded_by')", proj) or 0
+    if limit == 0:
+        return {"project": project, "decisions": [], "total": total, "more": total}
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='summary' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='kind' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "WHERE o.type='Decision' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='superseded_by') "
+        "ORDER BY o.created_at DESC "
+        "OFFSET $2 LIMIT $3", proj, offset, limit)
+    decisions = []
+    for r in rows:
+        decisions.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
+                          "summary": (r["summary"] or "")[:200],
+                          "kind": r["kind"]})
+    more = max(0, total - offset - len(decisions))
+    return {"project": project, "decisions": decisions, "total": total, "more": more}
+
+
+@mcp.tool()
+async def graph_search(
+    query: str, project: str | None = None, lineage: str | None = None,
+    max_depth: int = 0, limit: int = 15, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """GRAPH-AWARE search -- same lexical/semantic engine as search() but scoped
+    to a subgraph. project narrows results to one project. lineage scopes to
+    a specific agent lineage (e.g. 'ad1a1cb0'). max_depth > 0 expands results
+    to include the N-hop neighborhood around each hit (linked objects).
+    Without scope params, behaves exactly like search()."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    caller = ident.agent_id if ident else None
+    spec = {"op": "function", "name": "search",
+            "args": {"q": query, "limit": limit, "caller": caller,
+                     "project": project, "lineage": lineage, "max_depth": max_depth}}
+    out = await comp.run_spec(pool, spec, None, name="graph_search", caller=caller)
+    items = out.get("items", {})
+    hits = items.get("hits", [])
+    return {"hits": hits, "q": query,
+            "scoped_to": {"project": project, "lineage": lineage}}
+
+
+@mcp.tool()
+async def get_mail(ctx: Context | None = None) -> dict[str, Any]:
+    """​Your inbox status: unread count, asks, operator briefs -- one query,
+    no threads, no succession, no fleet pulse. The cheapest orient alternative."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    proj = ident.project if ident else None
+    if not ident or not proj:
+        return {"mail": "unmounted -- call mount(cwd) first"}
+    lease = get_settings().osiris_mail_lease_secs
+    counts = await unread_counts(pool, proj, reader_agent=ident.agent_id, lease_secs=lease)
+    if counts is None:
+        counts = {"total": 0, "ask": 0}
+    op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id)
+    return {"you": ident.agent_id, "project": proj, "mail": counts,
+            "operator_mail": op_unread if isinstance(op_unread, int) else None}
 
 
 @mcp.tool()

@@ -212,6 +212,15 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "Remembered and queryable, NEVER actionable — no work surface (briefing, "
                "wall, pile, duty extraction) may present it as a ticket, and no resolver "
                "may close it: there is nothing to resolve.", ("reflection:",)),
+    ObjectType("Message", "Software", "#58a6ff", "round-rectangle",
+               "A fleet mail or DM — graphed inter-agent communication, the postal layer. "
+               "Messages carry sent_by/addressed_to/broadcast_to/replies_to edges and can "
+               "mentions decisions, threads, or agents for context-traversable conversations. "
+               "Monotonic: written once, never mutated, only settled (read + ack). "
+               "The fleet_messages table is the operational record; the Message object makes "
+               "mail traversable in the graph.",
+               ("message:",),
+               subtitle_field="grade"),
     ObjectType("Seat", "Software", "#ffd33d", "star",
                "A durable ROLE in a house — the fleet's addressable identity (the identity "
                "core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, "
@@ -295,6 +304,16 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("spawned_by", "Sub-agent was spawned by (delegated from) its direct parent agent "
              "— the fractal DELEGATION tree, distinct from acts_for (authority).",
              ("Agent",), ("Agent",)),
+    LinkType("sent_by", "Message was sent by an agent (provenance).",
+             ("Message",), ("Agent",)),
+    LinkType("addressed_to", "DM was addressed to this specific agent.",
+             ("Message",), ("Agent",)),
+    LinkType("broadcast_to", "Message was broadcast to a project channel.",
+             ("Message",), ("SoftwareProject",)),
+    LinkType("replies_to", "Message replies to an earlier message (reply chain).",
+             ("Message",), ("Message",)),
+    LinkType("in_thread", "Message belongs to a persistent work thread.",
+             ("Message",), ("Thread",)),
     LinkType("succeeded_from", "Minted heir → its ancestor (ruling be292762): a fresh context "
              "arriving across a succession seam or wearing a retired face is MINTED its own "
              "lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — "
@@ -371,8 +390,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Reference",), ("Reference",)),
     LinkType("informs", "This reference grounds / informs that artifact.",
              ("Reference",), ("SoftwareProject", "Commit")),
-    LinkType("mentions", "This document names that entity in its text (the doc joins the graph).",
-             ("Reference", "Commit"), ("Organization", "Person")),
+    LinkType("mentions", "This object names/references that entity — a decision, thread, "
+             "agent, or entity mentioned in text. For messages, this is the graphed "
+             "inter-agent communication primitive: an agent can literally edge a message "
+             "to a Decision or Thread node, making the conversation context-traversable.",
+             ("Reference", "Commit", "Message"),
+             ("Organization", "Person", "Decision", "Thread", "Agent")),
     LinkType("decided_in", "Decision was stated in this commit (the 'why', sourced).",
              ("Decision",), ("Commit",)),
     LinkType("supersedes", "This decision overrides/replaces an earlier one.",
