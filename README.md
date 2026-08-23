@@ -239,8 +239,3 @@ When an agent enters an Osiris workspace, it follows a structured 5-step ritual:
 8. **Build publicly** — Clean milestones, verifiable test suites, and strict secret/PII scanning before release.
 
 ---
-
-## 📄 License & Ethical Conduct
-
-Osiris is open-source software licensed under the [MIT License](LICENSE).  
-For guidelines on responsible use and keyless public entity collection, see [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md).
