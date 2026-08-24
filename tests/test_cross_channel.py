@@ -221,8 +221,23 @@ async def test_adoption_share_is_unknown_when_the_session_was_never_recovered(
 
 
 async def test_adoption_share_computes_the_real_split(actions: Actions) -> None:
+    # NOT _ASSISTANT_WITH_SEND (Thoth DM 5442 leg 1c): its shared module-level fixture
+    # carries a FIXED 2026-08-18 timestamp that other tests assert on literally — reused
+    # here it drifts stale as the session clock advances (default window_hours=24 in
+    # adoption_share started excluding it, silently undercounting harness_count 2 vs the
+    # expected 3; nothing to do with graphed mail, a plain fixture-date-rot bug). A local
+    # variant with the SAME to/summary/message but a live timestamp fixes it without
+    # touching the shared constant's other 8 dependent assertions.
+    recent_send = _line(
+        type="assistant", timestamp=datetime.now(UTC).isoformat(),
+        message={"content": [
+            {"type": "text", "text": "routing around it"},
+            {"type": "tool_use", "name": "SendMessage",
+             "input": {"to": "adbf9df793f4d1264", "summary": "resume",
+                       "message": "pick up here"}},
+        ]})
     await _seed_soul(actions, "anchorB1",
-                     [_ASSISTANT_WITH_SEND, _ASSISTANT_MALFORMED_SEND])
+                     [recent_send, _ASSISTANT_MALFORMED_SEND])
     # give the malformed one a real message too, via direct insert, to get 3 harness sends
     await actions.pool.execute(
         "INSERT INTO harness_messages (anchor_sid, turn_index, harness_to, message) "
@@ -233,5 +248,5 @@ async def test_adoption_share_computes_the_real_split(actions: Actions) -> None:
         "VALUES ('agent:x', 'osiris', 'one osiris send')")
     out = await adoption_share(actions.pool, from_agent="agent:x", anchor_sid="anchorB1")
     assert out["osiris_count"] == 1
-    assert out["harness_count"] == 3  # 2 direct-inserted + 1 recovered from _ASSISTANT_WITH_SEND
+    assert out["harness_count"] == 3  # 2 direct-inserted + 1 recovered from recent_send
     assert out["share"] == pytest.approx(0.25)

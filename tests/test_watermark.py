@@ -44,13 +44,25 @@ async def test_audit_log_moves_on_any_graph_write_through_actions(actions: Actio
     assert after["agent_wakes"] == before["agent_wakes"]
 
 
-async def test_fleet_messages_moves_on_new_mail_only(actions: Actions) -> None:
+async def test_fleet_messages_moves_and_audit_log_moves_too_since_mail_is_graph_resident(
+    actions: Actions,
+) -> None:
+    """6a1dd99 (Thoth DM 5442 leg 1b) made mail graph-resident: send_message now ALSO
+    writes a Message object + sent_by/addressed_to/broadcast_to/in_thread edges through
+    Actions, alongside the fleet_messages row — the same class of write
+    test_audit_log_moves_on_any_graph_write_through_actions above already proves moves
+    audit_log. `audit_log == before` was the true invariant back when sending mail was
+    pure mailbox-table I/O with no graph action at all; it stopped being true the moment
+    mail started writing through Actions, and staying green on the old assertion would
+    have meant either the graph write silently stopped happening or the test was no
+    longer testing what it claims to. agent_mounts/agent_wakes remain genuinely
+    untouched — no mount or wake logic sits anywhere on this path."""
     from src.orchestrator.mailbox import send_message
 
     # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
     # #117) -- seeded BEFORE the `before` snapshot, or the seed's own mount row would move
     # agent_mounts' watermark between before/after and break this test's own assertion that
-    # only fleet_messages moves.
+    # only fleet_messages/audit_log move.
     await save_mount(actions.pool, job_dir="/test/seed/osiris", agent_id="agent:seed-osiris",
                      project="osiris", cwd="/test", model=None, session_key=None, alive=False)
     before = await graph_watermark(actions.pool)
@@ -59,7 +71,8 @@ async def test_fleet_messages_moves_on_new_mail_only(actions: Actions) -> None:
     after = await graph_watermark(actions.pool)
     assert after["fleet_messages"] is not None
     assert after["fleet_messages"] != before["fleet_messages"]
-    assert after["audit_log"] == before["audit_log"]
+    assert after["audit_log"] is not None
+    assert after["audit_log"] != before["audit_log"]
     assert after["agent_mounts"] == before["agent_mounts"]
     assert after["agent_wakes"] == before["agent_wakes"]
 

@@ -3762,6 +3762,21 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # a SPAWN's mail goes out under its OWN name (the hook-stamped sidechain identity),
     # from the parent's project — the fleet must never mistake a child's word for the seat's
     actor = await _actor_for(ctx, subagent_id, subagent_type)
+    # THE READ-SIDE PRIOR-ART HOP (obligation a6198075) runs BEFORE send_message, not
+    # after (6a1dd99 fallout, Thoth DM 5442 leg 1a): since 6a1dd99 graphs every sent
+    # message as its own searchable Message object, searching AFTER the write let this
+    # call's own just-written body — a verbatim, single-field, perfect self-match —
+    # satisfy search()'s strict-AND lexical door trivially, which short-circuits the
+    # OR-relaxation ladder that is the actual mechanism finding a DIFFERENTLY-worded
+    # standing decision (record_decision's own prior-art call structurally avoids this
+    # because its query spans summary+rationale while the graph stores them as separate
+    # single-field assertions — no candidate row ever contains the literal union, so no
+    # accidental self-match). A message can never be its own prior art by definition —
+    # searching the graph as it stood BEFORE this write is both the fix and the more
+    # honest semantics.
+    prior: list[dict[str, Any]] = []
+    if grade == "ask" or to_agent:
+        prior = await _surface_prior_art(pool, body, repo=ident.project, actor=actor)
     try:
         res = await send_message(pool, from_agent=actor, from_project=ident.project,
                                  to_project=to, to_agent=to_agent, body=body, reply_to=reply_to,
@@ -3857,28 +3872,24 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             out["crossed"] = (f"{crossed} unread message(s) in THIS thread are already "
                               "waiting in your inbox — your note may have crossed theirs; "
                               "inbox() before assuming your view is current")
-    # THE READ-SIDE PRIOR-ART HOP (obligation a6198075): fires on a DM or an 'ask'-graded
-    # broadcast — the two shapes that cost a reader a turn if the graph already answered
-    # this. Skipped on a dedup hit (res["id"] then names an EXISTING message that may
-    # already carry its own prior_art from its original send; recomputing would waste the
-    # search and risks clobbering a real prior result with a fresh, possibly-empty one).
-    # `_surface_prior_art` is the SAME fail-open, 15s-bounded search record_decision runs
-    # at write time — a hit is a nudge on BOTH sides, never a refusal (577988ed).
-    if not res["dedup"] and (grade == "ask" or res["to_agent"]):
-        prior = await _surface_prior_art(pool, body, repo=ident.project, actor=actor)
-        if prior:
-            out["prior_art"] = prior
-            top = prior[0]
-            out["prior_art_flag"] = (
-                f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
-                "worth reading before dispatching/answering as if it's new")
-            try:
-                await pool.execute(
-                    "UPDATE fleet_messages SET prior_art=$1 WHERE id=$2", prior, res["id"])
-            except Exception:  # noqa: BLE001 — persistence for the READER's copy is a
-                                # bonus; the send already committed and the sender's own
-                                # receipt above already carries the hits regardless
-                pass
+    # Attach/persist the prior-art computed ABOVE, before the write — skipped on a dedup
+    # hit (res["id"] then names an EXISTING message that may already carry its own
+    # prior_art from its original send; overwriting risks clobbering a real prior result
+    # with this resend's own, possibly-empty, recomputation — moot anyway since we never
+    # searched for a dedup'd resend in the first place... but the gate stays explicit).
+    if prior and not res["dedup"]:
+        out["prior_art"] = prior
+        top = prior[0]
+        out["prior_art_flag"] = (
+            f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
+            "worth reading before dispatching/answering as if it's new")
+        try:
+            await pool.execute(
+                "UPDATE fleet_messages SET prior_art=$1 WHERE id=$2", prior, res["id"])
+        except Exception:  # noqa: BLE001 — persistence for the READER's copy is a
+                            # bonus; the send already committed and the sender's own
+                            # receipt above already carries the hits regardless
+            pass
     return out
 
 
