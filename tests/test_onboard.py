@@ -160,6 +160,20 @@ def test_spawn_installs_the_subagent_announcements(tmp_path: Path) -> None:
     assert changed is False
 
 
+def test_session_end_installs_the_release_hook(tmp_path: Path) -> None:
+    """--session-end wires SessionEnd to osiris_hook.py's own "session-end" subcommand
+    (dispatch 5441/5492 — onboard.py never had this flag at all before the gap was found
+    while flipping the live settings.json off the retired osiris_sessionend.py)."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, session_end=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    cmds = [h["command"] for g in settings["hooks"]["SessionEnd"] for h in g["hooks"]]
+    assert any(c.endswith("scripts/osiris_hook.py session-end") for c in cmds)
+    _, changed = merge_settings(settings, tmp_path, session_end=True)
+    assert changed is False
+
+
 def test_settings_merge_preserves_other_keys(tmp_path: Path) -> None:
     repo = tmp_path / "hassettings"
     (repo / ".claude").mkdir(parents=True)

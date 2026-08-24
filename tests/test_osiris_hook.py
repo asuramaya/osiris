@@ -8,6 +8,8 @@ Pure/no-DB throughout: `_post` is monkeypatched, never a real HTTP round trip.""
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,15 @@ from scripts.osiris_hook import (
     _fire_stage_a,
     _swap_confession,
 )
+
+_HOOK_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "osiris_hook.py"
+
+
+def _run_anchor(payload: dict[str, object], env: dict[str, str] | None = None) -> dict[str, object]:
+    out = subprocess.run([sys.executable, str(_HOOK_SCRIPT), "anchor"],
+                         input=json.dumps(payload), capture_output=True, text=True,
+                         check=False, env=env)
+    return dict(json.loads(out.stdout)) if out.stdout.strip() else {}
 
 
 def _write_transcript(path: Path, *entries: dict) -> None:
@@ -180,3 +191,406 @@ def test_fire_stage_a_posts_the_expected_shape(monkeypatch: Any) -> None:
     assert captured["data"]["pct"] == 42
     assert captured["data"]["payload"] == {"session_id": "x"}
     assert captured["url"] == osiris_hook._URLS["stop"]
+
+
+# --- _cmd_statusline: the chrome rendering (dispatch 5441/5492 parity fix — /heartbeat has
+# only ever returned raw counts, never a pre-rendered line; found live, the day of the flip,
+# that this was ENTIRELY missing and would have rendered a blank status bar) --------------
+
+def _heartbeat_result(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "briefs": 0, "mail": 0, "dm": 0, "flight": 0, "souls": 3, "wakes": 2,
+        "owed": 0, "owed_here": 0, "sick": [], "spend": [0.0, 0.0, 0],
+        "resolved_project": "osiris", "resolved_intent": "claude-sonnet-5",
+        "resolved_seat_handle": "Seshat",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result()})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    rc = osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"},
+        "session_id": "abcd1234",
+    })
+    assert rc == 0
+    assert len(out) >= 1
+    assert "Seshat" in out[0] and "osiris" in out[0]
+    assert "fleet 3●" in out[0]
+    assert "wakes 2/h" in out[0]
+    assert "mail 0" in out[0]
+    assert "owe 0" in out[0]
+
+
+def test_statusline_falls_back_to_graph_unreachable_on_route_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    rc = osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert rc == 0
+    assert "graph unreachable" in out[0]
+
+
+def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"result": _heartbeat_result(owed_here=3)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert "owe 3" in out[0]
+    assert osiris_hook._RED in out[0]
+
+
+def test_statusline_shows_a_dm_doorbell_even_with_zero_plain_mail(monkeypatch: Any) -> None:
+    """thread from the old script: `dm` must light the segment by itself — mail 0 + flight 0
+    + 7 DMs waiting must never render as a dim 'mail 0'."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"result": _heartbeat_result(dm=7)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert "✉7" in out[0]
+    assert f"{osiris_hook._DIM}mail 0{osiris_hook._RESET}" not in out[0]
+
+
+def test_statusline_model_matches_declared_intent_renders_green(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-sonnet-5")})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert len(out) == 2
+    assert f"{osiris_hook._GREEN}sonnet-5{osiris_hook._RESET}" in out[1]
+
+
+def test_statusline_model_mismatch_with_no_operator_swap_renders_red(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-opus-5")})
+    monkeypatch.setattr(osiris_hook, "_operator_swap", lambda t, s, m: False)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert "⚠ sonnet-5 (declared: opus-5)" in out[1]
+    assert osiris_hook._RED in out[1]
+
+
+def test_statusline_model_mismatch_confirmed_as_operator_choice_renders_amber(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-opus-5")})
+    monkeypatch.setattr(osiris_hook, "_operator_swap", lambda t, s, m: True)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert "your /model" in out[1]
+    assert osiris_hook._AMBER in out[1]
+
+
+def test_statusline_no_declared_intent_is_silent_not_an_alarm(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent=None)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"},
+        "context_window": {"used_percentage": 40}})
+    # only the ctx segment on the vitals line, no model warning at all
+    assert len(out) == 2
+    assert "sonnet-5" not in out[1]
+    assert "⚠" not in out[1]
+
+
+def test_statusline_ctx_pct_from_payload_colors_by_threshold(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result()})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"},
+        "context_window": {"used_percentage": 90, "context_window_size": 200000}})
+    assert f"{osiris_hook._RED}ctx 90%{osiris_hook._RESET}" in out[1]
+
+
+def test_operator_swap_reads_the_transcript_command_record(tmp_path: Any) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "user", "isSidechain": False,
+        "message": {"content": "<command-name>/model</command-name>"},
+    }) + "\n")
+    assert osiris_hook._operator_swap(str(t), "swapop01", "claude-opus-5") is True
+
+
+def test_operator_swap_false_with_no_command_in_transcript(tmp_path: Any) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({"type": "assistant", "message": {"content": "ok"}}) + "\n")
+    assert osiris_hook._operator_swap(str(t), "swapop02", "claude-opus-5") is False
+
+
+# --- render_whisper: ported verbatim from osiris_whisper.py (dispatch 5441/5492 parity
+# fix — /automount has only ever returned automount()'s own raw structured output, never a
+# rendered "intro"/"message" string; found live, the same day as the flip). Same test
+# suite tests/test_whisper.py already proved against the pre-port function. -------------
+
+def _whisper_base(**extra: Any) -> dict[str, Any]:
+    out = {"agent": "agent:abc12345", "project": "osiris", "model": "claude-sonnet-5",
+           "resolved": True, "mail": 0, "mail_asks": 0, "desk": 0, "seat": None, "thin": False,
+           "job_dir": "/home/asuramaya/.claude/jobs/abc12345"}
+    out.update(extra)
+    return out
+
+
+def test_render_whisper_inlines_the_fold_with_top_obligations() -> None:
+    out = _whisper_base(obligations=[
+        {"id": "12a58447", "summary": "HANDOFF — Thoth L to LI", "kind": "obligation"},
+        {"id": "9dc3ce8b", "summary": "READ-SIDE ADOPTION OF THE VISIT CLASS"},
+    ])
+    text = osiris_hook.render_whisper(out, cwd="/home/asuramaya/.osiris/seats/seshat", env_job="")
+    assert "Top of your project's wall" in text
+    assert "[12a58447] HANDOFF — Thoth L to LI" in text
+    assert "orient() for the rest" in text
+
+
+def test_render_whisper_no_obligations_means_no_wall_line() -> None:
+    text = osiris_hook.render_whisper(_whisper_base(), cwd="/x", env_job="")
+    assert "Top of your project's wall" not in text
+
+
+def test_render_whisper_hedges_an_unconfirmed_swap() -> None:
+    out = _whisper_base(swap="claude-fable-5 → claude-haiku-4-5")
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "Possible model seam" in text and "unconfirmed" in text
+
+
+def test_render_whisper_speaks_plainly_on_a_witnessed_operator_swap() -> None:
+    out = _whisper_base(swap="claude-fable-5 → claude-opus-4-8 [operator /model]")
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "the OPERATOR's own deliberate choice" in text
+    assert "Possible model seam" not in text
+
+
+def test_render_whisper_succession_pointer_by_query() -> None:
+    out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii", succession={
+        "thread_id": "12a58447", "thread_summary": "HANDOFF — Thoth L to LI"})
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "MINTED as this lineage's successor" in text
+    assert "[12a58447] HANDOFF — Thoth L to LI" in text
+
+
+def test_render_whisper_succession_falls_back_with_no_query_result() -> None:
+    out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii")
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "read orient()'s open threads for the succession note" in text
+
+
+def test_render_whisper_identity_anchor_unconditional_no_mint_needed() -> None:
+    out = _whisper_base(identity_anchor={
+        "charter_file": "/home/asuramaya/.osiris/seats/thoth/charter.md"})
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "MINTED" not in text
+    assert "your charter file is /home/asuramaya/.osiris/seats/thoth/charter.md" in text
+
+
+def test_render_whisper_already_mounted_when_env_matches_anchor() -> None:
+    out = _whisper_base(job_dir="/home/asuramaya/.claude/jobs/abc12345")
+    text = osiris_hook.render_whisper(
+        out, cwd="/x", env_job="/home/asuramaya/.claude/jobs/abc12345")
+    assert "ALREADY MOUNTED" in text
+
+
+def test_render_whisper_mail_count_names_asks() -> None:
+    out = _whisper_base(mail=3, mail_asks=1)
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "3 unread fleet messages" in text
+    # ported verbatim, pre-existing pluralization quirk and all (osiris_whisper.py's own
+    # `'s' if asks == 1 else ''` is inverted from what "asks == 1" suggests) — out of scope
+    # for this parity fix to silently correct.
+    assert "1 asks something of you" in text
+
+
+def test_render_whisper_anonymous_offers_the_claim() -> None:
+    text = osiris_hook.render_whisper(_whisper_base(seat=None), cwd="/x", env_job="")
+    assert "You are ANONYMOUS" in text
+
+
+def test_render_whisper_named_seat_names_the_dm_address() -> None:
+    out = _whisper_base(seat="Seshat XXXVIII")
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "You answer to the name Seshat XXXVIII" in text
+    assert "send(to_agent='Seshat')" in text
+
+
+# --- _cmd_whisper: the request body must carry the env-derived attach/bridge/spawn fields
+# the harness's own stdin JSON never provides (found live, the SAME day as the flip — a
+# structural continuity gap, not merely a missing banner) ------------------------------
+
+def test_cmd_whisper_carries_the_attach_ceremony_env_vars(monkeypatch: Any) -> None:
+    monkeypatch.setenv("OSIRIS_SEAT_ID", "seat:abc123")
+    monkeypatch.setenv("OSIRIS_ATTACH_TOKEN", "tok-xyz")
+    monkeypatch.setenv("OSIRIS_SPAWNED_BY", "agent:parent001")
+    monkeypatch.setenv("OSIRIS_SPAWN_TYPE", "subagent")
+    monkeypatch.setenv("CLAUDE_CODE_BRIDGE_SESSION_ID", "bridge-001")
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any]:
+        captured.update(data)
+        return {"agent": "agent:x", "seat": None, "mail": 0}
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="": None)
+    osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
+    assert captured["seat_id"] == "seat:abc123"
+    assert captured["attach_token"] == "tok-xyz"
+    assert captured["spawned_by"] == "agent:parent001"
+    assert captured["spawn_type"] == "subagent"
+    assert captured["bridge_session_id"] == "bridge-001"
+
+
+def test_cmd_whisper_no_session_id_or_cwd_is_a_clean_noop(monkeypatch: Any) -> None:
+    def _unreachable(*a: Any, **k: Any) -> None:
+        raise AssertionError("must never POST with no session_id/cwd")
+
+    monkeypatch.setattr(osiris_hook, "_post", _unreachable)
+    assert osiris_hook._cmd_whisper({}) == 0
+
+
+def test_cmd_whisper_prints_the_rendered_banner(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"agent": "agent:x", "seat": None, "mail": 0,
+                                      "job_dir": "/j/x"})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    rc = osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
+    assert rc == 0
+    assert len(out) == 1
+    assert "◈ OSIRIS" in out[0]
+
+
+def test_cmd_whisper_route_unreachable_prints_the_manual_hint(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
+    assert "unreachable" in out[0]
+    assert "mount(cwd='/repo')" in out[0]
+
+
+# --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------
+# The stub that shipped at the hook migration only stamped a raw session_id onto EVERY
+# osiris call, ungated, and echoed the whole hook payload back in the WRONG envelope (no
+# hookSpecificOutput wrapper) — meaning even that stamp would never have reached a real
+# tool call. Ported verbatim from osiris_mount_anchor.py: job_dir derivation, ANCHOR_AWARE/
+# SPAWN_AWARE gating, the MAIN-session strip, and the CLAUDE_CODE_BRIDGE_SESSION_ID door —
+# an OS-environment read the stub dropped entirely, the same CHANNEL-class gap already found
+# in whisper and statusline.
+
+def test_anchor_the_hook_and_the_SERVER_stay_in_lockstep() -> None:
+    import inspect
+
+    import src.mcp_server as srv
+    from scripts.osiris_hook import _ANCHOR_AWARE
+
+    for name in sorted(_ANCHOR_AWARE):
+        fn = getattr(srv, name.removeprefix("mcp__osiris__"), None)
+        assert fn is not None, f"{name} is stamped by the hook but does not exist on the server"
+        assert "session_anchor" in inspect.signature(fn).parameters, (
+            f"{name} is in _ANCHOR_AWARE but its signature does not accept `session_anchor`")
+
+
+def test_anchor_SPAWN_AWARE_stays_in_lockstep_with_the_server() -> None:
+    import inspect
+
+    import src.mcp_server as srv
+    from scripts.osiris_hook import _SPAWN_AWARE
+
+    for name in sorted(_SPAWN_AWARE):
+        fn = getattr(srv, name.removeprefix("mcp__osiris__"), None)
+        assert fn is not None, f"{name} is stamped by the hook but does not exist on the server"
+        assert "subagent_id" in inspect.signature(fn).parameters, (
+            f"{name} is in _SPAWN_AWARE but its signature does not accept `subagent_id`")
+
+
+def test_anchor_rides_every_call_not_only_mount() -> None:
+    for tool in ("inbox", "send", "orient", "record_decision", "open_thread", "resolve_thread"):
+        out = _run_anchor({"tool_name": f"mcp__osiris__{tool}",
+                           "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                           "tool_input": {}})
+        anchor = out["hookSpecificOutput"]["updatedInput"]["session_anchor"]  # type: ignore[index]
+        assert str(anchor).endswith("/jobs/513aa520"), f"{tool} rode without its anchor"
+
+
+def test_anchor_a_spawn_never_gets_a_seat_anchor() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__open_thread",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "agent_id": "agent-abc", "agent_type": "Explore",
+                       "tool_input": {}})
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert "session_anchor" not in ti
+    assert ti["subagent_id"] == "agent-abc"  # type: ignore[index]
+
+
+def test_anchor_main_session_strips_a_stale_spawn_stamp() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__open_thread",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "tool_input": {"subagent_id": "agent-stale"}})
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert "subagent_id" not in ti
+
+
+def test_anchor_an_agents_own_anchor_is_never_overwritten() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__orient",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "tool_input": {"session_anchor": "/home/x/.claude/jobs/deadbeef"}})
+    if out:
+        ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+        assert ti["session_anchor"] == "/home/x/.claude/jobs/deadbeef"  # type: ignore[index]
+
+
+def test_anchor_mount_gets_transcript_path_and_bridge_id_stamped(monkeypatch: Any) -> None:
+    import os as _os
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_BRIDGE_SESSION_ID"] = "bridge-xyz"
+    out = _run_anchor({"tool_name": "mcp__osiris__mount",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "transcript_path": "/home/x/.claude/projects/p/other-sid.jsonl",
+                       "tool_input": {}}, env=env)
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert ti["transcript_path"] == "/home/x/.claude/projects/p/other-sid.jsonl"
+    assert ti["bridge_session_id"] == "bridge-xyz"
+
+
+def test_anchor_a_non_osiris_tool_is_never_touched() -> None:
+    assert _run_anchor({"tool_name": "Bash", "session_id": "513aa520-aaaa",
+                        "tool_input": {"command": "ls"}}) == {}
+
+
+def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() -> None:
+    """The stub this fix replaces echoed the WHOLE hook payload unconditionally, in a shape
+    the harness's PreToolUse contract does not recognize — no `hookSpecificOutput.updatedInput`
+    means the harness never applies the edit at all, silently. Unchanged input must print
+    NOTHING (the harness leaves the call alone), never a no-op envelope."""
+    import os as _os
+
+    env = dict(_os.environ)
+    env.pop("CLAUDE_CODE_BRIDGE_SESSION_ID", None)  # this session's own env must not leak in
+    out = subprocess.run([sys.executable, str(_HOOK_SCRIPT), "anchor"],
+                         input=json.dumps({"tool_name": "mcp__osiris__mount",
+                                          "session_id": "",
+                                          "tool_input": {}}),
+                         capture_output=True, text=True, check=False, env=env)
+    assert out.stdout.strip() == ""
