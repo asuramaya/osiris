@@ -413,6 +413,10 @@ async def find_session_row(
     # keeps paying for. Function-local because handshake/sessions both import mounts —
     # module-level would be circular; sessions' own import of mounts is function-local too.
     from src.ingest.sessions import _UUID_RE
+    # _UUID_RE is REUSED, never re-declared: sessions.py:301 and handshake.py:185 each
+    # already carry a copy and a third would be the second-implementation class. Function-
+    # local because both of those import mounts — module-level would be circular.
+    from src.ingest.sessions import _UUID_RE
     dsh_uuid = None
     if sid.startswith("session-") and len(sid) == len("session-") + 36:
         dsh_uuid = sid[len("session-"):]
