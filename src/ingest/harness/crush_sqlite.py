@@ -118,7 +118,16 @@ class CrushSqliteAdapter:
         """Every Crush session across every known project — the miner's backfill sweep.
 
         Walks projects.json for known cwds, plus ~/.osiris/seats/*/.crush/ (seat offices).
-        Each crush.db holds many sessions; yield one locator per session."""
+        Each crush.db holds many sessions; yield one locator per session.
+
+        COMPLETENESS (HarnessAdapter's own contract): NOT complete against every crush.db
+        that may exist on disk — only those reachable via projects.json's own registry
+        plus the fixed seat-office path. A crush.db for a workspace never registered
+        there (or registered somewhere this walk doesn't look) is invisible to this
+        enumerate(), silently — the same class of gap DSH's own walk had, here structural
+        rather than a bug to fix, since there is no other on-disk index to walk instead.
+        This adapter also carries no test of its own (2026-08-24) — worth knowing before
+        leaning on either its discovery or its completeness."""
         # 1. projects.json-registered cwds (either shape — see _project_entries)
         seen_dbs: set[str] = set()
         for entry in _project_entries():

@@ -47,11 +47,20 @@ _REMINDER_RE = re.compile(
 
 def _cwd_to_slug(cwd: str) -> str:
     """Convert a cwd path to DSH's slug convention.
-    /home/user/code/project -> --home-user-code-project"""
+    /home/user/code/project -> --home-user-code-project--
+
+    THE TRAILING '--' IS A TERMINATOR, NOT DECORATION — found live, mid-build
+    (2026-08-24): every real slug directory on this box carries it (verified against
+    all 6 live slugs' own recorded session `cwd`), and without it `discover()` computed
+    a slug that matched NO real directory — silently returning None for every single
+    current workspace, not a narrowed result but a total miss. A leading '--' alone
+    can't unambiguously mark where path segments end when a directory name itself
+    contains dashes (dsh-deepseek-harness); the trailing sentinel resolves that the
+    same way the leading one does."""
     parts = Path(cwd).parts
     if parts and parts[0] == "/":
         parts = parts[1:]
-    return "--" + "-".join(parts)
+    return "--" + "-".join(parts) + "--"
 
 
 def _session_id_from_dir(slug: str) -> str:
@@ -61,7 +70,9 @@ def _session_id_from_dir(slug: str) -> str:
 
 
 def _session_file_in(session_dir: Path) -> Path | None:
-    """Find the zstd-compressed JSONL file inside a session directory."""
+    """Find the zstd-compressed JSONL file directly inside `session_dir` — ONE level
+    only, no recursion. Callers that need to walk a slug dir's own nested session-<uuid>/
+    subdirectories use `_iter_session_files`, not this."""
     if not session_dir.is_dir():
         return None
     for f in session_dir.iterdir():
@@ -70,15 +81,49 @@ def _session_file_in(session_dir: Path) -> Path | None:
     return None
 
 
+def _iter_session_files(slug_dir: Path) -> Iterator[Path]:
+    """Every session file under a workspace slug directory — BOTH layouts DSH has used:
+    the OLD one (the slug dir directly holds the .zstd, one session per slug — what
+    `_session_file_in` alone used to assume was the only shape) and the CURRENT one (the
+    slug dir holds one or more `session-<uuid>/` subdirectories, one .zstd each, because a
+    workspace can now carry more than one DSH session over its lifetime). Discovered live:
+    a session found under EVERY slug on this box mid-build (2026-08-24) turned out to sit
+    one level deeper than `_session_file_in(slug_dir)` alone ever looked, so both
+    `discover()` and `enumerate()` were silently seeing zero or a stale subset — not a
+    hypothetical, the actual on-disk shape moved between two runs of the SAME script in
+    the same session (DSH is live infrastructure, not a fixed layout to assume once)."""
+    direct = _session_file_in(slug_dir)
+    if direct is not None:
+        yield direct
+    for child in sorted(slug_dir.iterdir()):
+        if child.is_dir():
+            nested = _session_file_in(child)
+            if nested is not None:
+                yield nested
+
+
 def _find_slug_for(cwd: str) -> str | None:
     """Find the DSH session slug matching a given cwd, or the most recent one."""
     if not _DSH_SESSIONS.is_dir():
         return None
     expected = _cwd_to_slug(cwd)
     slug_dir = _DSH_SESSIONS / expected
-    if slug_dir.is_dir() and _session_file_in(slug_dir) is not None:
+    if slug_dir.is_dir() and next(_iter_session_files(slug_dir), None) is not None:
         return expected
     return None
+
+
+def _newest_session_file(slug_dir: Path) -> Path | None:
+    """The most-recently-modified session file under a slug dir — `discover()`'s own
+    "which one is THIS session" tiebreak when a workspace carries more than one (a
+    finished session plus a fresh one, both nested under the same slug). Same
+    hottest/newest heuristic this module's own docstring already names for the no-jid
+    fallback case; a workspace slug is coarser than a session id, so ambiguity here is
+    expected, not a bug to eliminate."""
+    files = list(_iter_session_files(slug_dir))
+    if not files:
+        return None
+    return max(files, key=lambda f: f.stat().st_mtime)
 
 
 def _decompress(path: Path) -> list[str] | None:
@@ -134,7 +179,7 @@ class DshSessionAdapter:
         if slug is None:
             return None
         slug_dir = _DSH_SESSIONS / slug
-        session_file = _session_file_in(slug_dir)
+        session_file = _newest_session_file(slug_dir)
         if session_file is None:
             return None
         lines = _decompress(session_file)
@@ -193,40 +238,42 @@ class DshSessionAdapter:
         )
 
     def enumerate(self, *, root: Path | None = None) -> Iterator[SessionLocator]:
-        """Yield every DSH session on disk."""
+        """Yield every DSH session on disk — BEST-EFFORT COMPLETE, not guaranteed: a
+        slug dir this box has never seen `_iter_session_files` handle a new nesting
+        shape for again would silently drop that slug's sessions, same class of gap
+        that made this walk under-count in the first place. See HarnessAdapter's own
+        docstring for what "complete" means across adapters."""
         sessions_dir = Path(root) if root else _DSH_SESSIONS
         if not sessions_dir.is_dir():
             return
-        for slug_dir in sessions_dir.iterdir():
+        for slug_dir in sorted(sessions_dir.iterdir()):
             if not slug_dir.is_dir():
                 continue
-            session_file = _session_file_in(slug_dir)
-            if session_file is None:
-                continue
-            lines = _decompress(session_file)
-            if not lines:
-                continue
-            session_id: str | None = None
-            cwd: str | None = None
-            for line in lines[:5]:
-                try:
-                    d = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
+            for session_file in _iter_session_files(slug_dir):
+                lines = _decompress(session_file)
+                if not lines:
                     continue
-                if d.get("type") == "session":
-                    session_id = d.get("id")
-                    cwd = d.get("cwd")
-                    break
-            if not session_id:
-                continue
-            yield SessionLocator(
-                anchor_sid=_session_id_from_dir(session_id)[:8],
-                session_id=session_id,
-                harness=self.name,
-                source_path=str(session_file),
-                cwd=cwd,
-                project=Path(cwd).name if cwd else None,
-            )
+                session_id: str | None = None
+                cwd: str | None = None
+                for line in lines[:5]:
+                    try:
+                        d = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if d.get("type") == "session":
+                        session_id = d.get("id")
+                        cwd = d.get("cwd")
+                        break
+                if not session_id:
+                    continue
+                yield SessionLocator(
+                    anchor_sid=_session_id_from_dir(session_id)[:8],
+                    session_id=session_id,
+                    harness=self.name,
+                    source_path=str(session_file),
+                    cwd=cwd,
+                    project=Path(cwd).name if cwd else None,
+                )
 
     def read_turns(
         self, locator: SessionLocator, *, since_idx: int = 0,

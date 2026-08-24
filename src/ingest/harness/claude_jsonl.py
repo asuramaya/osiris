@@ -142,7 +142,12 @@ class ClaudeJsonlAdapter:
         Walks ~/.claude/projects/*/*.jsonl. Each parent dir is a project (the cwd with
         slashes dashed); each file is a session. Skips the osiris-extract sidechains
         (those are the miner's OWN extractions, not real sessions — ingesting them would
-        double-count)."""
+        double-count).
+
+        COMPLETENESS (HarnessAdapter's own contract): complete relative to a FLAT,
+        one-file-per-session layout under `base` — Claude Code has not been observed to
+        nest sessions the way DSH now does, and this walk does not assume it never will;
+        it only promises what a flat `iterdir()` can see today."""
         base = (root or (Path.home() / ".claude" / "projects")).expanduser()
         if not base.is_dir():
             return

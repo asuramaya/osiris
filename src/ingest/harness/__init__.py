@@ -112,9 +112,23 @@ class HarnessAdapter(Protocol):
     discover(): given a cwd and/or job_dir, find THIS session's record on disk. Returns
     None when this adapter doesn't recognize the session (try the next adapter). read_turns():
     stream turns from the record, optionally skipping already-ingested ones (since_idx).
-    enumerate(): yield ALL sessions this harness knows about on disk (for the miner's
-    backfill — "Osiris eats transcripts" as a periodic sweep, not just mount-time). Adapters
-    that can't enumerate (a harness with no on-disk discovery surface) yield nothing.
+    enumerate(): yield every session this harness's OWN discovery surface can currently
+    see (for the miner's backfill — "Osiris eats transcripts" as a periodic sweep, not
+    just mount-time). Adapters that can't enumerate at all (a harness with no on-disk
+    discovery surface) yield nothing.
+
+    THE COMPLETENESS CONTRACT, STATED NOT ASSUMED (found live, 2026-08-24: DshSessionAdapter's
+    enumerate() silently under-counted for months because "yield ALL sessions" read as a
+    promise nothing here ever verified): enumerate() is BEST-EFFORT against whatever
+    on-disk layout the adapter was last written to understand — it is NOT a guarantee that
+    every session the harness has ever run exists in the result. A harness whose storage
+    layout drifts (DSH's own move from one .zstd per project slug to nested
+    session-<uuid>/ subdirectories, discovered by walking the SAME code against the SAME
+    directory twice in one sitting and getting two different answers) can silently make a
+    "complete" enumerate() partial without any code change on Osiris's side at all. Each
+    adapter's own enumerate() docstring states what it actually promises for ITS harness —
+    read that before treating a caller's zero or a caller's N as ground truth; a caller
+    that needs a completeness guarantee has none available from this Protocol alone.
 
     Both discover/read_turns are SYNC — they do disk IO (read a file, open a SQLite DB),
     not network or DB. enumerate() is also sync for the same reason."""
