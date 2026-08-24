@@ -656,6 +656,32 @@ async def phantom_heal_heartbeat(ctx: dict[str, Any]) -> int:
     return len(folded)
 
 
+async def phantom_fold_reap_heartbeat(ctx: dict[str, Any]) -> int:
+    """The phantom/fold backlog reap's scheduled leg (dispatch #185 item (e), ruling
+    696d302c, Thoth DM 5464) — a no-op unless osiris_phantom_fold_reap_enabled (the kill
+    switch), same shape as fleet_reconcile_heartbeat/phantom_heal_heartbeat: the flag gate
+    lives here, the acting logic (phantom_fold_scheduled_tick) lives in
+    phantom_fold_reap.py so a test can exercise it directly without touching arq.
+    Reinstates a false_mint generation only when registry_census independently confirms a
+    live body; invalidates a duplicate works_in edge only when exactly one live target is
+    a dead SoftwareProject. A DB hiccup logs, never sinks the cron."""
+    from src.config.settings import get_settings
+    from src.orchestrator.phantom_fold_reap import phantom_fold_scheduled_tick
+
+    if not get_settings().osiris_phantom_fold_reap_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await phantom_fold_scheduled_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("phantom fold reap heartbeat failed: %r", exc)
+        return 0
+    acted = len(report.get("reinstated") or []) + len(report.get("invalidated") or [])
+    if acted:
+        _log.info("phantom fold reap heartbeat: %s", report)
+    return acted
+
+
 async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     """The closure miner's scheduled leg (Thoth DM 2679, following the deploy that made
     this defensible) — same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
@@ -895,6 +921,13 @@ class WorkerSettings:
         # contend for CPU at the same wall-clock second.
         cron(watched(tree_ingest_alarm_heartbeat, every=900), minute={1, 16, 31, 46},
              second={15}, timeout=600, run_at_startup=True),
+        # the phantom/fold backlog reap (dispatch #185 item (e), ruling 696d302c): reinstate
+        # a mis-folded live generation or clean a dead-project works_in duplicate, on the
+        # same 15-min cadence class as its five siblings above — a no-op unless
+        # osiris_phantom_fold_reap_enabled (the kill switch). Offset from all five so none
+        # contend for CPU at the same wall-clock second.
+        cron(watched(phantom_fold_reap_heartbeat, every=900), minute={7, 22, 37, 52},
+             second={20}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
