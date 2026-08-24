@@ -84,15 +84,11 @@ def test_discover_finds_a_nested_session_for_a_matching_cwd(tmp_path: Path) -> N
         / "session.jsonl.zstd",
         session_id="session-dddddddd-0000-0000-0000-000000000000",
         cwd="/home/user/code/proj")
-    # discover() doesn't take `root` for the sessions dir (it always resolves via the
-    # module-level _DSH_SESSIONS) — patch that constant for this one call.
-    import src.ingest.harness.dsh as dsh_mod
-    original = dsh_mod._DSH_SESSIONS
-    dsh_mod._DSH_SESSIONS = root
-    try:
-        loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None)
-    finally:
-        dsh_mod._DSH_SESSIONS = original
+    # discover() resolves the sessions root at CALL time (`_dsh_sessions()`, never the
+    # frozen-at-import `_DSH_SESSIONS` module constant — a test's tmp HOME must not be
+    # baked in) — its own `root=` param is the seam, same shape enumerate()'s already
+    # has.
+    loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None, root=root)
     assert loc is not None
     assert loc.anchor_sid == "dddddddd"
 
@@ -114,12 +110,6 @@ def test_discover_picks_the_most_recently_modified_session_when_a_slug_has_sever
                    cwd="/home/user/code/proj")
     assert os.stat(newer).st_mtime >= os.stat(older).st_mtime
 
-    import src.ingest.harness.dsh as dsh_mod
-    original = dsh_mod._DSH_SESSIONS
-    dsh_mod._DSH_SESSIONS = root
-    try:
-        loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None)
-    finally:
-        dsh_mod._DSH_SESSIONS = original
+    loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None, root=root)
     assert loc is not None
     assert loc.anchor_sid == "ffffffff"

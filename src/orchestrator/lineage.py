@@ -80,10 +80,9 @@ def _root_agent_id(session_uuid: str) -> str:
 
 
 def _project_of(session_dir: Path) -> str | None:
-    """The project name from the transcript dir: ~/.claude/projects/<-cwd-as-dashes>/<session>.
-    The grandparent dir is the cwd with slashes→dashes; its last segment is the repo name."""
-    parts = [p for p in session_dir.parent.name.split("-") if p]
-    return parts[-1] if parts else None
+    """The project name from the transcript dir: ~/.claude/projects/<-cwd-as-dashes>/<session>."""
+    from src.ingest.harness.claude_jsonl import decode_claude_project_name
+    return decode_claude_project_name(session_dir.parent.name) or None
 
 
 def scan_subagents(session_dir: Path) -> list[SubAgent]:

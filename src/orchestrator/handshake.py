@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,21 @@ async def office_claim(
     return await office_seat(actions, cwd=cwd, office_root=office_root)
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _sid8(session_id: str) -> str:
+    """The 8-char anchor a session id keys on — `session-<uuid>` (DSH depth-0) folds
+    to the uuid's first 8, every other shape (DSH bare-uuid subagent ids included)
+    keeps its own first 8. The ledger and the self-evident lanes MUST agree on this
+    grammar: a raw DSH depth-0 id truncated to 8 is `session-` for EVERY session on
+    the box, one colliding key for them all."""
+    sid = (session_id or "").strip().lower()
+    if sid.startswith("session-") and len(sid) == len("session-") + 36:
+        return sid[len("session-"):][:8]
+    return sid[:8]
+
+
 async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
     """THE SESSION LEDGER, read side (16e3cee9): a sid, once bound to a soul, is a GRAPH
     fact — the registry row was the only witness of jobs/a7e60257's owner, so one wrong
@@ -198,8 +214,8 @@ async def ledger_seat(actions: Actions, *, sid_prefix: str) -> str | None:
     owner = await actions.pool.fetchval(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name = 'anchor_sid:' || left($1, 8) "
-        "ORDER BY a.observed_at DESC LIMIT 1", sid)
+        "WHERE a.name = 'anchor_sid:' || $1 "
+        "ORDER BY a.observed_at DESC LIMIT 1", _sid8(sid))
     if owner is None:
         return None
     base = _generation(str(owner))[0]
@@ -322,12 +338,13 @@ async def record_session_anchor(
     sid = (session_id or "").strip().lower()
     if len(sid) < 8:
         return False
-    if _generation(agent_id)[0] == f"agent:{sid[:8]}":
+    sid8 = _sid8(sid)
+    if _generation(agent_id)[0] == f"agent:{sid8}":
         return False          # sid-derived identity: the sid already testifies to itself
     exists = await actions.pool.fetchval(
         "SELECT 1 FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
-        "WHERE a.name = 'anchor_sid:' || left($1, 8) LIMIT 1", sid)
+        "WHERE a.name = 'anchor_sid:' || $1 LIMIT 1", sid8)
     if exists:
         return False
     obj = await actions.pool.fetchval(
@@ -335,7 +352,7 @@ async def record_session_anchor(
         agent_id)
     if obj is None:
         return False
-    await actions.assert_property(obj, f"anchor_sid:{sid[:8]}", sid, actor,
+    await actions.assert_property(obj, f"anchor_sid:{sid8}", sid, actor,
                                   datetime.now(UTC), 0.9,
                                   evidence_class="direct_observation")
     return True
@@ -381,11 +398,37 @@ async def file_office_deed(
 
 
 def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | None:
-    """~/.claude/jobs/<first 8 of the session id> — the harness's scheme (verified against
-    live job dirs). None when the id is too short to trust. `jobs_home` is a test seam."""
+    """The durable anchor dir for a harness session id — TWO harness grammars:
+
+    · Claude Code: `~/.claude/jobs/<sid[:8]>` (the harness's own scheme, verified
+      against live job dirs).
+    · DSH: `~/.dsh/sessions/<slug>/<session>` — a session id is globally unique
+      (depth-0 ids carry a `session-` prefix, spawned subagent ids are a bare uuid,
+      verified live 2026-08-23), so one glob under ~/.dsh/sessions finds the exact
+      dir with no cwd needed (the slug is unguessable from the id alone; the glob
+      is the derivation). This is what let a DSH automount mount NOTHING for two
+      days: the whisper posted a real session id and the only grammar here folded
+      it into a claude-jobs path that never existed.
+
+    A BARE uuid is ambiguous between DSH (subagent session) and Claude — the disk
+    decides: the DSH glob runs FIRST and a hit wins; a miss falls through to the
+    claude lane (a claude sid genuinely has no DSH dir).
+
+    None when the id is too short to trust. `jobs_home` is a test seam (Claude lane)."""
     sid = (session_id or "").strip().lower()
     if len(sid) < 8:
         return None
+    dsh_shaped = sid.startswith("session-") and len(sid) == len("session-") + 36
+    bare_uuid = len(sid) == 36 and _UUID_RE.match(sid) is not None
+    if dsh_shaped or bare_uuid:
+        dsh_root = Path.home() / ".dsh" / "sessions"
+        if dsh_root.is_dir():
+            hits = sorted(dsh_root.glob(f"*/{sid}"))
+            if hits:
+                return str(hits[0])
+        if dsh_shaped:
+            return None  # a DSH-prefixed id with no dir on disk: no claude-lane
+            # fallback, that would mint an anchor for a session that never ran here
     return str((jobs_home or Path.home() / ".claude" / "jobs") / sid[:8])
 
 
@@ -411,7 +454,7 @@ async def automount(
     seat_id: str | None = None, attach_token: str | None = None,
     transcript_path: str | None = None, office_root: Path | None = None,
     spawned_by: str | None = None, spawn_type: str | None = None,
-    bridge_session_id: str | None = None,
+    bridge_session_id: str | None = None, job_dir: str | None = None,
 ) -> dict[str, Any]:
     """Mount a just-started session and return its whisper payload. Identical semantics to
     the mount() tool (same resolution, same registration, same durable row — idempotent on
@@ -440,7 +483,10 @@ async def automount(
     # the greet ledger (the resume race): stamp BEFORE any slow work, so a SessionEnd
     # racing this greeting sees the stamp however the awaits interleave
     mounts.note_greeting(session_id)
-    job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
+    # THE EXPLICIT ANCHOR (the DSH bridge's door): a harness plugin that KNOWS its own
+    # session dir passes it outright — no derivation, no glob. This outranks the
+    # derived anchor exactly the way mount(job_dir=...) outranks a cwd guess.
+    job_dir = job_dir or _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
     bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
     # THE FORK (7cbc2f98): no row for this anchor does NOT mean a new mind. `--fork-session
@@ -622,7 +668,7 @@ async def automount(
         # a VIEW's row is marked as one (view-of:<the viewed session's sid8>) so every
         # renderer can rank it below the session's own rows — the alias is never the witness
         skey = (f"view-of:{Path(transcript_path or '').name[:8]}" if viewed
-                else f"whisper:{session_id[:8]}")
+                else f"whisper:{_sid8(session_id)}")
         prev = await mounts.save_mount(
             actions.pool, job_dir=job_dir, agent_id=ident.agent_id, project=ident.project,
             cwd=cwd, model=ident.model, session_key=skey, alive=False)
@@ -934,6 +980,7 @@ async def automount(
 
 async def session_end(
     actions: Actions, *, session_id: str, jobs_home: Path | None = None,
+    job_dir: str | None = None,
 ) -> dict[str, Any]:
     """SessionEnd's server half — the ghost-seat fix (heinrich's filing, thread 1fe6811c): Stop
     fires PER-TURN and cannot mean "closed"; SessionEnd is the harness's actual close signal.
@@ -983,7 +1030,7 @@ async def session_end(
                 "note": "a greeting for this session landed within the grace — the end "
                         "yields to the resume (the sweep reaps the door if the window "
                         "is truly gone)"}
-    job_dir = _derive_job_dir(session_id, jobs_home=jobs_home)
+    job_dir = job_dir or _derive_job_dir(session_id, jobs_home=jobs_home)
     if job_dir is None:
         return {"released": 0, "note": "session id too short to derive an anchor"}
     row = await mounts.find_mount(actions.pool, job_dir=job_dir)
