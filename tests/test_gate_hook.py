@@ -14,13 +14,17 @@ from scripts.gate_hook import (
     _is_merge_context,
     _is_receipt_shaped,
     _module_imports,
+    _module_level_import_names,
+    _own_scope_local_imports,
     _pytest_sole_failure_is_ratchet_ceiling,
+    _reads_name_before,
     _status_word,
     classify_test_files,
     cmd_precommit,
     receipt_shaped_touches,
     resolve_test_files,
     run_gates,
+    shadow_before_use_violations,
 )
 
 
@@ -984,3 +988,173 @@ def test_main_a_real_gate_failure_still_refuses_normally(monkeypatch: Any) -> No
 
     monkeypatch.setattr(get_settings(), "osiris_gate_hook_enforce", True)
     assert gate_hook.main([]) == 1
+
+
+# ═══════════ THE SHADOWED-IMPORT LINT (dispatch 5441 LEG 4, ruling 2f7e1588) ══════════
+# The discriminator is EXECUTION ORDER, never mere shadow presence — a fleet-wide audit
+# found 19 candidate shadows and exactly ONE real bug (mailbox.py's send_message: a nested
+# `_stamp_threads` closure read `datetime`/`UTC` before a redundant later local import of
+# the same names ran, an UnboundLocalError/NameError on every real call). This lint is
+# built on that discriminator, not on the audit's own over-broad first heuristic.
+
+def test_module_level_import_names_collects_both_import_forms(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("import os\nfrom datetime import UTC, datetime as dt\n")
+    tree = ast.parse(f.read_text())
+    assert _module_level_import_names(tree) == {"os", "UTC", "dt"}
+
+
+def test_module_level_import_names_ignores_a_nested_import(tmp_path: Path) -> None:
+    f = tmp_path / "m.py"
+    f.write_text("def f():\n    import os\n    return os\n")
+    tree = ast.parse(f.read_text())
+    assert _module_level_import_names(tree) == set()
+
+
+def test_own_scope_local_imports_finds_ones_inside_try_and_if(tmp_path: Path) -> None:
+    src = (
+        "def f():\n"
+        "    if True:\n"
+        "        try:\n"
+        "            from datetime import datetime\n"
+        "        except ImportError:\n"
+        "            pass\n"
+    )
+    tree = ast.parse(src)
+    func = tree.body[0]
+    assert _own_scope_local_imports(func) == [("datetime", 4)]
+
+
+def test_own_scope_local_imports_ignores_a_nested_functions_own_import(tmp_path: Path) -> None:
+    """A nested function's local import belongs to ITS OWN scope, not the outer one."""
+    src = (
+        "def outer():\n"
+        "    def inner():\n"
+        "        import os\n"
+        "        return os\n"
+        "    return inner\n"
+    )
+    tree = ast.parse(src)
+    outer = tree.body[0]
+    assert _own_scope_local_imports(outer) == []
+
+
+def test_reads_name_before_true_for_a_read_on_an_earlier_line() -> None:
+    src = "def f():\n    x = datetime\n    from datetime import datetime\n"
+    tree = ast.parse(src)
+    func = tree.body[0]
+    assert _reads_name_before(func, "datetime", 3) is True
+
+
+def test_reads_name_before_false_when_the_only_read_is_later() -> None:
+    src = "def f():\n    from datetime import datetime\n    return datetime\n"
+    tree = ast.parse(src)
+    func = tree.body[0]
+    assert _reads_name_before(func, "datetime", 2) is False
+
+
+def test_reads_name_before_sees_a_nested_closures_read_the_bug_shape(tmp_path: Path) -> None:
+    """The EXACT mailbox.py shape: a nested function reads the name, is defined (and would
+    be CALLED) before the outer function's own later local import runs."""
+    src = (
+        "def outer():\n"
+        "    def inner():\n"
+        "        return datetime.now()\n"
+        "    inner()\n"
+        "    from datetime import datetime\n"
+    )
+    tree = ast.parse(src)
+    outer = tree.body[0]
+    local_imports = _own_scope_local_imports(outer)
+    assert local_imports == [("datetime", 5)]
+    assert _reads_name_before(outer, "datetime", 5) is True
+
+
+def test_shadow_before_use_violations_catches_the_mailbox_shape(tmp_path: Path) -> None:
+    src = (
+        "from datetime import UTC, datetime\n\n"
+        "async def send_message():\n"
+        "    async def _stamp_threads():\n"
+        "        return datetime.now(UTC)\n"
+        "    await _stamp_threads()\n"
+        "    try:\n"
+        "        from datetime import UTC, datetime\n"
+        "        return datetime.now(UTC)\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    (tmp_path / "mailbox_like.py").write_text(src)
+    out = shadow_before_use_violations(tmp_path, ["mailbox_like.py"])
+    assert "mailbox_like.py" in out
+    assert any("send_message" in msg and "'datetime'" in msg for msg in out["mailbox_like.py"])
+
+
+def test_shadow_before_use_violations_silent_on_a_harmless_shadow(tmp_path: Path) -> None:
+    """A local import that is NEVER read before its own line — the common, harmless shape
+    (18 of the audit's own 19 candidates) — must not be flagged, even with a nested
+    function present, even when the SAME name is shadowed."""
+    src = (
+        "import os\n\n"
+        "def f():\n"
+        "    def inner():\n"
+        "        return 1  # never touches os\n"
+        "    inner()\n"
+        "    import os\n"
+        "    return os.getcwd()\n"
+    )
+    (tmp_path / "harmless.py").write_text(src)
+    out = shadow_before_use_violations(tmp_path, ["harmless.py"])
+    assert out == {}
+
+
+def test_shadow_before_use_violations_ignores_a_name_never_imported_at_module_level(
+    tmp_path: Path,
+) -> None:
+    """A purely-local import with no module-level twin is not a SHADOW at all — never in
+    scope for this lint, however it's used."""
+    src = "def f():\n    import json\n    return json.dumps({})\n"
+    (tmp_path / "nomodulelevel.py").write_text(src)
+    out = shadow_before_use_violations(tmp_path, ["nomodulelevel.py"])
+    assert out == {}
+
+
+def test_shadow_before_use_violations_skips_unparseable_files(tmp_path: Path) -> None:
+    (tmp_path / "broken.py").write_text("def broken(:\n")
+    assert shadow_before_use_violations(tmp_path, ["broken.py"]) == {}
+
+
+def test_shadow_before_use_violations_skips_missing_and_non_python_files(
+    tmp_path: Path,
+) -> None:
+    out = shadow_before_use_violations(
+        tmp_path, ["does_not_exist.py", "README.md", "scripts/gate_hook.py"])
+    assert out == {}
+
+
+def test_run_gates_refuses_on_a_shadow_before_use_violation(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    src = (
+        "from datetime import UTC, datetime\n\n"
+        "async def send_message():\n"
+        "    async def _stamp_threads():\n"
+        "        return datetime.now(UTC)\n"
+        "    await _stamp_threads()\n"
+        "    from datetime import UTC, datetime\n"
+    )
+    _write(tmp_path, "src/orchestrator/mailbox_like.py", src)
+    results = run_gates(tmp_path, ["src/orchestrator/mailbox_like.py"])
+    ok, detail = results["shadow_lint"]
+    assert ok is False
+    assert "send_message" in detail
+    assert _status_word(ok, detail) == "FAILED"
+
+
+def test_run_gates_shadow_lint_is_a_plain_ok_with_nothing_to_flag(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "src/orchestrator/clean.py", "def f():\n    return 1\n")
+    results = run_gates(tmp_path, ["src/orchestrator/clean.py"])
+    assert results["shadow_lint"] == (True, "")

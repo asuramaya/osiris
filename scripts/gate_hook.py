@@ -347,6 +347,108 @@ def _pytest_sole_failure_is_ratchet_ceiling(out: str) -> bool:
     return failed[0].split(" ", 2)[1] == _RATCHET_TEST_NODEID
 
 
+def _module_level_import_names(tree: ast.Module) -> set[str]:
+    """Every name this module binds via a TOP-LEVEL `import`/`from ... import` — the
+    population a function-local import can shadow. Never a nested import (those belong to
+    their own scope, not the module's)."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in node.names)
+    return names
+
+
+def _own_scope_local_imports(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, int]]:
+    """(name, lineno) for every name bound by an `import`/`from ... import` DIRECTLY in
+    this function's own scope — walks the whole body (through if/for/while/try/with) but
+    does NOT descend into a nested def/class/lambda, which each own a separate scope with
+    its own local imports. Python's scoping rule (the actual mechanism behind the bug this
+    lint exists to catch): any assignment anywhere in a function's body, at any nesting
+    depth of a non-scope-creating block, makes that name local to the WHOLE function —
+    not merely from that line onward."""
+    out: list[tuple[str, int]] = []
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef, ast.Lambda)):
+                continue  # a separate scope — its own local imports are its own business
+            if isinstance(child, ast.Import):
+                out.extend(
+                    (alias.asname or alias.name.split(".")[0], child.lineno)
+                    for alias in child.names)
+            elif isinstance(child, ast.ImportFrom):
+                out.extend(
+                    (alias.asname or alias.name, child.lineno) for alias in child.names)
+            else:
+                walk(child)
+
+    walk(func)
+    return out
+
+
+def _reads_name_before(func: ast.AST, name: str, before_lineno: int) -> bool:
+    """True iff `name` is READ (`ast.Name` in `Load` context) anywhere in `func` — INCLUDING
+    nested def/lambda bodies, since those close over this scope by Python's own LEGB rule —
+    at a line strictly before `before_lineno`. This is the execution-order discriminator
+    (ruling 2f7e1588): a shadow that is never read before its own import line is harmless
+    (the common case, 18 of 19 candidates in the fleet-wide audit that motivated this);
+    a shadow that IS read first — usually from a nested function called earlier in the same
+    body — is a live NameError/UnboundLocalError waiting for that code path to run, the
+    exact shape mailbox.py's send_message shipped with (a nested `_stamp_threads` closure,
+    called before a redundant local `from datetime import ...` a few lines later)."""
+    for node in ast.walk(func):
+        if (isinstance(node, ast.Name) and node.id == name
+                and isinstance(node.ctx, ast.Load) and node.lineno < before_lineno):
+            return True
+    return False
+
+
+def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> dict[str, list[str]]:
+    """{file: [\"funcname shadows NAME at line N, read earlier at line M\", ...]} for every
+    STAGED/touched `.py` file where a function-local import shadows a module-level import
+    of the SAME name, AND that name is read somewhere in the function (including a nested
+    closure) before the local import's own line — the ONE narrow, execution-order-based
+    shape ruling 2f7e1588 asks for, never the mere presence of a shadow (which the
+    fleet-wide audit measured at 19 candidates, 18 harmless, this being the one real bug).
+    TOUCHED-FILES-ONLY, same law as `resolve_test_files` — a cheap, pure AST walk, no
+    subprocess, no full-project cost. A file that fails to parse is skipped, never crashes
+    the gate over it (ruff already gates syntax)."""
+    out: dict[str, list[str]] = {}
+    for f in changed_files:
+        if not f.endswith(".py"):
+            continue
+        path = repo_root / f
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        module_names = _module_level_import_names(tree)
+        if not module_names:
+            continue
+        findings: list[str] = []
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for name, lineno in _own_scope_local_imports(func):
+                if name not in module_names:
+                    continue
+                if _reads_name_before(func, name, lineno):
+                    findings.append(
+                        f"{func.name} shadows {name!r} with a local import at line "
+                        f"{lineno} — {name!r} is read earlier in the same function "
+                        f"(module level already imports it; delete the local import)")
+        if findings:
+            out[f] = findings
+    return out
+
+
 def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool, str]]:
     """ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
     pytest is the one gate that must be scoped, or it re-imports the 209s full-suite cost
@@ -373,6 +475,12 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
     results["ruff"] = _run(
         [str(VENV_BIN / "ruff"), "check", "src", "tests", "scripts"], repo_root)
     results["mypy"] = _run([str(VENV_BIN / "mypy"), "src"], repo_root)
+    shadow_hits = shadow_before_use_violations(repo_root, changed_files)
+    if shadow_hits:
+        lines = [f"{f}: {msg}" for f, msgs in sorted(shadow_hits.items()) for msg in msgs]
+        results["shadow_lint"] = (False, "\n".join(lines))
+    else:
+        results["shadow_lint"] = (True, "")
     direct, fixture_only = classify_test_files(changed_files, repo_root)
     selected = set(direct)
     omitted = ""
@@ -712,9 +820,8 @@ def cmd_audit(rev_range: str) -> int:
                 verdict = "RATCHET-DEBT"
             else:
                 verdict = "PASS"
-            print(f"[{i}/{len(shas)}] {short}: {verdict} "
-                  f"(ruff={statuses['ruff']}, mypy={statuses['mypy']}, "
-                  f"pytest={statuses['pytest']})")
+            detail = ", ".join(f"{name}={statuses[name]}" for name in sorted(statuses))
+            print(f"[{i}/{len(shas)}] {short}: {verdict} ({detail})")
             if not all_ok:
                 if statuses["pytest"] == "TIMEOUT" and all(
                     ok for name, (ok, _) in results.items() if name != "pytest"
