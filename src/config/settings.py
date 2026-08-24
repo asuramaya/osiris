@@ -361,6 +361,16 @@ class Settings(BaseSettings):
     # a deliberate second call. A tree with no governing Seat is reported in the tick's
     # return value, never mailed to no one.
     osiris_tree_ingest_alarm_enabled: bool = False
+    # THE LANDING AUDIT'S OWN SWITCH (Thoth DM 5544 — the dispatch that found deploy_guard.
+    # landing_audit's ONLY caller, cmd_deploy, had not completed in 5 days, blocked by an
+    # unrelated gate — the surface was correct, its sole trigger was dark) — same law as
+    # the switches above: a mechanism that WRITES to the graph on a schedule earns its own
+    # kill switch, never inherits one. OFF by default. When on, a 15-min tick runs
+    # deploy_guard.landing_audit fleet-wide — mints one obligation per branch unmerged into
+    # main for 48h+ with no open held-work claim naming it, and per graph text whose cited
+    # merge is provably not an ancestor of main. Idempotent on summary text; never blocks a
+    # deploy, never gates anything (landing_audit's own NEVER REFUSES law, unchanged).
+    osiris_landing_audit_enabled: bool = False
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a

@@ -1364,3 +1364,65 @@ async def test_landing_audit_skips_a_branch_an_open_held_work_thread_already_cla
 
     out = await landing_audit(actions, main_repo)
     assert out["stale_unmerged_branches"] == []
+
+
+async def test_landing_audit_heartbeat_is_scheduled_as_a_cron_job() -> None:
+    """The scheduled leg exists and is wired into the cron table — same proof shape as
+    reap_leases'/reap_stuck_sweeps' own registration tests (Thoth DM 5544: a mechanism
+    whose only trigger is `osiris deploy` succeeding is not adopted, it is hostage to
+    whatever else can block a deploy)."""
+    from src.workers.arq_worker import WorkerSettings
+
+    crons = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
+    assert "landing_audit_heartbeat" in crons
+
+
+async def test_landing_audit_heartbeat_noop_when_flag_off(
+    actions: Actions, main_repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.workers.arq_worker import landing_audit_heartbeat
+
+    monkeypatch.setenv("OSIRIS_LANDING_AUDIT_ENABLED", "0")
+    _git(main_repo, "checkout", "-q", "-b", "seshat-heartbeat-off-lane")
+    _commit_dated(main_repo, "stranded, flag off", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+
+    monkeypatch.setattr(
+        "src.orchestrator.deploy_guard._REPO_ROOT", main_repo, raising=False)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    out = await landing_audit_heartbeat(ctx)
+    assert out == 0
+
+
+async def test_landing_audit_heartbeat_mints_when_flag_on_replaying_a_stranded_branch(
+    actions: Actions, main_repo: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The replay the dispatch asked for: a branch shaped exactly like tonight's
+    seshat-hook-flip specimen — finished, committed, never merged — swept unprompted by
+    the cron tick, with no `osiris deploy` involved at all."""
+    from types import SimpleNamespace
+
+    from src.workers.arq_worker import landing_audit_heartbeat
+
+    monkeypatch.setenv("OSIRIS_LANDING_AUDIT_ENABLED", "1")
+    _git(main_repo, "checkout", "-q", "-b", "seshat-hook-flip")
+    _commit_dated(main_repo, "statusline port + onboard.py SessionEnd gap",
+                  "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+
+    monkeypatch.setattr(
+        "src.orchestrator.deploy_guard._REPO_ROOT", main_repo, raising=False)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    out = await landing_audit_heartbeat(ctx)
+    assert out == 1
+
+    second = await landing_audit_heartbeat(ctx)
+    assert second == 1  # still one open obligation naming it, every tick
+
+    minted = await actions.pool.fetch(
+        "SELECT o.id FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='summary' "
+        "WHERE o.type='Thread' AND a.value #>> '{}' ILIKE '%seshat-hook-flip%'")
+    assert len(minted) == 1  # idempotent: one Thread, never a duplicate obligation

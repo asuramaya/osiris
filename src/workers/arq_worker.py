@@ -682,6 +682,38 @@ async def phantom_fold_reap_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
+    """The landing audit's scheduled leg (Thoth DM 5544): task #168 built and tested
+    deploy_guard.landing_audit/stale_unmerged_branches — measured live, the mechanism was
+    never broken, but its ONLY caller was cmd_deploy, and the deploy cursor had sat at
+    e42f7c6 (2026-08-18) for 5 days, blocked by an unrelated gate (Sekhmet's false-mint-live
+    lane). Detection was correct; its sole trigger was dark — an adoption gap, not a
+    ranking or detection defect. Same thin-shim shape as its five 15-min siblings above:
+    the acting logic (deploy_guard.landing_audit) is UNCHANGED, no new surface — a no-op
+    unless osiris_landing_audit_enabled (the kill switch). Runs off `_REPO_ROOT`, same as
+    check_unreviewed_boot's sibling call above in startup() — correct here because the
+    worker daemon always runs from the one canonical deployed checkout, never a seat's own
+    worktree (deploy_guard's own worktree-resolution gotcha applies to cmd_deploy, invoked
+    by hand from any worktree; it does not apply to this always-primary-service caller). A
+    DB or git hiccup logs, never sinks the cron (landing_audit's own NEVER REFUSES law,
+    doubled)."""
+    from src.config.settings import get_settings
+    from src.orchestrator.deploy_guard import _REPO_ROOT, landing_audit
+
+    if not get_settings().osiris_landing_audit_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        audit = await landing_audit(actions, _REPO_ROOT)
+    except Exception as exc:  # a DB or git hiccup must not kill the cron
+        _log.warning("landing audit heartbeat failed: %r", exc)
+        return 0
+    acted = len(audit.get("obligations") or [])
+    if acted:
+        _log.info("landing audit heartbeat: %s", audit)
+    return acted
+
+
 async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     """The closure miner's scheduled leg (Thoth DM 2679, following the deploy that made
     this defensible) — same thin-shim shape as fleet_reconcile_heartbeat: the flag gate
@@ -928,6 +960,14 @@ class WorkerSettings:
         # contend for CPU at the same wall-clock second.
         cron(watched(phantom_fold_reap_heartbeat, every=900), minute={7, 22, 37, 52},
              second={20}, timeout=600, run_at_startup=True),
+        # the landing audit's scheduled leg (Thoth DM 5544): mint an obligation for a
+        # branch stale-unmerged into main, or graph text whose cited merge is provably not
+        # an ancestor of main — the exact detection cmd_deploy already runs, now firing
+        # independent of whether a deploy has recently succeeded. Same 15-min cadence class
+        # as its six siblings above — a no-op unless osiris_landing_audit_enabled (the kill
+        # switch). Offset from all six so none contend for CPU at the same wall-clock second.
+        cron(watched(landing_audit_heartbeat, every=900), minute={2, 17, 32, 47},
+             second={35}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
