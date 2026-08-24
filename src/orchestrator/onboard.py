@@ -134,12 +134,17 @@ def _merge_hook(
 def merge_settings(
     existing: dict[str, Any] | None, osiris_home: Path, *, hook: bool = False,
     whisper: bool = False, anchor: bool = False, precompact: bool = False,
-    spawn: bool = False,
+    spawn: bool = False, session_end: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Merge the statusLine command and the requested hooks into a settings.json WITHOUT
     dropping other keys (permissions, env, worktree, …): hook=Stop mail-drain, whisper=
     SessionStart auto-mount, anchor=PreToolUse anchor-force + spawn-stamp, precompact=the
-    death rite's sweep ring, spawn=SubagentStart/Stop announcements. Returns (result,
+    death rite's sweep ring, spawn=SubagentStart/Stop announcements, session_end=release the
+    durable mount row the instant a tab closes (dispatch 5441/5492 — osiris_hook.py has
+    always shipped a `session-end` subcommand and mcp_server.py's own `/session-end` route
+    has always been live; this installer just never had a flag to wire either one, a real
+    gap found while flipping the live settings.json off the retired per-purpose scripts,
+    one of which — osiris_sessionend.py — this closes the last caller of). Returns (result,
     changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     # Unified osiris_hook.py — one script, all lifecycle events.
@@ -180,6 +185,12 @@ def merge_settings(
             doc, "PreCompact",
             {"type": "command",
              "command": _hook_command(osiris_home, "precompact"),
+             "timeout": 5})
+    if session_end:
+        changed |= _merge_hook(
+            doc, "SessionEnd",
+            {"type": "command",
+             "command": _hook_command(osiris_home, "session-end"),
              "timeout": 5})
     return doc, changed
 
@@ -274,6 +285,7 @@ def onboard(
     anchor: bool = False,
     precompact: bool = False,
     spawn: bool = False,
+    session_end: bool = False,
     dry_run: bool = False,
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
@@ -291,12 +303,13 @@ def onboard(
         changes.append(Change("skipped", root / ".mcp.json"))  # print the one-liner instead
     else:
         changes.append(_apply(root / ".mcp.json", merge_mcp, dry_run=dry_run))
-    if statusline or hook or whisper or anchor or precompact or spawn:
+    if statusline or hook or whisper or anchor or precompact or spawn or session_end:
         changes.append(
             _apply(
                 root / ".claude" / "settings.json",
                 lambda e: merge_settings(e, home, hook=hook, whisper=whisper, anchor=anchor,
-                                         precompact=precompact, spawn=spawn),
+                                         precompact=precompact, spawn=spawn,
+                                         session_end=session_end),
                 dry_run=dry_run,
             )
         )
@@ -365,6 +378,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
              "never surprised) — an OPERATOR consent switch (blessing 2026-07-10)",
     )
     parser.add_argument(
+        "--session-end",
+        action="store_true",
+        help="also install the SessionEnd hook (releases the durable mount row the instant "
+             "a tab closes, instead of lingering live for last_seen's decay window) — an "
+             "OPERATOR consent switch (blessing 2026-07-08)",
+    )
+    parser.add_argument(
         "--user-scope",
         action="store_true",
         help="print the box-wide `claude mcp add --scope user` one-liner; write no .mcp.json",
@@ -384,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
             anchor=args.anchor,
             precompact=args.precompact,
             spawn=args.spawn,
+            session_end=args.session_end,
             dry_run=args.dry_run,
             user_scope=args.user_scope,
         )
