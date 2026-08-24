@@ -341,6 +341,17 @@ class Settings(BaseSettings):
     # (an interrupted heal from the older, now-atomic _debounce_roundtrip) is reported via
     # an obligation, never auto-completed, regardless of this switch.
     osiris_phantom_heal_enabled: bool = False
+    # THE PHANTOM/FOLD BACKLOG REAP'S OWN SWITCH (dispatch #185 item (e), ruling 696d302c
+    # — "this should not be babysat... it should manage itself", Thoth DM 5464) — same law
+    # as every switch above: a mechanism that WRITES to the graph on a schedule earns its
+    # own kill switch, never inherits one. OFF by default. When on, a 15-min tick runs
+    # phantom_fold_reap.phantom_fold_scheduled_tick fleet-wide — reinstates a false_mint
+    # generation ONLY when registry_census independently confirms a live body beyond the
+    # graph's own claim, and invalidates a duplicate works_in edge ONLY when exactly one
+    # live target is a non-active/non-merged SoftwareProject. parallel-lives and
+    # half-healed phantom threads are counted and surfaced, never acted on — the code's
+    # own standing law (agents.py's `_report_half_healed_phantom`) is unchanged by this.
+    osiris_phantom_fold_reap_enabled: bool = False
     # THE TREE-INGEST ALARM'S OWN SWITCH (thread 5126, operator ruling df646654/fe8ec7ff:
     # self-healing over manual bug-chasing) — same law as the switches above: a mechanism
     # that acts on a schedule earns its own kill switch, never inherits one. OFF by default.
