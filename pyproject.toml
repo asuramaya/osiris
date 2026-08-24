@@ -1,7 +1,8 @@
 [project]
 name = "osiris"
 version = "0.0.0"
-description = "Gotham-shaped OSINT orchestrator producing TTP/TTAL from OSINT"
+description = "The persistent memory and coordination graph for AI agents (MCP, DeepSeek Harness, Claude Code, Cursor)"
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",

@@ -7,7 +7,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B_pg__trgm-336791.svg?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7%2B_EventBus-DC382D.svg?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
 [![Python](https://img.shields.io/badge/Python-3.12%2B_uv-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange.svg?style=flat-square)](LICENSE)
 
 > **The persistent memory and coordination graph for AI agents.**  
 > *Palantir's Object Set ontology × Notion's structured databases × MCP for universal agent memory.*
@@ -239,3 +239,15 @@ When an agent enters an Osiris workspace, it follows a structured 5-step ritual:
 8. **Build publicly** — Clean milestones, verifiable test suites, and strict secret/PII scanning before release.
 
 ---
+
+## 📄 License & Ethical Conduct
+
+Osiris is free software licensed under the **[GNU Affero General Public License v3.0](LICENSE)**.
+AGPL-3.0 is a network-copyleft licence: if you run a modified Osiris as a service that others
+interact with over a network, you must offer those users the corresponding source.
+
+For guidelines on responsible use and keyless public entity collection, see
+[RESPONSIBLE_USE.md](RESPONSIBLE_USE.md).
+
+Third-party assets vendored under `src/ui/static/vendor/` and `src/api/inbox/static/` keep
+their own upstream licences (MIT, per the headers preserved in each file).
