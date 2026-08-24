@@ -1875,3 +1875,173 @@ def test_static_check_no_seat_field_is_built_from_the_bare_addressed_id() -> Non
             "head), never a bare `to_a`-derived call. `gate_seat` (require_seat's own, "
             "deliberately addressed-id-derived variable) is unaffected by this check — it "
             "is never named `seat`.")
+
+
+# ═══ THE GRAPH-EDGE BLOCK IS STRUCTURALLY GUARDED (Thoth DM 5493, ruling 7d6815bb) — five
+# regressions from five unguarded raw create_or_find_object calls, found by five different
+# people one at a time. The law now: every edge TARGET is existence-checked, never minted
+# (only the Message object this function alone owns gets created fresh); a genuine graph-
+# write failure is CONFESSED (_log.warning + `graphed: False`), never silently swallowed. ═══
+
+async def test_broadcast_to_a_project_with_no_graph_object_links_nothing_and_mints_nothing(
+    actions: Actions,
+) -> None:
+    """`_seed` only calls save_mount — no SoftwareProject graph object exists for
+    'sibling-one'. The old code minted one as a side effect of the broadcast_to edge;
+    the fix must skip the edge and mint nothing."""
+    p = actions.pool
+    await _seed(p, "sibling-one")
+    await send_message(p, from_agent="agent:bcast1", from_project="sibling-two",
+                       to_project="sibling-one", body="a broadcast to an ungraphed project")
+    n = await p.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='repo:sibling-one' "
+        "AND type='SoftwareProject'")
+    assert n == 0, "a mail broadcast must never mint a SoftwareProject as a side effect"
+
+
+async def test_broadcast_to_a_project_with_a_real_graph_object_links_it(
+    actions: Actions,
+) -> None:
+    """The positive case: when the SoftwareProject genuinely already exists, the
+    broadcast_to edge DOES land."""
+    p = actions.pool
+    await _seed(p, "sibling-graphed")
+    proj_oid = await actions.create_or_find_object(
+        "SoftwareProject", "repo:sibling-graphed", "test")
+    res = await send_message(p, from_agent="agent:bcast2", from_project="sibling-two",
+                             to_project="sibling-graphed", body="a broadcast to a real project")
+    msg_oid = await p.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", f"message:{res['id']}")
+    assert msg_oid is not None
+    linked = await p.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='broadcast_to'",
+        msg_oid, proj_oid)
+    assert linked == 1
+
+
+async def test_dm_to_an_unknown_agent_id_mints_no_agent_object(actions: Actions) -> None:
+    """An `addressed_to` edge must never mint the addressee's Agent object either —
+    same law as the sender's own existence-only fix, not a second shape."""
+    p = actions.pool
+    await send_message(p, from_agent="agent:dm-sender", from_project="osiris",
+                       to_agent="agent:never-met-before-999", body="hello stranger")
+    n = await p.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='agent:never-met-before-999' "
+        "AND type='Agent'")
+    assert n == 0
+
+
+async def test_reply_to_a_message_whose_own_graph_write_never_landed_mints_no_stub(
+    actions: Actions,
+) -> None:
+    """A `reply_to` pointing at a real fleet_messages row whose Message object was
+    never created (e.g. its own graph write failed) must not mint a stub Message just
+    to hang a replies_to edge off of."""
+    p = actions.pool
+    await _seed(p, "osiris")
+    parent_id = await p.fetchval(
+        "INSERT INTO fleet_messages (from_agent, from_project, to_project, body) "
+        "VALUES ('agent:ghost-parent', 'osiris', 'osiris', 'never graphed') RETURNING id")
+    res = await send_message(p, from_agent="agent:replier", from_project="osiris",
+                             to_project="osiris", reply_to=parent_id, body="replying anyway")
+    n = await p.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical=$1", f"message:{parent_id}")
+    assert n == 0, "no stub Message should be minted for the missing parent"
+    msg_oid = await p.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", f"message:{res['id']}")
+    n_edges = await p.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='replies_to'", msg_oid)
+    assert n_edges == 0
+
+
+async def test_no_graph_thread_object_is_ever_minted_from_a_mailbox_reply_chain(
+    actions: Actions,
+) -> None:
+    """`thread` in send_message is fleet_messages' own integer reply-chain grouping —
+    a different thing entirely from the graph's `Thread` object type (open_thread()'s
+    owner/kind/status-bearing obligation). No `in_thread` edge, no minted Thread."""
+    p = actions.pool
+    await _seed(p, "osiris")
+    first = await send_message(p, from_agent="agent:threadA", from_project="osiris",
+                               to_project="osiris", body="opening a reply chain")
+    await send_message(p, from_agent="agent:threadB", from_project="osiris",
+                       to_project="osiris", reply_to=first["id"], body="replying in-chain")
+    n = await p.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical LIKE 'thread:%' AND type='Thread'")
+    assert n == 0
+    n_edges = await p.fetchval("SELECT count(*) FROM links WHERE type='in_thread'")
+    assert n_edges == 0
+
+
+async def test_a_genuine_graph_write_failure_is_confessed_not_swallowed(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force the graph-edge block to raise and confirm: (1) the relational send still
+    succeeds (`id` present, no exception escapes send_message), (2) the receipt says
+    `graphed: False` rather than staying silent, (3) a warning is logged — the swallow
+    this whole dispatch exists to remove."""
+    import logging
+
+    from src.actions.core import Actions as RealActions
+
+    async def _boom(self: RealActions, *a: object, **kw: object) -> None:
+        raise RuntimeError("simulated graph outage")
+
+    monkeypatch.setattr(RealActions, "create_or_find_object", _boom)
+
+    p = actions.pool
+    await _seed(p, "osiris")
+    caplog_records: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda record: caplog_records.append(record.getMessage())  # type: ignore[method-assign]
+    logger = logging.getLogger("osiris.mailbox")
+    logger.addHandler(handler)
+    try:
+        res = await send_message(p, from_agent="agent:willfail", from_project="osiris",
+                                 to_project="osiris", body="this send's graph write will blow up")
+    finally:
+        logger.removeHandler(handler)
+
+    assert res["id"] > 0
+    assert res["graphed"] is False
+    n = await p.fetchval("SELECT count(*) FROM fleet_messages WHERE id=$1", res["id"])
+    assert n == 1, "the relational row must land regardless of the graph write's fate"
+    assert any("simulated graph outage" in r for r in caplog_records), (
+        "the failure must be logged, not silently swallowed"
+    )
+
+
+async def test_send_tool_surfaces_graphed_false_on_the_receipt(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP send() wrapper must forward the honest-failure signal to the caller,
+    not just bury it inside mailbox.py's own internal return value."""
+    from src import mcp_server as srv
+    from src.actions.core import Actions as RealActions
+    from src.orchestrator.agents import AgentIdentity
+
+    async def _boom(self: RealActions, *a: object, **kw: object) -> None:
+        raise RuntimeError("simulated graph outage")
+
+    monkeypatch.setattr(RealActions, "create_or_find_object", _boom)
+    await _seed(actions.pool, "osiris")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:willfail2", session="willfail2", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.send("this will also blow up", to="osiris", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["graphed"] is False
+    assert "note" in out

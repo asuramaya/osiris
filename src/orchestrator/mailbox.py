@@ -7,8 +7,13 @@ The fleet co-writes MEMORY; this is the directed CHANNEL. Two shapes:
   * a DM to a specific agent (to_agent set) — only that agent sees it.
 
 PULL, never push (Osiris has no hands): a recipient reads its inbox when it next mounts/orients.
-Messages are ephemeral coordination, not durable memory, so they live in their own table, never
-the event-sourced graph — for durable knowledge, agents use record_decision/open_thread.
+Messages are ephemeral coordination, not durable memory, so they live in their own table —
+for durable knowledge, agents use record_decision/open_thread. `fleet_messages` stays the
+system of record either way: since 6a1dd99, `send_message` ALSO writes a best-effort Message
+object + sent_by/addressed_to/broadcast_to/replies_to edges (send()'s "THE READ-SIDE PRIOR-ART
+HOP" depends on it) so mail is search()/orient()-traversable, but that graph write can fail
+independently of the relational one (the receipt says `graphed: False` when it does) — the
+event-sourced graph is a traversability LENS onto mail here, never mail's own source of truth.
 
 Delivery is AT-LEAST-ONCE per recipient (decision 56f6a0d6): reading LEASES a message FOR THAT
 READER (a row in message_recipients) rather than consuming it; an ACK settles it. Settling three
@@ -22,11 +27,14 @@ to the sender as a DM; a reply to a broadcast routes to the thread's project.
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
+
+_log = logging.getLogger("osiris.mailbox")
 
 # The human's desk. Not a repo (the trigger never wakes it); read via inbox(project='operator').
 OPERATOR_ADDR = "operator"
@@ -601,15 +609,19 @@ async def send_message(
         "RETURNING id",
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     stamped = await _stamp_threads()
-    # GRAPH EDGES: write Message object + links so mail is traversable in the graph
+    # GRAPH EDGES: write Message object + links so mail is traversable in the graph.
+    # STRUCTURALLY GUARDED (Thoth DM 5493, ruling 7d6815bb: fix the mechanism, not the
+    # symptom — this block produced FIVE regressions from FIVE unguarded raw
+    # create_or_find_object calls, found by five different people one at a time: the
+    # datetime shadow, prior-art going dark, the watermark, adoption_share, and a bare
+    # Agent minted for every sender that silently made every sender DM-eligible). The
+    # law now: EVERY edge target here is EXISTENCE-CHECKED, never minted, except the
+    # Message object this function alone owns and is always creating fresh. Minting an
+    # Agent/Seat/SoftwareProject as a side effect of a mail write is exactly the
+    # unguarded-seventh-door class #139 enumerated six doors to prevent — sending mail
+    # must never be how an identity or a project first enters the graph.
+    graphed = True
     try:
-        # NOT a local `from datetime import ...` here (Thoth DM 5442 leg 1, ruling
-        # 2f7e1588's own fix never actually landed on this tip): datetime/UTC are already
-        # imported at module level (line 26) — a local import anywhere in send_message's
-        # body makes `datetime` a LOCAL name for the WHOLE function per Python's scoping,
-        # including inside the `_stamp_threads` closure above, which reads `datetime.now`
-        # at its own definition — called at line 603, before this import would have run,
-        # so every send(threads=[...]) hit "cannot access free variable 'datetime'".
         from src.actions.core import Actions as _Actions
         acts = _Actions(pool)
         now = datetime.now(UTC)
@@ -619,43 +631,65 @@ async def send_message(
         await acts.assert_property(msg_oid, "summary", msg_body[:160], from_agent, now, 1.0)
         await acts.assert_property(msg_oid, "grade", grade or "fyi", from_agent, now, 1.0)
         await acts.assert_property(msg_oid, "status", "sent", from_agent, now, 1.0)
-        # NEVER `create_or_find_object` here (thread reply-routing-6a1dd99 regression):
-        # `_dm_ineligibility`'s whole contract is "no Agent object = the graph has never
-        # met this mind" (mailbox.py's own docstring, "registration can lag a living
-        # mind") — reply routing's "an unbound asker keeps the room" law (thread 21596481)
-        # depends on that staying true for a transient id that has only ever SENT mail,
-        # never been mounted/addressed. Minting the sender's Agent object here as a side
-        # effect of writing this edge silently satisfied that same existence check one
-        # send later, collapsing "known mind" into "has sent one message ever" — found
-        # live via tests/test_mailbox.py::test_cross_project_reply_to_an_unbound_asker_
-        # keeps_the_room and test_reply_routes_back_threads_and_acks both failing with
-        # the room-return case never firing. A plain existence check, never a mint: link
-        # the edge only when the graph already knows this identity through some OTHER
-        # door; skip it (best-effort traversability, not a promise) otherwise.
-        from_row = await pool.fetchval(
-            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", from_agent)
+
+        async def _existing(canon: str, type_: str) -> Any:
+            return await pool.fetchval(
+                "SELECT id FROM objects WHERE canonical=$1 AND type=$2", canon, type_)
+
+        # THE SENDER (thread reply-routing-6a1dd99 regression): `_dm_ineligibility`'s
+        # whole contract is "no Agent object = the graph has never met this mind"
+        # (mailbox.py's own docstring, "registration can lag a living mind") — reply
+        # routing's "an unbound asker keeps the room" law (thread 21596481) depends on
+        # that staying true for a transient id that has only ever SENT mail, never been
+        # mounted/addressed. A mint here silently satisfied that existence check one
+        # send later, collapsing "known mind" into "has sent one message ever".
+        from_row = await _existing(from_agent, "Agent")
         if from_row is not None:
             await acts.create_link(msg_oid, from_row, "sent_by", from_agent, now, 1.0)
+
+        # THE ADDRESSEE / BROADCAST TARGET: the SAME existence-only law, not a second
+        # shape invented for it. `send_message` already refuses a `to_project` nobody
+        # has ever mounted under and a `to_agent`/seat that doesn't resolve — by the
+        # time this block runs, a real target (mint-worthy in its own right, through
+        # its OWN door: mount()/claim_name/create_project) either already exists or the
+        # call would have refused earlier. If it's somehow still missing, the edge is
+        # skipped, never patched over with a phantom mint.
         if to_a:
             target_type = "Seat" if to_a.startswith("seat:") else "Agent"
-            to_oid = await acts.create_or_find_object(target_type, to_a, from_agent)
-            await acts.create_link(msg_oid, to_oid, "addressed_to", from_agent, now, 1.0)
+            to_row = await _existing(to_a, target_type)
+            if to_row is not None:
+                await acts.create_link(msg_oid, to_row, "addressed_to", from_agent, now, 1.0)
         elif to_p:
-            proj_oid = await acts.create_or_find_object(
-                "SoftwareProject", f"repo:{to_p}", from_agent
-            )
-            await acts.create_link(msg_oid, proj_oid, "broadcast_to", from_agent, now, 1.0)
+            proj_row = await _existing(f"repo:{to_p}", "SoftwareProject")
+            if proj_row is not None:
+                await acts.create_link(msg_oid, proj_row, "broadcast_to", from_agent, now, 1.0)
+
+        # THE REPLY PARENT: if ITS OWN graph write failed at send-time (this same
+        # try/except, one message earlier), its Message object never landed — link to
+        # it if it's there, never mint a stub to paper over an earlier partial failure.
         if reply_to is not None:
-            parent_msg_oid = await acts.create_or_find_object(
-                "Message", f"message:{reply_to}", from_agent
-            )
-            await acts.create_link(msg_oid, parent_msg_oid, "replies_to", from_agent, now, 1.0)
-        if thread is not None:
-            thread_oid = await acts.create_or_find_object("Thread", f"thread:{thread}", from_agent)
-            await acts.create_link(msg_oid, thread_oid, "in_thread", from_agent, now, 1.0)
-    except Exception:  # noqa: BLE001 — graph write is best-effort; the relational row already landed
-        pass
+            parent_row = await _existing(f"message:{reply_to}", "Message")
+            if parent_row is not None:
+                await acts.create_link(msg_oid, parent_row, "replies_to", from_agent, now, 1.0)
+
+        # NO `in_thread` EDGE (dropped, not guarded): `thread` here is fleet_messages'
+        # own internal reply-chain grouping (an integer, `ref["thread_id"] or ref["id"]`
+        # a few lines up) — a DIFFERENT thing from the graph's `Thread` object type
+        # (open_thread()'s owner/kind/status-bearing obligation). Minting a `Thread`
+        # object from that bare int was a fourth unguarded door AND a category error —
+        # nothing else in this house treats a mailbox reply-chain id as ontology-worthy.
+        # `replies_to` (above) already makes a conversation walkable Message-to-Message;
+        # no fabricated container node is needed on top of it.
+    except Exception as exc:  # noqa: BLE001 — the relational row already landed; a
+                              # graph-write failure must be CONFESSED (the #139 shape:
+                              # a skip that says nothing is indistinguishable from a
+                              # clean pass), never silently swallowed — the swallow here
+                              # once hid the very NameError this class of bug produced.
+        graphed = False
+        _log.warning("send_message(%s): graph edge write failed, relational row %s "
+                    "already committed — %s", from_agent, mid, exc)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
+            **({} if graphed else {"graphed": False}),
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
             **({"holder": holder} if to_a and to_a.startswith("seat:") else {}),
             **({"redirect": redirect} if redirect else {}),

@@ -3790,6 +3790,14 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         **({"dedup": "identical recent message already queued — not re-posted"}
            if res["dedup"] else {}),
         **({"threads_stamped": res["threads_stamped"]} if res.get("threads_stamped") else {}),
+        # THE HONEST RECEIPT (Thoth DM 5493): the relational row always lands; the graph
+        # edge write (Message object + sent_by/addressed_to/broadcast_to/replies_to) is
+        # best-effort beside it and CAN fail on its own — `graphed: False` says so plainly
+        # rather than let mail look graph-traversable when this one didn't make it.
+        **({"graphed": False, "note": "relational send succeeded; the graph edge write "
+                                      "failed — this message won't show up in search()/"
+                                      "prior-art/orient() until a later repair recovers it"}
+           if res.get("graphed") is False else {}),
     }
     if res["to_agent"]:  # a DM — report the addressee, its seat + lineage head, and its liveness
         out["dm_to"] = res["to_agent"]
