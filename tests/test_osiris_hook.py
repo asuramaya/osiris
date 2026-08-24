@@ -8,6 +8,8 @@ Pure/no-DB throughout: `_post` is monkeypatched, never a real HTTP round trip.""
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,15 @@ from scripts.osiris_hook import (
     _fire_stage_a,
     _swap_confession,
 )
+
+_HOOK_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "osiris_hook.py"
+
+
+def _run_anchor(payload: dict[str, object], env: dict[str, str] | None = None) -> dict[str, object]:
+    out = subprocess.run([sys.executable, str(_HOOK_SCRIPT), "anchor"],
+                         input=json.dumps(payload), capture_output=True, text=True,
+                         check=False, env=env)
+    return dict(json.loads(out.stdout)) if out.stdout.strip() else {}
 
 
 def _write_transcript(path: Path, *entries: dict) -> None:
@@ -476,3 +487,110 @@ def test_cmd_whisper_route_unreachable_prints_the_manual_hint(monkeypatch: Any) 
     osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
     assert "unreachable" in out[0]
     assert "mount(cwd='/repo')" in out[0]
+
+
+# --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------
+# The stub that shipped at the hook migration only stamped a raw session_id onto EVERY
+# osiris call, ungated, and echoed the whole hook payload back in the WRONG envelope (no
+# hookSpecificOutput wrapper) — meaning even that stamp would never have reached a real
+# tool call. Ported verbatim from osiris_mount_anchor.py: job_dir derivation, ANCHOR_AWARE/
+# SPAWN_AWARE gating, the MAIN-session strip, and the CLAUDE_CODE_BRIDGE_SESSION_ID door —
+# an OS-environment read the stub dropped entirely, the same CHANNEL-class gap already found
+# in whisper and statusline.
+
+def test_anchor_the_hook_and_the_SERVER_stay_in_lockstep() -> None:
+    import inspect
+
+    import src.mcp_server as srv
+    from scripts.osiris_hook import _ANCHOR_AWARE
+
+    for name in sorted(_ANCHOR_AWARE):
+        fn = getattr(srv, name.removeprefix("mcp__osiris__"), None)
+        assert fn is not None, f"{name} is stamped by the hook but does not exist on the server"
+        assert "session_anchor" in inspect.signature(fn).parameters, (
+            f"{name} is in _ANCHOR_AWARE but its signature does not accept `session_anchor`")
+
+
+def test_anchor_SPAWN_AWARE_stays_in_lockstep_with_the_server() -> None:
+    import inspect
+
+    import src.mcp_server as srv
+    from scripts.osiris_hook import _SPAWN_AWARE
+
+    for name in sorted(_SPAWN_AWARE):
+        fn = getattr(srv, name.removeprefix("mcp__osiris__"), None)
+        assert fn is not None, f"{name} is stamped by the hook but does not exist on the server"
+        assert "subagent_id" in inspect.signature(fn).parameters, (
+            f"{name} is in _SPAWN_AWARE but its signature does not accept `subagent_id`")
+
+
+def test_anchor_rides_every_call_not_only_mount() -> None:
+    for tool in ("inbox", "send", "orient", "record_decision", "open_thread", "resolve_thread"):
+        out = _run_anchor({"tool_name": f"mcp__osiris__{tool}",
+                           "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                           "tool_input": {}})
+        anchor = out["hookSpecificOutput"]["updatedInput"]["session_anchor"]  # type: ignore[index]
+        assert str(anchor).endswith("/jobs/513aa520"), f"{tool} rode without its anchor"
+
+
+def test_anchor_a_spawn_never_gets_a_seat_anchor() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__open_thread",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "agent_id": "agent-abc", "agent_type": "Explore",
+                       "tool_input": {}})
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert "session_anchor" not in ti
+    assert ti["subagent_id"] == "agent-abc"  # type: ignore[index]
+
+
+def test_anchor_main_session_strips_a_stale_spawn_stamp() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__open_thread",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "tool_input": {"subagent_id": "agent-stale"}})
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert "subagent_id" not in ti
+
+
+def test_anchor_an_agents_own_anchor_is_never_overwritten() -> None:
+    out = _run_anchor({"tool_name": "mcp__osiris__orient",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "tool_input": {"session_anchor": "/home/x/.claude/jobs/deadbeef"}})
+    if out:
+        ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+        assert ti["session_anchor"] == "/home/x/.claude/jobs/deadbeef"  # type: ignore[index]
+
+
+def test_anchor_mount_gets_transcript_path_and_bridge_id_stamped(monkeypatch: Any) -> None:
+    import os as _os
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_BRIDGE_SESSION_ID"] = "bridge-xyz"
+    out = _run_anchor({"tool_name": "mcp__osiris__mount",
+                       "session_id": "513aa520-6f1e-4807-948d-2e0820af1574",
+                       "transcript_path": "/home/x/.claude/projects/p/other-sid.jsonl",
+                       "tool_input": {}}, env=env)
+    ti = out["hookSpecificOutput"]["updatedInput"]  # type: ignore[index]
+    assert ti["transcript_path"] == "/home/x/.claude/projects/p/other-sid.jsonl"
+    assert ti["bridge_session_id"] == "bridge-xyz"
+
+
+def test_anchor_a_non_osiris_tool_is_never_touched() -> None:
+    assert _run_anchor({"tool_name": "Bash", "session_id": "513aa520-aaaa",
+                        "tool_input": {"command": "ls"}}) == {}
+
+
+def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() -> None:
+    """The stub this fix replaces echoed the WHOLE hook payload unconditionally, in a shape
+    the harness's PreToolUse contract does not recognize — no `hookSpecificOutput.updatedInput`
+    means the harness never applies the edit at all, silently. Unchanged input must print
+    NOTHING (the harness leaves the call alone), never a no-op envelope."""
+    import os as _os
+
+    env = dict(_os.environ)
+    env.pop("CLAUDE_CODE_BRIDGE_SESSION_ID", None)  # this session's own env must not leak in
+    out = subprocess.run([sys.executable, str(_HOOK_SCRIPT), "anchor"],
+                         input=json.dumps({"tool_name": "mcp__osiris__mount",
+                                          "session_id": "",
+                                          "tool_input": {}}),
+                         capture_output=True, text=True, check=False, env=env)
+    assert out.stdout.strip() == ""

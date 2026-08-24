@@ -661,31 +661,104 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     return 0
 
 
+# tools whose server signature accepts the spawn stamp — keep in lockstep with mcp_server.
+# Ported verbatim from osiris_mount_anchor.py (dispatch 5441/5492 parity fix, the anchor
+# CHANNEL check): the retired script's own tests/test_anchor.py AST-scan guard (obligation
+# 570dd7e8) still enforces this set against mcp_server.py's real `_actor_for` call sites.
+_SPAWN_AWARE = {
+    "mcp__osiris__mount", "mcp__osiris__orient", "mcp__osiris__record_decision",
+    "mcp__osiris__open_thread", "mcp__osiris__resolve_thread", "mcp__osiris__hold_tension",
+    "mcp__osiris__send", "mcp__osiris__inbox", "mcp__osiris__ingest_reference",
+    "mcp__osiris__reclassify_thread", "mcp__osiris__wake", "mcp__osiris__launch",
+    "mcp__osiris__lift", "mcp__osiris__record_practice", "mcp__osiris__acquire_lease",
+    "mcp__osiris__release_lease", "mcp__osiris__settle", "mcp__osiris__register_blind_spot",
+    "mcp__osiris__hold_memory", "mcp__osiris__annotate_thread", "mcp__osiris__amend_decision",
+    "mcp__osiris__amend_practice", "mcp__osiris__ack_handoff",
+    "mcp__osiris__correct_thread_summary", "mcp__osiris__stop",
+}
+
+# tools whose server signature accepts `session_anchor` — ported verbatim, same source.
+_ANCHOR_AWARE = {
+    "mcp__osiris__orient", "mcp__osiris__inbox", "mcp__osiris__send",
+    "mcp__osiris__record_decision", "mcp__osiris__open_thread", "mcp__osiris__resolve_thread",
+    "mcp__osiris__ack_handoff",
+}
+
+
 def _cmd_anchor(hook: dict[str, Any]) -> int:
     """PreToolUse stdin filter — inject session_anchor and spawn stamps.
-    This is a FILTER: reads stdin, modifies tool_input, writes to stdout."""
+    This is a FILTER: reads stdin, modifies tool_input, writes to stdout.
+
+    Ported verbatim from osiris_mount_anchor.py (the anchor CHANNEL check, dispatch 5441/
+    5492): the original stub here only stamped a raw session_id onto every osiris call,
+    unconditionally and ungated — missing the job_dir DERIVATION (the actual fix for "the
+    most-reported bug in the fleet"), the ANCHOR_AWARE/SPAWN_AWARE gating (an ungated stamp
+    onto a tool whose schema doesn't accept the field fails validation LOUDER than the bug
+    it fixes), the MAIN-session strip (nobody masquerades DOWN as a spawn), the tab-view/
+    bridge doors (transcript_path, CLAUDE_CODE_BRIDGE_SESSION_ID — a live env read the old
+    stub dropped entirely, the same CHANNEL-class gap already found in whisper/statusline),
+    and the foreign-anchor respect (session_anchor, not job_dir clobber, when the agent
+    already supplied its own valid job_dir).
+    """
     tool = str(hook.get("tool_name") or "")
     if not tool.startswith("mcp__osiris__"):
-        json.dump(hook, sys.stdout, ensure_ascii=False)
-        sys.stdout.flush()
         return 0
     ti = dict(hook.get("tool_input") or {})
     changed = False
     child = str(hook.get("agent_id") or "")
-    if child:
-        ti["subagent_id"] = child
-        at = str(hook.get("agent_type") or "")
-        if at:
-            ti["subagent_type"] = at
-        changed = True
+
+    if tool in _SPAWN_AWARE:
+        if child:
+            ti["subagent_id"] = child
+            agent_type = str(hook.get("agent_type") or "")
+            if agent_type:
+                ti["subagent_type"] = agent_type
+            if tool == "mcp__osiris__mount":
+                ti.pop("job_dir", None)
+                ti.pop("session_anchor", None)
+                tp = str(hook.get("transcript_path") or "")
+                if tp.endswith(".jsonl"):
+                    handle = child.removeprefix("agent-")
+                    ti["subagent_transcript"] = f"{tp[:-6]}/subagents/agent-{handle}.jsonl"
+            changed = True
+        else:
+            for key in ("subagent_id", "subagent_type", "subagent_transcript"):
+                if key in ti:
+                    ti.pop(key)
+                    changed = True
+
     sid = str(hook.get("session_id") or "")
-    if sid:
-        ti["session_anchor"] = sid
+    derived = str(Path.home() / ".claude" / "jobs" / sid[:8]) if len(sid) >= 8 else ""
+
+    if tool == "mcp__osiris__mount" and not child:
+        if derived:
+            existing = str(ti.get("job_dir") or "")
+            if existing.startswith("/") and "$" not in existing:
+                if existing.rstrip("/") != derived:
+                    ti["session_anchor"] = derived
+                    changed = True
+            else:
+                ti["job_dir"] = derived
+                changed = True
+        tp = str(hook.get("transcript_path") or "")
+        if tp.endswith(".jsonl") and not ti.get("transcript_path"):
+            ti["transcript_path"] = tp
+            changed = True
+        bridge_id = os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID") or ""
+        if bridge_id and not ti.get("bridge_session_id"):
+            ti["bridge_session_id"] = bridge_id
+            changed = True
+
+    if derived and not child and tool in _ANCHOR_AWARE and not ti.get("session_anchor"):
+        ti["session_anchor"] = derived
         changed = True
+
     if changed:
-        hook["tool_input"] = ti
-    json.dump(hook, sys.stdout, ensure_ascii=False)
-    sys.stdout.flush()
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": ti,
+        }}))
     return 0
 
 
