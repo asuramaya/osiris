@@ -52,6 +52,69 @@ _URLS = {
     "succession": os.environ.get("OSIRIS_SUCCESSON_URL", "http://127.0.0.1:8790/succession"),
 }
 
+# THE CHROME'S OWN RENDERING (ported verbatim from osiris_statusline.py's own `main()`,
+# dispatch 5441/5492 parity fix — found live, the same day as the flip: `/heartbeat`
+# (src/mcp_server.py) has only ever returned raw COUNTS (HeartbeatResult._asdict()), never
+# a pre-rendered "status_line" string — the actual two-line rendering (colors, the mail/DM/
+# fleet/wakes segments, the budget strip, the model-swap check) has ALWAYS lived in the
+# script's own client-side `main()`, and had no equivalent anywhere in this file until now.
+# Without this, the flipped live settings.json would have rendered a BLANK status bar on
+# every session — a real, currently-live regression, not a hypothetical one.
+_CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
+_LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"
+_DIM, _RED, _GREEN, _AMBER, _RESET = "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[0m"
+
+
+def _short(model_id: str) -> str:
+    return model_id.removeprefix("claude-")
+
+
+def _link(text: str, anchor: str) -> str:
+    """OSC 8 hyperlink into the /membrane lens — terminals without OSC 8 support render the
+    plain text; the escapes are invisible either way."""
+    if not _LINKS:
+        return text
+    return f"\033]8;;{_CONSOLE}/membrane#{anchor}\033\\{text}\033]8;;\033\\"
+
+
+def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool:
+    """Was this divergence the OPERATOR's own /model? Pure/local — no DB, matching
+    `_swap_confession`'s own shape: a durable marker under the session's job dir, and a
+    transcript-tail scan for the harness's own verbatim `/model` command record."""
+    sid = (session_id or "")[:8]
+    marker = (Path.home() / ".claude" / "jobs" / sid / ".osiris_model_op") if len(sid) == 8 \
+        else None
+    try:
+        if marker is not None and marker.is_file() and marker.read_text().strip() == model_id:
+            return True
+    except OSError:
+        pass
+    try:
+        p = Path(transcript_path)
+        with p.open("rb") as fh:
+            fh.seek(max(0, p.stat().st_size - 262_144))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    hit = False
+    for ln in tail.splitlines():
+        if "<command-name>/model</command-name>" not in ln:
+            continue
+        try:
+            entry = json.loads(ln)
+        except ValueError:
+            continue
+        if entry.get("type") == "user" and not entry.get("isSidechain"):
+            hit = True
+            break
+    if hit and marker is not None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(model_id)
+        except OSError:
+            pass
+    return hit
+
 _TIMEOUTS: dict[str, int] = {
     "statusline": 1, "stop": 3, "whisper": 3, "session-end": 2,
     "precompact": 2, "spawn": 2, "anchor": 5, "stop_stage_a": 2,
@@ -70,17 +133,118 @@ def _post(url: str, data: dict[str, Any], *, timeout: int = 3) -> Any | None:
 
 
 def _cmd_statusline(hook: dict[str, Any]) -> int:
-    """POST session state to /heartbeat, print rendered status line."""
-    resp = _post(_URLS["statusline"], hook, timeout=_TIMEOUTS["statusline"])
+    """Render the two-line Osiris chrome (ported from osiris_statusline.py's own `main()`):
+    resolve project/model intent locally (pure filesystem pin-climb, no DB), POST the
+    resolved fields to /heartbeat for the shared counts, then render exactly as the old
+    script did. /heartbeat returns raw counts only (HeartbeatResult._asdict()), never a
+    pre-rendered line \u2014 the rendering has always been, and remains, this caller's job."""
+    ws = hook.get("workspace") or {}
+    cwd = str(ws.get("current_dir") or ws.get("project_dir") or hook.get("cwd") or "")
+    try:
+        from src.orchestrator.agents import read_project_label, read_project_model
+        project_hint = read_project_label(cwd)
+        intent_hint = read_project_model(cwd)
+    except Exception:  # noqa: BLE001 \u2014 the chrome never breaks on a resolver import/read
+        project_hint = intent_hint = None
+    model_raw = str((hook.get("model") or {}).get("id") or "")
+    model_id = model_raw.split("[", 1)[0].strip()
+    session_id = str(hook.get("session_id") or "")
+    transcript = str(hook.get("transcript_path") or "")
+    if not transcript and session_id:
+        transcript = str(Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
+                         / f"{session_id}.jsonl")
+    cw = hook.get("context_window") or {}
+    ctx_pct = cw.get("used_percentage") if isinstance(cw, dict) else None
+    ctx_pct = round(ctx_pct) if isinstance(ctx_pct, (int, float)) else None
+    window_size = cw.get("context_window_size") if isinstance(cw, dict) else None
+    window_size = int(window_size) if isinstance(window_size, (int, float)) else None
+
+    resolved_intent = intent_hint
+    resp = _post(_URLS["statusline"], {
+        "project_hint": project_hint or "", "session_id": session_id, "model_id": model_id,
+        "model_raw": model_raw, "window_size": window_size, "intent_hint": intent_hint,
+    }, timeout=_TIMEOUTS["statusline"])
     if resp is None or resp.get("error"):
-        cwd = str(hook.get("cwd") or "")
-        project = str(hook.get("project") or cwd.rsplit("/", 1)[-1] or "?")
-        print(f"\u25c8 {project} \u2502 graph unreachable")
-        return 0
-    result = resp.get("result") or resp
-    line = result.get("status_line") or result.get("rendered") or ""
-    if line:
-        print(line)
+        project = project_hint or "?"
+        parts = [f"\u25c8 {project}", f"{_DIM}graph unreachable{_RESET}"]
+    else:
+        r = resp.get("result") or resp
+        desk, mail, dm, flight = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0), \
+            r.get("flight", 0)
+        live, wakes = r.get("souls", 0), r.get("wakes", 0)
+        owed_here, sick = r.get("owed_here", 0), r.get("sick") or []
+        spend = r.get("spend") or [0.0, 0.0, 0]
+        spent, cap, blind = (spend + [0.0, 0.0, 0])[:3]
+        resolved_project = r.get("resolved_project") or project_hint or "?"
+        resolved_intent = r.get("resolved_intent")
+        resolved_seat_handle = r.get("resolved_seat_handle")
+        seat_tag = f"{resolved_seat_handle}\u00b7" if resolved_seat_handle else ""
+        owe_s = (f"{_RED}owe {owed_here}{_RESET}" if owed_here else f"{_GREEN}owe 0{_RESET}")
+        desk_s = f"{_DIM}briefs {desk}{_RESET}" if desk else ""
+        flight_s = f"{_AMBER}+{flight}{_RESET}" if flight else ""
+        dm_s = f" {_RED}\u2709{dm}{_RESET}" if dm else ""
+        mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight or dm)
+                  else f"{_DIM}mail 0{_RESET}")
+        sick_s = (f"{_RED}\u26a0 not sensing: {','.join(sick[:2])}{_RESET}" if sick else "")
+        spend_s = ""
+        try:
+            from src.ingest.providers import spend_is_metered
+            if spend_is_metered():
+                if blind:
+                    spend_s = f"{_RED}\u26a0 {blind} unpriced call(s){_RESET}"
+                elif cap > 0 and spent >= 0.6 * cap:
+                    c = _RED if spent >= 0.85 * cap else _AMBER
+                    spend_s = f"{c}${spent:.2f}/${cap:.0f}{_RESET}"
+        except Exception:  # noqa: BLE001 \u2014 the price strip is a nicety, never a crash
+            pass
+        parts = [
+            _link(f"\u25c8 {seat_tag}{resolved_project}", "desk"),
+            *([_link(sick_s, "fleet")] if sick_s else []),
+            *([_link(spend_s, "desk")] if spend_s else []),
+            _link(owe_s, "desk"),
+            *([_link(desk_s, "desk")] if desk_s else []),
+            _link(mail_s, "conversations"),
+            _link(f"fleet {live}\u25cf", "fleet"),
+            _link(f"wakes {wakes}/h", "wakes"),
+            # NO "graph slow" SEGMENT: the old script's own retry-after-timeout-then-cache
+            # distinction doesn't exist here — this hook makes one direct HTTP POST with its
+            # own short timeout and no local cache at all, so there is no "answered, just
+            # late" state left to report separately from a plain miss.
+        ]
+
+    vitals: list[str] = []
+    pct = ctx_pct if ctx_pct is not None else _context_pct(transcript, window_size)
+    if pct is not None:
+        color = _GREEN if pct < 60 else (_AMBER if pct < 85 else _RED)
+        vitals.append(f"{color}ctx {pct}%{_RESET}")
+
+    rl = hook.get("rate_limits") or {}
+    if isinstance(rl, dict):
+        vals = []
+        for key, tag in (("five_hour", "5h"), ("seven_day", "7d")):
+            v = (rl.get(key) or {}).get("used_percentage") if isinstance(rl.get(key), dict) \
+                else None
+            if isinstance(v, (int, float)):
+                vals.append((tag, round(v)))
+        if vals:
+            worst = max(v for _, v in vals)
+            color = _GREEN if worst < 60 else (_AMBER if worst < 85 else _RED)
+            vitals.append(color + " \u00b7 ".join(f"{t} {v}%" for t, v in vals) + _RESET)
+
+    if model_id:
+        if resolved_intent is None:
+            pass
+        elif model_id == resolved_intent:
+            vitals.append(f"{_GREEN}{_short(model_id)}{_RESET}")
+        elif _operator_swap(transcript, session_id, model_id):
+            vitals.append(f"{_AMBER}\u21c4 {_short(model_id)} (your /model){_RESET}")
+        else:
+            vitals.append(
+                f"{_RED}\u26a0 {_short(model_id)} (declared: {_short(resolved_intent)}){_RESET}")
+
+    print(f" {_DIM}\u2502{_RESET} ".join(parts))
+    if vitals:
+        print(f" {_DIM}\u2502{_RESET} ".join(vitals))
     return 0
 
 

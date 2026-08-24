@@ -180,3 +180,150 @@ def test_fire_stage_a_posts_the_expected_shape(monkeypatch: Any) -> None:
     assert captured["data"]["pct"] == 42
     assert captured["data"]["payload"] == {"session_id": "x"}
     assert captured["url"] == osiris_hook._URLS["stop"]
+
+
+# --- _cmd_statusline: the chrome rendering (dispatch 5441/5492 parity fix — /heartbeat has
+# only ever returned raw counts, never a pre-rendered line; found live, the day of the flip,
+# that this was ENTIRELY missing and would have rendered a blank status bar) --------------
+
+def _heartbeat_result(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "briefs": 0, "mail": 0, "dm": 0, "flight": 0, "souls": 3, "wakes": 2,
+        "owed": 0, "owed_here": 0, "sick": [], "spend": [0.0, 0.0, 0],
+        "resolved_project": "osiris", "resolved_intent": "claude-sonnet-5",
+        "resolved_seat_handle": "Seshat",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result()})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    rc = osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"},
+        "session_id": "abcd1234",
+    })
+    assert rc == 0
+    assert len(out) >= 1
+    assert "Seshat" in out[0] and "osiris" in out[0]
+    assert "fleet 3●" in out[0]
+    assert "wakes 2/h" in out[0]
+    assert "mail 0" in out[0]
+    assert "owe 0" in out[0]
+
+
+def test_statusline_falls_back_to_graph_unreachable_on_route_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    rc = osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert rc == 0
+    assert "graph unreachable" in out[0]
+
+
+def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"result": _heartbeat_result(owed_here=3)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert "owe 3" in out[0]
+    assert osiris_hook._RED in out[0]
+
+
+def test_statusline_shows_a_dm_doorbell_even_with_zero_plain_mail(monkeypatch: Any) -> None:
+    """thread from the old script: `dm` must light the segment by itself — mail 0 + flight 0
+    + 7 DMs waiting must never render as a dim 'mail 0'."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"result": _heartbeat_result(dm=7)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
+    assert "✉7" in out[0]
+    assert f"{osiris_hook._DIM}mail 0{osiris_hook._RESET}" not in out[0]
+
+
+def test_statusline_model_matches_declared_intent_renders_green(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-sonnet-5")})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert len(out) == 2
+    assert f"{osiris_hook._GREEN}sonnet-5{osiris_hook._RESET}" in out[1]
+
+
+def test_statusline_model_mismatch_with_no_operator_swap_renders_red(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-opus-5")})
+    monkeypatch.setattr(osiris_hook, "_operator_swap", lambda t, s, m: False)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert "⚠ sonnet-5 (declared: opus-5)" in out[1]
+    assert osiris_hook._RED in out[1]
+
+
+def test_statusline_model_mismatch_confirmed_as_operator_choice_renders_amber(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent="claude-opus-5")})
+    monkeypatch.setattr(osiris_hook, "_operator_swap", lambda t, s, m: True)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"}})
+    assert "your /model" in out[1]
+    assert osiris_hook._AMBER in out[1]
+
+
+def test_statusline_no_declared_intent_is_silent_not_an_alarm(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result(
+            resolved_intent=None)})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"}, "model": {"id": "claude-sonnet-5"},
+        "context_window": {"used_percentage": 40}})
+    # only the ctx segment on the vitals line, no model warning at all
+    assert len(out) == 2
+    assert "sonnet-5" not in out[1]
+    assert "⚠" not in out[1]
+
+
+def test_statusline_ctx_pct_from_payload_colors_by_threshold(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post", lambda url, data, timeout=3: {"result": _heartbeat_result()})
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    osiris_hook._cmd_statusline({
+        "workspace": {"current_dir": "/repo"},
+        "context_window": {"used_percentage": 90, "context_window_size": 200000}})
+    assert f"{osiris_hook._RED}ctx 90%{osiris_hook._RESET}" in out[1]
+
+
+def test_operator_swap_reads_the_transcript_command_record(tmp_path: Any) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "user", "isSidechain": False,
+        "message": {"content": "<command-name>/model</command-name>"},
+    }) + "\n")
+    assert osiris_hook._operator_swap(str(t), "swapop01", "claude-opus-5") is True
+
+
+def test_operator_swap_false_with_no_command_in_transcript(tmp_path: Any) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({"type": "assistant", "message": {"content": "ok"}}) + "\n")
+    assert osiris_hook._operator_swap(str(t), "swapop02", "claude-opus-5") is False
