@@ -2846,7 +2846,7 @@ async def graph_search(
 
 @mcp.tool()
 async def get_mail(ctx: Context | None = None) -> dict[str, Any]:
-    """​Your inbox status: unread count, asks, operator briefs -- one query,
+    """Your inbox status: unread count, asks, operator briefs -- one query,
     no threads, no succession, no fleet pulse. The cheapest orient alternative."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
