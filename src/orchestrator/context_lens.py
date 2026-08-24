@@ -24,6 +24,11 @@ WINDOW_DEFAULT = 200_000
 WINDOW_1M = 1_000_000
 # occupancy above this is the write-back alarm: compaction can land any turn
 ALARM_PCT = 80
+# the offload ritual's SECOND tier (moved here from scripts/osiris_stophook.py during the
+# hook-migration parity fix, dispatch 5441 LEG 1/4): one authority for both, same law as
+# ALARM_PCT above — a soft nudge at ALARM_PCT re-arms once more here, never a second
+# independently-tuned constant living beside it.
+HARD_ALARM_PCT = 95
 
 
 def window_for(raw_model: str | None, used: int | None = None) -> tuple[int, bool]:
