@@ -603,8 +603,13 @@ async def send_message(
     stamped = await _stamp_threads()
     # GRAPH EDGES: write Message object + links so mail is traversable in the graph
     try:
-        from datetime import UTC, datetime
-
+        # NOT a local `from datetime import ...` here (Thoth DM 5442 leg 1, ruling
+        # 2f7e1588's own fix never actually landed on this tip): datetime/UTC are already
+        # imported at module level (line 26) — a local import anywhere in send_message's
+        # body makes `datetime` a LOCAL name for the WHOLE function per Python's scoping,
+        # including inside the `_stamp_threads` closure above, which reads `datetime.now`
+        # at its own definition — called at line 603, before this import would have run,
+        # so every send(threads=[...]) hit "cannot access free variable 'datetime'".
         from src.actions.core import Actions as _Actions
         acts = _Actions(pool)
         now = datetime.now(UTC)
