@@ -7537,8 +7537,13 @@ async def stop_route(request: Any) -> Any:
     costs exactly what today already costs, never more."""
     from starlette.responses import JSONResponse
 
-    from src.orchestrator.stophook_logic import compute_stop_deliverable, compute_stop_offload
+    from src.orchestrator.stophook_logic import (
+        compute_stop_deliverable,
+        compute_stop_offload,
+        compute_stop_stage_a,
+    )
 
+    body: Any = None
     try:
         body = await request.json()
         phase = str(body.get("phase") or "")
@@ -7550,10 +7555,28 @@ async def stop_route(request: Any) -> Any:
             out = await compute_stop_deliverable(pool, cwd=cwd, session_id=session_id)
         elif phase == "offload":
             out = await compute_stop_offload(pool, session_id=session_id, cwd=cwd)
+        elif phase == "stage_a":
+            # THE PIT WATCH + PRACTICE AUDIT (dispatch 5441 LEG 1 parity fix): fire-and-
+            # forget from the hook's own POV — it does not block the stop either way, so
+            # this phase always answers `{"result": "ok"}` on success; a failure below still
+            # alarms like every other phase, never silently.
+            pct = body.get("pct")
+            await compute_stop_stage_a(
+                pool, payload=(body.get("payload") or {}), session_id=session_id, cwd=cwd,
+                pct=(int(pct) if isinstance(pct, (int, float)) else None))
+            out = "ok"
         else:
             return JSONResponse({"error": f"unknown phase {phase!r}"}, status_code=400)
         return JSONResponse({"result": out})
     except Exception as e:  # noqa: BLE001 — the hook falls back to its own connect; never block
+        sid = body.get("session_id") if isinstance(body, dict) else "?"
+        try:
+            from src.orchestrator.capture import record_hook_failure
+            await record_hook_failure(
+                Actions(await _pool_get()), surface="hook/stop",
+                cannot_see=f"/stop route failed for session {sid}: {e}")
+        except Exception:  # noqa: BLE001 — the alarm itself must never break the response
+            pass
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 

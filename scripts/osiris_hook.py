@@ -29,6 +29,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+# ONE AUTHORITY on the two-tier compaction ladder (src/orchestrator/context_lens.py's own
+# ALARM_PCT/HARD_ALARM_PCT), never a second, independently-drifting pair of literals here.
+# context_lens.py is itself stdlib-only (json/Path/typing, no asyncpg) so this import stays
+# true to this file's own "zero cold connections" law; the repo-root insert mirrors
+# osiris_stophook.py's own established technique for a hook invoked from an arbitrary cwd.
+# Fails open to the historically-correct values on any import trouble (a moved repo, a
+# stripped-down deploy) rather than ever crashing the hook over a constant.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from src.orchestrator.context_lens import ALARM_PCT, HARD_ALARM_PCT
+except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
+    ALARM_PCT, HARD_ALARM_PCT = 80, 95
+
 _URLS = {
     "statusline": os.environ.get("OSIRIS_HEARTBEAT_URL", "http://127.0.0.1:8790/heartbeat"),
     "stop": os.environ.get("OSIRIS_STOP_URL", "http://127.0.0.1:8790/stop"),
@@ -41,7 +54,7 @@ _URLS = {
 
 _TIMEOUTS: dict[str, int] = {
     "statusline": 1, "stop": 3, "whisper": 3, "session-end": 2,
-    "precompact": 2, "spawn": 2, "anchor": 5,
+    "precompact": 2, "spawn": 2, "anchor": 5, "stop_stage_a": 2,
 }
 
 
@@ -71,13 +84,98 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     return 0
 
 
+def _swap_confession(hook: dict[str, Any]) -> str | None:
+    """THE RUG-PULL CONFESSION (operator, 2026-07-17: 'atlas got rug pulled mid
+    conversation from fable to opus, and it will have no idea until i explicitly tell
+    it'). Ported verbatim from osiris_stophook.py's own `_swap_confession` (dispatch 5441
+    LEG 1 parity fix) — pure/local, no DB round trip: reads the transcript tail directly,
+    writes a local marker under the durable anchor dir. Detects the latest mid-session
+    model change and confesses it ONCE per change. Variant suffixes ([1m]) are the same
+    weights — never a swap. Fail-open."""
+    transcript = str(hook.get("transcript_path") or "")
+    sid = str(hook.get("session_id") or "")[:8]
+    if not transcript or len(sid) < 8:
+        return None
+    try:
+        tp = Path(transcript)
+        with tp.open("rb") as fh:
+            fh.seek(max(0, tp.stat().st_size - 524_288))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    cur: str | None = None
+    prev: str | None = None
+    for line in reversed(tail.splitlines()):
+        if '"assistant"' not in line or '"model"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant" or e.get("isSidechain"):
+            continue
+        m = str((e.get("message") or {}).get("model") or "").split("[", 1)[0].strip()
+        if not m or m == "<synthetic>":
+            continue
+        if cur is None:
+            cur = m
+        elif m != cur:
+            prev = m
+            break
+    if not cur or not prev:
+        return None
+    marker = Path.home() / ".claude" / "jobs" / sid / ".osiris_swapseen"
+    pair = f"{prev} -> {cur}"
+    try:
+        if marker.exists() and marker.read_text().strip() == pair:
+            return None  # this swap is already confessed; a NEW swap confesses again
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(pair)
+    except OSError:
+        return None
+    return (f"Osiris model check: YOUR MODEL CHANGED mid-session — {pair}. If you did "
+            "not see the operator ask for this, it is a silent swap (the classifier "
+            "rug-pull class, ruling 057a0bbf): confess it to the operator in your next "
+            "reply, then continue. If the operator chose it (/model on the record), "
+            "acknowledge and continue. Either way: you are not the model you were a "
+            "few turns ago — say so out loud; never inherit a swap blind.")
+
+
+def _fire_stage_a(hook: dict[str, Any], session_id: str, cwd: str, *, pct: int | None) -> None:
+    """Best-effort, fire-and-forget courtesy ping (osiris_stophook.py's own `_stage_a`,
+    dispatch 5441 LEG 1 parity fix): self-restore mount, the leased-assignment stall
+    confession, the parked-question / practice-violation nudges, and the context_pct
+    stamp — all server-side now (`/stop`'s `stage_a` phase, `stophook_logic.
+    compute_stop_stage_a`). Called only from ALLOW paths, same law as the original:
+    confessing "stopping" on a path that ends up BLOCKED would be a lie. A failure here
+    costs a missed courtesy note, never a broken stop — this call's own result is never
+    inspected, and the route alarms on its own internal failure independently."""
+    _post(_URLS["stop"], {"phase": "stage_a", "cwd": cwd, "session_id": session_id,
+                          "pct": pct, "payload": hook},
+          timeout=_TIMEOUTS["stop_stage_a"])
+
+
 def _cmd_stop(hook: dict[str, Any]) -> int:
-    """Two-phase stop hook: deliverable check + offload ritual.
+    """Two-phase stop hook: deliverable check + offload ritual, plus the swap confession
+    and Stage A/B/C courtesy pings (dispatch 5441 LEG 1 parity fix — ported from
+    osiris_stophook.py's own `main()`, same ordering).
     Block markers stored as files under ~/.claude/jobs/<sid>/."""
     session_id = str(hook.get("session_id") or "")
     cwd = str(hook.get("cwd") or "")
     if not session_id:
         return 0
+
+    if hook.get("stop_hook_active"):
+        # We already forced a continuation once this turn — never loop on unsettleable
+        # mail (a message the agent cannot settle must never trap it a second time).
+        _fire_stage_a(hook, session_id, cwd, pct=None)
+        return 0
+
+    # IDENTITY OUTRANKS MAIL: a mind that changed models must know before anything else.
+    confession = _swap_confession(hook)
+    if confession:
+        print(confession, file=sys.stderr)
+        return 1
 
     # Phase 1: deliverable check
     resp = _post(_URLS["stop"], {"phase": "deliverable", "cwd": cwd,
@@ -98,7 +196,8 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     # Context occupancy (stdlib tail-read)
     transcript = str(hook.get("transcript_path") or "")
     pct = _context_pct(transcript, window_hint)
-    if pct is None or pct < 80:
+    if pct is None or pct < ALARM_PCT:
+        _fire_stage_a(hook, session_id, cwd, pct=pct)
         return 0
 
     # Block marker state (Claude-specific paths)
@@ -109,23 +208,27 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     soft_exists = soft is not None and soft.exists()
     hard_exists = hard is not None and hard.exists()
 
-    if soft_exists and not hard_exists and pct < 95:
+    if soft_exists and not hard_exists and pct < HARD_ALARM_PCT:
+        _fire_stage_a(hook, session_id, cwd, pct=pct)
         return 0  # soft already fired, below hard line
     if soft_exists and hard_exists:
+        _fire_stage_a(hook, session_id, cwd, pct=pct)
         return 0  # both already fired — never loop
 
     # Phase 2: offload box check
     resp2 = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd,
                                    "session_id": session_id}, timeout=_TIMEOUTS["stop"])
     if resp2 is None or resp2.get("error"):
+        _fire_stage_a(hook, session_id, cwd, pct=pct)
         return 0
     boxes = (resp2.get("result") or resp2)
     missing = _missing_boxes(boxes) if isinstance(boxes, dict) else []
     if not missing:
+        _fire_stage_a(hook, session_id, cwd, pct=pct)
         return 0
 
     listed = "; ".join(missing)
-    target = hard if hard_exists else (hard if pct >= 95 else soft)
+    target = hard if hard_exists else (hard if pct >= HARD_ALARM_PCT else soft)
     is_hard = target is hard
     note = ("this is the harder nudge — nothing further will interrupt you this session"
             if is_hard else

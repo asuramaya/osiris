@@ -41,7 +41,7 @@ def test_fresh_repo_gets_both_files(tmp_path: Path) -> None:
     cmd = settings["statusLine"]["command"]
     assert settings["statusLine"]["type"] == "command"
     assert Path(cmd.split()[0]).is_absolute()  # absolute venv python
-    assert cmd.endswith("scripts/osiris_statusline.py")
+    assert cmd.endswith("scripts/osiris_hook.py statusline")  # the unified hook, dispatch 5441
     assert ".venv/bin/python" in cmd
 
 
@@ -115,7 +115,9 @@ def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
     # the foreign guard survives; ours is added with the osiris-wide matcher
     assert any(g.get("matcher") == "Bash" for g in pre)
     ours = next(g for g in pre if g.get("matcher") == "mcp__osiris__.*")
-    assert "osiris_mount_anchor.py" in ours["hooks"][0]["command"]
+    # dispatch 5441 (the hook migration): the unified osiris_hook.py, "anchor" subcommand —
+    # never the retired per-purpose osiris_mount_anchor.py.
+    assert ours["hooks"][0]["command"].endswith("scripts/osiris_hook.py anchor")
     # the whisper landed too (SessionStart), and a re-run changes nothing
     assert settings["hooks"]["SessionStart"]
     _, changed = merge_settings(settings, tmp_path, whisper=True, anchor=True)
@@ -123,16 +125,19 @@ def test_anchor_installs_the_pretooluse_mount_hook(tmp_path: Path) -> None:
 
 
 def test_anchor_retargets_a_stale_matcher_in_place(tmp_path: Path) -> None:
-    """The matcher widened (mount → mcp__osiris__.*): a settings.json carrying the OLD
-    matcher gets retargeted in place — appending a second group would double-fire the hook
-    on every mount."""
-    hook_cmd = f"python3 {tmp_path / 'scripts' / 'osiris_mount_anchor.py'}"
+    """The matcher widened (mount → mcp__osiris__.*): a settings.json carrying the SAME
+    command under the OLD narrower matcher gets retargeted in place — appending a second
+    group would double-fire the hook on every osiris tool call. `_merge_hook`'s own
+    retargeting keys off an EXACT command-string match, so this must use the unified
+    osiris_hook.py's own command shape (dispatch 5441) to exercise it, not the retired
+    per-purpose osiris_mount_anchor.py script."""
+    hook_cmd = f"python3 {tmp_path / 'scripts' / 'osiris_hook.py'} anchor"
     doc = {"hooks": {"PreToolUse": [{"matcher": "mcp__osiris__mount", "hooks": [
         {"type": "command", "command": hook_cmd, "timeout": 5}]}]}}
     out, changed = merge_settings(doc, tmp_path, anchor=True)
     assert changed is True
     groups = [g for g in out["hooks"]["PreToolUse"]
-              if any("osiris_mount_anchor" in h.get("command", "") for h in g["hooks"])]
+              if any("osiris_hook.py anchor" in h.get("command", "") for h in g["hooks"])]
     assert len(groups) == 1                                # retargeted, never duplicated
     assert groups[0]["matcher"] == "mcp__osiris__.*"
     _, again = merge_settings(out, tmp_path, anchor=True)  # now stable
@@ -148,7 +153,9 @@ def test_spawn_installs_the_subagent_announcements(tmp_path: Path) -> None:
     settings = _read(repo / ".claude" / "settings.json")
     for event in ("SubagentStart", "SubagentStop"):
         cmds = [h["command"] for g in settings["hooks"][event] for h in g["hooks"]]
-        assert any("osiris_spawn.py" in c for c in cmds)
+        # dispatch 5441: the unified osiris_hook.py's own "spawn" subcommand, never the
+        # retired per-purpose osiris_spawn.py.
+        assert any(c.endswith("scripts/osiris_hook.py spawn") for c in cmds)
     _, changed = merge_settings(settings, tmp_path, spawn=True)
     assert changed is False
 
