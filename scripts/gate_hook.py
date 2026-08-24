@@ -312,6 +312,143 @@ def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     return ok, out.strip()
 
 
+_RATCHET_TEST_NODEID = (
+    "tests/test_tool_contract_diet.py::test_tool_contract_stays_under_the_ceiling"
+)
+
+
+def _is_merge_context(repo_root: Path) -> bool:
+    """True for the commit-about-to-land in TWO cases: (1) live pre-commit, mid `git merge`
+    — `MERGE_HEAD` exists from the moment a merge starts conflict-free until the merge
+    commit itself lands, the standard git signal for "this commit, once made, will have 2+
+    parents"; (2) `--audit`'s retroactive replay, where the commit already exists at HEAD in
+    its own disposable worktree — read its actual parent count instead. Scoped this narrow
+    on purpose (thread 1a0f91bb): a NON-merge commit that happens to exceed the ratchet
+    ceiling is a real, ordinary regression and must still refuse — this only recognizes the
+    one named pattern where the growth landed via a merge whose own follow-up "ratchet:"
+    commit (this house's established practice) has not landed yet."""
+    ok, out = _run(["git", "rev-parse", "--verify", "-q", "MERGE_HEAD"], repo_root)
+    if ok and out.strip():
+        return True
+    ok, out = _run(["git", "rev-list", "--parents", "-n", "1", "HEAD"], repo_root)
+    if not ok or not out.strip():
+        return False
+    return len(out.split()) > 2  # HEAD's own sha + >=2 parent shas
+
+
+def _pytest_sole_failure_is_ratchet_ceiling(out: str) -> bool:
+    """True iff pytest's own `-q` "FAILED <nodeid> - ..." lines name EXACTLY the ratchet
+    ceiling test and nothing else. Never a blanket exemption for merge commits generally —
+    a merge that ALSO breaks something else (#133's own real specimens, a74ce7a/ff72377)
+    must still refuse; only this one named, narrow failure shape is eligible."""
+    failed = [line for line in out.splitlines() if line.startswith("FAILED ")]
+    if len(failed) != 1:
+        return False
+    return failed[0].split(" ", 2)[1] == _RATCHET_TEST_NODEID
+
+
+def _module_level_import_names(tree: ast.Module) -> set[str]:
+    """Every name this module binds via a TOP-LEVEL `import`/`from ... import` — the
+    population a function-local import can shadow. Never a nested import (those belong to
+    their own scope, not the module's)."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in node.names)
+    return names
+
+
+def _own_scope_local_imports(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, int]]:
+    """(name, lineno) for every name bound by an `import`/`from ... import` DIRECTLY in
+    this function's own scope — walks the whole body (through if/for/while/try/with) but
+    does NOT descend into a nested def/class/lambda, which each own a separate scope with
+    its own local imports. Python's scoping rule (the actual mechanism behind the bug this
+    lint exists to catch): any assignment anywhere in a function's body, at any nesting
+    depth of a non-scope-creating block, makes that name local to the WHOLE function —
+    not merely from that line onward."""
+    out: list[tuple[str, int]] = []
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef, ast.Lambda)):
+                continue  # a separate scope — its own local imports are its own business
+            if isinstance(child, ast.Import):
+                out.extend(
+                    (alias.asname or alias.name.split(".")[0], child.lineno)
+                    for alias in child.names)
+            elif isinstance(child, ast.ImportFrom):
+                out.extend(
+                    (alias.asname or alias.name, child.lineno) for alias in child.names)
+            else:
+                walk(child)
+
+    walk(func)
+    return out
+
+
+def _reads_name_before(func: ast.AST, name: str, before_lineno: int) -> bool:
+    """True iff `name` is READ (`ast.Name` in `Load` context) anywhere in `func` — INCLUDING
+    nested def/lambda bodies, since those close over this scope by Python's own LEGB rule —
+    at a line strictly before `before_lineno`. This is the execution-order discriminator
+    (ruling 2f7e1588): a shadow that is never read before its own import line is harmless
+    (the common case, 18 of 19 candidates in the fleet-wide audit that motivated this);
+    a shadow that IS read first — usually from a nested function called earlier in the same
+    body — is a live NameError/UnboundLocalError waiting for that code path to run, the
+    exact shape mailbox.py's send_message shipped with (a nested `_stamp_threads` closure,
+    called before a redundant local `from datetime import ...` a few lines later)."""
+    for node in ast.walk(func):
+        if (isinstance(node, ast.Name) and node.id == name
+                and isinstance(node.ctx, ast.Load) and node.lineno < before_lineno):
+            return True
+    return False
+
+
+def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> dict[str, list[str]]:
+    """{file: [\"funcname shadows NAME at line N, read earlier at line M\", ...]} for every
+    STAGED/touched `.py` file where a function-local import shadows a module-level import
+    of the SAME name, AND that name is read somewhere in the function (including a nested
+    closure) before the local import's own line — the ONE narrow, execution-order-based
+    shape ruling 2f7e1588 asks for, never the mere presence of a shadow (which the
+    fleet-wide audit measured at 19 candidates, 18 harmless, this being the one real bug).
+    TOUCHED-FILES-ONLY, same law as `resolve_test_files` — a cheap, pure AST walk, no
+    subprocess, no full-project cost. A file that fails to parse is skipped, never crashes
+    the gate over it (ruff already gates syntax)."""
+    out: dict[str, list[str]] = {}
+    for f in changed_files:
+        if not f.endswith(".py"):
+            continue
+        path = repo_root / f
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        module_names = _module_level_import_names(tree)
+        if not module_names:
+            continue
+        findings: list[str] = []
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for name, lineno in _own_scope_local_imports(func):
+                if name not in module_names:
+                    continue
+                if _reads_name_before(func, name, lineno):
+                    findings.append(
+                        f"{func.name} shadows {name!r} with a local import at line "
+                        f"{lineno} — {name!r} is read earlier in the same function "
+                        f"(module level already imports it; delete the local import)")
+        if findings:
+            out[f] = findings
+    return out
+
+
 def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool, str]]:
     """ruff/mypy stay whole-project (already single-digit seconds, no scoping needed);
     pytest is the one gate that must be scoped, or it re-imports the 209s full-suite cost
@@ -338,6 +475,12 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
     results["ruff"] = _run(
         [str(VENV_BIN / "ruff"), "check", "src", "tests", "scripts"], repo_root)
     results["mypy"] = _run([str(VENV_BIN / "mypy"), "src"], repo_root)
+    shadow_hits = shadow_before_use_violations(repo_root, changed_files)
+    if shadow_hits:
+        lines = [f"{f}: {msg}" for f, msgs in sorted(shadow_hits.items()) for msg in msgs]
+        results["shadow_lint"] = (False, "\n".join(lines))
+    else:
+        results["shadow_lint"] = (True, "")
     direct, fixture_only = classify_test_files(changed_files, repo_root)
     selected = set(direct)
     omitted = ""
@@ -369,6 +512,20 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 results["pytest"] = (
                     True, f"SKIPPED (partial) — ran {len(test_files)} clean, omitted "
                           f"{omitted}\n{out}")
+            elif (not ok and _pytest_sole_failure_is_ratchet_ceiling(out)
+                    and _is_merge_context(repo_root)):
+                # thread 1a0f91bb, decided: the gate TOLERATES the split rather than
+                # demanding the ratchet move in the same commit as a merge (impossible to
+                # author freely into a merge commit's own tree without amending it) -- never
+                # refused, but never a plain "ok" either, so the debt cannot go unnoticed.
+                results["pytest"] = (
+                    True,
+                    "RATCHET-DEBT — merge commit exceeds the tool-contract ceiling before "
+                    "its own follow-up \"ratchet:\" commit lands (thread 1a0f91bb's named "
+                    "pattern; this house's practice raises the ceiling as a deliberate "
+                    "later commit, never atomically with the growth-causing merge). NOT "
+                    "refused — but the VERY NEXT commit must raise TOOL_CONTRACT_CEILING_"
+                    f"CHARS, or this stops being tolerated.\n{out}")
             else:
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (ok, f"[{' '.join(test_files)}]{tail}\n{out}")
@@ -389,12 +546,17 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
 
 
 def _status_word(ok: bool, detail: str) -> str:
-    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" — never collapses a not-run result into the
-    same word as a genuine pass (Thoth DM 2957), and never collapses a hang into the same
-    word as a real assertion failure (Thoth DM 2948)."""
+    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" / "RATCHET-DEBT" — never collapses a not-run
+    result into the same word as a genuine pass (Thoth DM 2957), never collapses a hang into
+    the same word as a real assertion failure (Thoth DM 2948), and never collapses a known,
+    narrowly-scoped ratchet-lag pass-through into a plain "ok" either (thread 1a0f91bb)."""
     if not ok:
         return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
-    return "SKIPPED" if detail.startswith("SKIPPED") else "ok"
+    if detail.startswith("SKIPPED"):
+        return "SKIPPED"
+    if detail.startswith("RATCHET-DEBT"):
+        return "RATCHET-DEBT"
+    return "ok"
 
 
 def changed_files_staged(repo_root: Path = REPO_ROOT) -> list[str]:
@@ -549,12 +711,14 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
         verdict = "FAIL"
     elif "SKIPPED" in statuses.values():
         verdict = "PASS (UNVERIFIED — see SKIPPED below, not the same as a real pass)"
+    elif "RATCHET-DEBT" in statuses.values():
+        verdict = "PASS (RATCHET DEBT — see below, the next commit must raise the ceiling)"
     else:
         verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
         print(f"  {name}: {statuses[name]}")
-        if statuses[name] == "SKIPPED":
+        if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
             _print_skip_detail(out)
         elif not ok:
             for line in out.splitlines()[-15:]:
@@ -630,6 +794,7 @@ def cmd_audit(rev_range: str) -> int:
     fails: list[str] = []
     timeouts: list[str] = []
     skipped: list[str] = []
+    ratchet_debt: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gate-audit-") as tmp:
         tmp_path = Path(tmp)
         for i, sha in enumerate(shas, 1):
@@ -651,11 +816,12 @@ def cmd_audit(rev_range: str) -> int:
                 verdict = "FAIL"
             elif "SKIPPED" in statuses.values():
                 verdict = "UNVERIFIED"
+            elif "RATCHET-DEBT" in statuses.values():
+                verdict = "RATCHET-DEBT"
             else:
                 verdict = "PASS"
-            print(f"[{i}/{len(shas)}] {short}: {verdict} "
-                  f"(ruff={statuses['ruff']}, mypy={statuses['mypy']}, "
-                  f"pytest={statuses['pytest']})")
+            detail = ", ".join(f"{name}={statuses[name]}" for name in sorted(statuses))
+            print(f"[{i}/{len(shas)}] {short}: {verdict} ({detail})")
             if not all_ok:
                 if statuses["pytest"] == "TIMEOUT" and all(
                     ok for name, (ok, _) in results.items() if name != "pytest"
@@ -665,8 +831,10 @@ def cmd_audit(rev_range: str) -> int:
                     fails.append(short)
             elif verdict == "UNVERIFIED":
                 skipped.append(short)
+            elif verdict == "RATCHET-DEBT":
+                ratchet_debt.append(short)
             for name, (ok2, out2) in results.items():
-                if statuses[name] == "SKIPPED":
+                if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
                     print(f"    {name} tail:")
                     _print_skip_detail(out2, indent="      ")
                 elif not ok2:
@@ -674,11 +842,15 @@ def cmd_audit(rev_range: str) -> int:
                     for line in out2.splitlines()[-10:]:
                         print(f"      {line}")
             _run(["git", "worktree", "remove", "--force", str(wt)], REPO_ROOT)
-    settled = len(shas) - len(fails) - len(timeouts) - len(skipped)
+    settled = len(shas) - len(fails) - len(timeouts) - len(skipped) - len(ratchet_debt)
     print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly and VERIFIED")
     if skipped:
         print(f"UNVERIFIED (passed, but at least one gate was skipped — not proof of "
               f"correctness, only absence of a caught problem): {', '.join(skipped)}")
+    if ratchet_debt:
+        print(f"RATCHET DEBT (merge landed over the tool-contract ceiling before its own "
+              f"follow-up ratchet-raise commit — thread 1a0f91bb, not refused but not a "
+              f"plain pass): {', '.join(ratchet_debt)}")
     if fails:
         print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
     if timeouts:
@@ -695,9 +867,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audit", metavar="A..B",
                          help="retroactive dry-audit over a commit range, e.g. db8e3e9..HEAD")
     args = parser.parse_args(argv)
-    if args.audit:
-        return cmd_audit(args.audit)
-    return cmd_precommit()
+    try:
+        if args.audit:
+            return cmd_audit(args.audit)
+        return cmd_precommit()
+    except Exception as exc:  # noqa: BLE001 — the escape hatch (dispatch 5399, LEG 1): with
+        # core.hooksPath wired fleet-wide, a bug INSIDE this diagnostic's own code must never
+        # be the thing that blocks every seat's commit. A genuine gate failure (ruff/mypy/
+        # pytest finding a real problem) is caught and returned as an ordinary nonzero exit
+        # by cmd_precommit/cmd_audit themselves and never reaches this branch — only an
+        # unhandled internal exception (a bug in gate_hook.py itself) does, and it fails
+        # OPEN, loudly, rather than wedging the shared tree.
+        print(f"gate_hook: INTERNAL ERROR ({type(exc).__name__}: {exc}) — failing OPEN, "
+              f"never blocking a commit for a bug in the diagnostic itself", file=sys.stderr)
+        return 0
 
 
 if __name__ == "__main__":
