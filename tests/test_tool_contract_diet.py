@@ -614,7 +614,22 @@ def _tool_chars(t: Any) -> int:
 # LXXVII, khnum-scale-envelope merge): fleet()'s pool_health contract grew a `caps` envelope
 # (per-daemon pool cap / backends / utilization / max_connections headroom — the 1,000-worker
 # arithmetic, decision 6a745efa). Raised once here at the merged tip (45e72476).
-TOOL_CONTRACT_CEILING_CHARS = 187_800
+# 187,800 -> 190,400 (measured 190,072 exact). 131 -> 136 tools (2026-08-23, Thoth LXXXI,
+# reconciling main after the operator's DeepSeek-Harness build): the five GRANULAR GETTERS
+# (get_status 309, get_mail 301, get_thread_list 753, get_decision_list 485, graph_search 921
+# = 2,769 chars) landed in 6a1dd99 WITHOUT this ceiling being moved — main shipped over the
+# ratchet and only the merge gate would ever have caught it, which is exactly the failure
+# mode thread 1a0f91bb is about. Raised HERE, at the merged tip, with the measurement, per
+# the standing rule; the raise is not retroactive absolution for shipping through it.
+# WHY THE GROWTH IS LOAD-BEARING, not prose: these decompose the orient() monolith (~59K
+# chars of RESPONSE) into bounded, paginated reads a weaker/cheaper model can actually
+# carry. 2,769 contract chars buying a cheap alternative to a 59K response is the trade the
+# diet exists to make. Contract WITHOUT them measures 187,303 — under the old ceiling, so
+# the getters account for the entire breach and nothing else drifted.
+# NOTE for the next raise: sekhmet-wake-lifecycle already raised this to 189,400 on its own
+# branch for stop(). That branch is unmerged; when it lands, re-measure at THAT merged tip
+# rather than taking either number on faith.
+TOOL_CONTRACT_CEILING_CHARS = 190_400
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -707,4 +722,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 131
+    assert len(per_tool) == 136
