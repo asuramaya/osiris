@@ -996,6 +996,34 @@ async def test_wake_gate_preflight_names_the_ceiling_before_any_attempt(
     assert "over the context ceiling" in d["detail"]
 
 
+async def test_wake_gate_preflight_reports_fresh_heir_available_past_the_seam(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """RESUME / NUDGE / FRESH-HEIR (ruling 94c2e7e8, dispatch 5398 leg 1): the read-only
+    preflight must agree with what a real dispatch_dm would do — a holder past its own
+    compaction seam is no longer a bare 'refused-compaction' wall, it is a real, actionable
+    outcome (a real wake would boot a fresh successor here)."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:wg0001", compacted=True)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:wg0001", manager_agent="agent:hm-wg0001",
+        worker_handle="Wg-Seam-Test", house="osiris")
+    await _office(actions, worker_seat, "/repo/demo")
+    # THE JOB_DIR ANCHOR (`_job_id`/`locate_current_transcript`): the transcript-locating
+    # gate matches on job_dir's OWN last path segment as a PREFIX of the session id, never
+    # on cwd — `_lineage_holder_with_session` always names its file FULL_SID.jsonl
+    # ("abcd1234-…"), so the job_dir here must end in "abcd1234" to anchor onto it.
+    await save_mount(actions.pool, job_dir="/x/jobs/abcd1234", agent_id="agent:wg0001",
+                     project="osiris", cwd="/repo/demo", model=None,
+                     session_key=None)
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:wg0001", seat_id=worker_seat,
+        settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1000))
+    assert d["mode"] == "fresh-heir-available"
+    assert d["status"] == "fresh-heir-available"
+    assert "/repo/demo" in d["detail"]
+
+
 async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> None:
     """No agent_mounts row at all — nothing to wait for, ever."""
     d = await trigger_module.wake_gate_preflight(
@@ -3254,6 +3282,100 @@ async def test_dispatch_dm_reports_queued_live_not_never_mounted_when_only_last_
     assert "has never mounted" not in d["detail"]
 
 
+# ═══ THE FRESH-HEIR FALLBACK (ruling 94c2e7e8, dispatch 5398 leg 1) ═══════════════════════
+# "the zero-tolerance compaction gate is the bug, not the seats" — a mail-triggered wake
+# whose addressee's own transcript sits past its resumable seam now boots a successor at
+# the seat's own office instead of refusing outright. Scoped to the compaction gate only;
+# the other gates stay genuine refusals (see the sibling test after this one).
+
+async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The halcyon-class defect, closed: a seat holder whose tail since its own last
+    compaction boundary is genuinely tiny (min_tail_bytes refuses it) is not a dead end —
+    dispatch_dm boots a fresh successor at the seat's own office (the SAME fresh-mint boot
+    prompt launch_seat's own fallthrough uses) rather than leaving the mail stranded."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:fh0001", compacted=True)
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fh0001", manager_agent="agent:hm-fresh-heir",
+        worker_handle="Seam-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/seam-test-office")
+    # dispatch_dm's own wake_target resolution is agent_mounts-keyed (wakeable_identity),
+    # distinct from the graph `session` property the lineage walk reads below it — both
+    # must be present, the same shape a real launched-then-compacted seat leaves behind.
+    await save_mount(actions.pool, job_dir="/x/jobs/fh0001", agent_id="agent:fh0001",
+                     project="osiris", cwd="/tmp/seam-test-office", model=None,
+                     session_key=None)
+    out = await send_message(actions.pool, from_agent="agent:hm-fresh-heir",
+                             from_project="osiris", to_agent=worker_seat,
+                             body="please pick this up")
+    msg_id = int(out["id"])
+    booted: list[dict[str, Any]] = []
+
+    async def _fresh_spawn(repo: str, **kw: Any) -> None:
+        booted.append({"repo": repo, **kw})
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a tail closed at the seam itself must never be resumed")
+
+    d = await dispatch_dm(
+        actions.pool, addressee=worker_seat, msg_id=msg_id, sender="agent:hm-fresh-heir",
+        settings=_settings(enabled=True, dm_resume=True, min_tail_bytes=1000,
+                          sense=str(sense)),
+        spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
+        fresh_spawn=_fresh_spawn)
+
+    assert d["mode"] == "fresh-heir"
+    assert "seam" in d["detail"] and "/tmp/seam-test-office" in d["detail"]
+    assert len(booted) == 1
+    assert booted[0]["repo"] == "/tmp/seam-test-office"
+    assert "Seam-Test" in booted[0]["prompt"] and "claim_name" in booted[0]["prompt"]
+    row = await actions.pool.fetchrow(
+        "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id)
+    assert row is not None and row["mode"] == "dm-fresh-heir"
+
+
+async def test_dispatch_dm_never_mints_fresh_for_a_non_compaction_gate(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """SCOPED TO COMPACTION ONLY: a no-anchor/ceiling/crossed-registry/resident-unknown
+    refusal is a real identity uncertainty (here: a declared `session` with NO transcript
+    on disk at all — nothing to corroborate against, the no-anchor class) — minting on top
+    of it would repeat the exact stranger-over-a-live-head class Leg 3 (ruling 921eabcf
+    item 1) just closed. Only the compaction gate (a KNOWN identity, just an unresumable
+    tail) gets the fresh-heir door."""
+    sense = tmp_path / "projects"
+    sense.mkdir(parents=True, exist_ok=True)  # no transcript file written under it at all
+    obj = await actions.create_or_find_object("Agent", "agent:fh0002", "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fh0002", manager_agent="agent:hm-fresh-heir-2",
+        worker_handle="Unknown-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/unknown-test-office")
+    await save_mount(actions.pool, job_dir="/x/jobs/fh0002", agent_id="agent:fh0002",
+                     project="osiris", cwd="/tmp/unknown-test-office", model=None,
+                     session_key=None)
+    out = await send_message(actions.pool, from_agent="agent:hm-fresh-heir-2",
+                             from_project="osiris", to_agent=worker_seat,
+                             body="please pick this up")
+    msg_id = int(out["id"])
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a no-anchor refusal must never spawn anything")
+
+    d = await dispatch_dm(
+        actions.pool, addressee=worker_seat, msg_id=msg_id, sender="agent:hm-fresh-heir-2",
+        settings=_settings(enabled=True, dm_resume=True, min_tail_bytes=1,
+                          sense=str(sense)),
+        spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom, fresh_spawn=_boom)
+
+    assert d["mode"] == "resume-refused-no-anchor"
+
+
 def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
     """#156.2: a stable short token per named gate, read from the SAME sentences
     `_resume_candidate_verdict`/`_resume_miss_reason` already produce for humans — never
@@ -3415,6 +3537,38 @@ async def test_launch_hands_the_attach_line_on_the_idempotent_path_too(
     assert d["status"] == "already-live"
     assert d["attach"]["office"] == "/tmp/anhur"
     assert d["attach"]["command"] == 'python -m src.manager.attach "[OS] Anhur"'
+
+
+async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupies(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c) — the
+    halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on the same
+    seat, because launch_seat's own idempotency checks never consulted the single occupancy
+    authority (`is_occupied_by_a_live_body`) the fold/reanimation/send() doors already
+    share. A launch onto a seat whose CURRENT HOLDER that authority confirms is a live body
+    must refuse outright, before either spawn lane, regardless of substrate."""
+    from src.orchestrator import agents as agents_module
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:occ01", manager_agent="agent:occm01",
+        worker_handle="Halcyon-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/halcyon-test")
+
+    async def _occupied(pool: Any, agent_id: str, **kw: Any) -> bool:
+        return agent_id == "agent:occ01"
+    monkeypatch.setattr(agents_module, "is_occupied_by_a_live_body", _occupied)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:occm01", target=worker_seat,
+        spawn=_boom, resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-occupied"
+    assert d["holder"] == "agent:occ01"
+    assert d["body_exists"] is True and d["can_receive"] is True
 
 
 async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None:
@@ -3745,7 +3899,10 @@ async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_li
         actions, caller="agent:hm03", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/bastet", "sessionId": "real-abc", "name": "[OS] Bastet"}]]))
+            # LEG 3 (ruling 921eabcf item 1): launch_seat now runs an occupancy check
+            # (is_occupied_by_a_live_body) BEFORE the twin check — one extra leading
+            # agents_json() call, empty because this seat's holder is unoccupied.
+            [[], [], [{"cwd": "/tmp/bastet", "sessionId": "real-abc", "name": "[OS] Bastet"}]]))
 
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
@@ -3787,7 +3944,8 @@ async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: A
         actions, caller="agent:hm05", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/khepri", "sessionId": "khepri-sess", "name": "[OS] Khepri"}]]),
+            # LEG 3's leading occupancy-check call (see Bastet test above for why).
+            [[], [], [{"cwd": "/tmp/khepri", "sessionId": "khepri-sess", "name": "[OS] Khepri"}]]),
         cost_reader=_fake_cost_reader(
             {"priced": False, "reason": "claude agents --json carries no cost field"}))
 
@@ -3834,7 +3992,8 @@ async def test_launch_harness_lane_records_a_real_price_if_the_reader_has_one(
         actions, caller="agent:hm06", target=worker_seat,
         spawn=_fake_spawn([]),
         agents_json=_fake_agents_json(
-            [[], [{"cwd": "/tmp/wadjet", "sessionId": "wadjet-sess", "name": "[OS] Wadjet"}]]),
+            # LEG 3's leading occupancy-check call (see Bastet test above for why).
+            [[], [], [{"cwd": "/tmp/wadjet", "sessionId": "wadjet-sess", "name": "[OS] Wadjet"}]]),
         cost_reader=_fake_cost_reader({"priced": True, "cost_usd": 0.17}))
 
     assert d["status"] == "launched"
@@ -4699,3 +4858,137 @@ async def test_bg_session_cost_session_not_found(monkeypatch: Any) -> None:
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
     out = await trigger._bg_session_cost("nonexistent")
     assert out == {"priced": False, "reason": "session not found in claude agents --json"}
+
+
+# ═══ stop() — the process-lifecycle inverse of launch() (#156's held half, ruling
+# 94c2e7e8 leg 2 / b3ccd3f6's naming ruling, dispatch 5398) ═══════════════════════════════
+
+def _fake_census_agents_json(pid: int, *, cwd: str = "/repo/demo",
+                             session_id: str = "wg-9999-0000-4000-8000-000000000000",
+                             name: str = "[OS] StopTest") -> Any:
+    async def _read(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": session_id, "pid": pid, "cwd": cwd, "name": name}]
+    return _read
+
+
+def _fake_claude_exe(pid: int) -> str:
+    return "/home/x/.local/share/claude/versions/2.1.210"
+
+
+async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
+    actions: Actions,
+) -> None:
+    """The happy path: a seat's current holder has a real, harness+/proc-confirmed live
+    body — stop() signals its exact pid and records the event on the seat (survives
+    succession — it names an event, not a gate on the chair)."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop01", manager_agent="agent:stopm01",
+        worker_handle="Stop-Test", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/wg9999ii", agent_id="agent:stop01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+    killed: list[int] = []
+
+    async def _kill(pid: int) -> None:
+        killed.append(pid)
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm01", target=worker_seat,
+        agents_json=_fake_census_agents_json(4242, session_id="wg9999ii-0000-4000-8000-"
+                                             "000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d["pid"] == 4242 and d["holder"] == "agent:stop01"
+    assert killed == [4242]
+    row = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='stopped_at' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat)
+    assert row  # a real timestamp landed, not silence
+    _ = manager_seat
+
+
+async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing(
+    actions: Actions,
+) -> None:
+    """A stale mount row is not a live body — the SAME harness+/proc-confirmed occupancy
+    authority every other door in the fold/reanimation/send()/launch lane already
+    consults, never a second notion of 'live' (ruling 921eabcf)."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop02", manager_agent="agent:stopm02",
+        worker_handle="Stop-Test-2", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/nowhere", agent_id="agent:stop02",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _boom(pid: int) -> None:
+        raise AssertionError("nothing confirmed live — no signal should ever be sent")
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm02", target=worker_seat,
+        agents_json=_empty_agents_json, kill=_boom)
+
+    assert d["status"] == "no-live-body"
+
+
+async def test_stop_seat_is_downward_only_a_worker_cannot_stop_its_manager(
+    actions: Actions,
+) -> None:
+    """Mirrors launch_seat's own authority exactly (78e3734e) — the worker→manager
+    managed_by edge does not run the other way; nothing is ever signaled."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop03w", manager_agent="agent:stop03m")
+
+    async def _boom(pid: int) -> None:
+        raise AssertionError("downward-only: a worker stopping its manager must refuse first")
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stop03w", target=manager_seat, kill=_boom)
+
+    assert d["status"] == "refused-not-your-worker" and "DOWNWARD-ONLY" in d["detail"]
+
+
+async def test_stop_seat_self_target_needs_no_managed_by_edge(actions: Actions) -> None:
+    """`target=None` always stops the CALLER's own seat — pause_seat's own precedent, the
+    one case authority never has to arbitrate (no peer/edge check at all)."""
+    seat = (await ensure_seat(actions, house="demo", handle="SelfStopper",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:self01")
+    await save_mount(actions.pool, job_dir="/x/jobs/self9999", agent_id="agent:self01",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    killed: list[int] = []
+
+    async def _kill(pid: int) -> None:
+        killed.append(pid)
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:self01", target=None,
+        agents_json=_fake_census_agents_json(
+            777, session_id="self9999-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped" and killed == [777]
+
+
+async def test_stop_seat_reports_process_lookup_error_honestly(actions: Actions) -> None:
+    """A race (the body exits between the census read and the signal) is a real,
+    honestly-named outcome — never mistaken for a signal failure."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop04", manager_agent="agent:stopm04",
+        worker_handle="Stop-Test-4", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/wg8888ii", agent_id="agent:stop04",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _kill(pid: int) -> None:
+        raise ProcessLookupError()
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm04", target=worker_seat,
+        agents_json=_fake_census_agents_json(
+            5555, session_id="wg8888ii-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "no-live-body"
+    assert "already gone" in d["detail"]

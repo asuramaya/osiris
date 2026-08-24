@@ -1116,6 +1116,38 @@ async def wake_gate_preflight(
     if resume is None:
         miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
         gate = _gate_name(miss_reason)
+        # RESUME / NUDGE / FRESH-HEIR, NEVER A FOURTH WALL (ruling 94c2e7e8, dispatch
+        # 5398 leg 1): `_agent_resumable` is agent_mounts-keyed (the shared-anchor blind
+        # spot this file's own launch_seat/dispatch_dm docstrings already document) — a
+        # compaction miss here does not necessarily mean dispatch_dm's own graph-walked
+        # `_lineage_resume_candidate` agrees, so this checks the SAME primitive a real
+        # wake would, rather than reporting a refusal a real wake would not honor.
+        if gate == "compaction" and seat_id is not None:
+            from src.orchestrator.agents import _generation
+            from src.orchestrator.seats import seat_facts
+            facts = await seat_facts(pool, seat_id)
+            launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
+            if launch_cwd:
+                graph_outcome = await _lineage_resume_candidate(
+                    pool, wake_target, st, repo=launch_cwd)
+                graph_resume = (graph_outcome[0]
+                                if isinstance(graph_outcome, tuple) else None)
+                if graph_resume is not None:
+                    graph_log = graph_outcome[1]
+                    g_gate, g_refusal = await _resume_guard(
+                        pool, graph_resume, _generation(target)[0], seat_id=seat_id,
+                        st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
+                    if g_gate is None:
+                        return {"mode": "resumable", "status": "resumable",
+                                "detail": f"resumable now via the lineage walk — session "
+                                          f"{graph_resume[0][:8]}, no gate refuses it "
+                                          "(the shared-anchor mount row missed it; the "
+                                          "graph did not)"}
+            if facts.get("handle") and facts.get("anchor_cwd"):
+                return {"mode": "fresh-heir-available", "status": "fresh-heir-available",
+                        "detail": f"{miss_reason} — a real wake would boot a fresh "
+                                  f"successor at {facts['anchor_cwd']} instead of "
+                                  "refusing (its graph identity and office both resolve)"}
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
@@ -1322,6 +1354,7 @@ async def dispatch_dm(
     pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
+    fresh_spawn: Any = None,
 ) -> dict[str, str]:
     """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
@@ -1357,6 +1390,7 @@ async def dispatch_dm(
     send leg and a concurrent tick) can never double-fire one message."""
     st = settings or get_settings()
     spawn = spawn or _spawn_claude
+    fresh_spawn = fresh_spawn or _spawn_claude_bg
     windows = windows or _manager_windows
     poke = poke or _poke_window
     agents_json = agents_json or _claude_agents_json
@@ -1646,6 +1680,7 @@ async def dispatch_dm(
     # exactly as `_agent_resumable` above was rooted on it too.
     from src.orchestrator.seats import seat_facts
     launch_cwd = None
+    facts: dict[str, Any] | None = None
     if seat_id is not None:
         facts = await seat_facts(pool, seat_id)
         launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
@@ -1658,7 +1693,55 @@ async def dispatch_dm(
         who = target if wake_target == target else (
             f"{target} (its own live mount, {wake_target}, checked too)")
         miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
-        return {"mode": f"resume-refused-{_gate_name(miss_reason)}",
+        miss_gate = _gate_name(miss_reason)
+        # THE FRESH-HEIR FALLBACK (ruling 94c2e7e8, dispatch 5398 leg 1 — "the zero-
+        # tolerance compaction gate is the bug, not the seats"): resume / nudge /
+        # fresh-heir are the three outcomes every seat must land in, never a fourth
+        # silent wall. A generation whose OWN transcript sits too close to its own
+        # compaction seam to resume (resume_verdict's honest "nothing real to resume
+        # into") still has a real graph identity and a real office — SCOPED TO
+        # COMPACTION ONLY: the other gates (ceiling/no-anchor/crossed-registry/
+        # resident-unknown) are each a genuine "who this even is" uncertainty, and
+        # minting on top of THAT would repeat the exact stranger-over-a-live-head class
+        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location with
+        # the SAME fresh-mint boot prompt launch_seat's own fallthrough already uses —
+        # no separate carry-the-message prompt needed, `_bg_boot_prompt` already tells
+        # a fresh body to inbox() for its opening brief, and this very mail sits there
+        # addressed to the seat's own name.
+        handle = facts.get("handle") if facts else None
+        office = facts.get("anchor_cwd") if facts else None
+        house = facts.get("house") if facts else None
+        if (miss_gate == "compaction" and seat_id is not None and launch_cwd
+                and handle and office):
+            anchor = _launch_anchor(seat_id)
+            boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+            async with pool.acquire() as conn, conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, "
+                    "7445))", str(msg_id))
+                prior = await conn.fetchval(
+                    "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+                    "AND mode IN ('dm-reply','dm-resume','dm-poke','dm-fresh-heir')",
+                    msg_id)
+                if prior:
+                    return {"mode": "skipped-once-per-message",
+                            "detail": "another dispatcher already woke for this message"}
+                await conn.execute(
+                    "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
+                    "VALUES ($1,$2,$3,'dm-fresh-heir')", project, sender, msg_id)
+            try:
+                await fresh_spawn(launch_cwd, name=f"[{_house_tag(house)}] {handle}",
+                                  model=st.osiris_wake_model or None, prompt=boot_prompt)
+            except OSError as exc:
+                return {"mode": "refused-spawn",
+                        "detail": f"fresh-heir spawn failed ({exc}) — {who}'s compacted "
+                                  "generation still holds the mail; nothing else spent"}
+            return {"mode": "fresh-heir",
+                    "detail": f"{who}'s own transcript sits past its resumable seam "
+                              f"({miss_reason}) — booted a fresh successor at {office} "
+                              "instead of refusing; its own first turn's inbox() finds "
+                              "this same mail"}
+        return {"mode": f"resume-refused-{miss_gate}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo = graph_resume[0], graph_resume[1]
@@ -1888,6 +1971,10 @@ async def _verify_landed(
 # reason so nothing is lost to the bucket.
 _WAKE_STATUS = {
     "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
+    # a seat past its own compaction seam wakes as its successor rather than staying
+    # unreachable (ruling 94c2e7e8, dispatch 5398 leg 1) — the fresh body's first turn
+    # is its own inbox() read, the same "next turn" framing "resumed" already carries.
+    "fresh-heir": "delivered",
     "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",
@@ -2221,6 +2308,24 @@ async def launch_seat(
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
 
+    # ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c —
+    # the halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on
+    # the same seat). Consult the SAME occupancy authority the fold/reanimation/send()
+    # doors already share (`is_occupied_by_a_live_body`, built at 3014910) rather than a
+    # second notion of occupancy — checked centrally, before either spawn lane, so a
+    # launch can never fork a second eligible head regardless of substrate.
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+    if current_holder and await is_occupied_by_a_live_body(
+        pool, current_holder, agents_json=agents_json,
+    ):
+        return {"status": "refused-occupied", "seat": target_seat, "holder": current_holder,
+                "body_exists": True, "can_receive": True, "attach": attach,
+                "detail": f"{handle} ({target_seat}) is already occupied by a live body "
+                          f"({current_holder}, confirmed via registry_census) — one seat, "
+                          "one live lineage head; refusing rather than forking a second "
+                          "eligible head. If this is stale, vacate_seat first."}
+
     st = settings or get_settings()
     lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
     # MODEL PRECEDENCE (task #68, finding #7, thread 20e4feb6): an explicit caller param wins,
@@ -2542,6 +2647,103 @@ async def launch_seat(
     if brief_id is not None:
         out["brief_message_id"] = brief_id
     return out
+
+
+async def _real_kill_pid(pid: int) -> None:
+    """SIGTERM, the real default — a graceful ask, not SIGKILL: a live turn gets the chance
+    to unwind (flush a partial write, let the harness mark the session cleanly ended)
+    rather than vanishing mid-syscall. Injectable so no test ever touches a real process."""
+    import signal
+    os.kill(pid, signal.SIGTERM)
+
+
+async def stop_seat(
+    actions: Actions, *, caller: str, target: str | None, reason: str = "",
+    kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
+    """STOP — the process-lifecycle inverse of launch_seat (#156's held half, ruling
+    94c2e7e8 leg 2: "reachable and stoppable are the same lane's two directions"). Ends a
+    LIVE body's own OS process (SIGTERM) — nothing more. Deliberately NOT a symmetric
+    'sleep' (the operator's own naming ruling, b3ccd3f6: no promised thaw-where-you-left-
+    off — a `stop`/`wake` pair would promise a resume nobody can guarantee across an
+    arbitrary gap). NEITHER does this gate future reachability on some new flag of its
+    own: the SAME occupancy authority (`is_occupied_by_a_live_body` / `registry_census`)
+    that already governs launch/fold/reanimation/send() reads the real OS state, so the
+    instant this process actually exits, that authority sees it gone — a later wake() or
+    launch() boots a fresh successor with no separate 'unstop' step to remember, ONE
+    occupancy authority for every door, never a second notion of it (ruling 921eabcf).
+
+    DOWNWARD-ONLY, mirroring launch_seat's own authority (a manager stops a seat it
+    manages) — a worker may never stop its own manager's body. `target=None` always
+    allowed (going quiet on purpose, pause_seat's own precedent) — the one case
+    authority never needs to arbitrate.
+
+    Refuses (nothing signaled) on: no seat, no managed_by edge (`refused-not-your-
+    worker`), or no harness/proc-CONFIRMED live body for the seat's current holder
+    (`no-live-body` — a stale mount row, or an already-dead process, is not something to
+    signal). `stopped_at`/`stopped_reason` land on the seat object (survives succession —
+    it names an EVENT, not a gate on the chair) as a plain, append-only assertion, never a
+    boolean flag a later caller has to remember to clear."""
+    pool = actions.pool
+    from src.orchestrator.mounts import registry_census
+    from src.orchestrator.seats import held_seat, seat_receipt
+    kill = kill or _real_kill_pid
+    self_stop = target is None
+    if self_stop:
+        target_seat = ((await held_seat(pool, caller)) or {}).get("seat_id")
+        if target_seat is None:
+            return {"status": "refused-no-seat",
+                    "detail": f"{caller} holds no seat — nothing to stop"}
+    else:
+        assert target is not None  # self_stop is False only when target was given
+        caller_held = await held_seat(pool, caller)
+        caller_seat = (caller_held or {}).get("seat_id")
+        if caller_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"{caller} holds no seat — stop is a seat-to-seat act; an "
+                              "unseated caller has no managed_by relationship to invoke "
+                              "it with"}
+        target_seat = await _seat_for_target(actions, target)
+        if target_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"'{target}' resolves to no living Seat"}
+        if not await _manages(pool, caller_seat, target_seat):
+            return {"status": "refused-not-your-worker",
+                    "detail": f"no active managed_by edge from {target_seat} up to "
+                              f"{caller_seat} — stop is DOWNWARD-ONLY, mirroring launch "
+                              "(78e3734e): a worker may never stop its own manager's body"}
+    holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+    if not holder:
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": "the seat has no current holder — nothing to stop"}
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
+    pid = match.get("pid") if match else None
+    if not isinstance(pid, int):
+        return {"status": "no-live-body", "seat": target_seat, "holder": holder,
+                "detail": f"{holder} carries no harness/proc-confirmed live body right "
+                          "now — nothing to signal (already dead, or never really live)"}
+    try:
+        await kill(pid)
+    except ProcessLookupError:
+        return {"status": "no-live-body", "seat": target_seat, "holder": holder, "pid": pid,
+                "detail": "the process was already gone by the time the signal landed"}
+    except OSError as exc:
+        return {"status": "refused-signal", "seat": target_seat, "holder": holder, "pid": pid,
+                "detail": f"the stop signal itself failed ({exc}) — nothing else changed"}
+    now = datetime.now(UTC)
+    oid = await actions.create_or_find_object("Seat", target_seat, caller)
+    await actions.assert_property(oid, "stopped_at", now.isoformat(), caller, now, 0.9,
+                                  evidence_class="self_declared")
+    if reason:
+        await actions.assert_property(oid, "stopped_reason", reason[:500], caller, now, 0.9,
+                                      evidence_class="self_declared")
+    return {"status": "stopped", "seat": target_seat, "holder": holder, "pid": pid,
+            "by": caller, **({"reason": reason} if reason else {}),
+            "detail": f"SIGTERM sent to {holder}'s live body (pid {pid}) — reachability "
+                      "afterward is governed entirely by the SAME occupancy authority "
+                      "launch()/wake() already consult; no separate release step exists"}
 
 
 async def _transcript_activity(

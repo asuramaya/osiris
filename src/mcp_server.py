@@ -3901,11 +3901,12 @@ async def wake_preflight(target: str) -> dict[str, Any]:
     `seat:<id>`, or `agent:<id>`.
 
     Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate clears —
-    a real wake() would resume this addressee now), `no-live-body` (vacant, retired, or
-    never mounted — nothing to wait for), or `refused-<gate>` (compaction / ceiling /
-    no-anchor / crossed-registry / resident-unknown / unknown — the last two are never
-    the same finding, f624d114). Read-only: checks nothing it cannot answer from the
-    graph and disk, sends nothing, spawns nothing."""
+    a real wake() would resume this addressee now), `fresh-heir-available` (past its own
+    compaction seam, but not a dead end — a real wake() boots a fresh successor here
+    rather than refusing, ruling 94c2e7e8), `no-live-body` (vacant, retired, or never
+    mounted), or `refused-<gate>` (ceiling / no-anchor / crossed-registry / resident-
+    unknown / unknown — never the same finding, f624d114). Read-only: sends/spawns
+    nothing."""
     pool = await _pool_get()
     from src.orchestrator.trigger import (
         _resolve_wake_address,
@@ -4017,6 +4018,32 @@ async def launch(target: str, message: str = "", model: str | None = None,
     from src.orchestrator.trigger import launch_seat
     return await launch_seat(Actions(await _pool_get()), caller=actor, target=target,
                              message=message, model=model)
+
+
+@mcp.tool()
+async def stop(target: str | None = None, reason: str = "",
+               subagent_id: str | None = None, subagent_type: str | None = None,
+               session_anchor: str | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
+    """launch()'s process-lifecycle inverse — SIGTERMs a LIVE body's OS process, nothing
+    more. Not a symmetric 'sleep' (ruling b3ccd3f6: no promised thaw-where-you-left-off) —
+    an honest termination, auditable, not a pause. Gates no reachability flag of its own:
+    launch()/wake() already read the SAME occupancy authority this does, so once the
+    process actually exits a fresh launch()/wake() proceeds — no 'unstop' call needed.
+
+    `target=None` stops YOURSELF, always allowed. Otherwise DOWNWARD-ONLY, mirroring
+    launch() (a manager stops a seat it manages; a worker may never stop its manager's).
+
+    `status`: `stopped` (SIGTERM sent, see `pid`/`holder`), `no-live-body` (nothing
+    harness/proc-confirmed running there), `refused-not-your-worker`, `refused-signal`."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a stop must say who "
+                         "it's from", "why": _anchorless(ctx)}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from src.orchestrator.trigger import stop_seat
+    return await stop_seat(Actions(await _pool_get()), caller=actor, target=target,
+                           reason=reason)
 
 
 @mcp.tool()
