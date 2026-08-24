@@ -1044,6 +1044,23 @@ async def test_cross_project_reply_to_an_unbound_asker_keeps_the_room(
     assert rep["to"] == "oldhouse" and rep["to_agent"] is None
 
 
+async def test_sending_a_message_never_makes_the_sender_dm_eligible(actions: Actions) -> None:
+    """PINS THE ROOT CAUSE of the two tests above: the 6a1dd99 GRAPH EDGES write-through
+    used to `create_or_find_object("Agent", from_agent, ...)` unconditionally, silently
+    minting a bare Agent object for EVERY sender — which satisfied `_dm_ineligibility`'s
+    own "no Agent object = the graph has never met this mind" contract one send later,
+    collapsing "known mind" into "has sent one message ever" and breaking the room-return
+    law for a genuinely transient asker. A plain send must never change this id's own
+    eligibility for a FUTURE reply to address it directly."""
+    from src.orchestrator.mailbox import _dm_ineligibility
+
+    p = actions.pool
+    await _seed(p, "farhouse")
+    await send_message(p, from_agent="agent:transient001", from_project="farhouse",
+                       to_project="farhouse", body="just passing through")
+    assert await _dm_ineligibility(p, "agent:transient001") == "unknown"
+
+
 async def test_cross_project_reply_follows_the_mind_not_the_room(
     actions: Actions,
 ) -> None:

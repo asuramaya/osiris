@@ -614,8 +614,23 @@ async def send_message(
         await acts.assert_property(msg_oid, "summary", msg_body[:160], from_agent, now, 1.0)
         await acts.assert_property(msg_oid, "grade", grade or "fyi", from_agent, now, 1.0)
         await acts.assert_property(msg_oid, "status", "sent", from_agent, now, 1.0)
-        from_oid = await acts.create_or_find_object("Agent", from_agent, from_agent)
-        await acts.create_link(msg_oid, from_oid, "sent_by", from_agent, now, 1.0)
+        # NEVER `create_or_find_object` here (thread reply-routing-6a1dd99 regression):
+        # `_dm_ineligibility`'s whole contract is "no Agent object = the graph has never
+        # met this mind" (mailbox.py's own docstring, "registration can lag a living
+        # mind") — reply routing's "an unbound asker keeps the room" law (thread 21596481)
+        # depends on that staying true for a transient id that has only ever SENT mail,
+        # never been mounted/addressed. Minting the sender's Agent object here as a side
+        # effect of writing this edge silently satisfied that same existence check one
+        # send later, collapsing "known mind" into "has sent one message ever" — found
+        # live via tests/test_mailbox.py::test_cross_project_reply_to_an_unbound_asker_
+        # keeps_the_room and test_reply_routes_back_threads_and_acks both failing with
+        # the room-return case never firing. A plain existence check, never a mint: link
+        # the edge only when the graph already knows this identity through some OTHER
+        # door; skip it (best-effort traversability, not a promise) otherwise.
+        from_row = await pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", from_agent)
+        if from_row is not None:
+            await acts.create_link(msg_oid, from_row, "sent_by", from_agent, now, 1.0)
         if to_a:
             target_type = "Seat" if to_a.startswith("seat:") else "Agent"
             to_oid = await acts.create_or_find_object(target_type, to_a, from_agent)
