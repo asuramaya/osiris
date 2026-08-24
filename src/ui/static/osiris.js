@@ -73,28 +73,46 @@ const Osiris = (() => {
       <div class="o-pv">${esc(p.source_label || p.source_id || "—")} · ${esc(p.how || "—")} · ${pct(p.confidence)}</div>`;
   }
 
-  // the object detail (the one noun) — type chip, title, graded facts, slots for rels.
+  // the object detail (the one noun) — type chip, title, provenance box, graded facts, slots for rels.
   // `acts` is HTML for action buttons the shell injects (search-around, dossier, …).
   function objectDetail(o, acts = "") {
     const demo = o.properties.some((p) => p.name === "demo" && String(p.value).toLowerCase() === "true");
-    // the focus pane always shows the FULL resolved label, untruncated (o.name comes
-    // from /objects/{id}'s resolve_label — rule/chain/canonical tiers, task #97) — a
-    // Practice/BlindSpot/etc with no `name` property used to fall straight to its raw
-    // canonical hash here even though every list view already resolved it correctly.
     const title = o.name || o.canonical;
     const m = ty(o.type);
     const facts = o.properties.filter((p) => !["name", "demo", "tag"].includes(p.name));
     const pv = facts.map(propRow).join("") || `<div class="o-muted" style="grid-column:1/4">No properties.</div>`;
+    
+    // Extract top provenance fact for the provenance badge
+    const topProp = facts.find(p => p.confidence != null) || facts[0] || {};
+    const grade = (topProp.evidence_class || "self_declared").toLowerCase();
+    const source = topProp.source_label || topProp.source_id || "system";
+    const conf = topProp.confidence != null ? topProp.confidence : 1.0;
+    
     return `
       <div class="o-top">
         <span class="o-type" style="color:${m.c};background:${m.c}1e;border:1px solid ${m.c}55">${esc(o.type)}</span>
         ${demo ? '<span class="o-demo">DEMO</span>' : ""}
         <div class="o-title">${esc(title)}</div>
         <div class="o-canon">${esc(o.canonical)}</div>
+        <div class="prov-box">
+          <div class="prov-row">
+            <span class="o-faint">Evidence Grade</span>
+            <span class="grade-chip grade-${esc(grade)}">${esc(grade.replace(/_/g, ' '))}</span>
+          </div>
+          <div class="prov-row">
+            <span class="o-faint">Attribution</span>
+            <span class="o-v" style="font-size:11px">${esc(source)}</span>
+          </div>
+          <div class="prov-row">
+            <span class="o-faint">Confidence</span>
+            <span class="o-v" style="font-size:11px">${pct(conf)}</span>
+          </div>
+          <div class="conf-bar"><div class="conf-fill" style="width:${Math.round(conf * 100)}%"></div></div>
+        </div>
         ${acts ? `<div class="o-acts">${acts}</div>` : ""}
       </div>
       <div class="o-sect"><h3>Properties · what &amp; how</h3><div class="o-pvgrid">${pv}</div></div>
-      <div class="o-sect"><h3>Relationships</h3><div data-rels class="o-muted">…</div></div>`;
+      <div class="o-sect"><h3>Relationships (1-Hop)</h3><div data-rels class="o-muted">…</div></div>`;
   }
 
   // walk the 1-hop neighbourhood, GROUPED by (direction, link type) with counts (W3).
@@ -117,7 +135,7 @@ const Osiris = (() => {
         const arrow = gr.dir === "out" ? "→" : "←";
         const rows = gr.members
           .map((m) => `<div class="o-rel" style="padding-left:18px"><a data-pick="${m.id}" style="cursor:pointer">${esc(m.label)}</a>
-            <span class="o-faint">${esc(m.type)}</span></div>`)
+            <span class="o-faint">${esc(m.id).slice(0,8)}</span></div>`)
           .join("");
         return `<div class="o-relgrp">
             <div class="o-relhdr" data-grp="${i}">
@@ -154,20 +172,21 @@ const Osiris = (() => {
     if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
     const HAS_FCOSE = !!window.cytoscapeFcose;
     const cy = cytoscape({
-      container, wheelSensitivity: 0.2, minZoom: 0.15, maxZoom: 3,
+      container, wheelSensitivity: 1, minZoom: 0.15, maxZoom: 3,
       style: [
         { selector: "node", style: {
           "background-color": (e) => ty(e.data("type")).c, shape: (e) => ty(e.data("type")).s,
-          width: 30, height: 30, "border-width": 0, label: "data(label)", color: "#cdd6df", "font-size": 10.5,
-          "text-valign": "bottom", "text-margin-y": 4, "text-wrap": "wrap", "text-max-width": 110,
-          "text-background-color": "#0b0e13", "text-background-opacity": 0.7, "text-background-padding": 3,
-          "text-background-shape": "roundrectangle", "min-zoomed-font-size": 7 } },
-        { selector: "node.focus", style: { "border-width": 3, "border-color": "#4493f8" } },
+          width: 32, height: 32, "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
+          label: "data(label)", color: "#f0f6fc", "font-size": 11, "font-weight": 600,
+          "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": 120,
+          "text-background-color": "#0d1219", "text-background-opacity": 0.88, "text-background-padding": 3,
+          "text-background-shape": "roundrectangle", "min-zoomed-font-size": 6 } },
+        { selector: "node.focus", style: { "border-width": 3, "border-color": "#58a6ff" } },
         { selector: "edge", style: {
-          width: 1.2, "line-color": "#2c3744", "target-arrow-color": "#2c3744", "target-arrow-shape": "triangle",
-          "curve-style": "bezier", "arrow-scale": 0.85, label: "data(type)", "font-size": 8.5, color: "#7d8896",
-          "text-background-color": "#0b0e13", "text-background-opacity": 0.85, "text-background-padding": 2,
-          "text-rotation": "autorotate", "min-zoomed-font-size": 7 } },
+          width: 1.5, "line-color": "#2c3744", "target-arrow-color": "#58a6ff", "target-arrow-shape": "triangle",
+          "curve-style": "bezier", "arrow-scale": 0.9, label: "data(type)", "font-size": 9, color: "#8b949e",
+          "text-background-color": "#0d1219", "text-background-opacity": 0.9, "text-background-padding": 2,
+          "text-rotation": "autorotate", "min-zoomed-font-size": 6 } },
       ],
     });
     const layout = (preserve) => {
@@ -248,20 +267,21 @@ const Osiris = (() => {
   }
   // the views an objects result supports — a ranked/sequenced set earns a Timeline (the order
   // it computed is the point); everything keeps Graph + Table. The shell builds the switcher
-  // from this, so a ranking offers Timeline first and a flat set offers Graph first.
+  // Universal 3-way view engine: [ Table ] [ Board ] [ Graph ]
   function viewsFor(result) {
     if (result.kind !== "objects") return [];
-    return isRanked(result.spec) ? ["timeline", "table", "graph"] : ["graph", "table"];
+    return ["table", "board", "graph"];
   }
   function defaultView(result) {
     if (result.kind !== "objects") return "panel";
-    if (isRanked(result.spec)) return "timeline";         // a ranking is a timeline, not a graph
-    return result.items.length > 30 ? "table" : "graph";  // else a hairball past ~30 → table
+    if (isRanked(result.spec)) return "table";
+    return result.items.length > 35 ? "table" : "graph";
   }
   async function renderResult(result, mounts, view, onPick, onDrill, onCtx) {
     const { board, panel } = mounts;
     const kind = result.kind, items = result.items;
     if (kind === "objects") {
+      if (view === "board" || view === "cards") { spatialBoardGrid(panel, items, onPick, onCtx); return "panel"; }
       if (view === "table") { objectsTable(panel, items, onPick, onCtx); return "panel"; }
       if (view === "timeline") { timelineList(panel, items, onPick, onCtx); return "panel"; }
       if (board) { board.clear(); await board.placeObjects(items); }  // a CLEAN result board
@@ -369,6 +389,79 @@ const Osiris = (() => {
     return { cols, chips, showType: types.length > 1 };
   }
 
+  function spatialBoardGrid(panel, items, onPick, onCtx) {
+    if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
+    const shown = items.slice(0, 200);
+    
+    // Group items into spatial lanes
+    const lanes = [
+      { id: 'obligations', name: 'Duties & Tasks', items: [] },
+      { id: 'decisions', name: 'Rulings & Decisions', items: [] },
+      { id: 'entities', name: 'Entities & Codebases', items: [] },
+      { id: 'historical', name: 'Historical & Settled', items: [] }
+    ];
+
+    shown.forEach(o => {
+      const p = o.props || {};
+      const status = (o.status || p.status || 'active').toLowerCase();
+      const type = (o.type || '').toLowerCase();
+      if (status === 'historical' || status === 'retired' || status === 'resolved') {
+        lanes[3].items.push(o);
+      } else if (type === 'thread' || type === 'obligation' || type === 'task') {
+        lanes[0].items.push(o);
+      } else if (type === 'decision' || type === 'practice' || type === 'reference' || type === 'blindspot' || type === 'superstition') {
+        lanes[1].items.push(o);
+      } else {
+        lanes[2].items.push(o);
+      }
+    });
+
+    const activeLanes = lanes.filter(l => l.items.length > 0);
+    const lanesToRender = activeLanes.length ? activeLanes : lanes;
+
+    const lanesHtml = lanesToRender.map(l => {
+      const cardsHtml = l.items.map(o => {
+        const m = ty(o.type);
+        const p = o.props || {};
+        const source = p.source_id || p.source_label || p.source || "";
+        const grade = (p.evidence_class || p.grade || "self_declared").toLowerCase();
+        const summary = p.summary || p.rationale || p.statement || p.description || p.title || "";
+        const shortId = o.canonical ? (o.canonical.includes(":") ? o.canonical.split(":")[1] : o.canonical) : o.id.slice(0, 8);
+        return `<div class="board-card" data-pick="${esc(o.id)}" data-type="${esc(o.type)}" style="border-top: 2px solid ${m.c}">
+          <div class="card-tags-top">
+            <span class="card-tag card-tag-type" style="color:${m.c};background:${m.c}18;border-color:${m.c}40">${esc(o.type)}</span>
+            <span class="card-tag card-tag-id">${esc(shortId)}</span>
+          </div>
+          <div class="card-title">${esc(o.display_label || o.label || summary.slice(0, 85))}</div>
+          ${summary && summary !== o.label ? `<div class="card-desc">${esc(summary)}</div>` : ''}
+          <div class="card-tags-bottom">
+            <span class="card-tag card-tag-status status-${esc(o.status || p.status || 'active')}">${esc(o.status || p.status || 'active')}</span>
+            ${grade ? `<span class="card-tag card-tag-grade grade-${esc(grade)}">${esc(grade.replace(/_/g, ' '))}</span>` : ''}
+            ${source ? `<span class="card-tag card-tag-source">by ${esc(source)}</span>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+      return `<div class="board-lane">
+        <div class="board-lane-head">
+          <span class="lane-name">${esc(l.name)}</span>
+          <span class="lane-badge">${l.items.length}</span>
+        </div>
+        <div class="board-lane-items">
+          ${cardsHtml || '<div class="lane-empty">No items</div>'}
+        </div>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `<div class="spatial-board">${lanesHtml}</div>` + 
+      (items.length > shown.length ? _more(items.length - shown.length) : "");
+    _wireRows(panel, onPick, onCtx);
+  }
+
+  function cardsGrid(panel, items, onPick, onCtx) {
+    spatialBoardGrid(panel, items, onPick, onCtx);
+  }
+
   function objectsTable(panel, items, onPick, onCtx) {
     // same NO-SILENT-CAPS treatment as timelineList above, and the same reused SECTION_CAP/
     // _more — column shape is computed from the SHOWN slice, matching _capped's own
@@ -444,7 +537,7 @@ const Osiris = (() => {
     const shown = list.slice(0, SECTION_CAP);
     return table(shown) + (list.length > shown.length ? _more(list.length - shown.length) : "");
   }
-  function renderData(data) {
+  function renderData(data, depth = 0) {
     if (data == null) return `<div class="o-empty">Empty.</div>`;
     if (Array.isArray(data)) return data.length ? _capped(data) : `<div class="o-empty">No results.</div>`;
     if (typeof data === "object") {
@@ -461,9 +554,19 @@ const Osiris = (() => {
           `<span class="r-chip"><b>${esc(v)}</b> ${esc(k)}</span>`).join("")}</div>`;
       if (long.length)
         out += long.map(([, v]) => `<div class="r-note">${esc(v)}</div>`).join("");
-      out += blocks.map(([k, v]) =>
-        `<div class="r-group"><h3>${esc(k)}${Array.isArray(v) ? ` <span class="o-faint">${v.length}</span>` : ""}</h3>` +
-        `${renderData(v)}</div>`).join("");
+      out += blocks.map(([k, v]) => {
+        const title = esc(k).replace(/_/g, " ");
+        const count = Array.isArray(v) ? `<span class="o-faint" style="font-size:11.5px">(${v.length})</span>` : "";
+        if (depth === 0) {
+          return `<div class="sec-card">
+            <div class="sec-card-head">
+              <div class="sec-card-title">${title} ${count}</div>
+            </div>
+            ${renderData(v, depth + 1)}
+          </div>`;
+        }
+        return `<div class="r-group"><h3 style="font-size:12px;margin:10px 0 6px">${title} ${count}</h3>${renderData(v, depth + 1)}</div>`;
+      }).join("");
       return out || `<div class="o-empty">Empty.</div>`;
     }
     return `<div class="r-head">${esc(data)}</div>`;
@@ -669,5 +772,5 @@ const Osiris = (() => {
   }
 
   return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
-    renderResult, viewsFor, defaultView, lineage, innerSelect };
+    renderResult, viewsFor, defaultView, lineage, innerSelect, cardsGrid };
 })();

@@ -291,6 +291,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         type: str | None = None,
         q: str | None = None,
         exclude_types: str | None = None,
+        project: str | None = None,
         limit: int = Query(100, le=2000),
     ) -> list[dict[str, Any]]:
         # Word-order-proof recall: tokenize `q` on whitespace; an object matches when EVERY
@@ -305,29 +306,54 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         # a toggle brings them back deliberately
         excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
             if exclude_types else None
+        proj_clean = (project or "").strip()
+        if proj_clean:
+            proj_canon = f"repo:{proj_clean}" if not proj_clean.startswith("repo:") else proj_clean
+            proj_name = proj_clean[5:] if proj_clean.startswith("repo:") else proj_clean
+        else:
+            proj_canon = None
+            proj_name = None
         rows = await p.fetch(
-            "SELECT id, type, canonical, status "
-            "FROM objects o "
-            "WHERE status NOT IN ('archived','merged') "
-            "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
-            "        WHERE co.object_id = o.id AND co.case_id = $1)) "
-            "  AND ($2::text IS NULL OR type = $2) "
-            "  AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
-            "  AND ($3::text[] IS NULL OR NOT EXISTS ("
-            "        SELECT 1 FROM unnest($3::text[]) AS tok "
-            "        WHERE o.canonical NOT ILIKE '%' || tok || '%' "
-            "          AND NOT EXISTS (SELECT 1 FROM current_assertions a "
-            "             WHERE a.object_id=o.id "
-            "             AND a.name IN ('name','summary','title','rationale') "
-            "             AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
-            # recency across ALL types — type-first ordering let two alphabetically early types
-            # eat the whole cap (Decision+Commit = 1500; Threads never appeared)
+            "WITH scoped_objects AS ("
+            "  SELECT id, type, canonical, status, created_at,"
+            "         ROW_NUMBER() OVER (PARTITION BY type ORDER BY created_at DESC) as type_rn "
+            "  FROM objects o "
+            "  WHERE status NOT IN ('archived','merged','retired') "
+            "    AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "          WHERE co.object_id = o.id AND co.case_id = $1)) "
+            "    AND ($2::text IS NULL OR type = $2) "
+            "    AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
+            "    AND ($6::text IS NULL OR ("
+            "          o.canonical = $6 OR o.canonical = $7 "
+            "          OR EXISTS ("
+            "            SELECT 1 FROM links l "
+            "            JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+            "            WHERE (l.from_id = o.id OR l.to_id = o.id) "
+            "              AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "              AND p.type IN ('SoftwareProject', 'Project') "
+            "              AND (p.canonical = $6 OR p.canonical = $7 "
+            "                   OR lower(p.canonical) = lower($6))"
+            "          )"
+            "        )) "
+            "    AND ($3::text[] IS NULL OR NOT EXISTS ("
+            "          SELECT 1 FROM unnest($3::text[]) AS tok "
+            "          WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+            "            AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "               WHERE a.object_id=o.id "
+            "               AND a.name IN ('name','summary','title','rationale') "
+            "               AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
+            ") "
+            "SELECT id, type, canonical, status, created_at "
+            "FROM scoped_objects "
+            "WHERE type_rn <= (CASE WHEN $2::text IS NOT NULL THEN $4 ELSE 300 END) "
             "ORDER BY created_at DESC LIMIT $4",
             case_id,
             type,
             tokens,
             limit,
             excl,
+            proj_canon,
+            proj_name,
         )
         # task #97 workstream 3 (ruling 52daab71): `name` used to be a raw SQL COALESCE
         # (_OBJ_LABEL) — chain-only, no per-type RULE tier. resolve_label per row (one
@@ -338,6 +364,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         items = [
             {"id": r["id"], "type": r["type"], "canonical": r["canonical"],
              "status": r["status"],
+             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+             "props": props_by_id.get(r["id"], {}),
              "name": resolve_label(r["type"], props_by_id.get(r["id"], {}),
                                    r["canonical"]).label}
             for r in rows
@@ -750,6 +778,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.get("/watermark")
     async def watermark_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         return await graph_watermark(p)
+
+    @app.get("/pulse")
+    async def pulse_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Ambient surface segments for console header and live telemetry (ruling e9ef7373)."""
+        from src.orchestrator import mounts, surface
+        seg = await surface.fetch(p)
+        line = await mounts.fleet_pulse(p)
+        return {
+            "line": line,
+            "live": seg.live.data,
+            "owed": seg.owed.data,
+            "briefs": seg.briefs_total.data,
+            "wakes": seg.wakes.data,
+            "spend": seg.spend.data,
+        }
 
     # --- compositions: the composer's primitive (lenses + watches as one) ----
     @app.get("/compositions")

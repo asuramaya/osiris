@@ -298,10 +298,21 @@ def _tail_lines(path: Path, nbytes: int = 512 * 1024) -> list[str]:
     return lines[1:] if size > nbytes else lines
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
 def _job_id(job_dir: str | None) -> str | None:
     """The session/job id from CLAUDE_JOB_DIR, DSH, or generic harness — the component right
     after `jobs` or `sessions` (the dir is `…/jobs/<id>`, `…/sessions/<id>`, etc.). This
-    id is the session UUID's leading segment or slug — a precise anchor."""
+    id is the session UUID's leading segment or slug — a precise anchor.
+
+    DSH's layout nests one level deeper (`…/.dsh/sessions/<workspace-slug>/<session>`),
+    so the component right after `sessions` is the WORKSPACE slug — shared by every
+    session ever run in that tree, the exact conflation an anchor must prevent. DSH has
+    TWO session-dir grammars (verified live, 2026-08-23): depth-0 interactive sessions
+    are `session-<uuid>` (the id itself carries the prefix) while spawned subagent
+    sessions are a bare `<uuid>` (the harness's run id) — BOTH anchor on the uuid's
+    first 8 chars, same grammar as every other harness's sid anchor."""
     if not job_dir:
         return None
     parts = Path(job_dir).parts
@@ -312,6 +323,13 @@ def _job_id(job_dir: str | None) -> str | None:
     if "sessions" in parts:
         i = parts.index("sessions")
         if i + 1 < len(parts):
+            # DSH nests: sessions/<slug>/(session-)?<uuid> — anchor on the session
+            # uuid, never the slug (one slug names a whole workspace's history).
+            for part in parts[i + 1:]:
+                if part.startswith("session-") and len(part) == len("session-") + 36:
+                    return part[len("session-"):][:8]
+                if len(part) == 36 and _UUID_RE.match(part):
+                    return part[:8]
             return parts[i + 1]
     return None
 

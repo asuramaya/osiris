@@ -85,6 +85,43 @@ def _ts(line: str) -> datetime | None:
         return None
 
 
+def decode_claude_project_name(slug: str) -> str:
+    """Decode a Claude Code project slug (~/.claude/projects/<slug>/) into canonical project name.
+
+    Prevents naive rsplit('-', 1) from butchering hyphenated project names like:
+    - '-home-asuramaya-code-rotten-apple' -> 'rotten-apple' (NOT 'apple')
+    - '-home-asuramaya-code-like-us' -> 'like-us' (NOT 'us')
+    - '-home-asuramaya-code-dealer-to-fb' -> 'dealer-to-fb' (NOT 'fb')
+    - '-home-asuramaya-code-osiris--claude-worktrees-imhotep' -> 'osiris'
+    """
+    if not slug:
+        return ""
+    if "--claude-worktrees-" in slug:
+        slug = slug.split("--claude-worktrees-")[0]
+    m = re.match(r"^-(?:home|root)(?:-[^-\s]+)?-(?:code|REPOS|src|projects)-(.*)$", slug)
+    if m:
+        return m.group(1).lower()
+    m_seat = re.match(r"^-(?:home|root)(?:-[^-\s]+)?-*\.?osiris-seats-(.*)$", slug)
+    if m_seat:
+        seat_handle = m_seat.group(1)
+        pin_path = Path.home() / ".osiris" / "seats" / seat_handle / ".osiris"
+        if pin_path.is_file():
+            try:
+                for line in pin_path.read_text("utf-8").splitlines():
+                    if line.strip().startswith("project"):
+                        val = line.split("=", 1)[1].strip().strip("\"'")
+                        if val:
+                            return val.lower()
+            except Exception:
+                pass
+        return seat_handle.lower()
+    clean = slug.lstrip("-")
+    for prefix in ["home-asuramaya-Downloads-", "home-asuramaya-code-", "home-asuramaya-", "home-"]:
+        if clean.startswith(prefix):
+            return clean[len(prefix):].lower()
+    return clean.lower()
+
+
 class ClaudeJsonlAdapter:
     """Claude Code's ~/.claude/projects/*/<sid>.jsonl transcript."""
 
@@ -149,9 +186,8 @@ class ClaudeJsonlAdapter:
         for proj_dir in base.iterdir():
             if not proj_dir.is_dir():
                 continue
-            # the cwdencoded dir name un-dashes back to a path; the basename is the project
-            cwd_dashed = proj_dir.name
-            project = cwd_dashed.rsplit("-", 1)[-1] if "-" in cwd_dashed else cwd_dashed
+            # Decode dir name into canonical project name without truncating hyphenated names
+            project = decode_claude_project_name(proj_dir.name)
             for path in proj_dir.glob("*.jsonl"):
                 # skip the miner's own extraction sidechains (wake_cost.py's rule)
                 if path.parent.name.endswith("-osiris-extract"):

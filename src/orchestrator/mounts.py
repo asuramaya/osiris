@@ -402,18 +402,42 @@ async def find_session_row(
     if len(sid) < 8:
         return None
     cols = "job_dir, agent_id, project, model, context_window_size, mounted_at"
+    # DSH session ids come in TWO shapes (verified live, 2026-08-23): depth-0 ids
+    # carry a `session-` prefix, spawned subagent ids are a bare uuid. Either way
+    # the mount row keys on the FULL session dir path (job_dir ends with the id),
+    # and the sid8 anchor the ledger and self-evident lanes speak is the UUID's
+    # first 8, never `session-` (which would collide across every DSH session on
+    # the box). Normalized once, here, so every lane below speaks the same grammar.
+    # _UUID_RE is REUSED, never re-declared: sessions.py:301 and handshake.py:185 already
+    # each carry a copy, and a third would be the second-implementation class this house
+    # keeps paying for. Function-local because handshake/sessions both import mounts —
+    # module-level would be circular; sessions' own import of mounts is function-local too.
+    from src.ingest.sessions import _UUID_RE
+    dsh_uuid = None
+    if sid.startswith("session-") and len(sid) == len("session-") + 36:
+        dsh_uuid = sid[len("session-"):]
+    elif len(sid) == 36 and _UUID_RE.match(sid) is not None:
+        dsh_uuid = sid
+    if dsh_uuid is not None:
+        row = await db.fetchrow(
+            f"SELECT {cols} FROM agent_mounts "
+            "WHERE job_dir LIKE '%/' || $1 OR job_dir LIKE '%/session-' || $1 "
+            "ORDER BY last_seen DESC NULLS LAST LIMIT 1", dsh_uuid)
+        if row is not None:
+            return row
+    sid8 = dsh_uuid[:8] if dsh_uuid else sid[:8]
     row = await db.fetchrow(
         f"SELECT {cols} FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", sid[:8])
+        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", sid8)
     if row is not None:
         return row
     owner = await db.fetchval(
         "SELECT o.canonical FROM current_assertions a "
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE a.name = 'anchor_sid:' || $1 "
-        "ORDER BY a.observed_at DESC LIMIT 1", sid[:8])
+        "ORDER BY a.observed_at DESC LIMIT 1", sid8)
     if owner is None:
-        owner = f"agent:{sid[:8]}"  # lane 3: self-evident — falls through to the same
+        owner = f"agent:{sid8}"  # lane 3: self-evident — falls through to the same
         # base-lineage query below, which naturally returns None if no such lineage ever
         # mounted (a made-up sid matches nothing real; no extra existence check needed).
     from src.orchestrator.agents import _generation

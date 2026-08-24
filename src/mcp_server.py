@@ -2846,7 +2846,7 @@ async def graph_search(
 
 @mcp.tool()
 async def get_mail(ctx: Context | None = None) -> dict[str, Any]:
-    """​Your inbox status: unread count, asks, operator briefs -- one query,
+    """Your inbox status: unread count, asks, operator briefs -- one query,
     no threads, no succession, no fleet pulse. The cheapest orient alternative."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
@@ -7384,10 +7384,30 @@ async def automount_route(request: Any) -> Any:
             spawn_type=(str(body.get("spawn_type") or "") or None),
             # THE BRIDGE (task #68 binding leg): CLAUDE_CODE_BRIDGE_SESSION_ID, carried by
             # the whisper from a background-job fork's own environment
-            bridge_session_id=(str(body.get("bridge_session_id") or "") or None))
+            bridge_session_id=(str(body.get("bridge_session_id") or "") or None),
+            # THE EXPLICIT ANCHOR (the DSH bridge's door): the plugin knows its own
+            # session dir (~/.dsh/sessions/<slug>/session-<uuid>) and states it — no
+            # derivation guessing. Claude's whisper still omits it and derives as before.
+            job_dir=_sane_job_dir(str(body.get("job_dir") or "")) or None)
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))
+        # THE RENDERED WHISPER (the DSH bridge's door): a harness plugin cannot run the
+        # python hook script, so it asks the SERVER to render the payload's whisper
+        # paragraph — ONE renderer (scripts/osiris_whisper.render_whisper, the same
+        # function the Claude hook prints from), never a TypeScript twin left to drift.
+        # `env_job` is the caller's honesty-gate testimony: the DSH bridge passes the
+        # job_dir it is ABOUT to bind the connection with (and it verifies the bind
+        # before injecting the text), so an "ALREADY MOUNTED" claim stays true. Fail-open
+        # like everything whisper-shaped: no rendered text, never a failed mount.
+        if body.get("render"):
+            try:
+                from scripts.osiris_whisper import render_whisper
+
+                out["whisper_text"] = render_whisper(
+                    out, cwd=cwd, env_job=str(body.get("env_job") or ""))
+            except Exception:  # noqa: BLE001 — the mount stands; the caller falls back
+                out["whisper_text"] = None
         # DEFENSIVE ENCODING (2026-08-18): a datetime anywhere in this payload used to 500 the
         # whisper silently (60 of 63 arrivals in a day, for two weeks) — the payload is now
         # JSON-native at the source (handshake._json_native) AND encoded here with a default,
@@ -7429,7 +7449,9 @@ async def session_end_route(request: Any) -> Any:
         session_id = str(body.get("session_id") or "")
         if not session_id:
             return JSONResponse({"error": "session_id required"}, status_code=400)
-        out = await handshake.session_end(Actions(await _pool_get()), session_id=session_id)
+        out = await handshake.session_end(
+            Actions(await _pool_get()), session_id=session_id,
+            job_dir=_sane_job_dir(str(body.get("job_dir") or "")) or None)
         return JSONResponse(out)
     except Exception as e:  # noqa: BLE001 — fail-open: a session must always be able to end
         sid = body.get("session_id") if isinstance(body, dict) else "?"
