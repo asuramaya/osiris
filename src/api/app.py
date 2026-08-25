@@ -284,6 +284,65 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         items: dict[str, Any] = out["items"]
         return items
 
+    def _project_filter_arrays(
+        project: list[str] | None,
+    ) -> tuple[list[str] | None, list[str] | None]:
+        """`project` repeats (`&project=a&project=b`) for a multi-repo scope pill — the
+        console already sends it this way (console.js's applyRepoFilter/objectSetUrl loops
+        SELECTED_REPOS onto repeated `&project=` params); this endpoint used to accept only
+        the LAST one FastAPI bound a bare `str | None` to, so a multi-repo selection quietly
+        filtered on whichever repo happened to be last in the list — the scope pill's own
+        "server-side, not client-side after a capped fetch" gap named in #196 (Thoth msg
+        5600). Returns parallel (canonical, bare-name) arrays, `None` for an empty selection
+        so the SQL's own `IS NULL` no-op branch is unchanged for the common single/no-repo
+        case."""
+        names = [p.strip() for p in (project or []) if p and p.strip()]
+        if not names:
+            return None, None
+        canons = [n if n.startswith("repo:") else f"repo:{n}" for n in names]
+        bare = [n[5:] if n.startswith("repo:") else n for n in names]
+        return canons, bare
+
+    @app.get("/objects/counts")
+    async def object_counts(
+        p: asyncpg.Pool = Depends(get_pool),
+        case_id: uuid.UUID | None = None,
+        project: list[str] | None = Query(None),
+        exclude_types: str | None = None,
+    ) -> dict[str, Any]:
+        """The cheap aggregate the browse surface's own count/scope chrome needs (#196,
+        Thoth msg 5600) — a per-type census over the SAME live scope `/objects` enumerates
+        (same status filter, same case/project scoping), instead of the shell inferring
+        counts from a capped `/objects?limit=1500` fetch (silently wrong the moment a type
+        or scope exceeds the cap — exactly the 31,189-objects-Agent-10,617 shape the
+        dispatch's own measurement named). Not row-identical to `/objects`'s per-type
+        300-cap window — this is the TRUE count, uncapped, the number the cap itself needs
+        to be honest about."""
+        excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
+            if exclude_types else None
+        proj_canons, proj_names = _project_filter_arrays(project)
+        rows = await p.fetch(
+            "SELECT type, COUNT(*) AS n FROM objects o "
+            "WHERE status NOT IN ('archived','merged','retired') "
+            "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "        WHERE co.object_id = o.id AND co.case_id = $1)) "
+            "  AND ($2::text[] IS NULL OR NOT (type = ANY($2::text[]))) "
+            "  AND ($3::text[] IS NULL OR EXISTS ("
+            "        SELECT 1 FROM links l "
+            "        JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+            "        WHERE (l.from_id = o.id OR l.to_id = o.id) "
+            "          AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "          AND p.type IN ('SoftwareProject', 'Project') "
+            "          AND (p.canonical = ANY($3::text[]) OR p.canonical = ANY($4::text[]) "
+            "               OR lower(p.canonical) = ANY("
+            "                 SELECT lower(x) FROM unnest($3::text[]) x)) "
+            "      ) OR o.canonical = ANY($3::text[]) OR o.canonical = ANY($4::text[])) "
+            "GROUP BY type ORDER BY n DESC",
+            case_id, excl, proj_canons, proj_names,
+        )
+        by_type = {r["type"]: r["n"] for r in rows}
+        return {"by_type": by_type, "total": sum(by_type.values())}
+
     @app.get("/objects")
     async def list_objects(
         p: asyncpg.Pool = Depends(get_pool),
@@ -291,8 +350,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         type: str | None = None,
         q: str | None = None,
         exclude_types: str | None = None,
-        project: str | None = None,
+        project: list[str] | None = Query(None),
         limit: int = Query(100, le=2000),
+        before_created_at: datetime | None = None,
+        before_id: uuid.UUID | None = None,
     ) -> list[dict[str, Any]]:
         # Word-order-proof recall: tokenize `q` on whitespace; an object matches when EVERY
         # token appears SOMEWHERE in its searched content (canonical or a name/summary/title/
@@ -306,55 +367,96 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         # a toggle brings them back deliberately
         excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
             if exclude_types else None
-        proj_clean = (project or "").strip()
-        if proj_clean:
-            proj_canon = f"repo:{proj_clean}" if not proj_clean.startswith("repo:") else proj_clean
-            proj_name = proj_clean[5:] if proj_clean.startswith("repo:") else proj_clean
+        proj_canons, proj_names = _project_filter_arrays(project)
+        # KEYSET paging (#196, Thoth msg 5600 — "OFFSET paging would sort the whole table
+        # per page, that is the load-bearing fact"): `before_created_at`(+`before_id` as the
+        # tiebreak, created_at alone isn't unique) walks strictly OLDER than the caller's
+        # last-seen row, on the SAME (created_at DESC, id DESC) order objects_created_idx /
+        # objects_type_created_idx (migration 0054) now serve directly — no OFFSET, no
+        # re-sort-the-table-per-page. Opt-in and ADDITIVE ONLY: omitting both params (every
+        # existing caller) reproduces the exact prior query, unchanged, including its
+        # 300-per-type / flat-2000 cap — this never changes what the default browse call
+        # returns, it only makes "load more" past that cap possible.
+        if before_created_at is not None:
+            rows = await p.fetch(
+                "SELECT id, type, canonical, status, created_at FROM objects o "
+                "WHERE status NOT IN ('archived','merged','retired') "
+                "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+                "        WHERE co.object_id = o.id AND co.case_id = $1)) "
+                "  AND ($2::text IS NULL OR type = $2) "
+                "  AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
+                "  AND ($6::text[] IS NULL OR ("
+                "        o.canonical = ANY($6::text[]) OR o.canonical = ANY($7::text[]) "
+                "        OR EXISTS ("
+                "          SELECT 1 FROM links l "
+                "          JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+                "          WHERE (l.from_id = o.id OR l.to_id = o.id) "
+                "            AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "            AND p.type IN ('SoftwareProject', 'Project') "
+                "            AND (p.canonical = ANY($6::text[]) OR p.canonical = ANY($7::text[]) "
+                "                 OR lower(p.canonical) = ANY("
+                "                   SELECT lower(x) FROM unnest($6::text[]) x))"
+                "        )"
+                "      )) "
+                "  AND ($3::text[] IS NULL OR NOT EXISTS ("
+                "        SELECT 1 FROM unnest($3::text[]) AS tok "
+                "        WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+                "          AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+                "             WHERE a.object_id=o.id "
+                "             AND a.name IN ('name','summary','title','rationale') "
+                "             AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
+                "  AND (o.created_at, o.id) < "
+                "      ($8, COALESCE($9, '00000000-0000-0000-0000-000000000000'::uuid)) "
+                "ORDER BY created_at DESC, id DESC LIMIT $4",
+                case_id, type, tokens, limit, excl, proj_canons, proj_names,
+                before_created_at, before_id,
+            )
         else:
-            proj_canon = None
-            proj_name = None
-        rows = await p.fetch(
-            "WITH scoped_objects AS ("
-            "  SELECT id, type, canonical, status, created_at,"
-            "         ROW_NUMBER() OVER (PARTITION BY type ORDER BY created_at DESC) as type_rn "
-            "  FROM objects o "
-            "  WHERE status NOT IN ('archived','merged','retired') "
-            "    AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
-            "          WHERE co.object_id = o.id AND co.case_id = $1)) "
-            "    AND ($2::text IS NULL OR type = $2) "
-            "    AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
-            "    AND ($6::text IS NULL OR ("
-            "          o.canonical = $6 OR o.canonical = $7 "
-            "          OR EXISTS ("
-            "            SELECT 1 FROM links l "
-            "            JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
-            "            WHERE (l.from_id = o.id OR l.to_id = o.id) "
-            "              AND (l.valid_until IS NULL OR l.valid_until > now()) "
-            "              AND p.type IN ('SoftwareProject', 'Project') "
-            "              AND (p.canonical = $6 OR p.canonical = $7 "
-            "                   OR lower(p.canonical) = lower($6))"
-            "          )"
-            "        )) "
-            "    AND ($3::text[] IS NULL OR NOT EXISTS ("
-            "          SELECT 1 FROM unnest($3::text[]) AS tok "
-            "          WHERE o.canonical NOT ILIKE '%' || tok || '%' "
-            "            AND NOT EXISTS (SELECT 1 FROM current_assertions a "
-            "               WHERE a.object_id=o.id "
-            "               AND a.name IN ('name','summary','title','rationale') "
-            "               AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
-            ") "
-            "SELECT id, type, canonical, status, created_at "
-            "FROM scoped_objects "
-            "WHERE type_rn <= (CASE WHEN $2::text IS NOT NULL THEN $4 ELSE 300 END) "
-            "ORDER BY created_at DESC LIMIT $4",
-            case_id,
-            type,
-            tokens,
-            limit,
-            excl,
-            proj_canon,
-            proj_name,
-        )
+            rows = await p.fetch(
+                "WITH scoped_objects AS ("
+                "  SELECT id, type, canonical, status, created_at,"
+                "         ROW_NUMBER() OVER ("
+                "           PARTITION BY type ORDER BY created_at DESC) as type_rn "
+                "  FROM objects o "
+                "  WHERE status NOT IN ('archived','merged','retired') "
+                "    AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+                "          WHERE co.object_id = o.id AND co.case_id = $1)) "
+                "    AND ($2::text IS NULL OR type = $2) "
+                "    AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
+                "    AND ($6::text[] IS NULL OR ("
+                "          o.canonical = ANY($6::text[]) OR o.canonical = ANY($7::text[]) "
+                "          OR EXISTS ("
+                "            SELECT 1 FROM links l "
+                "            JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+                "            WHERE (l.from_id = o.id OR l.to_id = o.id) "
+                "              AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "              AND p.type IN ('SoftwareProject', 'Project') "
+                "              AND (p.canonical = ANY($6::text[]) "
+                "                   OR p.canonical = ANY($7::text[]) "
+                "                   OR lower(p.canonical) = ANY("
+                "                     SELECT lower(x) FROM unnest($6::text[]) x))"
+                "          )"
+                "        )) "
+                "    AND ($3::text[] IS NULL OR NOT EXISTS ("
+                "          SELECT 1 FROM unnest($3::text[]) AS tok "
+                "          WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+                "            AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+                "               WHERE a.object_id=o.id "
+                "               AND a.name IN ('name','summary','title','rationale') "
+                "               AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
+                ") "
+                "SELECT id, type, canonical, status, created_at "
+                "FROM scoped_objects "
+                "WHERE type_rn <= (CASE WHEN $2::text IS NOT NULL THEN $4 ELSE 300 END) "
+                "ORDER BY created_at DESC LIMIT $4",
+                case_id,
+                type,
+                tokens,
+                limit,
+                excl,
+                proj_canons,
+                proj_names,
+            )
         # task #97 workstream 3 (ruling 52daab71): `name` used to be a raw SQL COALESCE
         # (_OBJ_LABEL) — chain-only, no per-type RULE tier. resolve_label per row (one
         # batched property fetch, not N) plus disambiguate_labels across the whole

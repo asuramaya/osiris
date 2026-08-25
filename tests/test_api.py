@@ -188,6 +188,85 @@ async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Action
     assert "elsewhere.test" not in canonicals
 
 
+async def test_objects_scoped_to_multiple_projects(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """#196 (Thoth msg 5600): `project` used to bind as a bare `str`, so a multi-repo scope
+    pill selection (console.js sends `&project=a&project=b` for a multi-select) silently
+    filtered on whichever value FastAPI happened to bind last — the scope pill's own
+    "server-side, not client-side after a capped fetch" gap. Two repos selected together
+    must return objects from BOTH, not just one."""
+    from src.orchestrator.capture import open_thread
+
+    ta = await open_thread(actions, "in project alpha only", repo="apitest-alpha")
+    tb = await open_thread(actions, "in project beta only", repo="apitest-beta")
+    r = await client.get("/objects", params={
+        "type": "Thread", "project": ["apitest-alpha", "apitest-beta"],
+    })
+    assert r.status_code == 200
+    ids = {o["id"] for o in r.json()}
+    assert str(ta) in ids
+    assert str(tb) in ids
+
+
+async def test_object_counts_endpoint(client: httpx.AsyncClient, actions: Actions) -> None:
+    """#196: /objects/counts is the TRUE per-type count over the live scope — the browse
+    surface's own stat chrome must never infer counts from a capped /objects fetch (silently
+    wrong the instant a type/scope exceeds the cap)."""
+    await _seed(actions)
+    r = await client.get("/objects/counts")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["by_type"].get("IntrusionSet", 0) >= 1
+    assert body["total"] >= sum(body["by_type"].values()) - 1  # sum IS the total, not approx
+    assert body["total"] == sum(body["by_type"].values())
+
+
+async def test_object_counts_scoped_to_project(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "counts-scoped alpha thread", repo="apitest-counts-alpha")
+    r_all = await client.get("/objects/counts")
+    r_scoped = await client.get(
+        "/objects/counts", params={"project": "apitest-counts-alpha"})
+    assert r_scoped.json()["by_type"].get("Thread", 0) >= 1
+    assert r_scoped.json()["total"] <= r_all.json()["total"]
+
+
+async def test_objects_keyset_pagination_walks_strictly_older_and_never_repeats(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """#196: keyset paging is ADDITIVE — omitting before_created_at/before_id must reproduce
+    the exact prior (uncursored) response, and a cursor built from the last row of one page
+    must walk strictly older, with zero overlap between pages (the OFFSET failure mode this
+    replaces: re-sorting mid-walk can duplicate or skip rows)."""
+    from src.orchestrator.capture import link_repo
+
+    now = datetime.now(UTC)
+    for i in range(5):
+        d = await actions.create_or_find_object(
+            "Domain", f"keyset-{i}.apitest", "test")
+        await link_repo(actions, d, "apitest-keyset", now)
+
+    page1 = (await client.get("/objects", params={
+        "type": "Domain", "project": "apitest-keyset", "limit": 2,
+    })).json()
+    assert len(page1) == 2
+    last = page1[-1]
+    page2 = (await client.get("/objects", params={
+        "type": "Domain", "project": "apitest-keyset", "limit": 2,
+        "before_created_at": last["created_at"], "before_id": last["id"],
+    })).json()
+    assert len(page2) == 2
+    ids1 = {o["id"] for o in page1}
+    ids2 = {o["id"] for o in page2}
+    assert ids1.isdisjoint(ids2)
+    for o in page2:
+        assert o["created_at"] <= last["created_at"]
+
+
 async def test_snapshot_time_travel(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = uuid.UUID(
         str(
