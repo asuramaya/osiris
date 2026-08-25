@@ -10,6 +10,7 @@ let FOCUS = null, SET = [], ROOM = '', ROOMS = [], PROJECTS = [], ACTIVE_SURFACE
 let SELECTED_ENTITY_TYPES = new Set(), ENTITY_SEARCH_QUERY = '', ENTITY_VIEW_MODE = 'table';
 let TABLE_SORT_COL = 'date', TABLE_SORT_DIR = 'desc', EXPANDED_ROWS = new Set();
 let BOARD_GROUP_BY = 'auto', SYNCING = false, CONSOLE_REV = 0, SHOW_AGENTS = false, SCOPE_FILTER = '';
+let TRUE_COUNTS = null; // uncapped per-type census from /objects/counts (#196) — null until loaded
 
 var board = null;
 function ensureBoard() {
@@ -151,24 +152,42 @@ function updateRepoPill() {
   if (pill) pill.textContent = SELECTED_REPOS.length ? SELECTED_REPOS.join(", ") : "All Repos";
 }
 
-function objectSetUrl() {
+function objectScopeParams() {
+  // The scope bits objectSetUrl() and objectCountsUrl() both need — split out so the
+  // counts fetch (#196, Thoth msg 5600) reads the exact same scope /objects itself would,
+  // never a second, drifting copy of the same three branches.
   var ex = SHOW_AGENTS ? '' : '&exclude_types=Agent';
-  var url = '/objects?limit=1500' + ex;
-  
   var room = ROOMS.find(function(r){return r.id === ROOM;});
   var subject = (room && room.config && room.config.subject) || null;
-  if (subject && subject.startsWith('repo:')) return url + '&project=' + encodeURIComponent(subject.replace('repo:', ''));
-  if (subject && subject.startsWith('case:')) return url + '&case_id=' + encodeURIComponent(subject.replace('case:', ''));
-  
-  if (SCOPE_FILTER) {
-    var repos = SCOPE_FILTER.split(',').filter(Boolean);
-    for (var i = 0; i < repos.length; i++) {
-      url += '&project=' + encodeURIComponent(repos[i]);
-    }
-  }
+  if (subject && subject.startsWith('repo:')) return { extra: ex, project: [subject.replace('repo:', '')], case_id: null };
+  if (subject && subject.startsWith('case:')) return { extra: ex, project: [], case_id: subject.replace('case:', '') };
+  var repos = SCOPE_FILTER ? SCOPE_FILTER.split(',').filter(Boolean) : [];
+  return { extra: ex, project: repos, case_id: null };
+}
+function objectSetUrl() {
+  var s = objectScopeParams();
+  var url = '/objects?limit=1500' + s.extra;
+  if (s.case_id) url += '&case_id=' + encodeURIComponent(s.case_id);
+  for (var i = 0; i < s.project.length; i++) url += '&project=' + encodeURIComponent(s.project[i]);
   return url;
 }
-async function loadObjectSet() { const r = await fetch(objectSetUrl()).then(r => r.json()).catch(() => []); SET = Array.isArray(r) ? r : []; }
+function objectCountsUrl() {
+  var s = objectScopeParams();
+  var url = '/objects/counts?' + s.extra.replace(/^&/, '');
+  if (s.case_id) url += '&case_id=' + encodeURIComponent(s.case_id);
+  for (var i = 0; i < s.project.length; i++) url += '&project=' + encodeURIComponent(s.project[i]);
+  return url;
+}
+async function loadObjectSet() {
+  const r = await fetch(objectSetUrl()).then(r => r.json()).catch(() => []);
+  SET = Array.isArray(r) ? r : [];
+  // TRUE_COUNTS is the uncapped census (#196) — the taxonomy bar prefers it over
+  // SET-derived counts, which silently understate the moment a type/scope exceeds the
+  // /objects cap (measured: 31,189 objects fleet-wide, Agent alone 10,617 — the cap is
+  // 2000). A failed/slow counts fetch degrades to null, and the toolbar falls back to
+  // the old SET-derived count rather than showing nothing.
+  TRUE_COUNTS = await fetch(objectCountsUrl()).then(r => r.json()).catch(() => null);
+}
 
 // ── Entity Explorer ──────────────────────────────────────────────────────────
 function getFilteredEntities() {
@@ -189,8 +208,14 @@ function getFilteredEntities() {
 }
 function renderEntityToolbar() {
   $('entity-taxonomy-bar').style.display = 'flex';
-  const total = SET.length; if ($('entity-total-num')) $('entity-total-num').textContent = total.toLocaleString();
-  const typeCounts = {}; SET.forEach(o => { typeCounts[o.type] = (typeCounts[o.type] || 0) + 1; });
+  // TRUE_COUNTS (#196) is the uncapped census over the same scope; SET-derived counts
+  // are a fallback for when it hasn't loaded (or failed) — never the primary source,
+  // since SET is capped at 1500 and silently understates any type/scope past that.
+  const trueTotal = TRUE_COUNTS ? TRUE_COUNTS.total : SET.length;
+  if ($('entity-total-num')) $('entity-total-num').textContent = trueTotal.toLocaleString();
+  const typeCounts = TRUE_COUNTS ? Object.assign({}, TRUE_COUNTS.by_type) : {};
+  if (!TRUE_COUNTS) SET.forEach(o => { typeCounts[o.type] = (typeCounts[o.type] || 0) + 1; });
+  const total = trueTotal;
   const priorityOrder = ['Decision','Thread','Reference','Commit','File','Practice','Seat','SoftwareProject','Person','Organization'];
   const availableTypes = Object.keys(typeCounts).sort((a,b)=>{const ai=priorityOrder.indexOf(a),bi=priorityOrder.indexOf(b);if(ai!==-1&&bi!==-1)return ai-bi;if(ai!==-1)return-1;if(bi!==-1)return 1;return(typeCounts[b]||0)-(typeCounts[a]||0)});
   const isAllOn = SELECTED_ENTITY_TYPES.size === 0, nav = $('entity-type-pills'); if (!nav) return;
@@ -435,7 +460,39 @@ function expandSearchInput() { $('global-search-box').classList.add('expanded');
 function collapseSearchIfUnfocused() { if (document.activeElement !== $('search')) $('global-search-box').classList.remove('expanded'); }
 function handleOmniSearchInput(val) { const clear = $('search-clear-btn'); if (clear) clear.style.display = val ? 'block' : 'none'; filterEntitySearch(val); runOmniSearch(val); }
 function clearOmniSearch(e) { if (e) e.stopPropagation(); $('search').value = ''; handleOmniSearchInput(''); }
-function runOmniSearch(q) { const dd = $('omni-dropdown'); if (!dd) return; if (!q || q.trim().length < 1) { dd.style.display = 'none'; return; } dd.style.display = 'flex'; const ql = q.toLowerCase(); OMNI_ITEMS = POWER_TOOLS.filter(t => t.label.toLowerCase().includes(ql) || (t.hint || '').toLowerCase().includes(ql)).slice(0, 12); OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1); renderOmniList(q); }
+let OMNI_SEARCH_TOKEN = 0, OMNI_SEARCH_TIMER = null;
+function runOmniSearch(q) {
+  const dd = $('omni-dropdown'); if (!dd) return;
+  if (!q || q.trim().length < 1) { dd.style.display = 'none'; return; }
+  dd.style.display = 'flex';
+  const ql = q.toLowerCase();
+  const toolHits = POWER_TOOLS.filter(t => t.label.toLowerCase().includes(ql) || (t.hint || '').toLowerCase().includes(ql)).slice(0, 8);
+  OMNI_ITEMS = toolHits;
+  OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1);
+  renderOmniList(q);
+  // Search is an ADDITION to enumeration, never a replacement (ruling 7a1a5517) — this
+  // palette used to match ONLY the hardcoded POWER_TOOLS list, never the graph itself, so
+  // "find a known thing by name" had no path here at all (#196, Thoth msg 5600). Debounced
+  // (200ms) and token-guarded so a fast typist's stale response never clobbers a newer one.
+  const myToken = ++OMNI_SEARCH_TOKEN;
+  clearTimeout(OMNI_SEARCH_TIMER);
+  OMNI_SEARCH_TIMER = setTimeout(async () => {
+    let hits = [];
+    try {
+      const res = await fetch('/search?q=' + encodeURIComponent(q) + '&limit=8').then(r => r.json());
+      hits = Array.isArray(res.hits) ? res.hits : (Array.isArray(res) ? res : []);
+    } catch (e) { hits = []; }
+    if (myToken !== OMNI_SEARCH_TOKEN) return; // a newer keystroke already superseded this
+    const graphHits = hits.filter(h => h && h.id).map(h => ({
+      label: h.display_label || h.label || h.name || h.canonical || h.id,
+      hint: h.type || '', cat: 'Graph',
+      run: () => { switchSurface('browse'); focus(h.id); },
+    }));
+    OMNI_ITEMS = toolHits.concat(graphHits).slice(0, 16);
+    OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1);
+    renderOmniList(q);
+  }, 200);
+}
 function renderOmniList(q) { const list = $('omni-list'); if (!list) return; if (!OMNI_ITEMS.length) { list.innerHTML = '<div class="dd-empty">No matches for "' + esc(q) + '".</div>'; return; } let html = '', lastCat = null; OMNI_ITEMS.forEach((c, i) => { const cat = c.cat || 'Tools'; if (cat !== lastCat) { html += '<div class="omni-cat">' + esc(cat) + '</div>'; lastCat = cat; } html += '<div class="omni-row' + (i === OMNI_SEL ? ' sel' : '') + '" data-i="' + i + '" onclick="execOmniItem(' + i + ')"><span class="omni-label">' + esc(c.label) + '</span>' + (c.hint ? '<span class="omni-hint">' + esc(c.hint) + '</span>' : '') + '</div>'; }); list.innerHTML = html; list.querySelectorAll('[data-i]').forEach(el => el.onmouseenter = () => { OMNI_SEL = +el.dataset.i; paintOmniSel(); }); paintOmniSel(); }
 function paintOmniSel() { document.querySelectorAll('#omni-list .omni-row').forEach(el => el.classList.toggle('sel', +el.dataset.i === OMNI_SEL)); const sel = document.querySelector('#omni-list .sel'); if (sel) sel.scrollIntoView({ block: 'nearest' }); }
 function omniKey(e) { const dd = $('omni-dropdown'), isOpen = dd && dd.style.display === 'flex'; if (e.key === 'ArrowDown') { e.preventDefault(); if (!isOpen) { runOmniSearch(e.target.value); return; } OMNI_SEL = Math.min(OMNI_SEL + 1, OMNI_ITEMS.length - 1); paintOmniSel(); } else if (e.key === 'ArrowUp') { e.preventDefault(); if (!isOpen) return; OMNI_SEL = Math.max(OMNI_SEL - 1, 0); paintOmniSel(); } else if (e.key === 'Enter') { if (isOpen && OMNI_ITEMS[OMNI_SEL]) { e.preventDefault(); execOmniItem(OMNI_SEL); } } else if (e.key === 'Escape') { e.preventDefault(); closeAllDropdowns(); } }
