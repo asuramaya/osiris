@@ -2728,7 +2728,20 @@ async def get_thread_list(
         f"repo:{project}")
     if proj is None:
         return {"error": f"no project {project!r}", "threads": [], "total": 0}
-    clauses = ["o.type='Thread' AND o.status='active'"]
+    # dispatch #195 defect 2, measured live before this fix: 75.5% false-open (2,553 of
+    # 3,380 "active" Thread objects were actually resolved/retracted). `o.status='active'`
+    # is the OBJECT's own lifecycle column (active vs merged/retired) — a completely
+    # different fact from the thread's own `status` PROPERTY (open/resolved), which
+    # resolve_thread sets via a superseding assert_property and never touches `o.status`
+    # at all. This clause was simply missing; find_near_duplicate_open_thread's own query
+    # (capture.py) already gets it right with the identical COALESCE(...,'open')='open'
+    # pattern this now matches.
+    clauses = [
+        "o.type='Thread' AND o.status='active' AND COALESCE("
+        "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "'open')='open'"
+    ]
     params = [proj]
     idx = 2
     if kind:
