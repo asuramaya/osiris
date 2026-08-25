@@ -142,8 +142,14 @@ def test_swap_confession_blocks_before_any_mail_check(tmp_path: Path, monkeypatc
         raise AssertionError("must never reach the mail check once a swap is confessed")
 
     monkeypatch.setattr(osiris_hook, "_post", _unreachable)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
     rc = _cmd_stop({"session_id": "ffffhook6", "transcript_path": str(t)})
-    assert rc == 1
+    # Stop/SubagentStop hooks ONLY block on exit code 2 (dispatch 5599's own parity proof) —
+    # the old, live osiris_stophook.py never used exit codes at all: it prints the JSON
+    # decision to stdout and exits 0.
+    assert rc == 0
+    assert json.loads(out[0])["decision"] == "block"
 
 
 def test_stage_a_never_fires_when_mail_blocks_the_stop(monkeypatch: Any) -> None:
@@ -156,8 +162,13 @@ def test_stage_a_never_fires_when_mail_blocks_the_stop(monkeypatch: Any) -> None
         raise AssertionError("must not reach stage_a on a blocked stop")
 
     monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
     rc = _cmd_stop({"session_id": "mailblock1", "cwd": "/x"})
-    assert rc == 1
+    assert rc == 0
+    decision = json.loads(out[0])
+    assert decision["decision"] == "block"
+    assert "agent:x" in decision["reason"]
     assert [c["phase"] for c in calls] == ["deliverable"]  # never got to stage_a
 
 
@@ -175,6 +186,107 @@ def test_stage_a_fires_on_a_clean_allowed_stop(monkeypatch: Any) -> None:
     assert rc == 0
     phases = [c["phase"] for c in calls]
     assert phases == ["deliverable", "stage_a"]
+
+
+# --- the offload gate: ONE AUTHORITY + the assumed-window safety law (dispatch 5599) ------
+# Found in the retirement's own parity proof: the stub used here reimplemented context
+# occupancy by hand (no `window_assumed` concept at all) instead of delegating to
+# context_lens.last_usage/occupancy/window_for, the SAME authority osiris_stophook.py's own
+# `_offload_pct` already uses. A hand-rolled guess ("200000 or 1000000") that never tracks
+# whether it guessed can alarm exactly where the live script's own safety law — NEVER on an
+# unknown or assumed window (the Anubis VII false-eulogy law) — forbids it.
+
+def test_offload_pct_delegates_to_the_context_lens_authority(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 180000}},
+    }) + "\n")
+    pct, assumed = osiris_hook._offload_pct(
+        {"transcript_path": str(t)}, window_hint=200000)
+    assert pct == 90
+    assert assumed is False
+
+
+def test_offload_pct_never_asserts_a_window_it_assumed(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 50000}},
+    }) + "\n")
+    pct, assumed = osiris_hook._offload_pct({"transcript_path": str(t)}, window_hint=None)
+    assert assumed is True  # no harness-stamped window and no [1m] tag: a guess, flagged
+
+
+def test_offload_pct_none_with_no_transcript() -> None:
+    assert osiris_hook._offload_pct({}, window_hint=200000) == (None, True)
+
+
+def test_cmd_stop_never_blocks_on_an_assumed_window(monkeypatch: Any, tmp_path: Path) -> None:
+    """Even a HIGH guessed pct must never trigger the offload block — assumed=True short-
+    circuits before ALARM_PCT is even consulted, matching osiris_stophook.py's own law."""
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 190000}},
+    }) + "\n")
+    calls: list[dict[str, Any]] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        calls.append(data)
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": None, "bands": {}}}
+        if data["phase"] == "offload":
+            raise AssertionError("must never reach the offload phase on an assumed window")
+        return None  # stage_a: fire-and-forget, expected on this allow path
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = osiris_hook._cmd_stop({"session_id": "assumedwin1", "cwd": "/x",
+                                "transcript_path": str(t)})
+    assert rc == 0
+    assert not out  # never printed a block decision
+    assert [c["phase"] for c in calls] == ["deliverable", "stage_a"]
+
+
+def test_missing_boxes_delegates_to_the_settle_authority() -> None:
+    """ONE AUTHORITY (dispatch 5599): this used to carry its own friendlier name_map,
+    drifting from src.orchestrator.settle.missing_boxes — the same pure function /settle's
+    own confirm step and osiris_stophook.py's own offload verdict already share."""
+    from src.orchestrator.settle import missing_boxes
+
+    boxes = {"decisions": False, "open_threads": True, "charter_md": None}
+    assert osiris_hook._missing_boxes(boxes) == missing_boxes(boxes)
+
+
+def test_cmd_stop_offload_block_uses_the_decision_json_protocol_not_exit_1(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Stop/SubagentStop hooks ONLY block on exit code 2 (dispatch 5599's own parity proof,
+    verified against Claude Code's own hooks reference) — exit 1 is a non-blocking error,
+    the stop proceeds anyway, silently. The proven, live osiris_stophook.py never used exit
+    codes for this: it prints {"decision": "block", "reason": ...} to stdout and exits 0."""
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 180000}},
+    }) + "\n")
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
+        return {"result": {"decisions": False}}
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = osiris_hook._cmd_stop({"session_id": "exitcodecheck1", "cwd": "/x",
+                                "transcript_path": str(t)})
+    assert rc == 0
+    decision = json.loads(out[0])
+    assert decision["decision"] == "block"
 
 
 def test_fire_stage_a_posts_the_expected_shape(monkeypatch: Any) -> None:
@@ -450,7 +562,7 @@ def test_cmd_whisper_carries_the_attach_ceremony_env_vars(monkeypatch: Any) -> N
         return {"agent": "agent:x", "seat": None, "mail": 0}
 
     monkeypatch.setattr(osiris_hook, "_post", _fake_post)
-    monkeypatch.setattr("builtins.print", lambda s="": None)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
     osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
     assert captured["seat_id"] == "seat:abc123"
     assert captured["attach_token"] == "tok-xyz"
@@ -473,7 +585,7 @@ def test_cmd_whisper_prints_the_rendered_banner(monkeypatch: Any) -> None:
         lambda url, data, timeout=3: {"agent": "agent:x", "seat": None, "mail": 0,
                                       "job_dir": "/j/x"})
     out = []
-    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: (None if kw else out.append(s)))
     rc = osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
     assert rc == 0
     assert len(out) == 1
@@ -483,10 +595,66 @@ def test_cmd_whisper_prints_the_rendered_banner(monkeypatch: Any) -> None:
 def test_cmd_whisper_route_unreachable_prints_the_manual_hint(monkeypatch: Any) -> None:
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
     out = []
-    monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: (None if kw else out.append(s)))
     osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
     assert "unreachable" in out[0]
     assert "mount(cwd='/repo')" in out[0]
+
+
+def test_cmd_whisper_logs_the_connected_diagnostic_to_stderr(monkeypatch: Any, capsys: Any) -> None:
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"agent": "agent:x", "seat": None, "mail": 0,
+                                      "job_dir": "/j/x"})
+    osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
+    assert "connected" in capsys.readouterr().err
+
+
+# --- session-end/precompact/spawn: stderr diagnostic parity (dispatch 5599) ----------------
+# The retirement's own parity proof (run both paths against a real capture server, diff the
+# wire output, never a read-and-conclude claim) found the request bodies matched byte-for-
+# byte, but the retired scripts always logged "posted {url} — connected/failed" to stderr on
+# every attempt and the ported versions were silent — no replacement, unlike whisper's own
+# user-visible fallback message on failure. Restored via the shared `_log_post` helper.
+
+def test_session_end_logs_the_connected_diagnostic(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: {"ok": True})
+    out = []
+    monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: out.append(s),
+                                                       "flush": lambda self: None})())
+    osiris_hook._cmd_session_end({"session_id": "sid-x"})
+    assert "connected" in "".join(out)
+
+
+def test_session_end_logs_the_failed_diagnostic(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
+    out = []
+    monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: out.append(s),
+                                                       "flush": lambda self: None})())
+    osiris_hook._cmd_session_end({"session_id": "sid-x"})
+    assert "failed" in "".join(out)
+
+
+def test_precompact_logs_the_diagnostic_only_for_absolute_transcripts(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: {"ok": True})
+    out = []
+    monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: out.append(s),
+                                                       "flush": lambda self: None})())
+    osiris_hook._cmd_precompact({"transcript_path": "relative.jsonl"})
+    assert not out
+    osiris_hook._cmd_precompact({"transcript_path": "/abs/path.jsonl"})
+    assert "connected" in "".join(out)
+
+
+def test_spawn_logs_the_diagnostic_only_with_an_agent_id(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: {"ok": True})
+    out = []
+    monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: out.append(s),
+                                                       "flush": lambda self: None})())
+    osiris_hook._cmd_spawn({"session_id": "s", "agent_id": ""})
+    assert not out
+    osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-x"})
+    assert "connected" in "".join(out)
 
 
 # --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------
