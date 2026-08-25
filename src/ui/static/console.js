@@ -119,10 +119,15 @@ function renderRepoDropdown() {
   names = names.filter(function(n){ var l = n.toLowerCase(); if (seen[l]) return false; seen[l] = true; return true; });
   c.innerHTML = names.map(function(n){
     var sel = SELECTED_REPOS.indexOf(n) !== -1;
-    return '<div class="dd-item' + (sel ? ' sel' : '') + '" data-repo="" + esc(n) + "" onclick="toggleRepo(this.dataset.repo)"><div class="dd-item-main"><span class="dd-item-name">' + esc(n) + '</span></div>' + (sel ? '<span class="dd-item-check">' + String.fromCharCode(10003) + '</span>' : '') + '</div>';
+    // data-repo was written as `data-repo="" + esc(n) + ""` INSIDE a single-quoted JS
+    // string — so the `+ esc(n) +` was literal HTML text, never concatenation, and every
+    // item rendered data-repo="". toggleRepo('') then pushed an empty string that matched
+    // no project, so the scope pill accepted clicks and filtered nothing.
+    return '<div class="dd-item' + (sel ? ' sel' : '') + '" data-repo="' + esc(n) + '" onclick="toggleRepo(this.dataset.repo)"><div class="dd-item-main"><span class="dd-item-name">' + esc(n) + '</span></div>' + (sel ? '<span class="dd-item-check">' + String.fromCharCode(10003) + '</span>' : '') + '</div>';
   }).join('');
 }
 function toggleRepo(name) {
+  if (!name) { console.warn('toggleRepo: empty name, ignoring'); return; }
   var idx = SELECTED_REPOS.indexOf(name);
   if (idx === -1) SELECTED_REPOS.push(name);
   else SELECTED_REPOS.splice(idx, 1);
