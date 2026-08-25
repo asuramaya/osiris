@@ -1296,6 +1296,101 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
     assert out == 0
 
 
+# --- THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) ---------------
+# OFF by default (every test above ran with it unset). These pin the ONE new step, fully
+# injected: `_real_full_suite_gate`'s own subprocess plumbing has no dedicated test here
+# (it would mean nesting a real pytest run inside this suite) — this only tests that
+# cmd_deploy WIRES the gate correctly and runs it BEFORE the chaos gate.
+
+async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _boom_full_suite_gate(repo_root: Path) -> dict[str, Any]:
+        raise AssertionError("the full suite gate must never run when "
+                             "osiris_deploy_full_suite_gate is unset (OFF by default, "
+                             "the same law as osiris_deploy_chaos_gate)")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok,
+                           full_suite_gate=_boom_full_suite_gate)
+    assert out == 0
+
+
+async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", "1")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _ok_full_suite_gate(repo_root: Path) -> dict[str, Any]:
+        return {"ok": True, "summary": "3891 passed, 1 skipped", "returncode": 0}
+
+    calls: list[Any] = []
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        calls.append(repo_root)
+        return "cafef00d"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_record_deploy,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok,
+                               full_suite_gate=_ok_full_suite_gate)
+    assert out == 0
+    assert calls == [tmp_path]
+    assert "full suite: green on the merged tree" in buf.getvalue()
+
+
+async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_real_failure(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", "1")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _bad_full_suite_gate(repo_root: Path) -> dict[str, Any]:
+        return {"ok": False, "summary": "FAILED tests/test_x.py::test_y - ModuleNotFoundError",
+               "returncode": 1}
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the full suite gate refused first")
+
+    async def _unreachable_chaos(pool: Any) -> dict[str, Any]:
+        raise AssertionError("must never be called — the full suite gate refuses BEFORE "
+                             "the chaos gate ever runs")
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_unreachable,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok,
+                               full_suite_gate=_bad_full_suite_gate,
+                               chaos_gate=_unreachable_chaos)
+    assert out == 1
+    text = buf.getvalue()
+    assert "REFUSED" in text and "ModuleNotFoundError" in text
+    assert "NOT recording this deploy" in text
+
+
 # --- CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — osiris_deploy_chaos_gate ---------
 # OFF by default (every test above ran with it unset — 159 unaffected). These pin the ONE
 # new step, fully injected: chaos.py's own control flow has its own dedicated test suite

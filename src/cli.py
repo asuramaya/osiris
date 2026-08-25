@@ -101,6 +101,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -366,6 +367,39 @@ async def _real_chaos_gate(pool: asyncpg.Pool) -> dict[str, Any]:
         pool, units=DEFAULT_CHAOS_UNITS, kill=_real_kill_units,
         restart=_real_restart_services, fire_storm=_real_fire_storm,
         automount_probe=_real_check_whisper_probe)
+
+
+async def _real_full_suite_gate(repo_root: Path) -> dict[str, Any]:
+    """The real wiring `osiris deploy`'s own full-suite gate uses (task #186, Thoth DM
+    5637): `pytest -q -n 4` against `repo_root` — the SAME bounded worker cap
+    `scripts/gate_hook.py`'s own scoped runs use, never `-n auto`, so this gate cannot
+    itself become the thing that exhausts a host already running concurrent agents'
+    commits. Each invocation spins its OWN throwaway pg testcontainer (pytest's own
+    session fixture), entirely separate from the real dev Postgres `osiris deploy`
+    operates against — the concurrency risk this must respect (#100) is host resource
+    contention with OTHER pytest runs, not a shared database. `osiris deploy` itself is a
+    single coordinated action (the operator's/coordinator's own, never run by multiple
+    fleet agents at once — the same assumption `record_deploy`'s own cursor write already
+    makes), so this gate's own worst case is bounded the same way gate_hook.py's is.
+
+    Bounded at 600s (the suite measured ~200-230s under real load tonight; generous
+    headroom, never unbounded) — a timeout is reported as a genuine failure, never
+    swallowed as fail-open (577988ed's fail-open clause is for infrastructure this can't
+    control; a suite that cannot even finish is exactly the invariant violation this gate
+    exists to catch, same posture as the chaos gate beside it)."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "pytest", "-q", "-n", "4",
+        cwd=repo_root, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        out_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return {"ok": False, "summary": "pytest timed out after 600s — never finished",
+               "returncode": None}
+    out = out_bytes.decode(errors="replace")
+    tail = "\n".join(out.strip().splitlines()[-15:])
+    return {"ok": proc.returncode == 0, "summary": tail, "returncode": proc.returncode}
 
 
 async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
@@ -1524,6 +1558,7 @@ WaitForHealth = Callable[[], Awaitable[tuple[bool, float]]]
 WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
 ChaosGate = Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]]
+FullSuiteGate = Callable[[Path], Awaitable[dict[str, Any]]]
 CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[str]]]
 
 
@@ -1604,6 +1639,7 @@ async def cmd_deploy(
     check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
     chaos_gate: ChaosGate = _real_chaos_gate,
     check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
+    full_suite_gate: FullSuiteGate = _real_full_suite_gate,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1752,6 +1788,24 @@ async def cmd_deploy(
                   "door. NOT recording this deploy.")
             return 1
 
+        # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) — OFF
+        # by default, same law as the chaos gate below it. Runs BEFORE the chaos gate: a
+        # suite that doesn't even pass makes a slow SIGKILL replay pointless. Neither of
+        # tonight's two live incidents (a branch's own scoped-gate green, false once
+        # merged; an auto-merged capture.py only proven correct by a full re-run) was a
+        # daemon-crash-resilience gap — this is the gate that actually covers them.
+        from src.config.settings import get_settings as _get_deploy_settings
+
+        if _get_deploy_settings().osiris_deploy_full_suite_gate:
+            suite_report = await full_suite_gate(root)
+            if suite_report["ok"]:
+                print("full suite: green on the merged tree")
+            else:
+                print("osiris deploy: REFUSED — the full suite failed on the merged tree:")
+                print(suite_report["summary"])
+                print("NOT recording this deploy.")
+                return 1
+
         # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same
         # law as osiris_trigger_enabled/osiris_pit_watch_enabled: a mechanism that SIGKILLs
         # a live service earns its own kill switch, never inherits one. When on, runs a
@@ -1759,8 +1813,6 @@ async def cmd_deploy(
         # graceful `restart` above) and refuses the deploy outright on any finding — this
         # is a GATE (577988ed's fail-open clause is for infrastructure this can't control,
         # never for a genuine invariant violation this module exists to catch).
-        from src.config.settings import get_settings as _get_deploy_settings
-
         if _get_deploy_settings().osiris_deploy_chaos_gate:
             import json
 

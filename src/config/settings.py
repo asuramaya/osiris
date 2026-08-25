@@ -305,6 +305,21 @@ class Settings(BaseSettings):
     # `src.orchestrator.chaos.chaos_replay` as an additional gate after its own ordinary
     # graceful restart — see cmd_deploy's own docstring for exactly what it checks.
     osiris_deploy_chaos_gate: bool = False
+    # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25): OFF by
+    # default, same law as osiris_deploy_chaos_gate beside it — a mechanism that spins its
+    # own pg testcontainer earns its own kill switch. Two live incidents the same night this
+    # was dispatched: a branch's own scoped gate was green, merged onto main the SAME suite
+    # failed 6 tests for a ModuleNotFoundError the branch's own deletion caused (#187's own
+    # followup, commit c3f9f7d); a clean git auto-merge of two branches both touching
+    # capture.py was only PROVEN correct by re-running the suite on the MERGED result.
+    # Neither incident was a daemon-crash-resilience gap — osiris_deploy_chaos_gate would
+    # not have caught either one. gate_hook.py's own pytest is DELIBERATELY scoped to each
+    # commit's own resolved test files (its own docstring: a full 209s run per commit is
+    # unshippable under 4-agent concurrency) — nothing anywhere runs the full suite against
+    # what a merge actually produces. When on, `osiris deploy` runs the full suite (`pytest
+    # -q -n 4`, the same bounded worker cap gate_hook.py's own scoped runs use, never `-n
+    # auto`) against `repo_root` as an additional precondition gate, before the chaos gate.
+    osiris_deploy_full_suite_gate: bool = False
     # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
     # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
     # switch, never inherits one. When on, a tick alarms on any managed_by pair's ask-graded
