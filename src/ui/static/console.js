@@ -376,12 +376,13 @@ async function renderProjects() {
 function setProjectsStatusFilter(status) { PROJECTS_INDEX_STATUS = status; renderProjects(); }
 function projectRow(r) {
   var lastTouch = r.last_touch ? String(r.last_touch).slice(0, 10) : '—';
-  // The zero-links / identity-disagreement specimen (Thoth's own callout, msg 5631):
-  // surface it plainly rather than hide it — "the graph currently cannot tell you which
-  // [phantom mint or genuinely new tree]" is exactly the kind of honest gap this row exists
-  // to name, not paper over with a clean-looking table.
+  // CORRECTED (Sekhmet's per-project pass, decision 3b72b196, msg 5653): link-count is
+  // NOT a phantom test — the one active zero-links project (deepseek-harness) turned out
+  // real, a genuine disk-census-found repo simply never worked yet; the actual phantom
+  // (liveness-fix) carried ONE link, not zero. So this flag surfaces "worth a glance"
+  // ONLY — it must never read as "suspect", which the wording used to imply.
   var flag = '';
-  if (r.bucket === 'orphan') flag = '<span class="proj-flag" title="zero live links — a phantom mint or a genuinely new tree; the graph cannot tell you which">no links</span>';
+  if (r.bucket === 'orphan') flag = '<span class="proj-flag" title="zero live links — often just a repo nobody has worked yet, not necessarily a problem (link-count alone is not a phantom test)">no links</span>';
   else if (r.bucket === 'contradicted') flag = '<span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
   return '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + esc(r.name) + flag + '</td>' +
     '<td><span class="card-tag-status status-' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
