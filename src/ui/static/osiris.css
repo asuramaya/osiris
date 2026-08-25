@@ -1098,6 +1098,8 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
 .status-retired, .status-resolved, .status-historical { color: var(--muted); background: rgba(255, 255, 255, 0.05); }
 
 .ee-canon-mono {
+  display: inline-block;
+  max-width: 100%;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--muted);
@@ -1105,6 +1107,29 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   border: 1px solid var(--border);
   padding: 1px 6px;
   border-radius: 4px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* A key that is a NAME reads as a word, not a hash: proportional face, brighter,
+   no chip chrome competing with the summary beside it. */
+.ee-canon-mono.is-name {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  padding-left: 0;
+}
+
+/* The summary column absorbs whatever the fixed columns leave. The old rule was
+   `max-width:1fr` inline — not valid CSS outside grid, so it constrained nothing and
+   the nowrap children clipped against an arbitrary auto-layout width instead of the
+   real edge. width:100% on an auto-layout table means "take the remainder". */
+.ee-summary-cell {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
 }
 .ee-summary-preview {
   font-size: 11px;
@@ -1239,9 +1264,13 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   align-items: stretch;
 }
 .board-lane {
-  flex: 1 1 320px;
-  min-width: 280px;
-  max-width: 440px;
+  /* FIXED basis, never flex-grow: a lane is the same width whether the board shows
+     one type or six. `flex:1 1 320px` made a single-type board stretch each lane to
+     max-width and a multi-type board shrink them toward min-width — the same card
+     rendering at two different widths depending on an unrelated filter. */
+  flex: 0 0 340px;
+  min-width: 340px;
+  max-width: 340px;
   background: rgba(13, 18, 25, 0.6);
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -217,26 +217,55 @@ function renderEntityExplorerStage() {
   renderTableProjection(container, filtered); showPanel();
 }
 
+// ── Key/ID rendering ─────────────────────────────────────────────────────────
+// A key is either a NAME (repo:osiris -> "osiris", a handle, a slug) or an OPAQUE
+// digest (a uuid, a commit sha, a 32-hex canonical). Names are meaningful to a human
+// and must survive intact; digests carry no meaning in the middle, so they abbreviate
+// head+tail the way a wallet address does. Truncating a name from the right is the
+// worst of both: it destroys the only part that identified the thing.
+function keyLabel(o) {
+  var raw = o.canonical || '';
+  if (raw.indexOf(':') !== -1) raw = raw.slice(raw.indexOf(':') + 1);
+  if (!raw) raw = o.id || '';
+  return raw;
+}
+function isOpaqueKey(k) {
+  // uuid, bare sha, or any long unbroken hex run — nothing a human reads as a word.
+  return /^[0-9a-f-]{12,}$/i.test(k) || /[0-9a-f]{16,}/i.test(k);
+}
+function abbrevKey(k, head, tail) {
+  head = head || 6; tail = tail || 4;
+  if (k.length <= head + tail + 1) return k;
+  return k.slice(0, head) + '\u2026' + k.slice(-tail);
+}
+// NAMES up to ~24 chars render whole; longer names and all digests abbreviate.
+function renderKey(o) {
+  var k = keyLabel(o);
+  if (!k) return '';
+  var shown = isOpaqueKey(k) ? abbrevKey(k) : (k.length <= 24 ? k : abbrevKey(k, 14, 6));
+  var cls = 'ee-canon-mono' + (isOpaqueKey(k) ? '' : ' is-name');
+  return '<span class="' + cls + '" title="' + esc(k) + '">' + esc(shown) + '</span>';
+}
+
 // ── Table Projection ─────────────────────────────────────────────────────────
 function renderTableProjection(container, items) {
   var sorters = { name: function(o){return (o.display_label || o.name || '').toLowerCase();}, type: function(o){return (o.type || '').toLowerCase();}, status: function(o){return (o.status || 'active').toLowerCase();}, date: function(o){return o.created_at || '';} };
   var shown = [].concat(items).sort(function(a, b) { var va = sorters[TABLE_SORT_COL] ? sorters[TABLE_SORT_COL](a) : (a.created_at || ''); var vb = sorters[TABLE_SORT_COL] ? sorters[TABLE_SORT_COL](b) : (b.created_at || ''); return TABLE_SORT_DIR === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va); });
   if (!shown.length) { container.innerHTML = '<div class="o-empty" style="padding:40px 20px">No matching entities.</div>'; return; }
-  container.innerHTML = '<table class="ee-table"><thead><tr><th style="width:105px;cursor:pointer" onclick="toggleTableSort(\'type\')">Type' + sortIcon('type') + '</th><th style="width:85px">Key / ID</th><th style="cursor:pointer" onclick="toggleTableSort(\'name\')">Summary' + sortIcon('name') + '</th><th style="width:95px;cursor:pointer" onclick="toggleTableSort(\'date\')">Date' + sortIcon('date') + '</th><th style="width:75px;text-align:right;cursor:pointer" onclick="toggleTableSort(\'status\')">Status' + sortIcon('status') + '</th></tr></thead><tbody>' +
+  container.innerHTML = '<table class="ee-table"><thead><tr><th style="width:105px;cursor:pointer" onclick="toggleTableSort(\'type\')">Type' + sortIcon('type') + '</th><th style="width:150px">Key / ID</th><th style="cursor:pointer" onclick="toggleTableSort(\'name\')">Summary' + sortIcon('name') + '</th><th style="width:95px;cursor:pointer" onclick="toggleTableSort(\'date\')">Date' + sortIcon('date') + '</th><th style="width:75px;text-align:right;cursor:pointer" onclick="toggleTableSort(\'status\')">Status' + sortIcon('status') + '</th></tr></thead><tbody>' +
   shown.map(renderTableRow).join('') + '</tbody></table>' + (items.length > 300 ? '<div class="o-faint" style="padding:12px;text-align:center">Showing first 300 of ' + items.length + '</div>' : '');
 }
 function renderTableRow(o) {
   var isSel = FOCUS === o.id, isExp = EXPANDED_ROWS.has(o.id), p = o.props || {};
   var summary = p.summary || p.rationale || p.statement || p.description || p.title || '';
   var dateStr = o.created_at ? o.created_at.slice(0, 10) : '';
-  var shortId = o.canonical ? (o.canonical.indexOf(':') !== -1 ? o.canonical.split(':')[1] : o.canonical) : o.id.slice(0, 8);
   var grade = (p.evidence_class || p.grade || 'self_declared').toLowerCase(), source = p.source_id || p.source_label || p.source || '';
   var tColor = '#6e7681';
   try { tColor = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
   return '<tr class="ee-row' + (isSel ? ' sel' : '') + (isExp ? ' expanded' : '') + '" onclick="inspectAndToggleRow(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')">' +
     '<td><span class="ee-type-pill" style="border-color:' + tColor + '40;color:' + tColor + ';background:' + tColor + '18"><span class="dot" style="background:' + tColor + '"></span> ' + esc(o.type) + '</span></td>' +
-    '<td><span class="ee-canon-mono">' + esc(shortId) + '</span></td>' +
-    '<td style="max-width:1fr;overflow:hidden"><div class="ee-name">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="ee-summary-preview">' + esc(summary) + '</div>' : '') + '</td>' +
+    '<td>' + renderKey(o) + '</td>' +
+    '<td class="ee-summary-cell"><div class="ee-name">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="ee-summary-preview">' + esc(summary) + '</div>' : '') + '</td>' +
     '<td style="color:var(--muted);font-size:11px;font-family:var(--font-mono)">' + esc(dateStr) + '</td>' +
     '<td style="text-align:right"><span class="ee-status status-' + esc(o.status || 'active') + '">' + esc(o.status || 'active') + '</span></td>' +
     '</tr>' +
@@ -263,14 +292,16 @@ function renderBoardProjection(container, items) {
   container.innerHTML = '<div style="padding:16px;height:100%"><div class="spatial-board">' + lanesToRender.map(l => renderBoardLane(l)).join('') + '</div>' + (items.length > 250 ? '<div class="o-faint" style="padding:16px 0;text-align:center">Showing first 250 of ' + items.length + '</div>' : '') + '</div>';
 }
 function renderBoardLane(l) {
-  return '<div class="board-lane"><div class="board-lane-head" style="border-top:2px solid var(--border2)"><div class="lane-title-wrap"><span class="dot" style="background:var(--blue)"></span><span class="lane-name">' + esc(l.name) + '</span></div><span class="lane-badge">' + l.items.length + '</span></div><div class="board-lane-items">' + l.items.map(renderBoardCard).join('') + (l.items.length ? '' : '<div class="lane-empty">No items</div>') + '</div></div>';
+  var lc = '#6e7681'; try { lc = Osiris.ty(l.id).c || '#6e7681'; } catch(e) {}
+  return '<div class="board-lane"><div class="board-lane-head"><div class="lane-title-wrap"><span class="dot" style="background:' + lc + '"></span><span class="lane-name">' + esc(l.name) + '</span></div><span class="lane-badge">' + l.items.length + '</span></div><div class="board-lane-items">' + l.items.map(renderBoardCard).join('') + (l.items.length ? '' : '<div class="lane-empty">No items</div>') + '</div></div>';
 }
 function renderBoardCard(o) {
   const p = o.props || {}, summary = p.summary || p.rationale || p.statement || p.description || p.title || '';
-  const dateStr = o.created_at ? o.created_at.slice(0, 10) : '', shortId = o.canonical ? (o.canonical.includes(':') ? o.canonical.split(':')[1] : o.canonical) : o.id.slice(0, 8);
+  const dateStr = o.created_at ? o.created_at.slice(0, 10) : '';
   const grade = (p.evidence_class || p.grade || 'self_declared').toLowerCase(), source = p.source_id || p.source_label || p.source || '';
   const isDuty = o.type === 'Thread' && (p.kind === 'obligation' || o.status === 'obligation'), statusLabel = isDuty ? 'duty' : (o.status || 'active');
-  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" style="border-top:2px solid var(--blue)" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type"><span class="dot" style="background:var(--blue)"></span> ' + esc(o.type) + '</span><span class="card-tag card-tag-id">' + esc(shortId) + '</span></div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
+  var cc = '#6e7681'; try { cc = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
+  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type" style="border-color:' + cc + '40;color:' + cc + ';background:' + cc + '18"><span class="dot" style="background:' + cc + '"></span> ' + esc(o.type) + '</span>' + renderKey(o) + '</div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
 }
 
 // ── Mailbox ──────────────────────────────────────────────────────────────────
