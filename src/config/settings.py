@@ -385,8 +385,9 @@ class Settings(BaseSettings):
     # OBSERVED with four agents live before the hook path can actually block anybody). Wiring
     # core.hooksPath is a separate, later act, not this one.
     osiris_gate_hook_enforce: bool = True
-    # STAGE C, THE TURN-END PRACTICE-VIOLATION AUDIT (osiris_stophook.py's
-    # _confess_if_practice_violated) — OFF, DELIBERATELY DISARMED, not "not yet armed" like
+    # STAGE C, THE TURN-END PRACTICE-VIOLATION AUDIT (`_confess_if_practice_violated`,
+    # measured while it lived in osiris_stophook.py, since ported to stophook_logic.py at
+    # the hook migration, dispatch 5441/5599) — OFF, DELIBERATELY DISARMED, not "not yet armed" like
     # its siblings above. Five days live (since commit 8c07fec, 2026-07-28), 20 flags fleet-
     # wide in a single 24h sample, 14 individually verified against the flagging agent's own
     # turn text — 14/14 FALSE, zero true positives. A graph-wide search for even one

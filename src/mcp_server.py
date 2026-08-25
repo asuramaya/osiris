@@ -1729,7 +1729,7 @@ async def _co_agents(pool: asyncpg.Pool, project: str, agent_id: str) -> dict[st
     copies drifting' class this house keeps finding). Enriched with each sibling's
     context_pct (Thoth's Pit Watch extension, msg 1381, seam-discipline decision 33b7cb10:
     'a manager can't route around a seam it can't see' — the gap behind mis-assigning a
-    79%-full worker blind) — the freshest reading osiris_stophook.py's Stop hook has
+    79%-full worker blind) — the freshest reading osiris_hook.py's `stop` subcommand has
     stamped on that Agent, off the SAME context_lens.ALARM_PCT the hook itself alarms on,
     never a second copied threshold. Absent (no key) when that sibling has never had a
     reading stamped; STALENESS is spoken plainly via `context_pct_age_s`, since a reading
@@ -2053,7 +2053,7 @@ async def mount(
             # has carried this door since the alias-clone cure, 2026-07-16; mount() the tool
             # never had it, so a whisperless caller minted a clone here where a whisper-
             # greeted one would have adopted). `transcript_path` is hook-stamped
-            # (scripts/osiris_mount_anchor.py), never hand-supplied — a live tab attached
+            # (osiris_hook.py's `anchor` subcommand), never hand-supplied — a live tab attached
             # through a NEW sid whose transcript_path names ANOTHER session's file is a
             # window onto that mind, not a stranger.
             viewed = (await handshake.view_seat(
@@ -2137,7 +2137,7 @@ async def mount(
             "note": ("no job_dir, no session anchor, and no observed transcript sid — "
                      "there is nothing to attribute this session to, ever. Pass job_dir "
                      "(or confirm the PreToolUse hook is installed, "
-                     "scripts/osiris_mount_anchor.py) so this session carries a real, "
+                     "osiris_hook.py's `anchor` subcommand) so this session carries a real, "
                      "durable anchor. Nothing was minted or written."),
             **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
         }
@@ -7585,9 +7585,10 @@ async def heartbeat_route(request: Any) -> Any:
     """The statusline's server half (thread #180, 2026-08-18): every rendering tab used to
     fork a fresh `asyncpg.connect()` per render — Thoth's own measurement, 138 tx/s and 23
     backends against an idle fleet of 16, "20 backend forks/s from statusline alone" at
-    fleet scale. `compute_heartbeat` is the SAME logic `scripts/osiris_statusline.py`'s own
-    `_counts` has always run (see that module for the long-standing WHY of each resolution
-    step); this just runs it against the ALREADY-WARM shared pool instead of a cold
+    fleet scale. `compute_heartbeat` is the SAME logic the retired scripts/osiris_statusline.py's
+    own `_counts` used to run (that script is gone as of the hook migration's retirement pass,
+    dispatch 5441/5599; see this function's own body for the long-standing WHY of each
+    resolution step); this just runs it against the ALREADY-WARM shared pool instead of a cold
     per-process connection, and calls `live_succession` directly instead of the script's own
     HTTP round-trip to `/succession` (pointless when both ends are this same process).
 
