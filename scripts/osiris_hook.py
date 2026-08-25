@@ -37,8 +37,14 @@ from typing import Any
 # Fails open to the historically-correct values on any import trouble (a moved repo, a
 # stripped-down deploy) rather than ever crashing the hook over a constant.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_cl_last_usage: Any = None
+_cl_occupancy: Any = None
+_cl_window_for: Any = None
 try:
     from src.orchestrator.context_lens import ALARM_PCT, HARD_ALARM_PCT
+    from src.orchestrator.context_lens import last_usage as _cl_last_usage
+    from src.orchestrator.context_lens import occupancy as _cl_occupancy
+    from src.orchestrator.context_lens import window_for as _cl_window_for
 except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
     ALARM_PCT, HARD_ALARM_PCT = 80, 95
 
@@ -338,8 +344,8 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     # IDENTITY OUTRANKS MAIL: a mind that changed models must know before anything else.
     confession = _swap_confession(hook)
     if confession:
-        print(confession, file=sys.stderr)
-        return 1
+        print(json.dumps({"decision": "block", "reason": confession}))
+        return 0
 
     # Phase 1: deliverable check
     resp = _post(_URLS["stop"], {"phase": "deliverable", "cwd": cwd,
@@ -350,19 +356,48 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     n = result.get("n", 0)
     window_hint = result.get("window")
 
-    # If mail waits, block
+    # If mail waits, block. THE JSON DECISION PROTOCOL, NOT EXIT CODE 1 (found in the
+    # retirement's own parity proof, dispatch 5599): Claude Code's Stop/SubagentStop hooks
+    # ONLY block on exit code 2 — exit 1 is a non-blocking error, the stop proceeds anyway,
+    # silently. The proven, live osiris_stophook.py never used exit codes for this at all;
+    # it prints {"decision": "block", "reason": ...} to stdout and exits 0. The stub this
+    # replaces would never have blocked a single stop in production. Message text and the
+    # bands/senders/project shape are ported verbatim from that script's own `main()`.
     if n > 0:
-        senders = result.get("senders", [])
-        print(f"osiris: {n} unread message(s) from {senders} — "
-              f"inbox() then settle() before stopping", file=sys.stderr)
-        return 1
-
-    # Context occupancy (stdlib tail-read)
-    transcript = str(hook.get("transcript_path") or "")
-    pct = _context_pct(transcript, window_hint)
-    if pct is None or pct < ALARM_PCT:
-        _fire_stage_a(hook, session_id, cwd, pct=pct)
+        senders = result.get("senders") or []
+        who = f" (from {', '.join(senders[:4])})" if senders else ""
+        bands = result.get("bands") or {}
+        graded = []
+        if bands.get("ask"):
+            graded.append(f"{bands['ask']} ask(s) something of you")
+        if bands.get("fyi"):
+            graded.append(f"{bands['fyi']} fyi (an ack settles)")
+        rest = n - sum(bands.values())
+        if graded and rest:
+            graded.append(f"{rest} ungraded")
+        shape = f" — {', '.join(graded)}" if graded else ""
+        project_display = result.get("project") or "an unresolved project"
+        print(json.dumps({
+            "decision": "block",
+            "reason": (f"Osiris: {n} deliverable message(s) for {project_display}{who}{shape} "
+                       "— call inbox(), act on what carries new work, SETTLE each handled "
+                       "message (reply with send(reply_to=<id>) or ack with "
+                       "inbox(ack=[ids])), then finish. If a message needs nothing, ack it."),
+        }))
         return 0
+
+    # Context occupancy — via THE authority (context_lens.last_usage/occupancy/window_for),
+    # never a second, independently-drifting tail-parse. Found in the retirement's own
+    # parity proof (dispatch 5599): a hand-rolled reimplementation here had no concept of
+    # an ASSUMED window at all — osiris_stophook.py's own `_offload_pct` NEVER alarms on an
+    # unknown or assumed window (the Anubis VII false-eulogy law), and a reimplementation
+    # that silently guesses "200000 or 1000000" instead of tracking the guess can alarm
+    # exactly where the live script's own safety law forbids it.
+    pct, window_assumed = _offload_pct(hook, window_hint)
+    good_pct = pct if (pct is not None and not window_assumed) else None
+    if pct is None or window_assumed or pct < ALARM_PCT:
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
+        return 0  # never alarms on an unknown/assumed window or below the line
 
     # Block marker state (Claude-specific paths)
     sid8 = session_id[:8]
@@ -373,39 +408,48 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     hard_exists = hard is not None and hard.exists()
 
     if soft_exists and not hard_exists and pct < HARD_ALARM_PCT:
-        _fire_stage_a(hook, session_id, cwd, pct=pct)
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0  # soft already fired, below hard line
     if soft_exists and hard_exists:
-        _fire_stage_a(hook, session_id, cwd, pct=pct)
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0  # both already fired — never loop
 
     # Phase 2: offload box check
     resp2 = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd,
                                    "session_id": session_id}, timeout=_TIMEOUTS["stop"])
     if resp2 is None or resp2.get("error"):
-        _fire_stage_a(hook, session_id, cwd, pct=pct)
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
     boxes = (resp2.get("result") or resp2)
     missing = _missing_boxes(boxes) if isinstance(boxes, dict) else []
     if not missing:
-        _fire_stage_a(hook, session_id, cwd, pct=pct)
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
 
     listed = "; ".join(missing)
     target = hard if hard_exists else (hard if pct >= HARD_ALARM_PCT else soft)
     is_hard = target is hard
-    note = ("this is the harder nudge — nothing further will interrupt you this session"
-            if is_hard else
-            "a harder nudge fires again near 95% if you keep going without settling")
-    print(f"osiris: context {pct}% — unwritten: {listed}. Call settle(). {note}.",
-          file=sys.stderr)
+    tier_note = (
+        "this is the harder nudge — nothing further will interrupt you this session, so "
+        "settle now" if is_hard else
+        f"a harder nudge fires again near {HARD_ALARM_PCT}% if you keep going without settling"
+    )
     try:
         if target:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.touch()
     except OSError:
         pass
-    return 1 if not hard_exists else 0
+    print(json.dumps({
+        "decision": "block",
+        "reason": (f"Osiris offload ritual: context {pct}% full — a compaction (a death, "
+                   f"ruling a882b334) can land any turn, and this session hasn't written "
+                   f"back: {listed}. Call settle() — it runs every one of these checks "
+                   "itself (decisions/threads/charter.md/handoff/uncommitted git work; "
+                   "pass repo_path naming your code repo if you're a seat-office agent, "
+                   f"since settle can't see it there otherwise). {tier_note}."),
+    }))
+    return 0
 
 
 def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
@@ -445,13 +489,44 @@ def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
     return None
 
 
+def _offload_pct(hook: dict[str, Any], window_hint: int | None) -> tuple[int | None, bool]:
+    """Occupancy %% for the offload gate specifically — ported verbatim from
+    osiris_stophook.py's own `_offload_pct`, off THE authority's own primitives
+    (context_lens.last_usage/occupancy/window_for), never `_context_pct`'s hand-rolled
+    tail-parse above (that one is statusline's ambient display, low-stakes if slightly
+    off; this one gates a real block and must track whether the window was ASSUMED —
+    `_cmd_stop` never alarms on an assumed window, the same law the original names).
+    (pct, window_assumed); (None, True) — "nothing to read, never alarm" — on any import
+    or read failure, exactly the fail-open floor the rest of this file holds to."""
+    if _cl_last_usage is None or _cl_occupancy is None or _cl_window_for is None:
+        return None, True
+    transcript = str(hook.get("transcript_path") or "")
+    if not transcript:
+        return None, True
+    usage = _cl_last_usage(Path(transcript))
+    if usage is None:
+        return None, True
+    used = _cl_occupancy(usage)
+    if window_hint:
+        window, assumed = window_hint, False
+    else:
+        model_id = str((hook.get("model") or {}).get("id") or "") or None
+        window, assumed = _cl_window_for(model_id, used)
+    return round(100 * used / window), assumed
+
+
 def _missing_boxes(boxes: dict[str, Any]) -> list[str]:
-    if not boxes:
+    """ONE AUTHORITY (found in the retirement's own parity proof, dispatch 5599): this used
+    to be a hand-rolled reimplementation with its own friendlier name_map, drifting from
+    `src.orchestrator.settle.missing_boxes` — the SAME pure function both /settle's own
+    confirm step and osiris_stophook.py's own offload verdict already share. Delegates
+    instead of re-deriving; fails open to the empty list (never blocks) if settle.py can't
+    be imported at all."""
+    try:
+        from src.orchestrator.settle import missing_boxes
+    except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
         return []
-    name_map = {"decisions": "record_decision", "open_threads": "open_thread",
-                "resolved_threads": "resolve_thread", "charter_md": "charter.md",
-                "handoff_note": "handoff to successor", "uncommitted_git": "git add + commit"}
-    return [name_map.get(k, k) for k, v in boxes.items() if v is False]
+    return missing_boxes(boxes)
 
 
 def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
@@ -613,6 +688,7 @@ def _cmd_whisper(hook: dict[str, Any]) -> int:
     if os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID"):
         body["bridge_session_id"] = os.environ["CLAUDE_CODE_BRIDGE_SESSION_ID"]
     resp = _post(_URLS["whisper"], body, timeout=_TIMEOUTS["whisper"])
+    _log_post("osiris_hook.whisper", _URLS["whisper"], resp)
     if resp is None:
         print(f"◈ OSIRIS (fleet memory) is configured but its server is unreachable right "
               f"now. When your work touches shared knowledge, try the MCP tool "
@@ -627,20 +703,35 @@ def _cmd_whisper(hook: dict[str, Any]) -> int:
     return 0
 
 
+def _log_post(label: str, url: str, resp: Any | None) -> None:
+    """Restores the retired per-purpose scripts' own stderr diagnostic (osiris_sessionend.py/
+    osiris_precompact.py/osiris_spawn.py each logged "posted {url} — connected/failed" on
+    every attempt) — found genuinely lost in the parity proof (dispatch 5599): `_post`'s
+    shared helper swallows the outcome silently, and unlike whisper (which prints a
+    user-visible fallback on failure), these three had no replacement at all. Not a network
+    round trip of its own — just the diagnostic line the old scripts always emitted."""
+    print(f"{label}: posted {url} — {'connected' if resp is not None else 'failed'}",
+          file=sys.stderr)
+
+
 def _cmd_session_end(hook: dict[str, Any]) -> int:
     sid = str(hook.get("session_id") or "")
     if sid:
-        _post(_URLS["session-end"], {"session_id": sid}, timeout=_TIMEOUTS["session-end"])
+        url = _URLS["session-end"]
+        resp = _post(url, {"session_id": sid}, timeout=_TIMEOUTS["session-end"])
+        _log_post("osiris_hook.session-end", url, resp)
     return 0
 
 
 def _cmd_precompact(hook: dict[str, Any]) -> int:
     transcript = str(hook.get("transcript_path") or "")
     if transcript.startswith("/"):
-        _post(_URLS["precompact"], {"transcript_path": transcript,
-                                    "session_id": str(hook.get("session_id") or ""),
-                                    "trigger": str(hook.get("trigger") or "")},
-              timeout=_TIMEOUTS["precompact"])
+        url = _URLS["precompact"]
+        resp = _post(url, {"transcript_path": transcript,
+                           "session_id": str(hook.get("session_id") or ""),
+                           "trigger": str(hook.get("trigger") or "")},
+                     timeout=_TIMEOUTS["precompact"])
+        _log_post("osiris_hook.precompact", url, resp)
     return 0
 
 
@@ -657,7 +748,9 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     tp = str(hook.get("agent_transcript_path") or "")
     if tp:
         body["agent_transcript_path"] = tp
-    _post(_URLS["spawn"], body, timeout=_TIMEOUTS["spawn"])
+    url = _URLS["spawn"]
+    resp = _post(url, body, timeout=_TIMEOUTS["spawn"])
+    _log_post("osiris_hook.spawn", url, resp)
     return 0
 
 
