@@ -7481,15 +7481,16 @@ async def automount_route(request: Any) -> Any:
         _evict_stale_minds(out.get("minted"))
         # THE RENDERED WHISPER (the DSH bridge's door): a harness plugin cannot run the
         # python hook script, so it asks the SERVER to render the payload's whisper
-        # paragraph — ONE renderer (scripts/osiris_whisper.render_whisper, the same
-        # function the Claude hook prints from), never a TypeScript twin left to drift.
-        # `env_job` is the caller's honesty-gate testimony: the DSH bridge passes the
-        # job_dir it is ABOUT to bind the connection with (and it verifies the bind
+        # paragraph — ONE renderer (scripts/osiris_hook.render_whisper, the same function
+        # the Claude hook prints from — retired from osiris_whisper.py at the hook
+        # migration's retirement pass, dispatch 5599), never a TypeScript twin left to
+        # drift. `env_job` is the caller's honesty-gate testimony: the DSH bridge passes
+        # the job_dir it is ABOUT to bind the connection with (and it verifies the bind
         # before injecting the text), so an "ALREADY MOUNTED" claim stays true. Fail-open
         # like everything whisper-shaped: no rendered text, never a failed mount.
         if body.get("render"):
             try:
-                from scripts.osiris_whisper import render_whisper
+                from scripts.osiris_hook import render_whisper
 
                 out["whisper_text"] = render_whisper(
                     out, cwd=cwd, env_job=str(body.get("env_job") or ""))
