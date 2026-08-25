@@ -55,7 +55,7 @@ _URLS = {
     "session-end": os.environ.get("OSIRIS_SESSION_END_URL", "http://127.0.0.1:8790/session-end"),
     "precompact": os.environ.get("OSIRIS_SWEEP_URL", "http://127.0.0.1:8790/sweep"),
     "spawn": os.environ.get("OSIRIS_SPAWN_URL", "http://127.0.0.1:8790/spawn"),
-    "succession": os.environ.get("OSIRIS_SUCCESSON_URL", "http://127.0.0.1:8790/succession"),
+    "succession": os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession"),
 }
 
 # THE CHROME'S OWN RENDERING (ported verbatim from osiris_statusline.py's own `main()`,
