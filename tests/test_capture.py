@@ -3490,6 +3490,65 @@ async def test_assignee_rides_the_wall_exactly_like_owner(actions: Actions) -> N
     assert wall[0]["owner"] == "agent:me"
 
 
+async def test_open_thread_defaults_an_ownerless_obligation_to_the_callers_own_seat(
+    actions: Actions,
+) -> None:
+    """DEFAULT, NEVER REFUSE (#5546 item 1, Thoth's ruling msg 5605): the ownerless-
+    obligations population read found 1,057 open obligations fleet-wide with no owner at
+    all. A refusal would block real work at the exact moment someone tries to record a
+    duty; a silent pick would hide a wrong guess for a week — so a kind='obligation' call
+    with no owner/assignee defaults to the CALLER'S OWN SEAT (resolved from `source` via
+    held_seat), landing visibly, never silently."""
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:defaultowner1", "Defaultowner", source="agent:defaultowner1")
+    t = await open_thread(actions, "a duty minted with no owner at all",
+                          kind="obligation", source="agent:defaultowner1")
+    props = await _props(actions.pool, t)
+    assert props["owner"] == "Defaultowner"
+
+
+async def test_open_thread_default_never_fires_for_a_general_thread(
+    actions: Actions,
+) -> None:
+    """The default is SCOPED to `kind='obligation'` only — a general thread's own null
+    owner is a valid, intentional state ("unowned = anyone who reads it may act", this
+    function's own docstring) and must stay untouched by this fix."""
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:defaultowner2", "Defaultowner2", source="agent:defaultowner2")
+    t = await open_thread(actions, "a general thread minted with no owner and no kind",
+                          source="agent:defaultowner2")
+    props = await _props(actions.pool, t)
+    assert "owner" not in props
+
+
+async def test_open_thread_default_never_overrides_an_explicit_owner(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:defaultowner3", "Defaultowner3", source="agent:defaultowner3")
+    t = await open_thread(actions, "a duty explicitly owned by the operator",
+                          kind="obligation", owner="operator", source="agent:defaultowner3")
+    props = await _props(actions.pool, t)
+    assert props["owner"] == "operator"
+
+
+async def test_open_thread_default_stays_unowned_when_no_seat_resolves(
+    actions: Actions,
+) -> None:
+    """The lone-operator `source="session"` case, and any `source` no seat is bound to,
+    must still NEVER be refused — they just can't be defaulted, honestly, since there is
+    no seat to default to. Confirms the earlier population-read finding (list_assertions
+    returning assertions:[]) stays reproducible after this fix, not accidentally papered
+    over."""
+    t = await open_thread(actions, "a duty minted by the lone operator session",
+                          kind="obligation", source="session")
+    props = await _props(actions.pool, t)
+    assert "owner" not in props
+
+
 async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
     actions: Actions,
 ) -> None:
@@ -3505,6 +3564,35 @@ async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
     finally:
         srv._pool = saved_pool
     assert out["deduped"] == "false"
+
+
+async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) -> None:
+    """#5546 item 1 (Thoth ruling msg 5605): the mcp_server.open_thread tool's own receipt
+    must NAME a default the same way capture.open_thread applies it — never a silent pick.
+    `owner_defaulted` is present only when neither owner nor assignee were supplied."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    await claim_name(actions, "agent:mcpdefault1", "Mcpdefault", source="agent:mcpdefault1")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:mcpdefault1", session="mcpdefault1", project="mcptest",
+        model=None, cwd=None)
+    try:
+        out = await srv.open_thread(
+            "an mcp-tool-minted duty with no owner given", kind="obligation", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["owner_defaulted"]["to"] == "Mcpdefault"
 
 
 async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
