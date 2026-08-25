@@ -152,8 +152,12 @@ slash command registration needed -- the tool IS the command.
 
 ## Lifecycle Plugin
 
-The @deepseek-ai/dsh-osiris-lifecycle plugin replaces Claude Code's 13 subprocess
-hooks with in-process event listeners:
+The @deepseek-ai/dsh-experimental-osiris-bridge plugin (`dsh-plugin/osiris-bridge/`,
+installed via `dsh-plugin/install.sh`) replaces Claude Code's 13 subprocess hooks with
+in-process event listeners. It SUPERSEDES the earlier `dsh-osiris-lifecycle`, retired
+2026-08-25. The table below is the intended shape; the shipped bridge covers
+session-start and disposal, and reaches the server over HTTP rather than through a
+`ctx.mcp` service:
 
 | Lifecycle Event | Action | Replaces CC Hook |
 |---|---|---|

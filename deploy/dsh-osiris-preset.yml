@@ -7,8 +7,13 @@
 # Or merge into ~/.dsh/profiles/web/cordis.patch.yml
 #
 # LIFE CYCLE: In-process plugin replaces Claude Code's 13 subprocess hooks.
-# Auto-mounts on session start, auto-settles on session end, polls status.
+# On session-start the bridge resolves the durable anchor, POSTs /automount, binds
+# the shared MCP connection, and injects the server-rendered whisper; on disposal it
+# POSTs /session-end. Every leg fails OPEN — a cold server costs a note, not a session.
 # Zero forks, zero cold connections.
+#
+# INSTALL FIRST: dsh-plugin/install.sh — the package must be present in the harness
+# workspace before this preset can resolve it by name.
 
 # ── MCP bridge ──────────────────────────────────────────────────────────
 - insert:
@@ -25,14 +30,18 @@
           maxAttempts: 30
 
 # ── Lifecycle plugin (replaces CC hooks: whisper, stop, statusline, etc.) ──
+# SUPERSEDES `osiris-lifecycle` (@deepseek-ai/dsh-osiris-lifecycle), retired 2026-08-25.
+# That plugin reached Osiris through a guessed `ctx.mcp` service behind `as any` casts
+# and had no anchor resolution, no /automount, and no whisper. The bridge does all
+# three over the HTTP doors the server already exposes. Source: dsh-plugin/osiris-bridge/.
 - insert:
-    - id: osiris-lifecycle
-      name: '@deepseek-ai/dsh-osiris-lifecycle'
+    - id: osiris-bridge
+      name: '@deepseek-ai/dsh-experimental-osiris-bridge'
       config:
+        baseUrl: 'http://127.0.0.1:8790'
         serverName: osiris
-        autoMount: true
-        autoSettle: true
-        statusIntervalSecs: 30
+        bindConnection: true
+        timeoutMs: 3000
 
 # ── System prompt ───────────────────────────────────────────────────────
 - id: agent-spine

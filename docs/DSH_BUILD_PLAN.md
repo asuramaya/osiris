@@ -35,11 +35,20 @@
 - Server-side custom routes (`/heartbeat`, `/stop`, `/automount`, etc.) become the ONLY
   implementation; the hooks are now pure transport.
 
-## Part 3: dsh-osiris-lifecycle (in-process lifecycle plugin)
+## Part 3: osiris-bridge (in-process lifecycle plugin) — SHIPPED
 
-- Cordis plugin listening for session start/end/compaction events.
-- Calls mount()/settle()/get_status() via MCP client — no forks, no cold connections.
-- One shared pool for everything.
+Delivered as `@deepseek-ai/dsh-experimental-osiris-bridge`, NOT as the
+`dsh-osiris-lifecycle` this plan named. Source of truth: `dsh-plugin/osiris-bridge/`;
+install with `dsh-plugin/install.sh` (task #194).
+
+- Cordis plugin on `agent/session-start` and `agent/disposed`.
+- Reaches Osiris over the HTTP doors (`/automount`, `/session-end`) and binds the
+  shared MCP connection by executing `mcp__osiris__mount` once through `ctx.tools`.
+  The plan's `ctx.mcp` service was a guess; it does not exist as assumed.
+- Injects the server-rendered whisper as a plugin-sourced snapshot message.
+- Every leg fails OPEN — a cold server costs a note, never a session.
+- NOT delivered: compaction-succession (a DSH compacted session gets a new id) and
+  a `settle()` leg on `agent/turn-stopping`. Both still open.
 
 ## Part 4: Universal Command Layer
 
