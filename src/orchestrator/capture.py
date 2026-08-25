@@ -85,6 +85,34 @@ def _canon(prefix: str, text: str) -> str:
     return f"{prefix}:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
 
 
+def _thread_canon(summary: str, repo: str | None) -> str:
+    """`open_thread`'s own identity key — REPO-SCOPED (dispatch #195 defect 1, live-
+    reproduced: two `open_thread(SAME summary, repo="A")` / `(..., repo="B")` calls minted
+    ONE Thread object, silently in_repo-linked to both, because the bare `_canon("thread",
+    summary)` this replaced hashed the summary text ALONE — a project dimension nothing else
+    in the identity carried. `find_near_duplicate_open_thread`'s own fuzzy pre-check IS
+    correctly repo-scoped (verified reading it) and its own docstring's claim ("no repo
+    means no safe scope to dedup against") was true for THAT function — the defect lived
+    one layer down, in the exact-match mint path underneath it, which the docstring never
+    described and a project-scoped test never exercised (test_dedup_never_crosses_a_project_
+    boundary calls the fuzzy checker directly, never open_thread itself, for its second
+    project).
+
+    `repo=None` keeps the OLD bare-text hash unchanged (an unfiled thread has no scope to
+    protect, same law the fuzzy checker already applies) — so this only changes behavior
+    for the case that was actually broken, and every already-minted `repo=None` Thread's
+    canonical still matches. A `repo=` thread minted BEFORE this fix will NOT match its own
+    old canonical on a repeat call after upgrading — a one-time, unavoidable re-mint on next
+    touch, not a silent divergence (the old cross-project sharing was the bug; ceasing to
+    reproduce it is the fix). Normalizes the same way `link_repo`/`_resolve_repo` do
+    (`repo:` prefix stripped) so `repo="osiris"` and `repo="repo:osiris"` still collide onto
+    the same object, exactly as the rest of the repo-handling in this module already treats
+    them as the same name."""
+    if not repo:
+        return _canon("thread", summary)
+    return _canon("thread", f"{repo.removeprefix('repo:').strip()}\x00{summary}")
+
+
 async def _resolve_commit(pool: asyncpg.Pool, sha: str) -> uuid.UUID | None:
     """A cited sha almost never matches a Commit's canonical byte-for-byte: gitlog.py
     stores `commit:<sha[:12]>` (a 12-char prefix) while this house's own rulings cite git's
@@ -1260,7 +1288,7 @@ async def open_thread(
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic —
     # never a status-less or summary-less thread husk from a mid-sequence death.
     async with actions.atomic() as a:
-        t = await a.create_or_find_object("Thread", _canon("thread", summary), source)
+        t = await a.create_or_find_object("Thread", _thread_canon(summary, repo), source)
         await a.assert_property(t, "summary", summary, source, observed, _CONF,
                                 evidence_class=_EC)
         await a.assert_property(t, "status", "open", source, observed, _CONF,

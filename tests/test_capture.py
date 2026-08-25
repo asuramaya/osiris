@@ -393,6 +393,62 @@ async def test_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
         actions.pool, "wire the daemon's receipt path into the meter", repo=None) is None
 
 
+async def test_open_thread_itself_never_crosses_a_project_boundary(actions: Actions) -> None:
+    """Dispatch #195 defect 1, live-reproduced before this test existed: the check above only
+    ever drove `find_near_duplicate_open_thread` directly, in isolation — it never called
+    `open_thread` a second time for the second project, which is exactly where the real bug
+    lived. `open_thread`'s own mint path used to hash the summary ALONE (`_canon("thread",
+    summary)`), with no project dimension in the identity at all — a byte-identical summary
+    filed under a second project silently reused the FIRST project's Thread object and
+    in_repo-linked it to both, so resolving one obligation resolved the other. Two exact-text
+    calls under two different repos must mint two distinct objects, each linked to only its
+    own project — not one shared thread wearing two projects' names."""
+    exact = "wire the daemon's receipt path into the meter"
+    t1 = await open_thread(actions, exact, repo="dedupproj")
+    t2 = await open_thread(actions, exact, repo="otherproj")
+    assert t1 != t2
+    links1 = {r["to_id"] for r in await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo'", t1)}
+    links2 = {r["to_id"] for r in await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo'", t2)}
+    assert links1.isdisjoint(links2)
+
+
+async def test_open_thread_still_dedups_exactly_within_the_same_project(
+    actions: Actions,
+) -> None:
+    """The fix must not cost the common case: the SAME exact summary filed twice under the
+    SAME project still resolves to one object, same as before this change."""
+    exact = "wire the daemon's receipt path into the meter"
+    t1 = await open_thread(actions, exact, repo="dedupproj")
+    t2 = await open_thread(actions, exact, repo="dedupproj")
+    assert t1 == t2
+
+
+async def test_open_thread_repo_prefix_normalizes_like_link_repo_does(
+    actions: Actions,
+) -> None:
+    """`repo="dedupproj"` and `repo="repo:dedupproj"` name the same project everywhere else
+    in this module (`link_repo`/`_resolve_repo`/`_validate_repo_name` all strip the `repo:`
+    prefix before comparing) — the identity key this fix adds must strip it too, or the two
+    spellings would mint twins of what is really one project's thread."""
+    exact = "wire the daemon's receipt path into the meter"
+    t1 = await open_thread(actions, exact, repo="dedupproj")
+    t2 = await open_thread(actions, exact, repo="repo:dedupproj")
+    assert t1 == t2
+
+
+async def test_open_thread_unfiled_keeps_the_old_global_canonical(actions: Actions) -> None:
+    """`repo=None` had no safe scope to protect before this fix and still doesn't — an
+    unfiled thread's identity stays the bare summary hash, unchanged, so anything already
+    relying on that (e.g. `deploy_guard`'s unrepo'd landing-audit obligations) keeps its
+    existing idempotency exactly as before."""
+    exact = "wire the daemon's receipt path into the meter"
+    t1 = await open_thread(actions, exact)
+    t2 = await open_thread(actions, exact)
+    assert t1 == t2
+
+
 async def test_a_resolved_thread_is_never_a_dedup_target(actions: Actions) -> None:
     """The dedup only ever answers for OPEN threads — a closed one is a different fact now
     (it was answered), so a fresh telling of the same words must open its own thread, not
