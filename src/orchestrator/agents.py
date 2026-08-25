@@ -861,6 +861,28 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     return OsirisKeyRead(value=None, path=found_but_unset)
 
 
+def _true_repo_root(cwd: str) -> Path:
+    """The SAME climb `_read_osiris_key` already uses to find a PIN past a worktree boundary
+    (task #128) — but returning the STOPPING DIRECTORY itself, not a pin value. That earlier
+    fix only helped a repo that HAS a `.osiris` somewhere in the climb; an unpinned repo (no
+    `.osiris` anywhere — e.g. lilguy, live specimen: repo:liveness-fix, dispatch #195/#93
+    follow-on) falls all the way through to `resolve_identity`'s basename fallback, which used
+    the RAW, un-climbed `cwd` — so an agent working from `<repo>/.claude/worktrees/<branch>`
+    (this house's own EnterWorktree convention, ruling bcfdfcc1) minted a phantom SoftwareProject
+    named after its throwaway branch instead of its real repo. `Path(cwd).name` on THIS
+    function's return, instead of on `cwd` directly, closes that gap: same stopping rule (a
+    worktree/submodule's own `.git` is a FILE, transparent to the climb; only a real `.git`
+    DIRECTORY stops it), independent of whether a pin exists. Falls back to `cwd` itself if the
+    climb never finds a real repo root (not a git checkout at all, or the walk reaches the
+    filesystem root first) — never raises, matches every other cwd-reading helper in this
+    module's fail-open discipline."""
+    p = Path(cwd)
+    for d in (p, *p.parents):
+        if (d / ".git").is_dir():
+            return d
+    return p
+
+
 def read_project_label(cwd: str | None) -> str | None:
     """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
     the repo root. Decouples the project identity from the FOLDER name (the operator may rename
@@ -1123,8 +1145,12 @@ def resolve_identity(
     pin_read = OsirisKeyRead(value=project_label) if project_label else read_project_pin(cwd)
     pinned = pin_read.value
     bare_root = is_bare_office_root(cwd)
+    # #93 follow-on to #128: the basename fallback climbs to the TRUE repo root the same way
+    # the pin-lookup above already does (_true_repo_root, same stopping rule) — an UNPINNED
+    # repo worked from inside a worktree (`<repo>/.claude/worktrees/<branch>`) must fall back
+    # to the REPO's own name, never the worktree's own throwaway branch-named directory.
     project = None if (pinned is None and bare_root) else (pinned or
-             (Path(cwd).name if cwd else None))
+             (_true_repo_root(cwd).name if cwd else None))
     # task #128 wave 2: the THIRD leg of the "why did this fall back to a basename guess"
     # split — genuinely nothing declared anywhere, as opposed to a broken file (pin_read.error)
     # or a valid file that just never sets `project` (pin_read.path with no error). Silent for

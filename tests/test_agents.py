@@ -801,8 +801,11 @@ def test_resolve_identity_still_falls_back_to_basename_when_truly_unpinned_anywh
 ) -> None:
     """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs): the climb widening
     must not manufacture a pin out of nothing. A worktree of a repo that has NO `.osiris`
-    anywhere in its own climb — real root included — still honestly falls back to the
-    basename guess, unchanged from before this fix."""
+    anywhere in its own climb — real root included — still honestly falls back to a basename
+    guess: since #93's follow-on fix (repo:liveness-fix, the live phantom-project specimen
+    below), the TRUE REPO ROOT's basename, not the worktree's own throwaway leaf directory —
+    #128's climb widening only ever helped a repo that HAS a pin somewhere; an unpinned one
+    used to fall through to the raw, un-climbed cwd's own basename regardless."""
     root = tmp_path / "unpinned-repo"
     root.mkdir()
     (root / ".git").mkdir()  # a real root, but never pinned
@@ -812,8 +815,32 @@ def test_resolve_identity_still_falls_back_to_basename_when_truly_unpinned_anywh
     (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/someseat\n")
 
     ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree2")
-    assert ident.project == "someseat"        # honest basename fallback, unbroken
+    assert ident.project == "unpinned-repo"   # the repo's own name, not the worktree leaf
     assert ident.project_pin_missing is True
+
+
+def test_resolve_identity_worktree_basename_never_mints_the_branch_name_as_the_project(
+    tmp_path: Path,
+) -> None:
+    """THE LIVE SPECIMEN, EXACTLY (dispatch #93/#195 follow-on): repo:liveness-fix — a
+    SoftwareProject minted from `/home/asuramaya/code/lilguy/.claude/worktrees/liveness-fix`,
+    traced to this exact gap live-reproduced first. lilguy's repo carries no `.osiris`
+    anywhere (measured: `find /home/asuramaya/code/lilguy -name .osiris` — zero hits), so the
+    old fallback basenamed the raw cwd and produced "liveness-fix" (the BRANCH name the
+    worktree happens to be named after), never "lilguy" (the repo everyone actually means).
+    A branch-named worktree is the sharpest case: unlike a seat's own worktree (conventionally
+    named after the seat, so the old bug was invisible there), a feature-branch worktree's
+    basename shares NOTHING with the real project's name."""
+    root = tmp_path / "lilguy"
+    root.mkdir()
+    (root / ".git").mkdir()  # a real root, genuinely never pinned — matches the live specimen
+
+    worktree = root / ".claude" / "worktrees" / "liveness-fix"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/liveness-fix\n")
+
+    ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree3")
+    assert ident.project == "lilguy"          # never "liveness-fix", the branch/leaf name
 
 
 def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
