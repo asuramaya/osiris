@@ -38,6 +38,7 @@ async function switchSurface(surface) {
     $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
     (ensureBoard()).clear(); showBoard();
     if (surface === 'mailbox') renderMailbox();
+    if (surface === 'projects') renderProjects();
   }
 }
 
@@ -344,6 +345,55 @@ async function renderMailbox() {
     container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto"><h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Mailbox (' + msgs.length + ')</h2>' + msgs.map(function(m){ return '<div class="mail-card" style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div><span style="font-weight:600;color:var(--blue);font-size:11px">' + esc(m.from_agent || m.from_project || '') + '</span> <span style="color:var(--faint)">' + String.fromCharCode(8594) + '</span> <span style="color:var(--muted);font-size:11px">' + esc(m.to_project || m.to_agent || '') + '</span></div><div style="font-size:10px;color:var(--faint)">' + esc(m.created_at ? m.created_at.slice(0, 10) : '') + '</div></div><div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:8px;white-space:pre-wrap;word-break:break-word">' + esc((m.body || '').slice(0, 500)) + '</div></div>'; }).join('') + '</div>';
     setStatus(msgs.length + ' messages');
   } catch(e) { container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load mailbox.</div>'; }
+}
+
+// ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
+var PROJECTS_INDEX_DATA = null, PROJECTS_INDEX_STATUS = 'active';
+async function renderProjects() {
+  var container = $('result'); showPanel();
+  try {
+    if (!PROJECTS_INDEX_DATA) PROJECTS_INDEX_DATA = await fetch('/projects').then(function(r){return r.json();});
+    var rows = Array.isArray(PROJECTS_INDEX_DATA) ? PROJECTS_INDEX_DATA : [];
+    if (!rows.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No projects.</div>'; return; }
+    // NEVER collapse the status dimension to one number (Thoth's own instruction, msg
+    // 5631): "what is live" and "what has ever existed" are different questions — a
+    // toggle, not a single count, so both stay askable.
+    var counts = {};
+    rows.forEach(function(r){ counts[r.status] = (counts[r.status] || 0) + 1; });
+    var allCount = rows.length, activeCount = counts.active || 0;
+    var shown = rows.filter(function(r){ return PROJECTS_INDEX_STATUS === 'all' || r.status === PROJECTS_INDEX_STATUS; });
+    shown = shown.slice().sort(function(a, b){ return (b.last_touch || '').localeCompare(a.last_touch || ''); });
+    var head = '<div style="padding:16px 16px 8px;max-width:1100px;margin:0 auto"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+      '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted)">Projects (' + shown.length + ')</h2>' +
+      '<div><button class="iconbtn' + (PROJECTS_INDEX_STATUS === 'active' ? ' sel' : '') + '" onclick="setProjectsStatusFilter(\'active\')">Active (' + activeCount + ')</button> ' +
+      '<button class="iconbtn' + (PROJECTS_INDEX_STATUS === 'all' ? ' sel' : '') + '" onclick="setProjectsStatusFilter(\'all\')">All (' + allCount + ')</button></div></div>';
+    var table = '<table class="ee-table"><thead><tr><th>Project</th><th style="width:90px">Status</th><th style="width:90px;text-align:right">Objects</th><th style="width:130px">Last Activity</th></tr></thead><tbody>' +
+      shown.map(projectRow).join('') + '</tbody></table></div>';
+    container.innerHTML = head + table;
+    setStatus(shown.length + ' of ' + allCount + ' projects');
+  } catch(e) { container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load projects.</div>'; }
+}
+function setProjectsStatusFilter(status) { PROJECTS_INDEX_STATUS = status; renderProjects(); }
+function projectRow(r) {
+  var lastTouch = r.last_touch ? String(r.last_touch).slice(0, 10) : '—';
+  // The zero-links / identity-disagreement specimen (Thoth's own callout, msg 5631):
+  // surface it plainly rather than hide it — "the graph currently cannot tell you which
+  // [phantom mint or genuinely new tree]" is exactly the kind of honest gap this row exists
+  // to name, not paper over with a clean-looking table.
+  var flag = '';
+  if (r.bucket === 'orphan') flag = '<span class="proj-flag" title="zero live links — a phantom mint or a genuinely new tree; the graph cannot tell you which">no links</span>';
+  else if (r.bucket === 'contradicted') flag = '<span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
+  return '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + esc(r.name) + flag + '</td>' +
+    '<td><span class="card-tag-status status-' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
+    '<td style="text-align:right">' + (r.object_count || 0).toLocaleString() + '</td>' +
+    '<td>' + esc(lastTouch) + '</td></tr>';
+}
+function openProjectInBrowse(name) {
+  // A drill-in stand-in for the real project PAGE (#93 step 2, blocked on the operator's
+  // own read of "surfaces templates/primitives" — msg 5635) — filters Browse to this one
+  // project via the SAME server-side scope filter #196 built, not a client-side re-derive.
+  switchSurface('browse');
+  selectRepos([name]);
 }
 
 // ── Fleet ────────────────────────────────────────────────────────────────────

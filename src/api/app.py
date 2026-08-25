@@ -343,6 +343,77 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         by_type = {r["type"]: r["n"] for r in rows}
         return {"by_type": by_type, "total": sum(by_type.values())}
 
+    @app.get("/projects")
+    async def list_projects(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """THE PROJECT INDEX (#93, Thoth msg 5631, operator ruling 2026-07-30/d82650ec):
+        the front door over every SoftwareProject — "the rest of the projects/repos need
+        to land in the front." Measured first (ruling a87dd5c1): 91 SoftwareProject rows
+        ever minted, 42 active (31 retired + 18 merged), of which 41 carry at least one
+        live link. NEVER collapses the status dimension to one number — every status this
+        graph actually has among SoftwareProjects is returned, `status` on each row lets
+        the caller pick "what's live" vs "what has ever existed" without a second call
+        needing a different shape.
+
+        Reuses, never re-derives (#138 — no second notion of a graph's own health):
+        `fetch_label_props`/`resolve_label` for the display name (same chain /objects
+        itself uses — the operator's own ruling: "project", never "repo", the `repo:`
+        canonical prefix must not leak into the UI); the `triage` composition Function
+        (buckets mode) for `links`/`last_touch`/`bucket`/`contradicted_on` — the SAME
+        identity-disagreement and connectivity classification `graph_lint`/the object
+        browser already trust, not a bespoke health check invented for this one page.
+        `object_count`/`object_counts_by_type` are a fresh grouped query (one query for
+        all projects, not one call per project) over the SAME live-scope status filter
+        `/objects`/`/objects/counts` use."""
+        rows = await p.fetch(
+            "SELECT id, canonical, status, created_at FROM objects "
+            "WHERE type='SoftwareProject' ORDER BY canonical"
+        )
+        if not rows:
+            return []
+        label_props = await fetch_label_props(p, [r["id"] for r in rows])
+        count_rows = await p.fetch(
+            "SELECT proj.id AS project_id, o.type, COUNT(*) AS n "
+            "FROM links l "
+            "JOIN objects proj ON proj.id = l.to_id AND proj.type = 'SoftwareProject' "
+            "JOIN objects o ON o.id = l.from_id "
+            "WHERE l.type = 'in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "  AND o.status NOT IN ('archived', 'merged', 'retired') "
+            "GROUP BY proj.id, o.type"
+        )
+        counts_by_project: dict[uuid.UUID, dict[str, int]] = {}
+        for r in count_rows:
+            counts_by_project.setdefault(r["project_id"], {})[r["type"]] = r["n"]
+        # one triage(mode='buckets') call per status actually present — never a second,
+        # bespoke bucket/health notion for this one page (#138)
+        bucket_by_canonical: dict[str, dict[str, Any]] = {}
+        for status_val in sorted({r["status"] for r in rows}):
+            out = await run_spec(
+                p, {"op": "function", "name": "triage",
+                    "args": {"mode": "buckets", "object_type": "SoftwareProject",
+                             "status": status_val}},
+                None, name="triage")
+            for row in out["items"]:
+                bucket_by_canonical[row["canonical"]] = row
+        items = []
+        for r in rows:
+            name = resolve_label(
+                "SoftwareProject", label_props.get(r["id"], {}), r["canonical"]).label
+            b = bucket_by_canonical.get(r["canonical"], {})
+            by_type = counts_by_project.get(r["id"], {})
+            items.append({
+                "id": str(r["id"]), "canonical": r["canonical"], "name": name,
+                "status": r["status"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "object_count": sum(by_type.values()),
+                "object_counts_by_type": by_type,
+                "links": b.get("links"),
+                "last_touch": b.get("last_touch"),
+                "bucket": b.get("bucket", "normal"),
+                "contradicted_on": b.get("contradicted_on"),
+            })
+        return items
+
     @app.get("/objects")
     async def list_objects(
         p: asyncpg.Pool = Depends(get_pool),
