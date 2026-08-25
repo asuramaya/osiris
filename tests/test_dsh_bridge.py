@@ -224,7 +224,7 @@ async def test_automount_route_renders_the_whisper_for_the_bridge(
         actions: Actions, dsh_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE RENDER DOOR (the DSH bridge's own): a harness plugin cannot run the python
     hook script, so it POSTs render=true and reads `whisper_text` — ONE renderer
-    (scripts.osiris_whisper.render_whisper), never a TS twin to drift. The honesty
+    (scripts.osiris_hook.render_whisper), never a TS twin to drift. The honesty
     gate keys on env_job: the bridge passes the job_dir it is ABOUT to bind with."""
     from src import mcp_server
 
