@@ -669,6 +669,7 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   transition: all .15s;
 }
 .iconbtn:hover { border-color: var(--border2); background: var(--chip-hover); }
+.iconbtn.sel { border-color: var(--blue); color: var(--blue); background: rgba(88, 166, 255, 0.1); }
 
 .kbtn {
   background: var(--chip);
@@ -1095,7 +1096,8 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   font-weight: 600;
 }
 .status-active { color: var(--green, #3fb950); background: rgba(63, 185, 80, 0.1); }
-.status-retired, .status-resolved, .status-historical { color: var(--muted); background: rgba(255, 255, 255, 0.05); }
+.status-retired, .status-resolved, .status-historical, .status-merged { color: var(--muted); background: rgba(255, 255, 255, 0.05); }
+.proj-flag { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 9px; text-transform: uppercase; font-weight: 600; color: var(--orange, #d29922); background: rgba(210, 153, 34, 0.12); margin-left: 6px; }
 
 .ee-canon-mono {
   display: inline-block;

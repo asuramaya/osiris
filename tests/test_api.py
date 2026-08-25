@@ -173,6 +173,41 @@ async def test_list_cases_with_counts(client: httpx.AsyncClient, actions: Action
     assert mine["object_count"] >= 11  # the ingested ATT&CK objects
 
 
+async def test_projects_index(client: httpx.AsyncClient, actions: Actions) -> None:
+    """#93: the project index — name never leaks the `repo:` canonical prefix (operator's
+    own ruling), object_count/object_counts_by_type reflect real linked objects, and the
+    status dimension is never collapsed (each row carries its own real status)."""
+    from src.orchestrator.capture import link_repo
+
+    now = datetime.now(UTC)
+    d = await actions.create_or_find_object("Decision", "decision:projidxtest", "test")
+    await link_repo(actions, d, "projidxtest", now)
+    r = await client.get("/projects")
+    assert r.status_code == 200
+    rows = r.json()
+    mine = next(row for row in rows if row["canonical"] == "repo:projidxtest")
+    assert mine["name"] == "projidxtest"  # no "repo:" prefix leaked
+    assert mine["status"] == "active"
+    assert mine["object_count"] >= 1
+    assert mine["object_counts_by_type"].get("Decision", 0) >= 1
+    assert "bucket" in mine
+
+
+async def test_projects_index_object_count_excludes_archived_and_retired(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    from src.orchestrator.capture import link_repo
+
+    now = datetime.now(UTC)
+    d = await actions.create_or_find_object("Decision", "decision:projidxarchived", "test")
+    await link_repo(actions, d, "projidxarchivedtest", now)
+    await actions.pool.execute("UPDATE objects SET status='archived' WHERE id=$1", d)
+    r = await client.get("/projects")
+    mine = next(row for row in r.json() if row["canonical"] == "repo:projidxarchivedtest")
+    assert mine["object_count"] == 0
+    assert "Decision" not in mine["object_counts_by_type"]
+
+
 async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = await _seed(actions)
     # an object in a *different* case must not appear when scoping to this one
