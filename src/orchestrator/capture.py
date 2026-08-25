@@ -1185,6 +1185,9 @@ async def open_thread(
     the human' were illegible on the wall): 'operator' = blocked on the human's word or
     hands; 'agent:<id>' = a specific mind; a bare project name = any hand on that project.
     Unowned = anyone who reads it may act. The lens sorts by it; the record just keeps it.
+    EXCEPT for `kind='obligation'`: an unowned DUTY (not a general thread — see below)
+    defaults to the caller's own seat, never refuses, never picks silently — the
+    ownerless-obligations population read (Thoth msg 5605, thread #5546).
 
     `assignee` (alfred's ask 5, ruling dd47c1da §4.3 — "single-assignee leased
     obligations") is the seat/agent this BUILD belongs to, one build one assignee. It is
@@ -1244,6 +1247,26 @@ async def open_thread(
             arc = None  # out-of-scope: dropped, never refused (577988ed) — see mcp_server's receipt
     observed = datetime.now(UTC)
     effective_owner = assignee if assignee is not None else owner
+    if kind == "obligation" and not effective_owner and source != "session":
+        # DEFAULT, NEVER REFUSE (Thoth's ruling, msg 5605, thread #5546 — the ownerless-
+        # obligations population read: 1,057 open obligations fleet-wide carried no owner
+        # at all). An obligation is a minted DUTY, not a general thread — a general
+        # thread's own null owner IS a valid, intentional state (this function's own
+        # docstring above: "unowned = anyone who reads it may act"), but a DUTY that
+        # drifts unowned is invisible to read_desk's own operator queue (#168's finding).
+        # A REFUSAL here would block real work at the exact moment someone is trying to
+        # record a duty; a SILENT pick would hide a wrong guess for a week. This house's
+        # standing shape (#137) applies: the write always proceeds, nothing is refused,
+        # nothing is silently chosen — the caller (mcp_server.open_thread) reads back
+        # whether a default landed via `_current_owner` and names it in the receipt.
+        # Single-seat-project case (population-read bucket 4) resolves for free — the
+        # caller's own seat IS the unambiguous answer there; a multi-seat project just
+        # gets a visible, correctable default instead of an invisible gap.
+        from src.orchestrator.seats import held_seat
+
+        seat = await held_seat(actions.pool, source)
+        if seat and seat.get("handle"):
+            effective_owner = seat["handle"]
     to_resolve: list[uuid.UUID] = []
     if isinstance(resolves, list):
         for ref in resolves:

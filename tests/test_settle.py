@@ -378,6 +378,42 @@ async def test_settle_tool_accepts_a_decision_and_a_thread_and_verifies_landed(
     assert d_landed == 1 and t_landed == 1
 
 
+async def test_settle_threads_open_defaults_an_ownerless_obligation_and_names_it(
+    actions: Actions,
+) -> None:
+    """settle()'s own threads_open is the SECOND live door onto capture.open_thread
+    (#5546 items 1+3, Thoth's ruling msg 5605 — "one door, two callers, same shape"): the
+    default-never-refuse behavior must fire here too, and the receipt must name it, not
+    just settle's own kind='obligation' case."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    await claim_name(actions, "agent:settledefault1", "Settledefault",
+                     source="agent:settledefault1")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:settledefault1", session="settledefault1", project="settleproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            threads_open=[{"summary": "settle opened this duty with no owner given",
+                          "kind": "obligation"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    entry = out["accepted"]["threads_opened"][0]
+    assert entry["owner_defaulted"]["to"] == "Settledefault"
+
+
 async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
     actions: Actions,
 ) -> None:

@@ -6312,6 +6312,18 @@ async def open_thread(
           "arc": arc_receipt}
     if assignee:
         out["assignee"] = assignee.strip()
+    elif kind == "obligation" and not owner:
+        # DEFAULT, NEVER REFUSE, NEVER SILENT (#5546 item 1, Thoth msg 5605): neither
+        # `owner` nor `assignee` were supplied for a duty — capture.open_thread may have
+        # defaulted one to the caller's own seat. Read back what actually landed rather
+        # than re-deriving it here, so the receipt can never drift from the write.
+        landed_owner = await capture._current_owner(pool, t)
+        if landed_owner:
+            out["owner_defaulted"] = {
+                "to": landed_owner,
+                "why": "kind='obligation' with no owner given — defaulted to the "
+                       "caller's own seat rather than left ownerless (#5546 item 1)",
+            }
     if files_touched:
         others = [c for c in await capture.open_held_work(pool, repo=repo)
                  if c["id"] != str(t)[:8]]
@@ -7054,17 +7066,33 @@ async def settle(
         item = dict(item)
         is_handoff = bool(item.pop("is_handoff", False))
         summary = item.pop("summary")
+        thread_kind = item.pop("kind", None)
+        thread_owner = item.pop("owner", None)
         try:
             tid = await capture.open_thread(
                 Actions(pool), summary, repo=item.pop("repo", None),
-                kind=item.pop("kind", None), owner=item.pop("owner", None), source=actor)
+                kind=thread_kind, owner=thread_owner, source=actor)
         except ValueError as e:
             rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
             continue
         if is_handoff:
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
-        accepted["threads_opened"].append({"id": str(tid)[:8], "is_handoff": is_handoff})
+        thread_entry = {"id": str(tid)[:8], "is_handoff": is_handoff}
+        # settle()'s own threads_open is the SECOND live door onto capture.open_thread
+        # (#5546 item 3, Thoth msg 5605 — "one door, two callers, same shape"): the
+        # DEFAULT-NEVER-REFUSE behavior for kind='obligation' lives once, in
+        # capture.open_thread itself, so this caller inherits it for free — but the
+        # receipt still has to name it here too, same as the mcp_server.open_thread tool.
+        if thread_kind == "obligation" and not thread_owner:
+            landed_owner = await capture._current_owner(pool, tid)
+            if landed_owner:
+                thread_entry["owner_defaulted"] = {
+                    "to": landed_owner,
+                    "why": "kind='obligation' with no owner given — defaulted to the "
+                           "caller's own seat rather than left ownerless (#5546 item 1)",
+                }
+        accepted["threads_opened"].append(thread_entry)
     cross_wired = 0
     for item in threads_resolve or []:
         item = dict(item)
