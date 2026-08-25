@@ -161,11 +161,11 @@ session-start and disposal, and reaches the server over HTTP rather than through
 
 | Lifecycle Event | Action | Replaces CC Hook |
 |---|---|---|
-| First turn (turn/start) | mount(cwd) | osiris_whisper.py |
-| Session end (session/end-seed) | settle() | osiris_stophook.py |
-| Turn boundary | get_status() | osiris_statusline.py (periodic) |
-| Periodic poll (30s) | get_status() | osiris_statusline.py (chrome render) |
-| Compaction | settle() via DSH auto | osiris_precompact.py |
+| First turn (turn/start) | mount(cwd) | osiris_hook.py whisper |
+| Session end (session/end-seed) | settle() | osiris_hook.py stop |
+| Turn boundary | get_status() | osiris_hook.py statusline (periodic) |
+| Periodic poll (30s) | get_status() | osiris_hook.py statusline (chrome render) |
+| Compaction | settle() via DSH auto | osiris_hook.py precompact |
 
 ## Process Architecture (Part 5)
 

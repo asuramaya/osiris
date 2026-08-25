@@ -31,7 +31,7 @@ Requires a session-persistence backend with per-session artifacts (the jsonl bac
 
 #### What the model sees
 
-One plugin-sourced user message whose text is the Osiris server's rendered whisper: the session's fleet identity (`agent:<id>`, project, observed model), unread mail and obligations, and the durable anchor to re-mount with after a connection bounce. The exact text is owned by Osiris (`scripts/osiris_whisper.py`) and is data-dependent on the fleet graph; the bridge only transports it.
+One plugin-sourced user message whose text is the Osiris server's rendered whisper: the session's fleet identity (`agent:<id>`, project, observed model), unread mail and obligations, and the durable anchor to re-mount with after a connection bounce. The exact text is owned by Osiris (`scripts/osiris_hook.py`'s `render_whisper`) and is data-dependent on the fleet graph; the bridge only transports it.
 
 #### Token effect
 

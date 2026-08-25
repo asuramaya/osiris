@@ -338,12 +338,25 @@ function renderBoardCard(o) {
 async function renderMailbox() {
   var container = $('result'); showPanel();
   try {
-    var inboxData = await fetch('/pulse').then(function(r){return r.json();}).then(function(p){return p.messages || [];}).then(function(r){return r.json();}).catch(function(){return [];});
-    var msgs = Array.isArray(inboxData) ? inboxData : [];
+    var p = await fetch('/pulse').then(function(r){return r.json();});
+    // /pulse returns {line, live, owed, briefs, wakes, spend} — it has NEVER carried a
+    // `messages` array (server route: src/api/app.py's pulse_route). The old code called
+    // .json() a SECOND time on `p.messages || []` (an array, which has no .json() method),
+    // which threw and was swallowed by the outer catch — always rendering "No messages",
+    // even when mail was waiting, with nothing in the console to say why (found live,
+    // flagged twice, survived both because the failure was silent). No JSON mail-list route
+    // exists yet (a real gap, tracked separately) — until one does, say so LOUDLY instead of
+    // rendering a false "No messages in inbox."
+    if (!Array.isArray(p.messages)) {
+      console.error('renderMailbox: /pulse has no messages array — no JSON mail-list route exists yet', p);
+      container.innerHTML = '<div class="o-empty" style="padding:40px">Mailbox feed unavailable — /pulse carries no message data (no JSON mail-list route exists yet; see /mail for the HTML view).</div>';
+      return;
+    }
+    var msgs = p.messages;
     if (!msgs.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No messages in inbox.</div>'; return; }
     container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto"><h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Mailbox (' + msgs.length + ')</h2>' + msgs.map(function(m){ return '<div class="mail-card" style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div><span style="font-weight:600;color:var(--blue);font-size:11px">' + esc(m.from_agent || m.from_project || '') + '</span> <span style="color:var(--faint)">' + String.fromCharCode(8594) + '</span> <span style="color:var(--muted);font-size:11px">' + esc(m.to_project || m.to_agent || '') + '</span></div><div style="font-size:10px;color:var(--faint)">' + esc(m.created_at ? m.created_at.slice(0, 10) : '') + '</div></div><div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:8px;white-space:pre-wrap;word-break:break-word">' + esc((m.body || '').slice(0, 500)) + '</div></div>'; }).join('') + '</div>';
     setStatus(msgs.length + ' messages');
-  } catch(e) { container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load mailbox.</div>'; }
+  } catch(e) { console.error('renderMailbox failed', e); container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load mailbox.</div>'; }
 }
 
 // ── Fleet ────────────────────────────────────────────────────────────────────

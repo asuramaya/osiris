@@ -2,9 +2,10 @@
 
 Crush has no statusLine config, no SessionStart hook, no TUI plugin surface — so the
 Atlas seat ran blind: no ambient mail count, no fleet pulse, no model-vs-intent check.
-This prints the SAME vitals osiris_statusline.py renders, as plain text on demand (the
-honest trade: no refresh interval, the mind or the operator invokes it — the office's
-/fleet skill wraps exactly this script).
+This prints the SAME vitals osiris_hook.py's `statusline` subcommand renders (the
+per-purpose osiris_statusline.py it once named was retired at the hook migration,
+dispatch 5441/5599), as plain text on demand (the honest trade: no refresh interval, the
+mind or the operator invokes it — the office's /fleet skill wraps exactly this script).
 
 ONE AUTHORITY PER FACT (operator ruling 2026-07-19): every count comes from the shared
 formulas in src/orchestrator/{mailbox,vitals} and src/orchestrator/ceiling — the same
