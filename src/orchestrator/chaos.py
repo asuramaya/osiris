@@ -12,19 +12,26 @@ or not (never a bare pass/fail with no evidence):
      that EXACT agent identity afterward (`seats.held_seat`/`seat_receipt`) — the #178
      launch/dispatch gates must have refused any fork attempt that raced the crash window,
      not merely in their own mocked tests.
-  2. ZERO SURVIVING ADVISORY LOCKS — every lock this codebase takes is xact-scoped
-     (`pg_advisory_xact_lock`, #172's own fix) so a killed backend's locks release with its
-     connection; a post-recovery count higher than the pre-kill baseline is a real leak,
-     not a timing artifact (see `_advisory_lock_count`'s own docstring for the one honest
-     caveat this specific check carries).
+  2. ZERO SURVIVING ADVISORY LOCKS (BEYOND A SMALL NOISE MARGIN) — every lock this
+     codebase takes is xact-scoped (`pg_advisory_xact_lock`, #172's own fix) so a killed
+     backend's locks release with its connection; a post-recovery count higher than the
+     pre-kill baseline BY MORE THAN `ADVISORY_LOCK_NOISE_TOLERANCE` is a real leak, not a
+     timing artifact (see `_advisory_lock_count`'s own docstring for the one honest caveat
+     this specific check carries, and `ADVISORY_LOCK_NOISE_TOLERANCE`'s own docstring for
+     the measured cross-worker sampling race the margin exists to absorb).
   3. ROWLESS BODIES NEVER GROW (registry_census's own `rowless_count`) — the storm fires
      while a body's own `agent_mounts` row may be mid-suspend (#178a); if the self-restore
      path (#178b, `_reattach`) is doing its job, a body that WAS matched before the kill is
      matched again after, never left permanently rowless.
-  4. /automount RETURNS 200 THROUGHOUT — polled concurrently with the kill+storm+restart,
-     not just once after recovery; a window where it 500s or hangs is exactly the silent-
-     failure shape task #179 already fixed once (33a3573) and this must catch a REGRESSION
-     of.
+  4. /automount RECOVERS CLEAN, NEVER FLAPS — polled concurrently with the kill+storm+
+     restart, not just once after recovery. SPLIT (Thoth's ruling, msg 5702, 2026-08-26):
+     failures BEFORE the first confirmed recovery are expected, bounded unavailability —
+     no un-replicated process (this module's own isolated test pair, or the real systemd
+     units) can guarantee zero downtime across a real SIGKILL, and invariant #5 already
+     tracks and bounds exactly how long that's tolerated. Failures AFTER the first
+     confirmed recovery are a different animal — the backend already proved itself up, so
+     going back down is FLAPPING, the same silent-failure shape task #179 already fixed
+     once (33a3573), and THAT is what this invariant exists to catch a regression of.
   5. BACKENDS RECOVER WITHIN A BOUND — the same bounded-backoff discipline `cmd_deploy`'s
      own `_wait_for_health`/`_wait_for_smoke` already use, reused here rather than a second
      polling loop invented from scratch.
@@ -69,6 +76,23 @@ FireStorm = Callable[[asyncpg.Pool], Awaitable[int]]
 AutomountProbe = Callable[[], Awaitable[tuple[bool, str]]]
 
 DEFAULT_CHAOS_UNITS = ("osiris-mcp", "osiris-worker")
+
+ADVISORY_LOCK_NOISE_TOLERANCE = 2
+"""Measured, not guessed (#186 flake trace, Thoth msg 5702, 2026-08-26): under this
+suite's own `-n4` xdist parallelism every worker shares ONE physical Postgres instance
+(`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring already names this —
+`pg_locks` is server-wide, never scoped per worker database). A killed-and-restarted
+daemon pair's own teardown/startup housekeeping, or simply an unrelated worker's ordinary
+transient lock, can land inside the narrow post-recovery sampling instant and read as
+`post_locks > baseline_locks` even though nothing leaked — reproduced live: two
+independent chaos tests failed on this exact assertion in the SAME `-n4` run (same xdist
+worker), neither one holding a real lock. `_advisory_lock_count`'s own baseline-diff
+design already existed to filter ordinary noise; it just assumed baseline and post carry
+the SAME noise level, when post is sampled after strictly more real wall-clock time has
+passed and so has strictly more chance of catching a stray lock mid-flight. A tiny
+tolerance closes that asymmetry without touching the "does not scope by key" design this
+check deliberately keeps general-purpose. Sized well below the leak-reproduction test's
+own deliberate 10-key signal so it stays reliably caught."""
 
 
 async def _real_kill_units(units: list[str]) -> tuple[int, str]:
@@ -207,21 +231,24 @@ async def chaos_replay(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     baseline_seats = await _baseline_seat_map(pool, baseline_census.get("matched", []))
 
-    automount_results: list[tuple[bool, str]] = []
+    automount_results: list[tuple[float, bool, str]] = []
     stop = asyncio.Event()
 
     async def _poll_automount() -> None:
         while not stop.is_set():
+            ts = asyncio.get_running_loop().time()
             try:
-                automount_results.append(await automount_probe())
+                ok, detail = await automount_probe()
             except Exception as exc:  # noqa: BLE001 — a probe crash IS a finding, not a poller crash
-                automount_results.append((False, f"automount probe raised: {exc}"))
+                ok, detail = False, f"automount probe raised: {exc}"
+            automount_results.append((ts, ok, detail))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=poll_interval_secs)
             except TimeoutError:
                 pass
 
     poller = asyncio.create_task(_poll_automount())
+    first_recovery_at: float | None = None
     try:
         kill_rc, kill_out = await kill(list(units))
         storm_fired = await fire_storm(pool)
@@ -235,6 +262,18 @@ async def chaos_replay(
             elapsed += delay
             delay = min(delay * 2, 8.0)
             recovered_ok, recovered_detail = await automount_probe()
+        if recovered_ok:
+            first_recovery_at = asyncio.get_running_loop().time()
+            # INVARIANT #4'S OWN SPLIT (Thoth's ruling, msg 5702, 2026-08-26, adopting
+            # this module's own proposal): a window before first confirmed recovery is
+            # EXPECTED, bounded unavailability (invariant #5 already tracks and tolerates
+            # that bound) — "/automount 200 throughout, unconditional" asserted a
+            # guarantee no un-replicated process ever provided. A window AFTER recovery
+            # is different in kind: the backend has already proven itself up, so a
+            # failure there is FLAPPING, a real regression. This short extra poll window
+            # is what makes that distinction observable at all — without it every sample
+            # would land before `stop.set()` fires right on recovery's heels.
+            await sleep(min(poll_interval_secs * 3, 4.0))
     finally:
         stop.set()
         await poller
@@ -252,16 +291,23 @@ async def chaos_replay(
         findings.append(
             f"backends did not recover within {recovery_ceiling_secs:.0f}s "
             f"(last probe: {recovered_detail})")
-    bad_automounts = [r for r in automount_results if not r[0]]
-    if bad_automounts:
+    if first_recovery_at is not None:
+        bad_pre_recovery = [r for r in automount_results if not r[1] and r[0] < first_recovery_at]
+        bad_post_recovery = [r for r in automount_results if not r[1] and r[0] >= first_recovery_at]
+    else:
+        bad_pre_recovery = [r for r in automount_results if not r[1]]
+        bad_post_recovery = []
+    bad_automounts = bad_pre_recovery + bad_post_recovery
+    if bad_post_recovery:
         findings.append(
-            f"{len(bad_automounts)}/{len(automount_results)} /automount probe(s) failed "
-            f"during the chaos window — first: {bad_automounts[0][1]}")
-    if post_locks > baseline_locks:
+            f"{len(bad_post_recovery)} /automount probe(s) failed AFTER recovery was first "
+            f"confirmed — flapping, a real regression (first: {bad_post_recovery[0][2]})")
+    if post_locks > baseline_locks + ADVISORY_LOCK_NOISE_TOLERANCE:
         findings.append(
             f"{post_locks} advisory lock(s) held after recovery, vs {baseline_locks} "
-            "baseline before the kill — a real leak (this check accounts for ordinary "
-            "concurrent-fleet noise by comparing to its own baseline, not to zero)")
+            f"baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE}) — a real "
+            "leak (this check accounts for ordinary concurrent-fleet noise by comparing to "
+            "its own baseline plus a small margin, not to zero or to an exact baseline match)")
     if post_census.get("rowless_count", 0) > baseline_census.get("rowless_count", 0):
         findings.append(
             f"rowless body count grew from {baseline_census.get('rowless_count', 0)} to "
@@ -278,6 +324,8 @@ async def chaos_replay(
         "recovery_elapsed_secs": elapsed,
         "automount_probes_total": len(automount_results),
         "automount_probes_failed": len(bad_automounts),
+        "automount_probes_failed_pre_recovery": len(bad_pre_recovery),
+        "automount_probes_failed_post_recovery": len(bad_post_recovery),
         "baseline_advisory_locks": baseline_locks,
         "post_advisory_locks": post_locks,
         "baseline_rowless": baseline_census.get("rowless_count", 0),

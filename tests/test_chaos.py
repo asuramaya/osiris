@@ -269,14 +269,19 @@ async def test_chaos_replay_reports_a_restart_failure(actions: Actions) -> None:
     assert any("restart failed" in f for f in report["findings"])
 
 
-async def test_chaos_replay_reports_automount_failures_seen_during_the_window(
+async def test_chaos_replay_tolerates_automount_failures_before_first_recovery(
     actions: Actions,
 ) -> None:
-    """REAL timing, deliberately (not the no-op `sleep` fake): the concurrent poller
-    (`poll_interval_secs=0.01`) needs actual wall-clock gaps during `kill`/`restart` to get
-    scheduled at all — the first few probes (from WHICHEVER caller reaches them first, the
-    poller or the recovery-wait) fail, then it recovers; deterministic regardless of exact
-    interleaving because every EARLY call fails, not just one specific caller's."""
+    """INVARIANT #4's SPLIT (chaos.py's own module docstring, Thoth ruling msg 5702,
+    2026-08-26): failures strictly BEFORE the first confirmed recovery are EXPECTED,
+    bounded unavailability — no un-replicated process can guarantee zero downtime across
+    a real SIGKILL — so this exact scenario, which used to be a hard finding, is
+    correctly GREEN now. REAL timing, deliberately (not the no-op `sleep` fake): the
+    concurrent poller (`poll_interval_secs=0.01`) needs actual wall-clock gaps during
+    `kill`/`restart` to get scheduled at all — the first few probes (from WHICHEVER
+    caller reaches them first, the poller or the recovery-wait) fail, then it recovers;
+    deterministic regardless of exact interleaving because every EARLY call fails, not
+    just one specific caller's."""
     import asyncio
 
     calls: list[int] = []
@@ -299,8 +304,38 @@ async def test_chaos_replay_reports_automount_failures_seen_during_the_window(
         automount_probe=_flaky_automount,
         agents_json=_agents_json_sequence([[]]),
         poll_interval_secs=0.01, recovery_ceiling_secs=5.0)
+    assert report["ok"] is True, report["findings"]
+    assert report["findings"] == []
+    assert report["automount_probes_failed_pre_recovery"] > 0
+    assert report["automount_probes_failed_post_recovery"] == 0
+
+
+async def test_chaos_replay_reports_automount_flapping_after_recovery(
+    actions: Actions,
+) -> None:
+    """INVARIANT #4's OTHER HALF: a probe that succeeds on the very FIRST call (instant
+    recovery) but fails on every call thereafter is, by construction, failing entirely
+    AFTER `first_recovery_at` — the post-recovery poll window chaos.py adds specifically
+    so this class of regression stays observable (`min(poll_interval_secs * 3, 4.0)`)
+    is what makes those later failures land inside the measurement at all. This is the
+    REAL regression invariant #4 exists to catch (task #179's own shape) — unlike its
+    sibling test above, this one must stay red."""
+    calls: list[int] = []
+
+    async def _flaps_after_recovery() -> tuple[bool, str]:
+        calls.append(1)
+        if len(calls) == 1:
+            return True, "ok"
+        return False, "500 flapping post-recovery"
+
+    report = await chaos_replay(
+        actions.pool, kill=_ok_kill, restart=_ok_restart, fire_storm=_no_storm,
+        automount_probe=_flaps_after_recovery,
+        agents_json=_agents_json_sequence([[]]),
+        poll_interval_secs=0.01, recovery_ceiling_secs=5.0)
     assert report["ok"] is False
-    assert any("/automount probe(s) failed" in f for f in report["findings"])
+    assert report["automount_probes_failed_post_recovery"] > 0
+    assert any("flapping" in f for f in report["findings"])
 
 
 async def test_chaos_replay_reports_a_recovery_timeout(actions: Actions) -> None:
@@ -415,54 +450,34 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
     deliberately: `registry_census`'s own fleet-agent census is about the HOST's real
     Claude Code sessions, unrelated to this isolated daemon pair.
 
-    THIS TEST DOES NOT PASS, AND SHOULDN'T BE MADE TO — A REAL WALL, NOT A SUITE-ISOLATION
-    BUG (Thoth's own instruction: name it, don't route around it). Measured directly (a
-    standalone script, real production DSN, no test isolation involved at all): a freshly
+    THE WALL THIS TEST NAMED, AND HOW IT CLOSED (#186 follow-up, Thoth ruling msg 5702,
+    2026-08-26): measured directly (a standalone script, real production DSN) a freshly
     spawned `python -m src.mcp_server` takes ~1.5-2s of genuine connection-refused before
     it accepts its first HTTP request — cold Python + FastMCP + settings + DB-pool init,
-    inherent to the process, not an artifact of this harness. Production's REAL restart
-    path is worse: `deploy/user/osiris-mcp.service` sets `RestartSec=5`, so a real SIGKILL
-    there means at LEAST 5s (systemd's own mandated delay) + ~1.5-2s startup ≈ 6.5s+ of
-    genuine unavailability — and `chaos_replay` has NEVER been run live before #186
-    (decision aa7f515f: "BUILT AND GATED, NOT RUN LIVE... deferred... never restart
-    services"), so this specific tension was never caught.
+    inherent to the process, not an artifact of this harness. Invariant #4 used to flag
+    ANY probe failure during the WHOLE kill-to-recovery window as a hard finding, which
+    made this unavailability — expected of any un-replicated process across a real
+    SIGKILL — indistinguishable from a genuine regression. Thoth's ruling adopted this
+    test's own proposed fix shape: chaos.py's invariant #4 now SPLITS pre-first-recovery
+    failures (expected, bounded — invariant #5 already tracks that bound) from
+    post-recovery FLAPPING (a real regression, the shape task #179 fixed once). With that
+    split landed, this test can finally assert the invariant for real, not route around
+    it: the isolated real daemon pair's own cold-start unavailability no longer needs a
+    carve-out, because chaos_replay itself now correctly doesn't count it as a finding.
 
-    THE TENSION: invariant #4 ("/automount RETURNS 200 THROUGHOUT", chaos.py's own
-    docstring) is coded to flag ANY probe failure during the whole kill-to-recovery
-    window as a hard finding — and a dedicated existing test
-    (`test_chaos_replay_reports_automount_failures_seen_during_the_window`) deliberately
-    locks in that exact behavior, so this is REVIEWED, INTENTIONAL strictness, not an
-    oversight I can quietly loosen. Invariant #5 ("BACKENDS RECOVER WITHIN A BOUND")
-    already tracks and tolerates bounded downtime via `recovery_elapsed_secs` — the two
-    invariants currently disagree about whether transient, bounded unavailability is
-    acceptable. No single, un-replicated process (this isolated pair, OR the real
-    systemd units) can satisfy #4 as literally coded; only a proxy/replica architecture
-    with zero-downtime failover could, which does not exist today for either.
-
-    NOT FIXED HERE: whether to (a) distinguish pre-first-recovery failures (expected,
-    bounded, tolerable) from post-recovery flapping (a genuine regression) — the natural
-    reading of what #5 already half-implements, or (b) require real replica
-    infrastructure before this can ever be a suite gate, is Thoth's/the operator's call,
-    not mine to make unilaterally against a previously-reviewed, deliberately-tested
-    invariant. Reported in full, per standing practice, rather than forcing green."""
+    THE OTHER HALF OF THIS SEGMENT'S FLAKE (root-caused live, reproduced twice under a
+    real `-n4` full-suite run): `_advisory_lock_count` reads `pg_locks` SERVER-WIDE
+    (`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring names this — every
+    xdist worker shares ONE physical Postgres instance), so an unrelated worker's own
+    transient lock landing in the narrow post-recovery sampling instant could false-
+    positive as a leak; `ADVISORY_LOCK_NOISE_TOLERANCE` (chaos.py) now absorbs that
+    measured noise without masking the leak-reproduction test's own deliberate 10-key
+    signal."""
     report = await chaos_replay(
         actions.pool, units=DEFAULT_CHAOS_UNITS,
         kill=isolated_chaos_daemons.kill, restart=isolated_chaos_daemons.restart,
         fire_storm=_real_fire_storm, automount_probe=isolated_chaos_daemons._whisper_probe,
         agents_json=_agents_json_sequence([[]]), recovery_ceiling_secs=30.0)
-    # The isolation infrastructure itself is proven here regardless of the automount
-    # tension above: storm ran for real, and — the invariant this test's own docstring
-    # names as unresolved aside — recovery must still complete within the bound.
     assert report["storm_fired"] == 25
-    assert report["recovery_elapsed_secs"] < 30.0, report["findings"]
-    assert not any("did not recover" in f for f in report["findings"])
-    assert not any("stranger was minted" in f for f in report["findings"])
-    assert not any("advisory lock" in f for f in report["findings"])
-    assert not any("rowless" in f for f in report["findings"])
-    # THE NAMED, UNRESOLVED TENSION (see docstring), MEASURED TWICE, TWO DIFFERENT
-    # ANSWERS: one run found 2/2 automount probes failing during the real cold-start
-    # window; a later run found 0/1. Real process-restart timing racing a 1s poll
-    # interval is not deterministic either way — asserting a fixed count in either
-    # direction would itself be exactly the "flaky" acceptance Thoth's dispatch refused.
-    # Not asserted; logged in the receipt for a human to read (`report["automount_
-    # probes_failed"]`), same as `chaos_replay`'s own report already surfaces it.
+    assert report["ok"] is True, report["findings"]
+    assert report["findings"] == []
