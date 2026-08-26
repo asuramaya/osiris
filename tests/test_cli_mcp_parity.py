@@ -77,7 +77,13 @@ CLI_ONLY_PARAMS = {
     ("smoke", "chaos"): "the crash replay SIGKILLs osiris-mcp/osiris-worker and fires a "
         "session-end storm — an operator/manager-hand operational act (every worker "
         "charter says 'you NEVER restart services'); deliberately unreachable from any "
-        "MCP tool a seat could call mid-turn (Sekhmet bfa2bd2, #178 residual)",
+        "MCP tool a seat could call mid-turn (Sekhmet bfa2bd2, #178 residual). Still true "
+        "for the REAL production daemons after #186 (dispatch 5690): this entry is about "
+        "CLI-vs-MCP surface parity, unchanged. What #186 added is a SEPARATE, test-only "
+        "pathway — tests/test_chaos.py's own isolated osiris-mcp/osiris-worker pair (own "
+        "port, own testcontainer DB/Redis) — so the crash-replay mechanism itself is now "
+        "exercised for real in the suite; neither a CLI param nor an MCP tool, so this "
+        "table's own claim is untouched by it.",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
