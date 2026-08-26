@@ -2472,6 +2472,78 @@ async def test_registry_corroborates_accepts_a_null_seat_as_unsuspicious(
         actions.pool, job_dir, t, "agent:abcd1234", seat_id="seat:the-real-one")
 
 
+async def test_registry_corroborates_a_same_lineage_stale_row_is_not_a_collision(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#184 Leg 1 follow-on, live-reproduced (metron): a durable per-seat anchor mounts
+    the SAME cwd on every generation of one lineage by construction — an earlier
+    generation's own stale, never-swept row sharing that cwd is corroborating evidence,
+    not ambiguity. Only a DIFFERENT lineage landing on the same slug (the existing
+    `test_registry_corroborates_refuses_a_slug_collision` above) is a real collision."""
+    from src.orchestrator import mounts
+
+    _sense, t = await _mounted_deep_agent(actions, tmp_path, agent_id="agent:abcd1234-ii")
+    job_dir = str(tmp_path / "jobs" / "abcd1234")
+    # an EARLIER generation of the SAME lineage, same cwd (the durable-anchor shape) —
+    # stale, never swept, but not a stranger
+    await mounts.save_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234-old"),
+        agent_id="agent:abcd1234", project="demo", cwd="/repo/demo",
+        model=None, session_key=None)
+    assert await trigger_module._registry_corroborates(
+        actions.pool, job_dir, t, "agent:abcd1234", seat_id=None)
+
+
+async def test_resident_verdict_total_miss_corroborates_via_the_freshest_registry_row(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """#184 Leg 1 follow-on, live-reproduced (metron/deckard): a genuinely live seat whose
+    transcript simply hasn't called an osiris tool recently (nothing signed anywhere in
+    the scan, tail or deep) must not read as a stranger when the registry's own freshest
+    row for this exact lineage corroborates it — the same authority the deeper-signed-act
+    branch already trusts, extended to the total-miss case."""
+    from src.orchestrator import mounts
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"just harness chrome, nothing signed"}\n')
+    job_dir = tmp_path / "jobs" / "abcd1234"
+    await mounts.save_mount(actions.pool, job_dir=str(job_dir), agent_id="agent:abcd1234",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    verdict = await trigger_module._resident_verdict(
+        actions.pool, sense, FULL_SID, "agent:abcd1234", job_dir_hint=str(job_dir))
+    assert verdict == "match"
+
+
+async def test_resident_verdict_total_miss_refuses_when_a_fresher_successor_exists(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The exact case the freshness check exists for: a declared successor has ALREADY
+    mounted its own, later row for this lineage — the ancestor's own registry row still
+    corroborates on its own terms, but must not win over a fresher body."""
+    from src.orchestrator import mounts
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{FULL_SID}.jsonl"
+    t.write_bytes(b'{"type":"assistant","text":"just harness chrome, nothing signed"}\n')
+    job_dir = tmp_path / "jobs" / "abcd1234"
+    await mounts.save_mount(actions.pool, job_dir=str(job_dir), agent_id="agent:abcd1234",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    await actions.pool.execute("UPDATE agent_mounts SET last_seen = now() - interval '1 hour'")
+    # a fresher successor's own mount, same lineage
+    await mounts.save_mount(
+        actions.pool, job_dir=str(tmp_path / "jobs" / "abcd1234ii"),
+        agent_id="agent:abcd1234-ii", project="demo", cwd="/repo/demo",
+        model=None, session_key=None)
+    verdict = await trigger_module._resident_verdict(
+        actions.pool, sense, FULL_SID, "agent:abcd1234", job_dir_hint=str(job_dir))
+    assert verdict == "unknown"
+
+
 async def test_dispatch_dm_resumes_the_halcyon_shaped_unsigned_tail(
     actions: Actions, tmp_path: Path,
 ) -> None:
