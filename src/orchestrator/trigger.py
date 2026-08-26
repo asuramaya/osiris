@@ -830,9 +830,15 @@ async def _registry_corroborates(
     slug = transcript.parent.name
     if _harness_slug(row["cwd"]) != slug and _legacy_slug(row["cwd"]) != slug:
         return False
+    # #184 Leg 1 follow-on, live-reproduced (metron): a collision candidate must be a
+    # DIFFERENT lineage — one of THIS lineage's own earlier, stale rows (a durable
+    # per-seat anchor from a prior generation, never swept) shares this exact cwd by
+    # construction, every time a seat re-mounts. That is corroborating evidence, not
+    # ambiguity; only another LINEAGE'S row landing on the same slug is a real collision.
     others = await pool.fetch(
-        "SELECT cwd FROM agent_mounts WHERE job_dir != $1", row["job_dir"])
-    if any(_harness_slug(r["cwd"]) == slug or _legacy_slug(r["cwd"]) == slug for r in others):
+        "SELECT cwd, agent_id FROM agent_mounts WHERE job_dir != $1", row["job_dir"])
+    if any((_harness_slug(r["cwd"]) == slug or _legacy_slug(r["cwd"]) == slug)
+           and _generation(r["agent_id"])[0] != base for r in others):
         return False  # a slug collision — refuse rather than trust a coincidental match
     return seat_id is None or row["seat_id"] is None or row["seat_id"] == seat_id
 
@@ -904,13 +910,50 @@ async def _resident_verdict(
     corroborates (`_registry_corroborates`) — either alone is insufficient. Still nothing
     found anywhere within the scan cap, or the deeper act names someone else, or the
     registry doesn't corroborate: "unknown" (or "mismatch" if a lineage was positively
-    named), exactly the refusal shape from before this fix — only the label is honest now."""
+    named), exactly the refusal shape from before this fix — only the label is honest now.
+
+    A TOTAL MISS (no signed act ANYWHERE, tail or deep scan both empty) gets the SAME
+    registry-corroboration fallback (#184 Leg 1 follow-on, live-reproduced: metron/deckard,
+    both genuinely-live seats refused for lack of RECENT osiris tool chatter — busy coding
+    sessions that simply hadn't called mount/send/whisper within the ~2MB scanned) — but
+    ONLY when `job_dir_hint`'s own registry row is the FRESHEST mount anywhere in this
+    lineage (no other row for the same lineage carries a later `last_seen`). Without this,
+    the fallback would corroborate a STALE ancestor whose own successor has since taken
+    over — the registry row genuinely IS the ancestor's, but a fresher successor's mount
+    means resuming/nudging the old one is a different question the registry alone cannot
+    answer (`test_an_absent_transcript_refuses_as_unknown_never_as_a_found_mismatch`'s own
+    shape: a declared-but-never-mounted successor `abcd1234-ii` still mounts its OWN row —
+    same "most recently mounted wins" comparison `wakeable_identity` itself already uses —
+    with a fresher `last_seen` than `abcd1234`'s, and must still win over trusting
+    `abcd1234`'s own genuinely-corroborated but superseded door). A `last_seen`
+    comparison, not a generation-number one, because this fallback is ALSO reachable from
+    `dispatch_dm`'s own daemon-reply/nudge lane (`_resident_disagrees`) with no hop or
+    target-generation context threaded at all — freshness is the one signal every caller
+    already has (it is `wakeable_identity`'s own tiebreak)."""
     from src.orchestrator.agents import _generation
     resident = await asyncio.to_thread(_resident_of_sync, root, sid)
     if resident is not None:
         return "mismatch" if _generation(resident)[0] != base else "match"
     deep_resident, transcript = await asyncio.to_thread(_resident_of_deeper_sync, root, sid)
-    if deep_resident is None or transcript is None:
+    if transcript is None:
+        return "unknown"  # the transcript itself is unreadable — nothing left to check
+    if deep_resident is None:
+        # #184 Leg 1 follow-on, live-reproduced (metron/deckard, both currently-live
+        # seats refused for lack of RECENT osiris tool chatter): nothing signed in ~2MB
+        # is genuine silence for a session doing other work, not evidence of a stranger —
+        # try the SAME registry corroboration the deeper-signed-act branch below already
+        # uses, rather than giving up the instant no signature exists to re-check.
+        if job_dir_hint:
+            fresher = await pool.fetchval(
+                "SELECT 1 FROM agent_mounts a WHERE (a.agent_id=$1 OR a.agent_id LIKE $1 || '-%') "
+                "AND a.last_seen > COALESCE((SELECT last_seen FROM agent_mounts "
+                "  WHERE job_dir=$2 OR job_dir LIKE '%/' || $2), 'epoch'::timestamptz) LIMIT 1",
+                base, job_dir_hint)
+            if fresher is None:
+                corroborates = await _registry_corroborates(
+                    pool, job_dir_hint, transcript, base, seat_id=seat_id)
+                if corroborates:
+                    return "match"
         return "unknown"  # nothing signed found anywhere in the scan — ignorance, not a finding
     if _generation(deep_resident)[0] != base:
         return "mismatch"
