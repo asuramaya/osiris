@@ -11,6 +11,7 @@ let SELECTED_ENTITY_TYPES = new Set(), ENTITY_SEARCH_QUERY = '', ENTITY_VIEW_MOD
 let TABLE_SORT_COL = 'date', TABLE_SORT_DIR = 'desc', EXPANDED_ROWS = new Set();
 let BOARD_GROUP_BY = 'auto', SYNCING = false, CONSOLE_REV = 0, SHOW_AGENTS = false, SCOPE_FILTER = '';
 let TRUE_COUNTS = null; // uncapped per-type census from /objects/counts (#196) — null until loaded
+let OBJECTS_LIMIT = 1500, OBJECTS_HAS_MORE = false, OBJECTS_LOADING_MORE = false;
 
 var board = null;
 function ensureBoard() {
@@ -165,11 +166,16 @@ function objectScopeParams() {
   var repos = SCOPE_FILTER ? SCOPE_FILTER.split(',').filter(Boolean) : [];
   return { extra: ex, project: repos, case_id: null };
 }
-function objectSetUrl() {
+function objectSetUrl(cursor) {
   var s = objectScopeParams();
-  var url = '/objects?limit=1500' + s.extra;
+  var url = '/objects?limit=' + OBJECTS_LIMIT + s.extra;
   if (s.case_id) url += '&case_id=' + encodeURIComponent(s.case_id);
   for (var i = 0; i < s.project.length; i++) url += '&project=' + encodeURIComponent(s.project[i]);
+  // KEYSET continuation (#93 step 3, Thoth msg 5668) — the cursor #196 built and proved
+  // (before_created_at/before_id, migration 0054's objects_type_created_idx) but never
+  // wired to a click. Omitted for the initial load (unchanged behavior, every existing
+  // caller); passed here only by loadMoreObjects() below.
+  if (cursor) url += '&before_created_at=' + encodeURIComponent(cursor.created_at) + '&before_id=' + encodeURIComponent(cursor.id);
   return url;
 }
 function objectCountsUrl() {
@@ -182,12 +188,36 @@ function objectCountsUrl() {
 async function loadObjectSet() {
   const r = await fetch(objectSetUrl()).then(r => r.json()).catch(() => []);
   SET = Array.isArray(r) ? r : [];
+  // A full-length page is the only signal /objects gives that there might be more (no
+  // total/has_more field) — a heuristic, not a promise, same honesty rule as everywhere
+  // else this reign: never assert a conclusion the data can't support. A short page is
+  // certain (fewer than asked for = nothing left); a full page MIGHT mean more, or might
+  // land exactly on the boundary — "Load More" staying clickable in that rare case costs
+  // one empty click, never a silent truncation.
+  OBJECTS_HAS_MORE = SET.length >= OBJECTS_LIMIT;
   // TRUE_COUNTS is the uncapped census (#196) — the taxonomy bar prefers it over
   // SET-derived counts, which silently understate the moment a type/scope exceeds the
   // /objects cap (measured: 31,189 objects fleet-wide, Agent alone 10,617 — the cap is
   // 2000). A failed/slow counts fetch degrades to null, and the toolbar falls back to
   // the old SET-derived count rather than showing nothing.
   TRUE_COUNTS = await fetch(objectCountsUrl()).then(r => r.json()).catch(() => null);
+}
+async function loadMoreObjects() {
+  if (OBJECTS_LOADING_MORE || !OBJECTS_HAS_MORE || !SET.length) return;
+  var last = SET[SET.length - 1];  // SET is created_at DESC — the last row is the oldest loaded
+  if (!last || !last.created_at) { OBJECTS_HAS_MORE = false; renderEntityExplorerStage(); return; }
+  OBJECTS_LOADING_MORE = true;
+  renderEntityExplorerStage();  // shows the loading state on the button immediately
+  try {
+    var page = await fetch(objectSetUrl({ created_at: last.created_at, id: last.id }))
+      .then(function(r){return r.json();}).catch(function(){return [];});
+    page = Array.isArray(page) ? page : [];
+    SET = SET.concat(page);
+    OBJECTS_HAS_MORE = page.length >= OBJECTS_LIMIT;
+  } finally {
+    OBJECTS_LOADING_MORE = false;
+    renderEntityExplorerStage();
+  }
 }
 
 // ── Entity Explorer ──────────────────────────────────────────────────────────
@@ -279,12 +309,27 @@ function renderKey(o) {
 }
 
 // ── Table Projection ─────────────────────────────────────────────────────────
+// The old footer here claimed "Showing first 300 of X" while actually rendering EVERY
+// row in `shown`, unsliced — a granular sharpening (#93 item 2, Thoth msg 5668): a
+// footer that asserts a conclusion the render doesn't support is exactly the fact-vs-
+// conclusion distinction this whole reign kept landing on for the project index's own
+// flag copy. Replaced with what's actually true — how many are loaded, out of the real
+// total when known (#196's /objects/counts), plus Load More when the server signaled
+// there might be more (loadObjectSet's own heuristic, not a promise).
+function objectSetFooterHtml() {
+  var total = TRUE_COUNTS ? TRUE_COUNTS.total : null;
+  var loadedText = 'Loaded ' + SET.length.toLocaleString() + (total != null ? ' of ' + total.toLocaleString() : '') + ' objects in scope';
+  var btn = OBJECTS_HAS_MORE
+    ? '<button class="iconbtn" style="margin-left:10px" onclick="loadMoreObjects()"' + (OBJECTS_LOADING_MORE ? ' disabled' : '') + '>' + (OBJECTS_LOADING_MORE ? 'Loading…' : 'Load More') + '</button>'
+    : '';
+  return '<div class="o-faint" style="padding:12px;text-align:center">' + esc(loadedText) + btn + '</div>';
+}
 function renderTableProjection(container, items) {
   var sorters = { name: function(o){return (o.display_label || o.name || '').toLowerCase();}, type: function(o){return (o.type || '').toLowerCase();}, status: function(o){return (o.status || 'active').toLowerCase();}, date: function(o){return o.created_at || '';} };
   var shown = [].concat(items).sort(function(a, b) { var va = sorters[TABLE_SORT_COL] ? sorters[TABLE_SORT_COL](a) : (a.created_at || ''); var vb = sorters[TABLE_SORT_COL] ? sorters[TABLE_SORT_COL](b) : (b.created_at || ''); return TABLE_SORT_DIR === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va); });
   if (!shown.length) { container.innerHTML = '<div class="o-empty" style="padding:40px 20px">No matching entities.</div>'; return; }
   container.innerHTML = '<table class="ee-table"><thead><tr><th style="width:105px;cursor:pointer" onclick="toggleTableSort(\'type\')">Type' + sortIcon('type') + '</th><th style="width:150px">Key / ID</th><th style="cursor:pointer" onclick="toggleTableSort(\'name\')">Summary' + sortIcon('name') + '</th><th style="width:95px;cursor:pointer" onclick="toggleTableSort(\'date\')">Date' + sortIcon('date') + '</th><th style="width:75px;text-align:right;cursor:pointer" onclick="toggleTableSort(\'status\')">Status' + sortIcon('status') + '</th></tr></thead><tbody>' +
-  shown.map(renderTableRow).join('') + '</tbody></table>' + (items.length > 300 ? '<div class="o-faint" style="padding:12px;text-align:center">Showing first 300 of ' + items.length + '</div>' : '');
+  shown.map(renderTableRow).join('') + '</tbody></table>' + objectSetFooterHtml();
 }
 function renderTableRow(o) {
   var isSel = FOCUS === o.id, isExp = EXPANDED_ROWS.has(o.id), p = o.props || {};
