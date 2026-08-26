@@ -1097,6 +1097,46 @@ async def test_automount_inlines_the_top_of_the_obligations_wall(
     json.dumps(out)
 
 
+async def test_automount_ranks_a_seat_owned_obligation_above_an_unrelated_one(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """#185 leg (a): reader_identity_set folds the seat's own HANDLE into the wall's
+    ranking identity, so a self-declared-charter nudge (owner='<handle>') sorts ahead of
+    an unrelated project-wide item at automount time — the same ranking orient() gives,
+    without a full orient() round-trip."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/handle-owned-project")
+    await open_thread(actions, "an unrelated project-wide obligation",
+                      repo="handle-owned-project", kind="obligation",
+                      owner="handle-owned-project")
+    await open_thread(actions, "aegis's own undeclared charter nudge",
+                      repo="handle-owned-project", kind="obligation", owner="aegis")
+
+    await actions.create_or_find_object("Agent", "agent:aegis0001", "agent:aegis0001")
+    # a SEATED agent's project is its seat's derived HOUSE, unconditionally (resolve_project,
+    # ruling 577988ed) — the house must match this test's own project name or the wall
+    # query below looks under the wrong SoftwareProject entirely.
+    seat = await ensure_seat(actions, house="handle-owned-project", handle="aegis",
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:aegis0001")
+    # a pre-existing mount row is how automount resolves THIS session to aegis's own
+    # agent id, rather than minting a fresh stranger for a never-seen session/cwd pair
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
+                     agent_id="agent:aegis0001", project="handle-owned-project",
+                     cwd="/w/handle-owned-project", model=None, session_key=None)
+
+    out = await automount(actions, session_id=SID, cwd="/w/handle-owned-project",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+
+    summaries = [o["summary"] for o in out["obligations"]]
+    assert summaries.index("aegis's own undeclared charter nudge") < \
+        summaries.index("an unrelated project-wide obligation")
+
+
 async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_thread(
     actions: Actions, tmp_path: Path
 ) -> None:

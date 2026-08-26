@@ -2228,6 +2228,36 @@ async def owner_lineage_roots(
     return out
 
 
+async def reader_identity_set(
+    pool: asyncpg.Pool, *, agent_id: str | None, project: str | None,
+) -> frozenset[str]:
+    """ONE AUTHORITY for the `me` set `rank_open_threads` ranks against (#185 leg (a)):
+    orient() and automount()/whisper each used to hand-roll `{agent_id, project}` — never
+    the seat's own HANDLE. A charter obligation filed `owner='<handle>'` (the natural way
+    to say "whose move is this" for a self-declaring seat, per 696d302c/1bb8e095's own
+    self-service model) never ranked as MINE under either caller: a bare handle matches
+    neither an agent id nor a project name, so a seat's own evidenced-but-undeclared
+    charter sat on its wall ranked no differently from a stranger's business. Two identical
+    copies of this gap were the bug, not a missing feature in `rank_open_threads` itself —
+    this closes both at once rather than patching each caller separately.
+
+    Resolves the seat via `held_seat` (lineage-aware, the same "who am I" lookup mount/
+    orient already use) and folds its handle in alongside agent_id/project — never a
+    second, independently-drifting handle lookup. Silent on any resolution failure (an
+    unbound identity, a transient pool error): the reader still gets its base set, exactly
+    the fail-open law every whisper/orient path already holds to."""
+    base = frozenset(x for x in (agent_id, project) if x)
+    if not agent_id:
+        return base
+    try:
+        from src.orchestrator.seats import held_seat
+        seat = await held_seat(pool, agent_id)
+    except Exception:  # noqa: BLE001 — the reader's own identity set must never crash on this
+        seat = None
+    handle = seat.get("handle") if seat else None
+    return base | {handle} if handle else base
+
+
 def rank_open_threads(
     rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
     owner_roots: dict[str, str] | None = None,
@@ -2248,6 +2278,15 @@ def rank_open_threads(
     function stays callable exactly as before for anyone who doesn't have a pool handy,
     degrading gracefully rather than refusing. Still entirely synchronous and Pure.
 
+    A BARE SEAT HANDLE MATCHES CASE-INSENSITIVELY (#185 leg (a), the self-declared-charter
+    obligation batch): `owner='<handle>'` is the natural way to file "whose move is this"
+    for a seat rather than its current agent:id, but a handle's stored casing follows
+    whatever claim_name happened to type — nobody should have to know a seat's exact
+    capitalization for their own obligation to rank as theirs. Exact-match stays the FIRST,
+    fast check (agent:/operator lineage roots already need it precise); a lowercase
+    fallback only fires when that misses, so this never weakens the agent-lineage matching
+    above, only forgives a casing mismatch on a plain name.
+
     WITHIN each (kind, ownership) band, RELEVANCE OBSERVED, NOT DECLARED (ruling a4bd555c,
     #121's catalog-usage law applied to the object that matters most, Thoth msg 2332):
     `last_touched` — the freshest self_declared `observed_at` a caller of `open_thread_wall`
@@ -2265,12 +2304,13 @@ def rank_open_threads(
         return owner_roots.get(a) or _generation(a)[0]
 
     me_roots = frozenset(root_of(m) for m in me)
+    me_lower = frozenset(m.lower() for m in me)
     never = datetime.min.replace(tzinfo=UTC)
     latest = datetime.max.replace(tzinfo=UTC)
 
     def whose_move(r: dict[str, Any]) -> int:
         owner = (r.get("owner") or "").strip()
-        if not owner or owner in me or root_of(owner) in me_roots:
+        if not owner or owner in me or root_of(owner) in me_roots or owner.lower() in me_lower:
             return 0  # mine to act (unowned = anyone who reads it may act)
         return 2 if owner == "operator" else 1
 

@@ -755,13 +755,22 @@ async def automount(
     obligations: list[dict[str, Any]] = []
     if ident.project:
         try:
-            from src.orchestrator.compositions import open_thread_wall, rank_open_threads
+            from src.orchestrator.compositions import (
+                open_thread_wall,
+                rank_open_threads,
+                reader_identity_set,
+            )
             proj_id = await actions.pool.fetchval(
                 "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
                 f"repo:{ident.project}")
             if proj_id is not None:
                 wall, _echoes = await open_thread_wall(actions.pool, proj_id)
-                me = frozenset(x for x in (ident.agent_id, ident.project) if x)
+                # ONE AUTHORITY with orient()'s own identical need (#185 leg (a)): folds in
+                # the seat's own HANDLE, not just agent_id/project, so a self-declared-
+                # charter obligation (owner='<handle>') ranks as MINE at the whisper's own
+                # inline top-of-wall, not only at a full orient() round-trip.
+                me = await reader_identity_set(
+                    actions.pool, agent_id=ident.agent_id, project=ident.project)
                 shown, _more = rank_open_threads(wall, me)
                 # JSON-NATIVE BY CONSTRUCTION (2026-08-18, decision 49510a2f's tail): the wall
                 # rows carry `last_touched` as a datetime for the ranker; the whisper's HTTP
