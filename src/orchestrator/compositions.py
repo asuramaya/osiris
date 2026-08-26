@@ -3832,9 +3832,20 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         ot = node.get("object_type")
         cp = node.get("canonical_prefix")
         where = node.get("where", []) or []
+        # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
+        # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
+        # carried NO order at all, so row order was whatever the planner's physical scan
+        # happened to produce — usually insertion order on a quiet local box (a sequential
+        # scan with no concurrent writers tends to return heap order), but Postgres never
+        # guarantees that, and a shared-container-under-real-load plan (parallel workers,
+        # a different scan choice from buffer/lock contention) can and did return rows out
+        # of insertion order, which every downstream group/table/collect op then silently
+        # inherited as if it were meaningful. `created_at` (0054's own index) is the
+        # deterministic, insertion-order-matching key every caller actually wants; `id`
+        # (a random UUID) is only the tiebreaker for two rows sharing one timestamp.
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1) "
-            "AND ($2::text IS NULL OR canonical LIKE $2 || '%')", ot, cp
+            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') ORDER BY created_at, id", ot, cp
         )
         # the house boundary (6c18709f): a composition selecting Reflections — by type or
         # by an untyped select-all — reads only the caller's own house; the record stays
