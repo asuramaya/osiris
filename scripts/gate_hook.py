@@ -500,16 +500,46 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
 
         test_files = sorted(selected)
         env = dict(**{"TMPDIR": "/var/tmp/osiris-scratch"})
-        try:
-            proc = subprocess.run(
+
+        def _run_pytest() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
                 [str(VENV_BIN / "pytest"), *test_files, "-q",
                  "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root,
                 capture_output=True, text=True, check=False,
                 env={**os.environ, **env}, timeout=_PYTEST_TIMEOUT_SECS,
             )
+
+        # TOLERANCE, NOT BLINDNESS (f1f8ad62, ruling f61cad1b: the ambient-load limb LEANS
+        # true -- #197's own root causes reproduce under ordinary host contention with no
+        # concurrent gate run required -- so a single hang is not proof of a real problem;
+        # witness 3's own specimen, commit 40dfcca, was CORRECT and did not reproduce on
+        # retry). retried ONE extra attempt only, on TIMEOUT alone -- never on a genuine
+        # assertion failure, which still refuses on the first attempt with no second chance.
+        # The retry's own outcome is never silently folded into a plain "ok": passing only
+        # on the second attempt gets its OWN status word (PASSED-ON-RETRY, `_status_word`
+        # below), reported exactly like SKIPPED/RATCHET-DEBT -- a receipt that cannot tell
+        # "passed first try" from "passed on retry" has stopped being a gate. Timing out
+        # TWICE in a row is a stronger signal than once and still refuses, unconditionally.
+        retried = False
+        try:
+            try:
+                proc = _run_pytest()
+            except subprocess.TimeoutExpired:
+                retried = True
+                proc = _run_pytest()
             ok = proc.returncode == 0
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-            if ok and omitted:
+            if ok and retried:
+                tail = f" (also omitted {omitted})" if omitted else ""
+                results["pytest"] = (
+                    True,
+                    f"PASSED ON RETRY — timed out after {_PYTEST_TIMEOUT_SECS}s on the "
+                    f"first attempt, then passed clean on an immediate second attempt "
+                    f"[{' '.join(test_files)}]{tail}. NOT a plain pass — the first "
+                    f"attempt's hang is real signal (f1f8ad62); a PATTERN of retries "
+                    f"across commits, not just one, is what would prove the ambient-load "
+                    f"limb rather than merely lean toward it.\n{out}")
+            elif ok and omitted:
                 # ran clean, but NOT the whole relevant set -- must not read as a plain "ok"
                 results["pytest"] = (
                     True, f"SKIPPED (partial) — ran {len(test_files)} clean, omitted "
@@ -530,34 +560,43 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                     f"CHARS, or this stops being tolerated.\n{out}")
             else:
                 tail = f" (also omitted {omitted})" if omitted else ""
-                results["pytest"] = (ok, f"[{' '.join(test_files)}]{tail}\n{out}")
+                retry_note = " (unchanged after an immediate retry)" if retried else ""
+                results["pytest"] = (
+                    ok, f"[{' '.join(test_files)}]{tail}{retry_note}\n{out}")
         except subprocess.TimeoutExpired:
             # A DISTINCT WORD FROM "FAILED" (Thoth DM 2948, same discipline as smoke_chrome's
             # timeout-vs-refusal split): a hang past _PYTEST_TIMEOUT_SECS is not proven to be
-            # the code's fault -- the negative control run twice this session (identical
-            # timeout on ec01c42 before and after adding -n 4 parallelism) points at DB
-            # contention from every worktree sharing the same live dev Postgres, not CPU-bound
-            # test time. `_status_word` below renders this as TIMEOUT, never FAILED.
+            # the code's fault on its own -- but TWO timeouts in a row (the retry above
+            # exhausted, this is the second) is a materially stronger signal than one, and
+            # still refuses unconditionally. `_status_word` below renders this as TIMEOUT,
+            # never FAILED.
             tail = f" (also omitted {omitted})" if omitted else ""
             results["pytest"] = (
                 False,
-                f"TIMED OUT after {_PYTEST_TIMEOUT_SECS}s under real ambient fleet load "
-                f"(not a proven code failure -- see the DB-contention negative control) "
-                f"[{' '.join(test_files)}]{tail}")
+                f"TIMED OUT TWICE — {_PYTEST_TIMEOUT_SECS}s on the first attempt AND an "
+                f"immediate retry (tolerance exhausted, f1f8ad62) under real ambient fleet "
+                f"load (not a proven code failure -- see the DB-contention negative "
+                f"control) [{' '.join(test_files)}]{tail}")
     return results
 
 
 def _status_word(ok: bool, detail: str) -> str:
-    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" / "RATCHET-DEBT" — never collapses a not-run
-    result into the same word as a genuine pass (Thoth DM 2957), never collapses a hang into
-    the same word as a real assertion failure (Thoth DM 2948), and never collapses a known,
-    narrowly-scoped ratchet-lag pass-through into a plain "ok" either (thread 1a0f91bb)."""
+    """"ok" / "SKIPPED" / "TIMEOUT" / "FAILED" / "RATCHET-DEBT" / "PASSED-ON-RETRY" — never
+    collapses a not-run result into the same word as a genuine pass (Thoth DM 2957), never
+    collapses a hang into the same word as a real assertion failure (Thoth DM 2948), never
+    collapses a known, narrowly-scoped ratchet-lag pass-through into a plain "ok" either
+    (thread 1a0f91bb), and never collapses a pass that only happened on a timeout retry into
+    the same "ok" as a clean first attempt (f1f8ad62's tolerance remedy, ruling f61cad1b) —
+    a receipt that cannot tell "passed first try" from "passed on retry" has stopped being a
+    gate."""
     if not ok:
         return "TIMEOUT" if detail.startswith("TIMED OUT") else "FAILED"
     if detail.startswith("SKIPPED"):
         return "SKIPPED"
     if detail.startswith("RATCHET-DEBT"):
         return "RATCHET-DEBT"
+    if detail.startswith("PASSED ON RETRY"):
+        return "PASSED-ON-RETRY"
     return "ok"
 
 
@@ -715,12 +754,15 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
         verdict = "PASS (UNVERIFIED — see SKIPPED below, not the same as a real pass)"
     elif "RATCHET-DEBT" in statuses.values():
         verdict = "PASS (RATCHET DEBT — see below, the next commit must raise the ceiling)"
+    elif "PASSED-ON-RETRY" in statuses.values():
+        verdict = "PASS (PASSED ON RETRY — see below, timed out once under transient host " \
+                  "contention then passed clean; f1f8ad62)"
     else:
         verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
     for name, (ok, out) in results.items():
         print(f"  {name}: {statuses[name]}")
-        if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
+        if statuses[name] in ("SKIPPED", "RATCHET-DEBT", "PASSED-ON-RETRY"):
             _print_skip_detail(out)
         elif not ok:
             for line in out.splitlines()[-15:]:
@@ -797,6 +839,7 @@ def cmd_audit(rev_range: str) -> int:
     timeouts: list[str] = []
     skipped: list[str] = []
     ratchet_debt: list[str] = []
+    retried: list[str] = []
     with tempfile.TemporaryDirectory(prefix="gate-audit-") as tmp:
         tmp_path = Path(tmp)
         for i, sha in enumerate(shas, 1):
@@ -820,6 +863,8 @@ def cmd_audit(rev_range: str) -> int:
                 verdict = "UNVERIFIED"
             elif "RATCHET-DEBT" in statuses.values():
                 verdict = "RATCHET-DEBT"
+            elif "PASSED-ON-RETRY" in statuses.values():
+                verdict = "PASSED-ON-RETRY"
             else:
                 verdict = "PASS"
             detail = ", ".join(f"{name}={statuses[name]}" for name in sorted(statuses))
@@ -835,8 +880,10 @@ def cmd_audit(rev_range: str) -> int:
                 skipped.append(short)
             elif verdict == "RATCHET-DEBT":
                 ratchet_debt.append(short)
+            elif verdict == "PASSED-ON-RETRY":
+                retried.append(short)
             for name, (ok2, out2) in results.items():
-                if statuses[name] in ("SKIPPED", "RATCHET-DEBT"):
+                if statuses[name] in ("SKIPPED", "RATCHET-DEBT", "PASSED-ON-RETRY"):
                     print(f"    {name} tail:")
                     _print_skip_detail(out2, indent="      ")
                 elif not ok2:
@@ -844,7 +891,8 @@ def cmd_audit(rev_range: str) -> int:
                     for line in out2.splitlines()[-10:]:
                         print(f"      {line}")
             _run(["git", "worktree", "remove", "--force", str(wt)], REPO_ROOT)
-    settled = len(shas) - len(fails) - len(timeouts) - len(skipped) - len(ratchet_debt)
+    settled = (len(shas) - len(fails) - len(timeouts) - len(skipped) - len(ratchet_debt)
+               - len(retried))
     print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly and VERIFIED")
     if skipped:
         print(f"UNVERIFIED (passed, but at least one gate was skipped — not proof of "
@@ -853,10 +901,16 @@ def cmd_audit(rev_range: str) -> int:
         print(f"RATCHET DEBT (merge landed over the tool-contract ceiling before its own "
               f"follow-up ratchet-raise commit — thread 1a0f91bb, not refused but not a "
               f"plain pass): {', '.join(ratchet_debt)}")
+    if retried:
+        print(f"PASSED ONLY ON RETRY (timed out once under transient host contention then "
+              f"passed clean — f1f8ad62, not refused but not a plain first-try pass "
+              f"either; a PATTERN here across an audit range is the real signal): "
+              f"{', '.join(retried)}")
     if fails:
         print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
     if timeouts:
-        print(f"TIMED OUT, NOT PROVEN A REAL FAILURE (ruff/mypy clean, pytest alone hung — "
+        print(f"TIMED OUT TWICE IN A ROW, NOT PROVEN A REAL FAILURE (ruff/mypy clean, "
+              f"pytest hung on both the first attempt and an immediate retry — "
               f"see the DB-contention negative control): {', '.join(timeouts)}")
     if not fails and not timeouts:
         print("NONE would have been refused — no false positives against real, "
