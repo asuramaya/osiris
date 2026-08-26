@@ -2269,8 +2269,13 @@ async def launch_seat(
     persistent window — it is RE-SUMMONABLE, not unreachable: dispatch_dm's own resume lane
     wakes the same session again on the next mail, so a standing window here would be a
     SECOND mechanism doing a job dispatch_dm's resume lane already does (38c71544's shape).
-    Whether `osiris launch` should ALSO offer a persistent resumed window is a real,
-    separate policy fork, named as thread (owner=operator) rather than decided here.
+    Whether `osiris launch` should ALSO offer a persistent resumed window was once an open
+    fork (thread 65d8846a) — RESOLVED, not left dangling: decision 696d302c named "the
+    launch window is a property of launch, not a per-launch question" as the general rule
+    for this whole class of recurring coordinator decisions, and this branch already lives
+    that rule (window shape is DERIVED from `_lineage_resume_candidate`, never asked of a
+    human per call). No persistent-resumed-window lane is being added on top of it; asking
+    would reintroduce exactly the per-launch human judgment the ruling retired.
     `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for this branch's tests,
     parallel to `spawn`/`agents_json`/`cost_reader` above.
 
