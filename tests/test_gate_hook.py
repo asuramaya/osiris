@@ -359,6 +359,98 @@ def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
     assert _status_word(ok, msg) == "TIMEOUT"
 
 
+# --- run_gates: the f1f8ad62 tolerance remedy — retry-once-on-timeout, never blindness --------
+
+def test_run_gates_retries_once_on_timeout_and_reports_it_distinctly(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """A single timeout is not proof of a real problem (f1f8ad62, ruling f61cad1b) — but a
+    pass that only happened on retry must NEVER read the same as a clean first-try "ok"."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "tests/test_a.py")
+    calls: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "1 passed"
+        stderr = ""
+
+    def _first_times_out_then_passes(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        calls.append("call")
+        if len(calls) == 1:
+            raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+        return _FakeProc()
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _first_times_out_then_passes)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert len(calls) == 2  # the retry actually ran a second attempt, not a no-op
+    assert ok is True
+    assert msg.startswith("PASSED ON RETRY")  # never folded into a plain "ok"
+    assert "timed out" in msg
+    assert "second attempt" in msg
+    assert _status_word(ok, msg) == "PASSED-ON-RETRY"
+
+
+def test_run_gates_timing_out_twice_still_refuses_unconditionally(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The retry is a SINGLE extra chance, not infinite tolerance — two timeouts in a row is
+    a stronger signal than one and must still refuse (never becomes blindness)."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "tests/test_a.py")
+    calls: list[str] = []
+
+    def _always_times_out(cmd: list[str], **kwargs: Any) -> None:
+        calls.append("call")
+        raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _always_times_out)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert len(calls) == 2  # exactly one retry, never a loop
+    assert ok is False
+    assert msg.startswith("TIMED OUT TWICE")
+    assert "tolerance exhausted" in msg
+    assert _status_word(ok, msg) == "TIMEOUT"
+
+
+def test_run_gates_a_retry_that_reveals_a_real_failure_is_not_swallowed(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The retry exists ONLY for a timeout — if the second attempt runs to completion but
+    fails for real, that is a genuine FAILED, never quietly treated as tolerated."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    _write(tmp_path, "tests/test_a.py")
+    calls: list[str] = []
+
+    class _FakeFailedProc:
+        returncode = 1
+        stdout = "1 failed, 2 passed"
+        stderr = ""
+
+    def _first_times_out_then_fails(cmd: list[str], **kwargs: Any) -> _FakeFailedProc:
+        calls.append("call")
+        if len(calls) == 1:
+            raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+        return _FakeFailedProc()
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _first_times_out_then_fails)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert len(calls) == 2
+    assert ok is False
+    assert not msg.startswith("PASSED ON RETRY")
+    assert "unchanged after an immediate retry" in msg
+    assert _status_word(ok, msg) == "FAILED"
+
+
+def test_status_word_never_folds_a_retried_pass_into_a_plain_ok() -> None:
+    assert _status_word(
+        True, "PASSED ON RETRY — timed out after 180s on the first attempt, then passed "
+        "clean on an immediate second attempt") == "PASSED-ON-RETRY"
+
+
 # --- _report: a skip is UNVERIFIED, never folded into plain PASS (Thoth DM 2957) --------------
 
 def test_report_marks_a_skip_as_unverified_not_pass(capsys: Any) -> None:
@@ -383,6 +475,20 @@ def test_report_a_genuine_clean_run_says_plain_pass(capsys: Any) -> None:
     out = capsys.readouterr().out
     assert all_ok is True
     assert out.splitlines()[0] == "gate_hook[test]: PASS"
+
+
+def test_report_marks_a_retried_pass_distinctly_not_a_plain_pass(capsys: Any) -> None:
+    results = {
+        "ruff": (True, ""), "mypy": (True, ""),
+        "pytest": (True, "PASSED ON RETRY — timed out after 180s on the first attempt, "
+                          "then passed clean on an immediate second attempt\n1 passed"),
+    }
+    all_ok = gate_hook._report("test", results)
+    out = capsys.readouterr().out
+    assert all_ok is True  # enforcement semantics unchanged -- this never refuses
+    assert "PASSED ON RETRY" in out.splitlines()[0]
+    assert out.splitlines()[0] != "gate_hook[test]: PASS"
+    assert "pytest: PASSED-ON-RETRY" in out
 
 
 # --- obligation a3c71bf5: the omitted-file list must survive the printed tail -----------------
