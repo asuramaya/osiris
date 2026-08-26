@@ -120,6 +120,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.push_guard import git_common_dir
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # NOT `REPO_ROOT / ".venv" / "bin"` (thread 64c6b197): when this module's own copy is a
 # worktree's (a different tree than the interpreter running it -- worktrees have no
@@ -860,6 +862,38 @@ def cmd_audit(rev_range: str) -> int:
         print("NONE would have been refused — no false positives against real, "
               "genuinely-gated history")
     return 1 if fails or timeouts else 0
+
+
+def hook_status(repo_root: Path = REPO_ROOT) -> str:
+    """Is the pre-commit gate actually installed, and is it the CURRENT tracked version? —
+    #133's own install-verification twin of `push_guard.hook_status`, wired into `osiris
+    deploy`'s report the same way so a MISSING gate hook is exactly as visible as a missing
+    push guard. Deliberately NOT `git config core.hooksPath` (that stays #103's landmine,
+    machine-wide and therefore wrong for this repo's own gate): `install_gate_hook.sh` copies
+    the tracked `.githooks/pre-commit` shim directly into this repo's SHARED `.git/hooks/
+    pre-commit`, repo-scoped by construction, the exact mechanism `install_push_guard_hook.sh`
+    already proved for pre-push. NEVER raises; any read failure is its own honest status
+    string, same fail-open discipline as `push_guard.hook_status`."""
+    common_dir = git_common_dir(repo_root)
+    if common_dir is None:
+        return "gate_hook hook: not a git checkout — nothing to verify"
+    tracked = repo_root / ".githooks" / "pre-commit"
+    installed = common_dir / "hooks" / "pre-commit"
+    if not tracked.is_file():
+        return "gate_hook hook: SOURCE MISSING (.githooks/pre-commit not found in this tree)"
+    if not installed.is_file():
+        return ("gate_hook hook: NOT INSTALLED — run "
+                "scripts/install_gate_hook.sh (commits from any worktree are UNGATED at the "
+                "hook layer until this is fixed; osiris_gate_hook_enforce still governs "
+                "whether an installed hook actually refuses)")
+    try:
+        current = tracked.read_bytes() == installed.read_bytes()
+    except OSError as exc:
+        return f"gate_hook hook: could not compare installed vs. tracked ({exc}) — UNKNOWN"
+    if current:
+        return "gate_hook hook: installed and current"
+    return ("gate_hook hook: STALE — installed copy differs from the tracked source, "
+            "re-run scripts/install_gate_hook.sh")
 
 
 def main(argv: list[str] | None = None) -> int:
