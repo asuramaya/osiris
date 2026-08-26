@@ -52,14 +52,25 @@ async def _collect_until(
     return bytes(buf)
 
 
-async def _await_in_ring(session: PtySession, needle: bytes) -> None:
+async def _await_in_ring(
+    session: PtySession, needle: bytes, *, deadline_secs: float = 2.0,
+) -> None:
     """Attaches, waits for `needle` to appear in the live stream (or is already in the replay),
     detaches. After this returns, `session.attach()`'s replay is guaranteed to contain `needle`
-    too — ring writes happen before fan-out inside `_on_readable`, never after."""
+    too — ring writes happen before fan-out inside `_on_readable`, never after.
+
+    `deadline_secs` (task #197): 2.0s is generous for a single short round trip on a quiet box,
+    but this is a REAL wall-clock bound on REAL subprocess/PTY scheduling — no logic here
+    ever slows it down, only host contention does (this box is shared fleet-wide; other
+    agents' concurrent activity is normal load, not a hypothetical). A caller doing MORE
+    real work per wait (a longer payload, two round trips in one test) has strictly less
+    margin under the same fixed bound than a caller doing less — raise it explicitly for
+    those, never globally, so a bound going slack elsewhere doesn't quietly hide a genuine
+    regression in the common case."""
     replay, queue = session.attach()
     try:
         if needle not in replay:
-            async with asyncio.timeout(2.0):
+            async with asyncio.timeout(deadline_secs):
                 await _collect_until(queue, lambda buf: needle in buf)
     finally:
         session.detach(queue)
@@ -199,7 +210,11 @@ async def test_poke_types_one_bracketed_message_and_submits() -> None:
     try:
         await _await_in_ring(session, b"ready")
         session.poke("new mail waiting\ninbox() and settle it")
-        await _await_in_ring(session, b"settle it")
+        # task #197: this test's own second wait is the heaviest _await_in_ring call in
+        # this file — a longer payload AND the second of two round trips in one test, so
+        # under real host contention it has the least margin of any sibling still using
+        # the 2.0s default. Widened, not the shared default (see that param's own doc).
+        await _await_in_ring(session, b"settle it", deadline_secs=5.0)
         replay, queue = session.attach()
         try:
             # the echo renders ESC as caret notation (^[), so match the marker's tail —

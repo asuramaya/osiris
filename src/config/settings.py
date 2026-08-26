@@ -305,20 +305,40 @@ class Settings(BaseSettings):
     # `src.orchestrator.chaos.chaos_replay` as an additional gate after its own ordinary
     # graceful restart — see cmd_deploy's own docstring for exactly what it checks.
     osiris_deploy_chaos_gate: bool = False
-    # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25): OFF by
-    # default, same law as osiris_deploy_chaos_gate beside it — a mechanism that spins its
-    # own pg testcontainer earns its own kill switch. Two live incidents the same night this
-    # was dispatched: a branch's own scoped gate was green, merged onto main the SAME suite
-    # failed 6 tests for a ModuleNotFoundError the branch's own deletion caused (#187's own
-    # followup, commit c3f9f7d); a clean git auto-merge of two branches both touching
-    # capture.py was only PROVEN correct by re-running the suite on the MERGED result.
-    # Neither incident was a daemon-crash-resilience gap — osiris_deploy_chaos_gate would
-    # not have caught either one. gate_hook.py's own pytest is DELIBERATELY scoped to each
-    # commit's own resolved test files (its own docstring: a full 209s run per commit is
-    # unshippable under 4-agent concurrency) — nothing anywhere runs the full suite against
-    # what a merge actually produces. When on, `osiris deploy` runs the full suite (`pytest
-    # -q -n 4`, the same bounded worker cap gate_hook.py's own scoped runs use, never `-n
-    # auto`) against `repo_root` as an additional precondition gate, before the chaos gate.
+    # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25). Two live
+    # incidents the same night this was dispatched: a branch's own scoped gate was green,
+    # merged onto main the SAME suite failed 6 tests for a ModuleNotFoundError the branch's
+    # own deletion caused (#187's own followup, commit c3f9f7d); a clean git auto-merge of
+    # two branches both touching capture.py was only PROVEN correct by re-running the suite
+    # on the MERGED result. Neither incident was a daemon-crash-resilience gap —
+    # osiris_deploy_chaos_gate would not have caught either one. gate_hook.py's own pytest
+    # is DELIBERATELY scoped to each commit's own resolved test files (its own docstring: a
+    # full 209s run per commit is unshippable under 4-agent concurrency) — nothing anywhere
+    # runs the full suite against what a merge actually produces. When on, `osiris deploy`
+    # runs the full suite (`pytest -q -n 4`, the same bounded worker cap gate_hook.py's own
+    # scoped runs use, never `-n auto`) against `repo_root` as an additional precondition
+    # gate, before the chaos gate.
+    #
+    # STILL OFF BY DEFAULT (task #197, Thoth DM 5667, 2026-08-26) — NOT the same shape as
+    # osiris_gate_hook_enforce's own later arming (that flag gates a cheap boolean refusal;
+    # this one, on, makes ~159 OTHER cmd_deploy tests in test_cli.py that never inject their
+    # own `full_suite_gate` fake start spawning a REAL nested pytest subprocess apiece —
+    # flipping the source default here is a test-suite-architecture change, not a policy
+    # one, and out of this dispatch's scope. The two -n4 concurrency flakes this gate's own
+    # dry-run surfaced were root-caused and fixed: (1) compositions.py's `select` op carried
+    # no ORDER BY at all, so row order was whatever the query planner's physical scan
+    # happened to produce — usually insertion order on a quiet box, but never guaranteed,
+    # and a shared-container-under-real-load plan legitimately returned rows out of order,
+    # which every downstream group/table op silently inherited as meaningful. Fixed: `ORDER
+    # BY created_at, id`. (2) test_pty_broker.py's poke test shares its 2.0s wait bound with
+    # 16 other call sites in the same file, but does the MOST real PTY round-trip work of
+    # any of them (two sequential waits, the longer of the two payloads) — the same bound
+    # that is generous for its siblings has the least margin here, under host contention
+    # that is normal fleet load, not a hypothetical (this box runs concurrent agent sessions
+    # as a matter of course). Fixed: widened only this call's own bound (5.0s), not the
+    # shared default. Neither was a mechanism this gate itself was ever expected to see —
+    # the gate flagged them running its own baseline suite, which was doing its job. Arming
+    # (env var, at actual deploy time) is the coordinator's own call, not this commit's.
     osiris_deploy_full_suite_gate: bool = False
     # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
     # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
