@@ -5836,6 +5836,16 @@ async def record_decision(
         bears_on_receipt.append({"ref": ref, "matched": "true", "id": str(bid)[:8],
                                  "summary": bsumm or ""})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
+    repo_defaulted = False
+    if not repo:
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix):
+        # open_thread's wrapper already falls back to the mounted identity's project when
+        # none is given; this door had no equivalent, so a decision written without repo=
+        # landed unlinked even when the caller's own identity named a project. Default,
+        # never refuse; honestly unlinked when identity offers none.
+        ident = await _ident_for(ctx)
+        repo = ident.project if ident else None
+        repo_defaulted = repo is not None
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
     # existing decision, run here FIRST so the receipt can show what a hit is about to
@@ -5860,6 +5870,12 @@ async def record_decision(
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
     out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    if repo_defaulted:
+        out["repo_defaulted"] = {
+            "to": repo,
+            "why": "no repo given — defaulted to the caller's own project rather than "
+                   "left unlinked (orphan-door fix, msg 5703/5720)",
+        }
     # CONTENT-LANDED, MEASURED NOT INFERRED (task #149, thread 20145def): a READ-BACK, not
     # a guess from the pre-write dup-check below — that check can only ever say WHICH
     # object a call landed on, never whether THIS call's own rationale/protocol actually
@@ -6181,6 +6197,15 @@ async def ingest_reference(
     for c in cites or []:
         rid = await _resolve(pool, c)
         (cids.append(rid) if rid is not None else missing.append(c))
+    repo_defaulted = False
+    if not repo:
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix):
+        # open_thread's wrapper already falls back to the mounted identity's project when
+        # none is given; this door had no equivalent. Default, never refuse; honestly
+        # unlinked when identity offers none.
+        ident = await _ident_for(ctx)
+        repo = ident.project if ident else None
+        repo_defaulted = repo is not None
     try:
         ref, canon = await capture.ingest_reference(
             Actions(pool), title, source_url=source_url, vendor=vendor,
@@ -6191,6 +6216,12 @@ async def ingest_reference(
         return {"error": str(e)}
     out: dict[str, Any] = {"id": str(ref), "canonical": canon,
                            "note": "cite it: record_decision(..., grounds=['" + canon + "'])"}
+    if repo_defaulted:
+        out["repo_defaulted"] = {
+            "to": repo,
+            "why": "no repo given — defaulted to the caller's own project rather than "
+                   "left unlinked (orphan-door fix, msg 5703/5720)",
+        }
     if missing:
         out["unresolved_cites"] = missing
         out["cites_note"] = ("unresolved cites SKIPPED — ingest_reference each cited work "
@@ -7063,10 +7094,20 @@ async def settle(
         is_handoff = bool(item.pop("is_handoff", False))
         summary = item.pop("summary")
         resolves_arg = item.get("resolves")
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix): the
+        # identity-default lives in the MCP record_decision wrapper, not in
+        # capture.record_decision itself — this bulk loop calls capture directly and
+        # bypassed it entirely. Default here too, never refuse; honestly unlinked when
+        # identity offers no project.
+        item_repo = item.pop("repo", None)
+        repo_defaulted = False
+        if not item_repo:
+            item_repo = ident.project
+            repo_defaulted = item_repo is not None
         try:
             did = await capture.record_decision(
                 Actions(pool), summary, kind=item.pop("kind", "ruling"),
-                rationale=item.pop("rationale", None), repo=item.pop("repo", None),
+                rationale=item.pop("rationale", None), repo=item_repo,
                 resolves=item.pop("resolves", None), source=actor)
         except ValueError as e:
             rejected.append({"kind": "decision", "summary": summary, "error": str(e)})
@@ -7074,7 +7115,14 @@ async def settle(
         if is_handoff:
             await Actions(pool).assert_property(did, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
-        accepted["decisions"].append({"id": str(did)[:8], "is_handoff": is_handoff})
+        decision_entry = {"id": str(did)[:8], "is_handoff": is_handoff}
+        if repo_defaulted:
+            decision_entry["repo_defaulted"] = {
+                "to": item_repo,
+                "why": "no repo given — defaulted to the caller's own project rather "
+                       "than left unlinked (orphan-door fix, msg 5703/5720)",
+            }
+        accepted["decisions"].append(decision_entry)
         for ref in (resolves_arg if isinstance(resolves_arg, list) else
                     [resolves_arg] if resolves_arg else []):
             tid = await capture._find_thread(pool, ref, require_identifier=True)
@@ -7086,9 +7134,19 @@ async def settle(
         summary = item.pop("summary")
         thread_kind = item.pop("kind", None)
         thread_owner = item.pop("owner", None)
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix): the
+        # repo identity-default lives in the MCP open_thread wrapper, not in
+        # capture.open_thread itself — this bulk loop calls capture directly and bypassed
+        # it entirely (unlike the owner default, which DOES live in capture.open_thread
+        # and so already applied here for free). Default here too, never refuse.
+        thread_repo = item.pop("repo", None)
+        repo_defaulted = False
+        if not thread_repo:
+            thread_repo = ident.project
+            repo_defaulted = thread_repo is not None
         try:
             tid = await capture.open_thread(
-                Actions(pool), summary, repo=item.pop("repo", None),
+                Actions(pool), summary, repo=thread_repo,
                 kind=thread_kind, owner=thread_owner, source=actor)
         except ValueError as e:
             rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
@@ -7097,6 +7155,12 @@ async def settle(
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
         thread_entry = {"id": str(tid)[:8], "is_handoff": is_handoff}
+        if repo_defaulted:
+            thread_entry["repo_defaulted"] = {
+                "to": thread_repo,
+                "why": "no repo given — defaulted to the caller's own project rather "
+                       "than left unlinked (orphan-door fix, msg 5703/5720)",
+            }
         # settle()'s own threads_open is the SECOND live door onto capture.open_thread
         # (#5546 item 3, Thoth msg 5605 — "one door, two callers, same shape"): the
         # DEFAULT-NEVER-REFUSE behavior for kind='obligation' lives once, in

@@ -3453,6 +3453,133 @@ async def test_ingest_reference_tool_refuses_a_path_shaped_repo(actions: Actions
         "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
 
 
+# --- repo identity-default (msg 5703/5720, orphan-door fix): open_thread's wrapper
+# already fell back to the mounted identity's own project when none was given;
+# record_decision and ingest_reference had no equivalent — the door that produced most
+# of the fleet's orphaned Decisions/References. Same shape as #5546 item 1's owner
+# default, applied to repo/in_repo instead. --------------------------------------------
+
+
+async def test_record_decision_tool_defaults_repo_to_the_callers_own_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:repodefault1", session="repodefault1", project="repodefaultproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.record_decision(
+            "a decision written with no repo=, filed by identity instead", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "repodefaultproj",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND d.type='Decision' "
+        "AND p.canonical='repo:repodefaultproj'")
+    assert linked == 1
+
+
+async def test_record_decision_tool_never_defaults_repo_when_explicitly_given(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:repodefault2", session="repodefault2", project="repodefaultproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.record_decision(
+            "a decision written with an explicit repo=, identity never consulted",
+            repo="explicitproj", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "repo_defaulted" not in out
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND d.type='Decision' "
+        "AND p.canonical='repo:explicitproj'")
+    assert linked == 1
+
+
+async def test_record_decision_tool_stays_unlinked_when_identity_offers_no_project(
+    actions: Actions,
+) -> None:
+    """No mounted identity at all — never refuse, just honestly unlinked."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "a decision with no repo= and no mounted identity to default from")
+    finally:
+        srv._pool = saved_pool
+    assert "repo_defaulted" not in out
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+
+
+async def test_ingest_reference_tool_defaults_repo_to_the_callers_own_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:refdefault1", session="refdefault1", project="refdefaultproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.ingest_reference(
+            "a reference ingested with no repo=, filed by identity instead", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "refdefaultproj",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects r ON r.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND r.type='Reference' "
+        "AND p.canonical='repo:refdefaultproj'")
+    assert linked == 1
+
+
 # --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
 
 async def test_open_thread_with_assignee_stamps_the_owner_property(actions: Actions) -> None:

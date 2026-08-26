@@ -414,6 +414,50 @@ async def test_settle_threads_open_defaults_an_ownerless_obligation_and_names_it
     assert entry["owner_defaulted"]["to"] == "Settledefault"
 
 
+async def test_settle_bulk_loops_default_repo_to_the_callers_own_project(
+    actions: Actions,
+) -> None:
+    """The repo identity-default lives in the MCP record_decision/open_thread wrappers,
+    not in capture.record_decision/capture.open_thread themselves — settle's own bulk
+    decisions/threads_open loops call capture directly and would otherwise bypass it
+    entirely (msg 5703/5720, orphan-door fix). Both loops must default and name it."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:settlerepo1", session="settlerepo1", project="settlerepoproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settle's decision, no repo given, filed by identity"}],
+            threads_open=[{"summary": "settle's thread, no repo given, filed by identity"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    d_entry = out["accepted"]["decisions"][0]
+    t_entry = out["accepted"]["threads_opened"][0]
+    assert d_entry["repo_defaulted"]["to"] == "settlerepoproj"
+    assert t_entry["repo_defaulted"]["to"] == "settlerepoproj"
+    d_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND d.type='Decision' "
+        "AND p.canonical='repo:settlerepoproj'")
+    t_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND t.type='Thread' "
+        "AND p.canonical='repo:settlerepoproj'")
+    assert d_linked == 1 and t_linked == 1
+
+
 async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
     actions: Actions,
 ) -> None:
@@ -473,11 +517,15 @@ async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Thread'") == 1
     # ...and the bad one genuinely never landed — no Decision, no bogus SoftwareProject
+    # minted from ITS path-shaped repo (the good sibling's own repo= now legitimately
+    # defaults to the mounted identity's project, "settleproj" — the orphan-door fix;
+    # that is a real, expected link, not the bug this assertion guards against)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' "
         "AND value #>> '{}' = $1", bad_summary) == 0
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical ILIKE '%ballgem%'") == 0
 
 
 async def test_settle_tool_rejects_a_bad_repo_thread_without_sinking_the_dump(
@@ -527,8 +575,11 @@ async def test_settle_tool_rejects_a_bad_repo_thread_without_sinking_the_dump(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' "
         "AND value #>> '{}' = $1", bad_summary) == 0
+    # the good sibling's own repo= now legitimately defaults to "settleproj" (the
+    # orphan-door fix) — only the bad path-shaped repo must never mint a project
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical ILIKE '%ballgem%'") == 0
 
 
 async def test_settle_tool_resolve_thread_item_reports_a_miss_without_erroring(
@@ -1238,12 +1289,14 @@ async def test_retire_handoff_backlog_keeps_newest_per_root_and_leaves_others_al
 
     older = await _settle_as(
         actions.pool, "agent:backlogfleet",
-        decisions=[{"summary": "backlogfleet's older state of the board", "kind": "choice",
+        decisions=[{"summary": "backlogfleet reports the browse surface shipped and "
+                              "the counts endpoint is deployed", "kind": "choice",
                    "is_handoff": True}])
     older_id = older["accepted"]["decisions"][0]["id"]
     newer = await _settle_as(
         actions.pool, "agent:backlogfleet",
-        decisions=[{"summary": "backlogfleet's newer state of the board", "kind": "choice",
+        decisions=[{"summary": "backlogfleet reports the project index landed and "
+                              "load-more wiring is pending merge", "kind": "choice",
                    "is_handoff": True}])
     newer_id = newer["accepted"]["decisions"][0]["id"]
 
@@ -2002,8 +2055,13 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["complete"] is True, out          # never gated by the coherence check
+    # the thread's own repo= was never given, so it now legitimately defaults to the
+    # mounted identity's own project, "redmonth" (the orphan-door fix) — alongside the
+    # decision's explicit, deliberately mismatched "ballgem"; the mismatch this test is
+    # about is still visible and still marks `coherent: False`
     assert out["identity_coherence"] == {
-        "filed_under": "redmonth", "writes_went_to": ["ballgem"], "coherent": False}
+        "filed_under": "redmonth", "writes_went_to": ["ballgem", "redmonth"],
+        "coherent": False}
     assert "John XVI" in out["note"]
 
 
