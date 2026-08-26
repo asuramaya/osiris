@@ -30,6 +30,10 @@ Environment=REDIS_URL=redis://127.0.0.1:6396/0
 Environment=OSIRIS_WORKER_ROLE=primary
 Environment=OSIRIS_PHANTOM_HEAL_ENABLED=1
 Environment=OSIRIS_TREE_INGEST_ALARM_ENABLED=1
+# ARMED BY THE OPERATOR 2026-08-26: the phantom/fold auto-reaper (#185 leg e, Sekhmet
+# d2158a94). Dry-run/execute two-phase, DARK/BLIND/OVER_CAP/ACTS state machine, re-reads
+# its tray fresh every tick, 15-min cron. Cold-by-default in source; armed here.
+Environment=OSIRIS_PHANTOM_FOLD_REAP_ENABLED=1
 Environment=OSIRIS_SENSE_SESSIONS=%h/.claude/projects
 # thread 5cd49217: embed_pass has timed out on its FIRST attempt after every worker restart
 # visible in journalctl, then latches closed for that process's whole life (task #149's own
