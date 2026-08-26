@@ -485,3 +485,77 @@ async def test_wall_items_carry_arc_only_when_declared(actions: Actions) -> None
     by_summary = {t["summary"]: t for t in wall}
     assert by_summary["a thread with a named arc"]["arc"] == "Token-Cost"
     assert "arc" not in by_summary["a thread with no arc at all"]
+
+
+# --- reader_identity_set: the seat-handle gap in whose_move (#185 leg (a)) ------------------
+# orient() and automount()/whisper each hand-rolled `{agent_id, project}` as the ranking
+# reader's identity — never the seat's own HANDLE. A charter obligation filed
+# owner='<handle>' (the natural way to self-declare "whose move is this") never ranked as
+# MINE at either call site: a bare handle matches neither an agent id nor a project name.
+
+async def test_reader_identity_set_folds_in_the_seats_own_handle(actions: Actions) -> None:
+    from src.orchestrator.compositions import reader_identity_set
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="maat", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:maat0001")
+
+    me = await reader_identity_set(actions.pool, agent_id="agent:maat0001", project="kast")
+    assert me == frozenset({"agent:maat0001", "kast", "maat"})
+
+
+async def test_reader_identity_set_degrades_to_the_base_pair_when_unseated(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.compositions import reader_identity_set
+
+    me = await reader_identity_set(actions.pool, agent_id="agent:unseated0001", project="kast")
+    assert me == frozenset({"agent:unseated0001", "kast"})
+
+
+async def test_reader_identity_set_with_no_agent_is_just_the_project(actions: Actions) -> None:
+    from src.orchestrator.compositions import reader_identity_set
+
+    me = await reader_identity_set(actions.pool, agent_id=None, project="kast")
+    assert me == frozenset({"kast"})
+
+
+async def test_a_charter_obligation_owned_by_a_bare_handle_ranks_as_mine(
+    actions: Actions,
+) -> None:
+    """The end-to-end case this whole leg exists for: an obligation filed
+    owner='maat' (a self-declared-charter nudge, #185's own shape) ranks ABOVE an
+    unrelated operator-owned item once the reader's identity set carries maat's handle —
+    exactly what whisper/orient now compute via reader_identity_set."""
+    from src.orchestrator.compositions import reader_identity_set
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="maat", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:maat0002")
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:kast", "session")
+    await open_thread(actions, "an unrelated operator blocker", repo="kast",
+                      kind="obligation", owner="operator", source="agent:me")
+    await open_thread(actions, "maat's own undeclared charter nudge", repo="kast",
+                      kind="obligation", owner="maat", source="agent:me")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    me = await reader_identity_set(actions.pool, agent_id="agent:maat0002", project="kast")
+    shown, _more = rank_open_threads(wall, me)
+    summaries = [t["summary"] for t in shown]
+    assert summaries.index("maat's own undeclared charter nudge") < \
+        summaries.index("an unrelated operator blocker")
+
+
+async def test_whose_move_matches_a_handle_case_insensitively(actions: Actions) -> None:
+    """A handle's stored casing follows whatever claim_name/ensure_seat happened to type;
+    nobody should have to know a seat's exact capitalization for their own obligation to
+    rank as theirs. Exact match stays first (agent:/operator lineage roots need it
+    precise); this is the forgiving fallback for a plain name only."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:casetest", "session")
+    await open_thread(actions, "Ra's charter nudge, filed with capital-R casing",
+                      repo="casetest", kind="obligation", owner="Ra", source="agent:me")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    shown, _more = rank_open_threads(wall, frozenset({"ra"}))  # reader's own handle: lowercase
+    assert shown[0]["owner"] == "Ra"

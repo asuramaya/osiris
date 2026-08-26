@@ -3080,8 +3080,13 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                     "assume that seam's yield has landed in the graph yet."
                 )
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
-    # above another mind's claims and above 'waiting on the human'
-    me = frozenset(x for x in ((ident.agent_id if ident else None), proj) if x)
+    # above another mind's claims and above 'waiting on the human' — ONE AUTHORITY with
+    # automount()/whisper's own identical need (compositions.reader_identity_set, #185 leg
+    # (a)): folds in the seat's own HANDLE too, not just agent_id/project, so a charter
+    # obligation filed owner='<handle>' ranks as mine here exactly as it does at whisper.
+    from src.orchestrator.compositions import reader_identity_set
+    me = await reader_identity_set(
+        pool, agent_id=(ident.agent_id if ident else None), project=proj)
     scoped = await _project_briefing(pool, proj, me=me, verbose=verbose) if proj else None
     if scoped is not None:
         fleet_open = await pool.fetchval(
