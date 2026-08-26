@@ -1894,6 +1894,9 @@ async def cmd_deploy(
         from scripts.push_guard import hook_status
         print(hook_status(root))
 
+        from scripts.gate_hook import hook_status as gate_hook_status
+        print(gate_hook_status(root))
+
         return 1 if fails else 0
     finally:
         if owns_pool:
