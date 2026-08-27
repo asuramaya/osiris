@@ -10,6 +10,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -740,6 +741,70 @@ async def test_the_office_crowns_at_the_first_act_never_the_greeting(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
         "AND canonical='agent:9ce57000'") == 0
+
+
+async def test_office_seat_no_longer_refuses_on_a_fresh_but_bodiless_mount_row(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ATLAS SHAPE (door census item 3, obligation 555d5eb6/164fc26c, Thoth msg
+    5772/5741, thread 2c3c2b9a): a fresh/refreshing agent_mounts row used to be enough,
+    alone, to call a lineage 'alive' and refuse the office-birth mint — even when
+    registry_census confirms NO body actually backs it. Cross-checked now: an unconfirmed
+    fresh row no longer blocks a genuinely free office-claim."""
+    from src.orchestrator.handshake import office_seat
+    from src.orchestrator.mounts import save_mount
+
+    offices = tmp_path / "seats"
+    office = offices / "haunt"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:haunt001", "agent:haunt001")
+    await actions.assert_property(o, "handle", "Haunt", "agent:haunt001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    # a FRESH row (registry_census's own default caller would confirm this is empty —
+    # no real harness process backs "agent:haunt001", the exact atlas shape)
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "haunt001"),
+                     agent_id="agent:haunt001", project="haunthouse",
+                     cwd=str(office), model=None, session_key=None)
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    seat = await office_seat(actions, cwd=str(office), office_root=offices,
+                             agents_json=_empty_agents_json)
+    assert seat == "agent:haunt001"          # unconfirmed fresh row: the seat is free
+
+
+async def test_office_seat_still_refuses_when_the_fresh_row_is_harness_confirmed(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The other half of the same fix: a fresh row that registry_census DOES confirm still
+    refuses — this cross-check narrows a false positive, it never weakens the genuine
+    halcyon-shape protection (a real live body wrongly displaced)."""
+    from src.orchestrator.handshake import office_seat
+    from src.orchestrator.mounts import save_mount
+
+    offices = tmp_path / "seats"
+    office = offices / "realbody"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:realb001", "agent:realb001")
+    await actions.assert_property(o, "handle", "Realbody", "agent:realb001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    # job_dir's own basename is exactly 8 chars ("realb001") so a fake harness census can
+    # confirm this row (registry_census keys agent_mounts.job_dir's basename against
+    # sessionId[:8]).
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "realb001"),
+                     agent_id="agent:realb001", project="realhouse",
+                     cwd=str(office), model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "realb001-0000-4000-8000-000000000000", "pid": 333,
+                 "cwd": str(office), "name": "[OS] Realbody"}]
+
+    seat = await office_seat(
+        actions, cwd=str(office), office_root=offices, agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: str(office))
+    assert seat is None                       # confirmed live: the seat stays taken
 
 
 async def test_a_stub_at_the_office_is_never_crowned(
