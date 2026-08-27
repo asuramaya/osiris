@@ -361,6 +361,22 @@ async def test_reboot_alarm_opens_one_durable_thread_and_briefs_the_desk(
     assert brief is not None and "aaa" in brief["body"]
 
 
+async def test_reboot_alarm_declares_its_own_repo_gap_honestly(actions: Actions) -> None:
+    """Thoth msg 5858 — the hatch's first real user: this alarm has no ctx and no mounted
+    caller, so it can never satisfy a repo requirement the way a real agent write can. It
+    must DECLARE that gap via unlinked_because rather than land as a silent orphan, and the
+    declaration must survive even while required_link_kinds ships empty (decision b792c039
+    — the gate stays dark; this is an honest confession, not enforcement)."""
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'aaa' was never recorded by `osiris deploy`",
+        running_head="aaa", service="osiris-worker")
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.type = 'Thread' AND a.name = 'unlinked_because' "
+        "AND a.source_id = 'boot:osiris-worker'")
+    assert reason == "service-scoped claim: a deploy-state alarm has no SoftwareProject"
+
+
 async def test_reboot_alarm_names_src_root_in_the_brief_not_the_thread(
     actions: Actions,
 ) -> None:

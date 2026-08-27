@@ -326,6 +326,12 @@ async def alarm_unreviewed_boot(
         "blocked; review what's actually running before trusting it, then run `osiris "
         "deploy` so the ledger and reality agree again.",
         kind="obligation", arc="Fleet-Hygiene", severity="alarm", source=f"boot:{service}",
+        # first real user of the hatch (Thoth msg 5858): this alarm fires with no ctx and
+        # no mounted caller — a claim about the SERVICE's own deploy state, which has no
+        # SoftwareProject to declare. Refusing an alarm because it can't name a repo would
+        # make the write that fires when something has gone wrong the one write the gate
+        # rejects; unlinked_because turns it into a DECLARED gap instead of a silent orphan.
+        unlinked_because="service-scoped claim: a deploy-state alarm has no SoftwareProject",
     )
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(
