@@ -146,11 +146,17 @@ async def bootstrap_project(
     ingested: list[dict[str, Any]] = []
     total = 0
     for fpath, topic, display in log_specs:
-        r = await ingest_log(actions, fpath, topic=f"{project}-{topic}", source=source)
+        # THE PROJECT WAS RIGHT HERE (operator ruling, 2026-08-27, on decision 49231693's
+        # trace of Reference's 37% orphan rate): `proj` was just resolved/created above in
+        # THIS SAME CALL — every log-chunk Reference this loop mints used to be written
+        # with that identity in scope and then discarded it. `repo=project` links each one
+        # `in_repo` at the door instead.
+        r = await ingest_log(actions, fpath, topic=f"{project}-{topic}", source=source,
+                             repo=project)
         total += r["entries"]
         ingested.append({"file": display, "entries": r["entries"], "as": "log"})
     for essay in essays:
-        await ingest_reference_doc(actions, essay)
+        await ingest_reference_doc(actions, essay, repo=project)
         total += 1
         ingested.append({"file": _essay_display(essay), "entries": 1, "as": "doc"})
 

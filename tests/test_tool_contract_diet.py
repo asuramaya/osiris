@@ -643,7 +643,13 @@ def _tool_chars(t: Any) -> int:
 # number was correct at the merged tip, because neither branch could see the other's tools.
 # Taking the larger would have been a guess that happened to be too small. Re-measure at
 # the merged tip is the rule precisely because two honest raises still don't compose.
-TOOL_CONTRACT_CEILING_CHARS = 191_800
+# 191,800 -> 192,981 (measured exact). 137 -> 138 tools (2026-08-27, Khnum, decision
+# 49231693/operator ruling on the Reference-orphan trace): backfill_bootstrap_orphan_
+# references — a genuinely NEW repair verb (the bootstrap_project door-gap's historical-
+# damage half), same shape as unwire_informs_fanout's own repair door. Docstring trimmed
+# under the category rule first (1,840 -> 1,451 chars for the tool itself); the remaining
+# growth is the verb existing at all, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 192_981
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -736,6 +742,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     zero-callers until now), ingest_project + ingest_project_third_party (self-service and
     coordinator forms, same authority shape as reconcile_seat_identity's own pair).
     131 -> 132 (2026-08-19, Sekhmet, dispatch 5398 leg 2, ruling 94c2e7e8/b3ccd3f6): stop —
-    launch()'s process-lifecycle inverse, #156's own held half, finally ships."""
+    launch()'s process-lifecycle inverse, #156's own held half, finally ships.
+    137 -> 138 (2026-08-27, Khnum, decision 49231693/operator ruling): backfill_bootstrap_
+    orphan_references — the repair-verb half of the bootstrap_project door-gap fix (see
+    the ceiling's own changelog above for the full account)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 137
+    assert len(per_tool) == 138
