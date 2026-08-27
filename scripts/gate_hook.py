@@ -118,6 +118,7 @@ import hashlib
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from scripts.push_guard import git_common_dir
@@ -319,6 +320,25 @@ _RATCHET_TEST_NODEID = (
 )
 
 
+
+def _pytest_env(ambient: Mapping[str, str], extra: dict[str, str]) -> dict[str, str]:
+    """The gate's pytest subprocess env, with git's per-hook variables REMOVED.
+
+    See the block comment at the pytest spawn site for the incident this exists for.
+    Short version: git exports GIT_DIR/GIT_INDEX_FILE (absolute) into hooks it runs from a
+    linked worktree, GIT_DIR overrides repository discovery for every descendant process,
+    and `git -C <dir>` does NOT rescope it -- so correctly-written test fixtures operating
+    on their own throwaway repos silently operate on the real shared one instead.
+
+    Removes the keys outright rather than blanking them: an EMPTY GIT_DIR is not "unset",
+    it is a git directory whose path is the empty string, which fails differently and
+    just as wrongly.
+    """
+    out = {k: v for k, v in ambient.items() if not k.startswith("GIT_")}
+    out.update(extra)
+    return out
+
+
 def _is_merge_context(repo_root: Path) -> bool:
     """True for the commit-about-to-land in TWO cases: (1) live pre-commit, mid `git merge`
     — `MERGE_HEAD` exists from the moment a merge starts conflict-free until the merge
@@ -501,12 +521,31 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         test_files = sorted(selected)
         env = dict(**{"TMPDIR": "/var/tmp/osiris-scratch"})
 
+        # SCRUB GIT_* BEFORE SPAWNING PYTEST -- the 2026-08-27 shared-repo corruption
+        # incident (obligations 3da2dca9 / fdb04d23 / a35c042f, three workers independently).
+        # git EXPORTS GIT_DIR and GIT_INDEX_FILE (both ABSOLUTE) into every hook it runs FROM
+        # A LINKED WORKTREE -- and this gate runs as a pre-commit hook, in worktrees, on every
+        # commit. Those variables are inherited by the whole subprocess tree, and GIT_DIR
+        # OVERRIDES REPOSITORY DISCOVERY ENTIRELY: `git -C /some/tmp/repo config user.email x`
+        # writes to the REAL repo pointed at by GIT_DIR, not to /some/tmp/repo. `-C` chdirs;
+        # it does NOT rescope the git directory. So every test fixture that builds its own
+        # throwaway repo -- all of them correctly written, all of them `-C`-scoped -- was
+        # operating on the fleet's shared repository instead. Observed damage: user.name/
+        # user.email overwritten to test/test@test (mis-attributing real commits fleet-wide),
+        # worktree HEADs repointed to a fabricated orphan branch `stray-history`, a fixture's
+        # own `git worktree add` registered in the real repo's worktree list, and core.bare
+        # set true on the main checkout (which makes `git status` refuse outright).
+        # Scrubbing the whole GIT_* namespace rather than a denylist is deliberate: the vars
+        # that redirect discovery are exactly the ones git adds to over time, and a test that
+        # genuinely needs git state sets it explicitly per-subprocess, so nothing legitimate
+        # depends on inheriting ours. THE FIXTURES WERE NEVER WRONG -- the environment was.
+
         def _run_pytest() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 [str(VENV_BIN / "pytest"), *test_files, "-q",
                  "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root,
                 capture_output=True, text=True, check=False,
-                env={**os.environ, **env}, timeout=_PYTEST_TIMEOUT_SECS,
+                env=_pytest_env(os.environ, env), timeout=_PYTEST_TIMEOUT_SECS,
             )
 
         # TOLERANCE, NOT BLINDNESS (f1f8ad62, ruling f61cad1b: the ambient-load limb LEANS
