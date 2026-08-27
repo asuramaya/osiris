@@ -1751,6 +1751,8 @@ async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
                          check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [(actions.pool, tmp_path)]
     assert "deploy ledger: recorded deadbeef" in buf.getvalue()
+    # #189 adoption meter (Thoth msg 5825) prints on every successful deploy, unconditionally
+    assert "adoption189:" in buf.getvalue()
 
 
 async def test_cmd_deploy_never_records_when_the_restart_fails(
