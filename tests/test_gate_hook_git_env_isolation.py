@@ -76,3 +76,37 @@ def test_scrubbed_env_cannot_write_through_to_the_real_repo(tmp_path: Path) -> N
                    env=gate_hook._pytest_env(poisoned, {}), check=True)
     assert _local_email(real) == "real@real", "the real repo was still written through to"
     assert _local_email(iso) == "scrubbed@scrubbed", "the isolated repo missed its own write"
+
+
+def test_no_tests_collected_is_its_own_verdict_not_a_failure(tmp_path: Path) -> None:
+    """pytest exit 5 (NO_TESTS_COLLECTED) must not read as a test failure.
+
+    LIVE SPECIMEN (2026-08-27): a commit touching ONLY tests/conftest.py. conftest is a real
+    file under tests/, so the gate selects it; it declares fixtures and defines no test
+    functions; pytest exits 5; a bare `returncode == 0` refused a clean commit. Found by the
+    gate refusing this file's own companion commit.
+
+    This is run_gates' own documented law one layer down -- it handles "nothing SELECTED"
+    honestly and did not handle "selected, but zero tests in it". Reporting "not run" as
+    "failed" is the mirror of reporting it as "passed", and equally a gate that cannot tell
+    the two apart.
+    """
+    assert gate_hook._PYTEST_EXIT_NO_TESTS_COLLECTED == 5
+
+    # the behaviour that defines the constant, asserted against real pytest, not a mock
+    fixtures_only = tmp_path / "conftest.py"
+    fixtures_only.write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef thing() -> int:\n    return 1\n")
+    done = subprocess.run(
+        [str(gate_hook.VENV_BIN / "pytest"), str(fixtures_only), "-q", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, check=False, cwd=tmp_path)
+    assert done.returncode == gate_hook._PYTEST_EXIT_NO_TESTS_COLLECTED, (
+        f"pytest exit for a fixtures-only file changed: {done.returncode}\n{done.stdout}")
+
+    # NEGATIVE CONTROL: a file with a real test must NOT take the NO-TESTS branch
+    with_a_test = tmp_path / "test_real.py"
+    with_a_test.write_text("def test_ok() -> None:\n    assert True\n")
+    done2 = subprocess.run(
+        [str(gate_hook.VENV_BIN / "pytest"), str(with_a_test), "-q", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, check=False, cwd=tmp_path)
+    assert done2.returncode == 0

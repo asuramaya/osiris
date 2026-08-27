@@ -349,6 +349,34 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
 
 
 @pytest.fixture(autouse=True)
+def _no_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits git's per-invocation GIT_* variables. Defence in depth.
+
+    THE INCIDENT (2026-08-27, ruling 06029cbf): git exports GIT_DIR and GIT_INDEX_FILE,
+    both ABSOLUTE, into every hook it runs FROM A LINKED WORKTREE. The pre-commit gate runs
+    in worktrees and spawned pytest with the ambient environment. GIT_DIR overrides
+    repository discovery for the whole subprocess tree, and `git -C <dir>` does NOT rescope
+    it -- `-C` chdirs, nothing more. So every fixture in this suite that builds its own
+    throwaway repo, all of them correctly `-C`-scoped, was writing into the fleet's SHARED
+    repository: identity overwritten to test/test@test, HEADs repointed to a fabricated
+    orphan branch, core.bare set on the main checkout, and both installed hooks replaced
+    with stubs -- which disarmed the gate and push_guard fleet-wide, silently.
+
+    scripts/gate_hook.py:_pytest_env() is the choke point and closes that path. THIS is the
+    belt to its braces, and it covers what the choke point cannot: the suite run any OTHER
+    way under a poisoned environment -- a bare `pytest` from a shell that has GIT_DIR set,
+    CI wired differently, a future hook that shells out to tests. Every one of those was
+    hypothetical the day before the incident, and so was the incident.
+
+    Deleted, never blanked: an empty GIT_DIR is not "unset", it is a git directory whose
+    path is the empty string, which fails differently and just as wrongly. monkeypatch
+    restores the real environment at teardown, so a test that deliberately sets GIT_* for
+    its own subprocess is unaffected -- this only removes what was INHERITED."""
+    for key in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _strict_schema() -> Iterator[None]:
     """Enforce the semantic layer in CI: any object/link type a test emits that the
     catalog doesn't declare RAISES. Runtime stays warn-only. Flips BOTH the legacy

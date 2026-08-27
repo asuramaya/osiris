@@ -151,6 +151,10 @@ VENV_BIN = Path(sys.executable).parent
 _PYTEST_FANOUT_CAP = 12
 _PYTEST_TIMEOUT_SECS = 180
 
+# pytest's own "no tests were collected" exit status (pytest.ExitCode.NO_TESTS_COLLECTED).
+# NOT a failure -- see the branch that consumes it for the incident that proved it.
+_PYTEST_EXIT_NO_TESTS_COLLECTED = 5
+
 # obligation a3c71bf5: the omitted-files summary is always the FIRST line of a SKIPPED
 # detail (see run_gates above) -- printing a fixed char cap keeps one pathological hub-module
 # fan-out from producing an unreadable wall of text, but the cap must never look like the
@@ -568,7 +572,35 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 proc = _run_pytest()
             ok = proc.returncode == 0
             out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-            if ok and retried:
+            if proc.returncode == _PYTEST_EXIT_NO_TESTS_COLLECTED:
+                # THE SAME DISEASE THIS FUNCTION'S OWN DOCSTRING NAMES, ONE LAYER DOWN.
+                # The "nothing SELECTED" case above is handled honestly. This is "something
+                # was selected, and pytest collected ZERO TESTS FROM IT" -- pytest exits 5,
+                # and a bare `returncode == 0` read it as a FAILURE. It is not: pytest ran
+                # perfectly and had nothing to run. Reporting "not run" as "failed" is the
+                # mirror of reporting it as "passed", and equally a gate that cannot tell
+                # the two apart.
+                # LIVE SPECIMEN (2026-08-27): a commit touching ONLY tests/conftest.py.
+                # conftest is a real file under tests/, so classify_test_files selects it;
+                # it declares fixtures and defines no test functions; pytest exits 5; the
+                # gate refused a clean commit. Any tests/ file with no test functions does
+                # this. Found by the gate refusing this very fix's own companion commit.
+                # `ok` STAYS TRUE, for the identical reason the SKIPPED path gives: a file
+                # with nothing runnable in it is ruff/mypy's business, not grounds to refuse
+                # an otherwise-clean commit. Only the REPORTING changes -- and it gets its
+                # own word, never folded into a plain "ok".
+                ok = True
+                tail = f" (also omitted {omitted})" if omitted else ""
+                results["pytest"] = (
+                    True,
+                    f"NO TESTS — pytest collected zero tests from the "
+                    f"{len(test_files)} selected file(s) [{' '.join(test_files)}]{tail}. "
+                    f"NOT a pass and NOT a failure: nothing ran, because these files "
+                    f"declare no test functions (a conftest, a fixtures module). Coverage "
+                    f"for this change comes from ruff/mypy only — if that is not enough for "
+                    f"what you changed, run the affected tests yourself before merging.\n"
+                    f"{out}")
+            elif ok and retried:
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (
                     True,
