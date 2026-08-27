@@ -1024,6 +1024,44 @@ async def test_wake_gate_preflight_reports_fresh_heir_available_past_the_seam(
     assert "/repo/demo" in d["detail"]
 
 
+async def test_wake_gate_preflight_finds_a_bg_anchor_resume_the_mount_row_misses(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FULCRUM SPECIMEN, live-fire (Alfred, Thoth msg 5852): a `--bg`-launched seat
+    with NO `agent_mounts` row at all for the addressee (the shared-anchor collapse
+    `_lineage_resume_candidate`'s own docstring documents) — `_agent_resumable` reads
+    this as "no anchored transcript at all" (gate='no-anchor'), and the OLD preflight
+    code only ever tried the lineage walk when the mount-keyed gate said 'compaction',
+    so it reported a confident false `resume-refused-no-anchor` here. The graph's own
+    `session` property (succession_chain's shape) still points at a real, uncompacted,
+    resumable transcript — exactly what `launch_seat` (`test_launch_harness_lane_
+    resumes_a_stale_but_resumable_holder`, same fixture) actually resumes. preflight
+    must now agree with launch, not merely echo the narrower mount-keyed miss."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:fulcrum1")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fulcrum1", manager_agent="agent:hm-fulcrum1",
+        worker_handle="Fulcrum-Test", house="osiris")
+    await _office(actions, worker_seat, "/repo/demo")
+    # THE SHARED `--bg` ANCHOR ITSELF: a mount row exists (so wakeable_identity resolves
+    # a living head at all — exactly how a real fulcrum-shaped seat still shows up), but
+    # its job_dir anchors to NOTHING on disk (a stale/overwritten anchor, or a later
+    # session-less generation's own mount) — `_agent_resumable` genuinely reports
+    # 'no anchored transcript at all' for THIS row, while the graph's own `session`
+    # property (set by `_lineage_holder_with_session` above) still points at a real file.
+    await save_mount(actions.pool, job_dir="/x/jobs/stale-anchor-no-file",
+                     agent_id="agent:fulcrum1", project="osiris", cwd="/repo/demo",
+                     model=None, session_key=None)
+
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:fulcrum1", seat_id=worker_seat,
+        settings=_settings(enabled=True, sense=str(sense)))
+    assert d["mode"] == "resumable"
+    assert d["status"] == "resumable"
+    assert "lineage walk" in d["detail"]
+    assert FULL_SID[:8] in d["detail"]
+
+
 async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> None:
     """No agent_mounts row at all — nothing to wait for, ever."""
     d = await trigger_module.wake_gate_preflight(
