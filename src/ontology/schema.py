@@ -395,8 +395,17 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "the module default 'session' or the REST route's 'analyst:operator' still "
              "resolves to SOMETHING rather than leaving the thread edgeless).",
              ("Thread",), ("Agent",)),
-    LinkType("cites", "This document cites / draws from that reference.",
-             ("Reference",), ("Reference",)),
+    LinkType("cites", "This document cites / draws from that reference — OR (task #189's "
+             "derivation lane, decision bb2ddf8a) a Decision/Thread's own prose named "
+             "another object by id ('ruling <id>', 'obligation <id>'), minted at the "
+             "door, SELF_DECLARED (the author typed it). Distinct from `answers` "
+             "(record_decision's `bears_on=`/`resolves=` — settling, Decision->Thread "
+             "only): this is the weaker, general claim that an author's own text merely "
+             "points at another object, on either end. `self_referential` (a property "
+             "on the link itself) marks an author citing their own earlier work, kept "
+             "separate from real cross-author structure.",
+             ("Reference", "Decision", "Thread"),
+             ("Reference", "Decision", "Thread", "Practice", "Superstition")),
     LinkType("informs", "This reference grounds / informs that artifact.",
              ("Reference",), ("SoftwareProject", "Commit")),
     LinkType("mentions", "This object names/references that entity — a decision, thread, "
