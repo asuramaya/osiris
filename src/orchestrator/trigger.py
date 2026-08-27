@@ -1122,10 +1122,22 @@ async def wake_gate_preflight(
     """Answer the FOUR RESUME GATES (compaction/ceiling/no-anchor/crossed-registry)
     BEFORE an attempt, not discovered as a wall after (#156.4, Thoth msg 3823: '#153
     fixed the rendering; this is the query'). Reuses the EXACT functions dispatch_dm's
-    own refusal path already calls (`_agent_resumable`, `_agent_resume_miss_reason`,
+    own refusal path already calls (`_agent_resumable`, `_lineage_resume_candidate`,
     `_resume_guard`, `_gate_name`) — never a second copy of the gate logic, only a
-    read-only entry point into it, so this can never disagree with what a real wake
-    would find.
+    read-only entry point into it.
+
+    THE LINEAGE WALK RUNS UNCONDITIONALLY WHEN THE MOUNT-KEYED LOOKUP MISSES (fixed
+    live-fire defect, Alfred's fulcrum specimen, Thoth msg 5852): a prior version gated
+    the `_lineage_resume_candidate` attempt on the mount-keyed miss reason naming
+    "compaction" specifically, which meant a genuinely EMPTY `agent_mounts` row for a
+    `--bg`-launched seat's current generation (the shared-anchor collapse
+    `_lineage_resume_candidate`'s own docstring documents) reported a confident
+    `resume-refused-no-anchor` even when the lineage walk — the SAME primitive `launch()`
+    always tries — would have found a real, resumable session. Fixed by matching
+    dispatch_dm's actual precedence exactly: the walk is attempted for every mount-keyed
+    miss, and only the FRESH-HEIR MINT decision (never the walk attempt itself) stays
+    scoped to a compaction-specific miss. This is now genuinely faithful to what a real
+    wake would find, not merely documented as such.
 
     SCOPED TO THE RESUME GATES ON PURPOSE, not dispatch_dm's full mail-routing sequence
     (vacant/paused/human-attended/awaiting-operator) — those are each a one-line graph
@@ -1157,40 +1169,66 @@ async def wake_gate_preflight(
                           "deliberate close; the estate carries the mail to the next mint"}
     resume = await _agent_resumable(pool, wake_target, st)
     if resume is None:
-        miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
+        from src.orchestrator.agents import _generation
+        from src.orchestrator.seats import seat_facts
+
+        # THE LINEAGE WALK RUNS UNCONDITIONALLY NOW — live defect, Alfred's fulcrum
+        # specimen (Thoth msg 5852): `_agent_resumable` is agent_mounts-keyed, the exact
+        # shared-anchor blind spot `_lineage_resume_candidate`'s own docstring documents
+        # for a `--bg`-launched seat (one durable per-seat mount row, overwritten by
+        # whichever generation mounts most recently — a genuinely EMPTY row for the
+        # current generation reads as "no anchored transcript at all", not compaction).
+        # The OLD code here gated the walk ATTEMPT itself on `gate == "compaction"`,
+        # conflating "which gate permits minting a fresh heir" (dispatch_dm's own
+        # compaction-only scoping, preserved below) with "whether the walk is worth
+        # trying at all" — dispatch_dm never makes that second conflation: it tries the
+        # walk for EVERY mount-keyed miss reason, unconditionally, and only asks which
+        # gate AFTER the walk itself has also failed. fulcrum's own case (gen 10, a real
+        # 5MB resumable session, 0 hops back) was gate="no-anchor" from the narrow mount
+        # check, so the walk never ran and preflight reported a confident false absence
+        # while `launch()` — which always tries the walk — resumed it correctly.
+        facts = await seat_facts(pool, seat_id) if seat_id is not None else None
+        launch_cwd = (facts["tree_cwd"] or facts["anchor_cwd"]) if facts else None
+        if launch_cwd:
+            graph_outcome = await _lineage_resume_candidate(
+                pool, wake_target, st, repo=launch_cwd)
+            graph_resume = (graph_outcome[0]
+                            if isinstance(graph_outcome, tuple) else None)
+            graph_log = (graph_outcome[1]
+                        if isinstance(graph_outcome, tuple) else graph_outcome)
+            if graph_resume is not None:
+                g_gate, g_refusal = await _resume_guard(
+                    pool, graph_resume, _generation(target)[0], seat_id=seat_id,
+                    st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
+                if g_gate is None:
+                    return {"mode": "resumable", "status": "resumable",
+                            "detail": f"resumable now via the lineage walk — session "
+                                      f"{graph_resume[0][:8]}, no gate refuses it "
+                                      "(the shared-anchor mount row missed it; the "
+                                      "graph did not)"}
+                return {"mode": f"resume-refused-{g_gate}", "status": f"refused-{g_gate}",
+                        "detail": g_refusal}
+            # THE WALK ALSO FOUND NOTHING — the FINAL reported reason is sourced from
+            # its OWN log tail (dispatch_dm's identical precedence), never re-derived
+            # from the earlier, narrower mount-keyed reason: the two must report the
+            # SAME failure for the SAME lineage, or this function is lying about which
+            # primitive it actually consulted last.
+            miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
+        else:
+            # no seat/office known at all — the walk was never attemptable; the mount-
+            # keyed reason is the only one there is to report.
+            miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
         gate = _gate_name(miss_reason)
-        # RESUME / NUDGE / FRESH-HEIR, NEVER A FOURTH WALL (ruling 94c2e7e8, dispatch
-        # 5398 leg 1): `_agent_resumable` is agent_mounts-keyed (the shared-anchor blind
-        # spot this file's own launch_seat/dispatch_dm docstrings already document) — a
-        # compaction miss here does not necessarily mean dispatch_dm's own graph-walked
-        # `_lineage_resume_candidate` agrees, so this checks the SAME primitive a real
-        # wake would, rather than reporting a refusal a real wake would not honor.
-        if gate == "compaction" and seat_id is not None:
-            from src.orchestrator.agents import _generation
-            from src.orchestrator.seats import seat_facts
-            facts = await seat_facts(pool, seat_id)
-            launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
-            if launch_cwd:
-                graph_outcome = await _lineage_resume_candidate(
-                    pool, wake_target, st, repo=launch_cwd)
-                graph_resume = (graph_outcome[0]
-                                if isinstance(graph_outcome, tuple) else None)
-                if graph_resume is not None:
-                    graph_log = graph_outcome[1]
-                    g_gate, g_refusal = await _resume_guard(
-                        pool, graph_resume, _generation(target)[0], seat_id=seat_id,
-                        st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
-                    if g_gate is None:
-                        return {"mode": "resumable", "status": "resumable",
-                                "detail": f"resumable now via the lineage walk — session "
-                                          f"{graph_resume[0][:8]}, no gate refuses it "
-                                          "(the shared-anchor mount row missed it; the "
-                                          "graph did not)"}
-            if facts.get("handle") and facts.get("anchor_cwd"):
-                return {"mode": "fresh-heir-available", "status": "fresh-heir-available",
-                        "detail": f"{miss_reason} — a real wake would boot a fresh "
-                                  f"successor at {facts['anchor_cwd']} instead of "
-                                  "refusing (its graph identity and office both resolve)"}
+        # FRESH-HEIR, SCOPED TO COMPACTION ONLY (ruling 94c2e7e8) — every other gate
+        # (ceiling/no-anchor/crossed-registry/resident-unknown) is a genuine "who this
+        # even is" uncertainty; minting on top of that repeats the stranger-over-a-live-
+        # head class dispatch_dm's own docstring names.
+        if (gate == "compaction" and seat_id is not None and launch_cwd
+                and facts and facts.get("handle") and facts.get("anchor_cwd")):
+            return {"mode": "fresh-heir-available", "status": "fresh-heir-available",
+                    "detail": f"{miss_reason} — a real wake would boot a fresh "
+                              f"successor at {facts['anchor_cwd']} instead of "
+                              "refusing (its graph identity and office both resolve)"}
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
