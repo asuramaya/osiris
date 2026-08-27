@@ -4440,6 +4440,36 @@ async def unwire_informs_fanout(
 
 
 @mcp.tool()
+async def backfill_bootstrap_orphan_references(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the bootstrap_project door-gap (decision 49231693/adde094b,
+    operator ruling 2026-08-27: a doc-splitter's orphans are a defect, not a legitimate
+    category — "something definitely went wrong here"). `ingest_log`/`ingest_reference_
+    doc` now take `repo=`, threaded through by `bootstrap_project` going forward; this
+    repairs the ~105 References already orphaned from before that fix.
+
+    MECHANICAL AND CONSERVATIVE, per the operator's other half of the same ruling: "a
+    derived link that is wrong is worse than an orphan that is honest." Only touches a
+    zero-live-link Reference stamped `source_id='ref:osiris'` (the script's own
+    fingerprint) whose canonical starts `ref:<name>-` for an EXISTING active
+    SoftwareProject — recovering what the canonical already encodes, never inventing a
+    fact. No clean project-name prefix → left alone, reported in `unmatched`, never guessed.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Links land
+    evidence_class DERIVED. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.ingest.reference import (
+        backfill_bootstrap_orphan_references as _backfill_bootstrap_orphan_references,
+    )
+    return await _backfill_bootstrap_orphan_references(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:

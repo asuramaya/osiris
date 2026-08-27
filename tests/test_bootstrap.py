@@ -59,6 +59,33 @@ async def test_bootstrap_migrates_memory_and_registers_project(
     assert (root / "CLAUDE.md").read_text() == _LOG  # NO HANDS: the file is untouched
 
 
+async def test_bootstrap_links_every_ingested_reference_in_repo(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Operator ruling, 2026-08-27, on decision 49231693's trace of Reference's 37%
+    orphan rate: bootstrap_project resolves/creates the SoftwareProject it's onboarding
+    THEN threw that identity away calling ingest_log/ingest_reference_doc with no repo=
+    — a doc only gets migrated because someone was working a project, and that context
+    existed at write time. Every log-chunk Reference AND every essay Reference must now
+    carry a live in_repo edge to the project bootstrap just registered."""
+    root = await _make_project(tmp_path)
+    await bootstrap_project(actions, str(root))
+
+    unlinked_logs = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Reference' "
+        "AND o.canonical LIKE 'ref:sibling-two-history-%' AND NOT EXISTS ("
+        "  SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='in_repo' AND p.canonical='repo:sibling-two')")
+    assert unlinked_logs == 0
+
+    essay_linked = await actions.pool.fetchval(
+        "SELECT 1 FROM objects o JOIN links l ON l.from_id=o.id "
+        "JOIN objects p ON p.id=l.to_id WHERE o.type='Reference' "
+        "AND o.canonical='ref:decept-strategy' AND l.type='in_repo' "
+        "AND p.canonical='repo:sibling-two'")
+    assert essay_linked == 1
+
+
 async def test_bootstrap_stamps_writes_with_the_given_source_not_a_hardcoded_literal(
     actions: Actions, tmp_path: Path
 ) -> None:

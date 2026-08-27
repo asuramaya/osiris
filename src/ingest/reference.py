@@ -22,6 +22,7 @@ from src.actions.core import Actions
 from src.config.settings import get_settings
 from src.db.pool import create_pool
 from src.ingest.redact import redact
+from src.orchestrator.capture import link_repo
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -145,7 +146,7 @@ def _canon_like_sections(text: str) -> list[tuple[str, str]]:
 
 async def ingest_log(
     actions: Actions, path: str, *, topic: str, case_id: uuid.UUID | None = None,
-    source: str = "ref:osiris",
+    source: str = "ref:osiris", repo: str | None = None,
 ) -> dict[str, Any]:
     """Ingest a build log as per-entry `Reference` nodes (canonical
     `ref:<topic>-[<date>-]<title-slug>`), SELF_DECLARED (our own record of our own work).
@@ -156,7 +157,14 @@ async def ingest_log(
     bootstrap_project's own fix (2026-08-03, Thoth's Tier 1 dispatch off the
     silent-authority census, decision 497a066a): every entry used to be stamped
     "ref:osiris" regardless of who actually ran the ingest, so a bad entry could not be
-    traced back to a caller even after the fact."""
+    traced back to a caller even after the fact.
+
+    `repo` links every entry `in_repo` to its project (operator ruling, 2026-08-27: a doc
+    only gets split because someone was working a project and the doc mattered to it —
+    that context exists at call time and must not be thrown away). `bootstrap_project`
+    already resolves the project it's onboarding before calling this; it now passes it
+    through instead of dropping it. Never refuses when omitted (the bare-CLI case still
+    has no project to give)."""
     ec = EvidenceClass.SELF_DECLARED
     conf, now = confidence_for(ec), datetime.now(UTC)
     source_id = source
@@ -175,15 +183,23 @@ async def ingest_log(
         if e["date"]:
             await actions.assert_property(ref, "date", e["date"], source_id, now, conf,
                                           case_id=case_id, evidence_class=ec.value)
+        if repo:
+            await link_repo(actions, ref, repo, now, source=source_id,
+                            evidence_class=ec.value, confidence=conf)
         ids.append(ref)
     return {"entries": len(ids), "topic": topic, "path": path}
 
 
 async def ingest_reference_doc(
-    actions: Actions, path: str, *, case_id: uuid.UUID | None = None
+    actions: Actions, path: str, *, case_id: uuid.UUID | None = None, repo: str | None = None,
 ) -> dict[str, Any]:
     """Ingest one markdown doc as a `Reference` object (canonical `ref:<stem-slug>`),
-    idempotent on the canonical. Vendor → AUTHORITATIVE_API, own → SELF_DECLARED."""
+    idempotent on the canonical. Vendor → AUTHORITATIVE_API, own → SELF_DECLARED.
+
+    `repo` links the doc `in_repo` to its project when the caller has one (operator
+    ruling, 2026-08-27 — same reasoning as `ingest_log`'s own `repo`: an essay only gets
+    ingested because someone was working a project, and that context must not be thrown
+    away at the door). Never refuses when omitted."""
     doc = parse_doc(_read(path))
     vendor = doc.get("vendor", "osiris")
     ec = EvidenceClass.AUTHORITATIVE_API if vendor != "osiris" else EvidenceClass.SELF_DECLARED
@@ -200,17 +216,21 @@ async def ingest_reference_doc(
             prop = "source_url" if name == "source" else name
             await actions.assert_property(ref, prop, value, source_id, now, conf,
                                           case_id=case_id, evidence_class=ec.value)
+    if repo:
+        await link_repo(actions, ref, repo, now, source=source_id,
+                        evidence_class=ec.value, confidence=conf)
     return {"id": ref, "canonical": canon, "title": doc["title"], "vendor": vendor,
             "grounds": doc.get("grounds", "")}
 
 
 async def ingest_reference_dir(
-    actions: Actions, directory: str = "docs/reference", *, case_id: uuid.UUID | None = None
+    actions: Actions, directory: str = "docs/reference", *, case_id: uuid.UUID | None = None,
+    repo: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ingest every markdown doc in a directory (sorted, deterministic)."""
     out = []
     for p in _md_files(directory):
-        out.append(await ingest_reference_doc(actions, p, case_id=case_id))
+        out.append(await ingest_reference_doc(actions, p, case_id=case_id, repo=repo))
     return out
 
 
@@ -364,6 +384,89 @@ async def unwire_informs_fanout(
     report.update({"unwired": unwired, "because": because})
     if skipped:
         report["skipped"] = skipped
+    return report
+
+
+async def backfill_bootstrap_orphan_references(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the bootstrap_project door-gap (decision 49231693, obligation
+    adde094b, operator ruling 2026-08-27 — verbatim: "if a doc splitter or a doc import
+    is acting its because at the time it was related to a project and it was relevant to
+    the graph, so something definitely went wrong here"). `ingest_log`/`ingest_reference_
+    doc` now take `repo=` and `bootstrap_project` now threads it through (this fix landed
+    first) — this verb is ONLY for the ~105 References already on the floor from before
+    that fix shipped.
+
+    MECHANICAL AND CONSERVATIVE ON PURPOSE, per the operator's own other half of the same
+    ruling: "a derived link that is wrong is worse than an orphan that is honest." Touches
+    only a Reference that (a) carries ZERO live links, (b) was written with
+    `source_id='ref:osiris'` (the bootstrap-script's own signature, never a real caller
+    identity — the exact fingerprint of the bug this repairs), and (c) whose canonical
+    starts with `ref:<name>-` for an EXISTING active SoftwareProject `<name>` — recovering
+    a fact the canonical itself still encodes (`bootstrap_project`'s own
+    `topic=f"{project}-{topic}"` naming), never inventing one. Longest project name wins
+    on a prefix collision, so e.g. a project "monster" can never steal a "monsterhouse-"
+    canonical.
+
+    DELIBERATELY EXCLUDED, not silently skipped — reported in `unmatched` instead: any
+    orphan Reference whose canonical carries NO clean project-name prefix (osiris's own
+    early bare-topic dump — `ref:design-*`, `ref:history-*` — and a handful of essay
+    slugs with no project prefix at all, since `ingest_reference_doc` never namespaces
+    its canonical by project). Those need a human/agent's thematic read, which this
+    mechanical rule cannot honestly claim to do; they stay orphaned here on purpose.
+
+    DRY RUN IS THE DEFAULT, same law as `unwire_informs_fanout`: returns the plan (ref id
+    + canonical -> target project) without writing. `dry_run=False` refuses a blank
+    `because`. Links land as evidence_class DERIVED, never self_declared — this is an
+    inference from the canonical's own naming convention, not a fresh first-hand
+    observation. Idempotent: a Reference that already carries a live link of any kind no
+    longer matches the WHERE clause on a re-run."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    projects = await pool.fetch(
+        "SELECT o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
+    names = sorted(
+        {(r["name"] or r["canonical"].removeprefix("repo:")) for r in projects if r["canonical"]},
+        key=len, reverse=True)
+    candidates = await pool.fetch(
+        "WITH live_link_counts AS ("
+        "  SELECT from_id AS obj_id, count(*) AS n FROM links "
+        "  WHERE valid_until IS NULL OR valid_until > now() GROUP BY from_id)"
+        " SELECT DISTINCT o.id, o.canonical FROM objects o "
+        " LEFT JOIN live_link_counts lc ON lc.obj_id = o.id "
+        " JOIN current_assertions a ON a.object_id = o.id "
+        " WHERE o.type='Reference' AND o.status='active' AND COALESCE(lc.n, 0) = 0 "
+        "   AND a.source_id = 'ref:osiris'")
+    plan: list[dict[str, str]] = []
+    unmatched: list[str] = []
+    for row in candidates:
+        canon = row["canonical"]
+        target = next((n for n in names if canon.startswith(f"ref:{n}-")), None)
+        if target is None:
+            unmatched.append(canon)
+            continue
+        plan.append({"id": str(row["id"]), "canonical": canon, "repo": target})
+    report: dict[str, Any] = {
+        "dry_run": dry_run, "to_link": len(plan), "plan": plan,
+        "unmatched": len(unmatched), "unmatched_canonicals": unmatched,
+    }
+    if dry_run or not plan:
+        return report
+    now = datetime.now(UTC)
+    ec = EvidenceClass.DERIVED
+    conf = confidence_for(ec)
+    linked = 0
+    for item in plan:
+        await link_repo(actions, uuid.UUID(item["id"]), item["repo"], now, source=actor,
+                        evidence_class=ec.value, confidence=conf)
+        linked += 1
+    report.update({"linked": linked, "because": because})
     return report
 
 
