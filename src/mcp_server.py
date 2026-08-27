@@ -102,6 +102,7 @@ from src.orchestrator.monitor import health_banner, organ_health
 from src.orchestrator.smoke import smoke as run_smoke
 from src.orchestrator.sources import as_dicts, suggest
 from src.orchestrator.swaps import classify_swap, swap_banner
+from src.parsers.base import EvidenceClass
 
 
 class BoundedMCP(FastMCP):
@@ -5901,6 +5902,8 @@ async def record_decision(
             protocol=protocol, supersedes=str(old) if old else None,
             resolves=[str(a) for a in answered] if isinstance(resolves, list) else
                      (str(answered[0]) if answered else None),
+            repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
+                                  if repo_defaulted else None),
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
@@ -6246,6 +6249,8 @@ async def ingest_reference(
             Actions(pool), title, source_url=source_url, vendor=vendor,
             body=body, caveats=caveats, repo=repo, cites=cids,
             source=await _actor_for(ctx, subagent_id, subagent_type),
+            repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
+                                  if repo_defaulted else None),
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
@@ -6316,9 +6321,11 @@ async def open_thread(
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
     # while his successor mined transcripts with regex). The mounted identity already
     # knows the project — filing there is the default; unfiled takes deliberate effort.
+    repo_defaulted = False
     if not repo:
         ident = await _ident_for(ctx)
         repo = ident.project if ident else None
+        repo_defaulted = repo is not None
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
         out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
@@ -6384,7 +6391,9 @@ async def open_thread(
         t = await capture.open_thread(
             Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
             arc=arc, resolves=resolves, branch=branch, files_touched=files_touched,
-            source=await _actor_for(ctx, subagent_id, subagent_type)
+            source=await _actor_for(ctx, subagent_id, subagent_type),
+            repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
+                                  if repo_defaulted else None),
         )
     except ValueError as e:
         return {"error": str(e)}
@@ -6394,6 +6403,12 @@ async def open_thread(
         arc_receipt = arc or capture._ARC_UNSORTED
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false",
           "arc": arc_receipt}
+    if repo_defaulted:
+        out["repo_defaulted"] = {
+            "to": repo,
+            "why": "no repo given — defaulted to the caller's own project rather than "
+                   "left unlinked (orphan-door fix, msg 5703/5720)",
+        }
     if assignee:
         out["assignee"] = assignee.strip()
     elif kind == "obligation" and not owner:
@@ -7143,7 +7158,9 @@ async def settle(
             did = await capture.record_decision(
                 Actions(pool), summary, kind=item.pop("kind", "ruling"),
                 rationale=item.pop("rationale", None), repo=item_repo,
-                resolves=item.pop("resolves", None), source=actor)
+                resolves=item.pop("resolves", None), source=actor,
+                repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
+                                      if repo_defaulted else None))
         except ValueError as e:
             rejected.append({"kind": "decision", "summary": summary, "error": str(e)})
             continue
@@ -7182,7 +7199,9 @@ async def settle(
         try:
             tid = await capture.open_thread(
                 Actions(pool), summary, repo=thread_repo,
-                kind=thread_kind, owner=thread_owner, source=actor)
+                kind=thread_kind, owner=thread_owner, source=actor,
+                repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
+                                      if repo_defaulted else None))
         except ValueError as e:
             rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
             continue

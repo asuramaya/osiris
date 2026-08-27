@@ -331,6 +331,7 @@ async def record_decision(
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
     supersedes: str | None = None, resolves: str | list[str] | None = None,
+    repo_evidence_class: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -340,6 +341,16 @@ async def record_decision(
     decision under a SoftwareProject. `source` is the attributing actor — the static
     `session` for a lone operator, or `agent:<session>` for a fleet member so provenance
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
+    `repo_evidence_class` grades the `in_repo` link ONLY, never the decision itself: a
+    caller who TYPED `repo=` is testifying to it (default, SELF_DECLARED — unchanged).
+    A caller who had it DEFAULTED from mount state (msg 5703/5720's orphan-door fix, the
+    MCP wrapper's job, not this function's) never asserted this fact about THIS object —
+    the server observed its own live mount table, which is DIRECT_OBSERVATION (0.6), not
+    a ninth-tenths-confident declaration. Landing both paths at SELF_DECLARED (0dfbfb4's
+    original shape) would launder an inference into a declaration — the next census reads
+    the graph as healed while the link is a guess wearing a citation (Thoth's own framing,
+    msg 5782). Pass the class explicitly when defaulting; omit it when the caller declared.
+
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
     reconstructed later from prose. `decided_in` needs no parameter of its own (task #101):
@@ -458,7 +469,9 @@ async def record_decision(
             await a.assert_property(d, "protocol", protocol, source, observed, _CONF,
                                     evidence_class=_EC)
         if repo:
-            await link_repo(a, d, repo, observed, source=source, evidence_class=_EC)
+            rec = repo_evidence_class or _EC
+            await link_repo(a, d, repo, observed, source=source, evidence_class=rec,
+                            confidence=confidence_for(EvidenceClass(rec)))
         for ref in grounds or []:
             exists = await a.pool.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='grounded_by'",
@@ -862,6 +875,7 @@ async def ingest_reference(
     vendor: str | None = None, body: str | None = None, caveats: str | None = None,
     repo: str | None = None, source: str = _SOURCE,
     cites: list[uuid.UUID] | None = None,
+    repo_evidence_class: str | None = None,
 ) -> tuple[uuid.UUID, str]:
     """An agent turns something it READ into a first-class Reference node (Soundwave VI's
     ask, obligation ecc8d58e): a paper, a vendor doc, a spec — findable by search, linkable
@@ -872,8 +886,14 @@ async def ingest_reference(
     survive as exactly that. `cites` wires paper→paper lineage (`cites` edges to other
     Reference ids) so a literature tree is walkable, not re-derived. Graded SELF_DECLARED:
     the agent testifying to what it read (the read is first-hand; the paper's CLAIMS keep
-    their own grade in `body`/`caveats` prose). Idempotent on the title slug. Returns
-    (id, canonical)."""
+    their own grade in `body`/`caveats` prose). Idempotent on the title slug.
+
+    `repo_evidence_class` grades the `in_repo` link only — same rule as record_decision's
+    own parameter of the same name: SELF_DECLARED (default) when the caller typed `repo=`,
+    DIRECT_OBSERVATION when the MCP wrapper defaulted it from the caller's own mount state
+    rather than the caller asserting it about this specific Reference.
+
+    Returns (id, canonical)."""
     observed = datetime.now(UTC)
     canon = _ref_slug(title)
     async with actions.atomic() as a:
@@ -886,7 +906,9 @@ async def ingest_reference(
                 await a.assert_property(ref, prop, value, source, observed, _CONF,
                                         evidence_class=_EC)
         if repo:
-            await link_repo(a, ref, repo, observed, source=source, evidence_class=_EC)
+            rec = repo_evidence_class or _EC
+            await link_repo(a, ref, repo, observed, source=source, evidence_class=rec,
+                            confidence=confidence_for(EvidenceClass(rec)))
         for cited in cites or []:
             exists = await a.pool.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
@@ -1197,11 +1219,15 @@ async def open_thread(
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
     severity: str | None = None, resolves: str | list[str] | None = None,
     branch: str | None = None, files_touched: list[str] | None = None,
-    source: str = _SOURCE,
+    source: str = _SOURCE, repo_evidence_class: str | None = None,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
     `briefing`'s open-threads section beside mined ones. Idempotent on the summary hash.
+
+    `repo_evidence_class` grades the `in_repo` link only — same rule as record_decision's
+    own parameter of the same name: SELF_DECLARED (default) when the caller typed `repo=`,
+    DIRECT_OBSERVATION when the MCP wrapper defaulted it from the caller's own mount state.
 
     `kind='obligation'` marks the obligations class (ruling 7336c5fc): a DUTY minted by an
     action ("kernel changed → daemons need restart") — neither a ruling nor ordinary work,
@@ -1335,7 +1361,9 @@ async def open_thread(
             await a.assert_property(t, "files_touched", files_touched, source, observed,
                                     _CONF, evidence_class=_EC)
         if repo:
-            await link_repo(a, t, repo, observed, source=source, evidence_class=_EC)
+            rec = repo_evidence_class or _EC
+            await link_repo(a, t, repo, observed, source=source, evidence_class=rec,
+                            confidence=confidence_for(EvidenceClass(rec)))
     for old_tid in to_resolve:
         if old_tid == t:
             continue  # never resolve yourself (idempotent re-open onto the same summary hash)
