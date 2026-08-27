@@ -752,7 +752,17 @@ def render_fleet(data: dict[str, Any]) -> str:
     out = [f'<h2>seats <span class="pill">{live_n} live{vis} · '
            f'{len(named)} soul{"s" if len(named) != 1 else ""} · '
            f'{len(anon)} unreconciled</span> '
-           f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>']
+           f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>',
+           # CONFESSED, NOT VERIFIED (door census item 2, Thoth msg 5772/5741, thread
+           # 2c3c2b9a): ● here means agent_mounts.last_seen touched within 15 minutes —
+           # the SAME cache every other liveness read in this house draws from, never
+           # cross-checked against the harness+/proc registry_census authority. An
+           # operator reading this dot had no way to know that until now; it is an
+           # awareness signal, not a verified fact, the same law render_overhead's own
+           # "the page says so rather than estimating" caption already follows.
+           '<p class="dim">● = touched agent_mounts within 15 min (a cache reading), '
+           "not a harness/proc-verified fact — a fresh row can still be a phantom, and a "
+           "stale one can still be a live body the cache hasn't heard from yet.</p>"]
     rows = "".join(_fleet_row(m) for m in named) or (
         '<tr><td class="dim">nothing mounted</td></tr>')
     out.append(f"<table>{rows}</table>")

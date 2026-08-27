@@ -170,6 +170,9 @@ def test_fleet_renders_live_dots_and_wake_ledger() -> None:
     assert "Thoth XX" in html and '<span class="live">●</span>' in html
     assert 'href="/mail?box=osiris"' in html    # a seat's project opens its mail
     assert "mint" in html and "msg 7" in html
+    # CONFESSED, NOT VERIFIED (door census item 2): the dot's own meaning is disclosed —
+    # an operator reading it should never mistake a 15-minute cache read for a harness fact.
+    assert "not a harness/proc-verified fact" in html
 
 
 async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
