@@ -23,6 +23,34 @@ NOW = datetime(2026, 7, 10, tzinfo=UTC)
 _SD = EvidenceClass.SELF_DECLARED.value
 
 
+@pytest.fixture(autouse=True)
+def _reset_spawn_skip_cache() -> None:
+    """`mcp_server._spawns_seen` is a MODULE-LEVEL dict that outlives the per-test database
+    reset, and `_actor_for` writes the child's properties ONLY inside its TTL guard
+    (mcp_server.py:888) while returning the child id UNCONDITIONALLY. So a cache entry left
+    by any earlier test in this xdist worker's process makes `register_spawn` a no-op while
+    the id still resolves — the object reads as present and its `agent_type` reads as None,
+    which is exactly the CI-only failure of
+    test_actor_for_attributes_the_stamped_child_never_the_seat (assert None == 'code-reviewer',
+    actor assertion on the line above PASSING). THE CACHE CAN CLAIM "REGISTERED" WHILE THE DB
+    HOLDS NOTHING, because the reset clears one and not the other.
+
+    Cleared at SETUP, not only in each test's own `finally`: teardown-shaped cleanup of
+    module-global state only works if every predecessor behaved, and a test that aborts before
+    its `finally` poisons whatever runs next. Setup GUARANTEES the precondition instead of
+    depending on the neighbours. Same class as obligation 7bde8729 (test_manager.py's catalog
+    seeding) — second specimen of "this file passes only because of what ran before it".
+
+    Deliberately does NOT reproduce the CI failure locally: it never reproduced here across
+    three attempts under CI-matching conditions (Khnum, decision 102c4035). This closes the
+    branch by construction rather than by chasing a race, and if CI still fails afterwards the
+    cache hypothesis is REFUTED — which is itself worth knowing.
+    """
+    from src import mcp_server as srv
+
+    srv._spawns_seen.clear()
+
+
 async def _prop(actions: Actions, canonical: str, name: str) -> str | None:
     return await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
