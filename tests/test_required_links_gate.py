@@ -303,3 +303,54 @@ async def test_record_decision_with_no_declared_requirement_is_unaffected(
     d = await capture.record_decision(actions, "an ordinary unlinked decision, today")
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE id=$1", d) == 1
+
+
+# --- obligation ce12d2ef: implements/confirms/rediscovers/bears_on now mint INSIDE ---
+# --- record_decision's own atomic transaction — proven by making the whole write ----
+# --- roll back and checking those links never landed either. ------------------------
+
+async def test_record_decision_implements_link_rolls_back_with_a_refused_write(
+    actions: Actions, decision_requires_repo: None,
+) -> None:
+    """The whole point of obligation ce12d2ef: implements= now mints in the SAME
+    transaction as the object, so when the gate refuses (no repo/grounds/resolves and
+    no unlinked_because), the implements link it already wrote is NOT left behind
+    orphaned on a decision that itself never committed."""
+    parent = await capture.record_decision(actions, "a standing parent ruling",
+                                            repo="osiris")
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.record_decision(
+            actions, "a child that only ever names its parent", implements=parent)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='implements' AND to_id=$1", parent) == 0
+
+
+async def test_record_decision_bears_on_link_rolls_back_with_a_refused_write(
+    actions: Actions, decision_requires_repo: None,
+) -> None:
+    thread = await capture.open_thread(actions, "a stale row a refused decision cites")
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.record_decision(
+            actions, "a refused decision that only cites a thread", bears_on=[thread])
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='answers' AND to_id=$1", thread) == 0
+
+
+async def test_record_decision_implements_and_bears_on_land_together_when_satisfied(
+    actions: Actions, decision_requires_repo: None,
+) -> None:
+    """Positive control: the same four-param fold, but the write actually satisfies
+    the gate (repo= given) — implements/confirms/rediscovers/bears_on all land in the
+    one transaction alongside the object itself."""
+    parent = await capture.record_decision(actions, "another standing parent ruling",
+                                            repo="osiris")
+    thread = await capture.open_thread(actions, "a row this satisfied decision cites")
+    child = await capture.record_decision(
+        actions, "a properly linked decision that also implements and cites",
+        repo="osiris", implements=parent, bears_on=[thread])
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='implements' AND from_id=$1 "
+        "AND to_id=$2", child, parent) == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='answers' AND from_id=$1 "
+        "AND to_id=$2", child, thread) == 1

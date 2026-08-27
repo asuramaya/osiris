@@ -5922,6 +5922,36 @@ async def record_decision(
         [obsoletes, confirms, refutes, implements, rediscovers, bears_on]
     ):
         effective_unlinked_because = _EXTENSION_LINK_PENDING_REASON
+    # RECEIPT-HONESTY PRE-CHECK (obligation ce12d2ef): these six now mint INSIDE
+    # record_decision's own atomic transaction (7ea187b9's shape (a)), so the wrapper
+    # can no longer diff "before this call" vs "after" by calling mint_*/_witness_link
+    # itself and reading its bool return — that return no longer reaches here. Instead,
+    # pre-check existence against the object THIS call will land on. `dup_before` alone
+    # is NOT enough here — it's only computed `if repo:`, but record_decision's own
+    # idempotency ALWAYS resolves by the exact summary hash regardless of repo (that's
+    # how a repo-less retry still lands on the same object) — so the pre-check target
+    # must fall back to that same exact-hash lookup when dup_before is unset, or a
+    # repo-less idempotent re-call would wrongly read every link as freshly minted.
+    existing_target = dup_before
+    if existing_target is None:
+        existing_target = await pool.fetchval(
+            "SELECT id FROM objects WHERE type='Decision' AND canonical=$1",
+            capture._canon("decision", summary))
+
+    async def _link_exists(from_id: uuid.UUID | None, to_id: uuid.UUID, type_: str) -> bool:
+        if from_id is None:
+            return False
+        return bool(await pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 LIMIT 1",
+            from_id, to_id, type_))
+    implements_was_new = (impl_id is None) or not await _link_exists(
+        existing_target, impl_id, "implements")
+    confirms_was_new = {pid: not await _link_exists(pid, existing_target, "witnesses")
+                        if existing_target else True for pid in confirm_ids}
+    rediscovers_was_new = {rdid: not await _link_exists(existing_target, rdid, "rediscovers")
+                           for rdid in rediscover_ids}
+    bears_on_was_new = {bid: not await _link_exists(existing_target, bid, "answers")
+                        for bid in bears_on_ids}
     try:
         d = await capture.record_decision(
             Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
@@ -5932,6 +5962,8 @@ async def record_decision(
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
             unlinked_because=effective_unlinked_because,
+            implements=impl_id, confirms=confirm_ids or None,
+            rediscovers=rediscover_ids or None, bears_on=bears_on_ids or None,
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
@@ -6090,38 +6122,38 @@ async def record_decision(
         else:
             out["prior_art_acknowledged"] = (
                 "no prior-art hit was found at all — nothing to acknowledge")
+    # RECEIPTS ONLY BELOW — all six already MINTED inside capture.record_decision's own
+    # atomic transaction, above (obligation ce12d2ef: the object and every one of these
+    # now either all land or none do). Nothing here writes; each block just reads back
+    # what committed, using the pre-check computed before the call for "was this new".
     if impl_id is not None:
-        await capture.mint_implements(Actions(pool), d, impl_id, actor)
-        out["implements"] = f"{str(impl_id)[:8]} — this decision is a specific execution of it"
+        out["implements"] = (
+            f"{str(impl_id)[:8]} — this decision is a specific execution of it"
+            f"{'' if implements_was_new else ' (already linked)'}")
     if confirm_ids:
         witnessed = []
         for pid in confirm_ids:
-            minted = await capture._witness_link(Actions(pool), pid, d, actor, datetime.now(UTC))
             n = await capture.practice_confirmed_count(pool, pid)
-            witnessed.append({"id": str(pid)[:8], "new_witness": minted, "confirmed": n})
+            witnessed.append({"id": str(pid)[:8], "new_witness": confirms_was_new[pid],
+                             "confirmed": n})
         out["confirmed_practices"] = witnessed
     if confirm_receipt:
         out["confirms_resolution"] = confirm_receipt
     if rediscover_ids:
-        rediscovered = []
-        for rdid in rediscover_ids:
-            minted = await capture.mint_rediscovers(Actions(pool), d, rdid, actor)
-            rediscovered.append({"id": str(rdid)[:8], "new_link": minted})
-        out["rediscovers"] = rediscovered
+        out["rediscovers"] = [{"id": str(rdid)[:8], "new_link": rediscovers_was_new[rdid]}
+                              for rdid in rediscover_ids]
     if rediscover_receipt:
         out["rediscovers_resolution"] = rediscover_receipt
     if bears_on_ids:
-        # BY CONSTRUCTION, not by discipline (Thoth's own no-auto-act ruling, DM 4701):
-        # mint_bears_on only ever touches `links`, never threaded through record_decision's
-        # own atomic transaction the way resolves/supersedes are — there is no code path
-        # here that can reach a thread's `status`.
-        cited = []
-        for bid in bears_on_ids:
-            minted = await capture.mint_bears_on(Actions(pool), d, bid, actor)
-            cited.append({"id": str(bid)[:8], "new_link": minted})
-        out["bears_on"] = cited
+        out["bears_on"] = [{"id": str(bid)[:8], "new_link": bears_on_was_new[bid]}
+                           for bid in bears_on_ids]
     if bears_on_receipt:
         out["bears_on_resolution"] = bears_on_receipt
+    # `refutes`/`obsoletes` stay NON-ATOMIC, called here AFTER record_decision's own
+    # transaction commits — same partial-commit debt as before, deliberately not folded
+    # in with their four siblings above (see record_decision's own docstring): folding
+    # them changes what the prior-art search just above sees, a real regression a test
+    # caught before it shipped, not a hypothetical.
     if refute_id is not None:
         converted = await capture.refute_practice(
             Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)

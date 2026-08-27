@@ -418,6 +418,8 @@ async def record_decision(
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
     supersedes: str | None = None, resolves: str | list[str] | None = None,
     repo_evidence_class: str | None = None, unlinked_because: str | None = None,
+    implements: uuid.UUID | None = None, confirms: list[uuid.UUID] | None = None,
+    rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -427,6 +429,23 @@ async def record_decision(
     decision under a SoftwareProject. `source` is the attributing actor — the static
     `session` for a lone operator, or `agent:<session>` for a fleet member so provenance
     records WHICH instance decided (still SELF_DECLARED, still the high-trust channel).
+
+    `implements`/`confirms`/`rediscovers`/`bears_on` (obligation ce12d2ef, closing PART
+    of the partial-commit window 612be5b0/7ea187b9 named and #189's own gate made
+    visible without fixing): PRE-RESOLVED ids, minted inside THIS SAME atomic
+    transaction — the object and every one of these now either all land or none do, a
+    crash mid-sequence can no longer leave a Decision with some but not all of what it
+    asked for. The caller (mcp_server's wrapper) still owns resolving a bare ref/short-id
+    to one of these — this function's own strictness laws (UUID/canonical/short-id only,
+    no prose fallback) apply at THAT resolution step, same as always; a wrong-typed id
+    here is the caller's bug, not this function's to catch twice.
+    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their four siblings
+    above — found live, not reasoned: refute_practice mutates the target Practice and
+    mints a live Superstition BEFORE commit, and the wrapper's own prior-art search
+    (runs AFTER this returns) would then see that already-changed state, silently
+    altering what it finds (a real regression a test caught before it shipped). They
+    stay separate, non-atomic calls, same partial-commit debt as before this fold.
+
     `repo_evidence_class` grades the `in_repo` link ONLY, never the decision itself: a
     caller who TYPED `repo=` is testifying to it (default, SELF_DECLARED — unchanged).
     A caller who had it DEFAULTED from mount state (msg 5703/5720's orphan-door fix, the
@@ -614,6 +633,34 @@ async def record_decision(
             await a.assert_property(thread_id, "resolved_because",
                                     f"answered by decision {str(d)[:8]}: {summary[:200]}",
                                     source, observed, _CONF, evidence_class=_EC)
+        # obligation ce12d2ef: FOUR of the six extension-link params, minted in THIS
+        # SAME transaction as the object itself — pure link mints, no side-object
+        # creation, no property write on anything ELSE this call's own search step
+        # reads. Each mint_* helper below takes a generic Actions and never opens its
+        # own atomic() block, so passing `a` (this transaction's own bound Actions)
+        # participates correctly, no nested-transaction conflict — verified by reading
+        # each one before relying on it here.
+        #
+        # `refutes`/`obsoletes` deliberately EXCLUDED from this fold, found live, not
+        # reasoned: refute_practice sets `refuted_by` on the target Practice and mints
+        # a new Superstition BEFORE this transaction commits; the wrapper's own prior-
+        # art search (mcp_server.py, runs AFTER record_decision returns) would then see
+        # the Practice already flagged and the fresh Superstition already live,
+        # changing what it finds — test_record_decision_flags_overturning_when_
+        # refutes_names_the_matched_practice caught this exact regression (the
+        # "contradict" polarity flag stopped firing) before it shipped. Folding these
+        # two needs the search step reordered too, a bigger change than this pass —
+        # left as their own non-atomic calls, same partial-commit debt they always
+        # carried, now named precisely rather than lumped in with the four that are
+        # actually safe to fold today.
+        if implements is not None:
+            await mint_implements(a, d, implements, source)
+        for pid in confirms or []:
+            await _witness_link(a, pid, d, source, observed)
+        for rdid in rediscovers or []:
+            await mint_rediscovers(a, d, rdid, source)
+        for bid in bears_on or []:
+            await mint_bears_on(a, d, bid, source)
         await _enforce_required_links(
             a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
             unlinked_because=unlinked_because, source=source, observed=observed)
