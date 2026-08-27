@@ -1,91 +1,143 @@
 """THE #189 ADOPTION METER — an instrument, not a fix (Thoth msg 5825, ruling d68c57e5,
 obligation 8d510875). The risk this answers is stated in the ruling itself: "a gate that
 exists in code and refuses nothing in production is the same artifact as a confession
-nobody acts on." Today the acceptance test was a `triage(mode='census')` call somebody had
+nobody acts on." The acceptance test used to be a `triage(mode='census')` call somebody had
 to REMEMBER to run and compare by hand against a baseline held in a decision's own prose —
 exactly the shape that decays (5169686b diagnosed this identically on 2026-08-02 and the
 population it named grew ~1,800 in the 24 days the record sat unbuilt).
 
-BUILDS NOTHING NEW WHERE A SURFACE ALREADY CARRIES IT: the two headline numbers
-(`median_links` moving off 1, true zero-link orphan counts for Decision/Thread/Reference)
-are read straight off `triage(mode='census')` (compositions.py's own `_fn_triage`) — that
-census already computes exactly this per type+status; this module filters it to the three
-in-scope types, never re-derives the SQL. The baseline is a ROW, not a sentence: seeded
-once from obligation 8d510875's own already-published numbers (2026-08-27T15:03Z,
-decision:a621a95676c1) into `watermarks` via `monitor.get_cursor`/`set_cursor` — the SAME
-generic cursor store `record_deploy`'s own devhead watermark and the chaos-replay gate's
-own last-report snapshot already use (`set_cursor(pool, "chaos-replay:last", ...)`,
-src/cli.py) — never a bespoke table.
+THE HEADLINE METRIC WAS REPLACED (Thoth msg 5866, superseding ruling d68c57e5's own
+"Decision median_links moving off 1"): Khnum measured (decision b71e1e0dcadf) that a
+Thread structurally CANNOT declare a forward relational link at its own birth — `open_thread`
+has no grounds=/relates_to= parameter, so a Thread's eventual connectivity is entirely a
+function of whether a LATER Decision's `resolves=` cites it back. A Reference is the same
+shape (its only route to connectivity is being named in a later Decision's `grounds=`).
+Even a well-connected Decision gets most of its own links from LATER objects citing it
+(supersedes/rediscovers/confirms/refutes), not from what its own writer declared. A
+population-wide snapshot median cannot tell "born yesterday, correctly not yet cited" apart
+from "born in June, never cited by anyone" — those are opposite conditions the old metric
+reported identically, and at ~20 new Decisions/day the always-young, legitimately-uncited
+population dominates the snapshot forever. median_links was never going to move off 1
+regardless of whether declaration-at-the-door was actually working.
 
-THE THIRD NUMBER, THE ADOPTION METRIC ITSELF (Imhotep's hatch, `unlinked_because`, msg
-5828): NOT a dedicated column — an ordinary property assertion, the same mechanism as
-every other graded fact in this house, read off `current_assertions WHERE name=
-'unlinked_because'`. This is why `_hatch_counts` never checks `information_schema` for a
-column that will never exist: the read is structurally always "available" (the table has
-existed since migration 0001), so an empty result is a REAL zero, never a missing
-instrument — Imhotep's own caveat (msg 5828) is that a real zero can ALSO mean the gate's
-own `required_link_kinds` isn't declared on any type yet (Khnum's content pass, separate
-and not yet landed), so this module reports the raw split PLUS that caveat rather than
-inventing a false "not live" flag it cannot actually verify. THE SPLIT (Thoth's
-requirement #2) compares each assertion's value against
-`src.mcp_server._EXTENSION_LINK_PENDING_REASON`, imported live at census time rather than
-copied — Imhotep named this exact string as still liable to move, so hardcoding it here
-would silently go stale the moment he touches it. When the symbol isn't importable yet
-(pre-merge, exactly today's state), the split is reported as unavailable and the raw
-per-value counts are returned instead — never a guess at which value means what.
+COHORT-AGED CONNECTIVITY replaces it: objects are bucketed by BIRTH WEEK
+(`date_trunc('week', created_at)`), and each cohort's own live link count is measured at
+THREE FIXED HISTORICAL AGES — at birth, +7 days, +30 days (`links.created_at <= objects.
+created_at + N days`, using the SAME live-link definition `triage`'s own `_TRIAGE_LINK_CTE`
+uses). The question stops being "are writes born connected" (they structurally cannot be,
+per Khnum's own finding) and becomes "DO WRITES BECOME CONNECTED" — does a cohort's own
+median link count climb between birth and day 30, or does it sit flat.
+
+NO BASELINE ROW IS NEEDED HERE, unlike the metric this replaces (deliberately, Thoth's own
+item 2 — "check that before building"): `links.created_at` has existed since migration
+0001, so every cohort old enough to have reached a checkpoint age is a FIXED HISTORICAL
+FACT the instant that window has fully elapsed — re-querying it tomorrow, next week, or a
+year from now returns the identical number, because the query only ever counts links that
+existed within a bounded historical interval, never "as of right now". This is structurally
+different from the old metric (a live snapshot of an ever-growing present, which is exactly
+what made a fixed comparison point necessary and hazardous to re-derive). Agreement by
+construction, not by a persisted snapshot: the same principle this reign's preflight fix
+(commit c0ea155) already applied to `wake_gate_preflight`.
+
+THE HATCH HALF IS UNCHANGED (Imhotep's `unlinked_because`, msg 5828) — Thoth's own framing
+was explicit that the METER is correct and the CRITERION it reported against was wrong;
+this file's hatch-reading half was never implicated and needed no rebuild.
 
 SCOPE, MATCHING THE OBLIGATION'S OWN EXCLUSIONS: File (#120 proved single-link Files
 benign — in_repo only, zero (repo,relpath) collisions) and Type (does not participate in
 `links` like an ordinary object, per `triage`'s own contract) are never counted here.
 
-NEVER A GATE: this module makes zero writes to `objects`/`links`/assertions and refuses
-nothing — the one write it ever makes is the baseline watermark row, seeded at most once."""
+NEVER A GATE: this module makes zero writes anywhere — not to `objects`/`links`/
+assertions, and (new, since the old metric's one write is gone) not even to `watermarks`."""
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
-
-ADOPTION_BASELINE_KEY = "adoption189:baseline"
 
 SCOPED_TYPES = ("Decision", "Thread", "Reference")
 """The obligation's own scope (8d510875): every other object type is either explicitly
 carved out (File, Type — see this module's own docstring) or was never part of #189's
 original diagnosis (5169686b/d68c57e5 named Decision/Thread/Reference specifically)."""
 
-_FIXED_BASELINE: dict[str, Any] = {
-    "taken_at": "2026-08-27T15:03:00+00:00",
-    "source": "decision:a621a95676c1 (ruling d68c57e5) / thread:cc495f1987e0 (obligation 8d510875)",
-    "types": {
-        "Decision": {"n": 5478, "orphans": 274, "thin": 4463, "median_links": 1.0},
-        "Thread": {"n": 3465, "orphans": 232, "thin": 3019, "median_links": 1.0},
-        "Reference": {"n": 300, "orphans": 112, "thin": 102, "median_links": None},
-    },
-}
-"""THE NUMBER TO BEAT, transcribed ONCE from the obligation that named it (never re-derived
-from a fresh census — a re-derivation now would silently absorb whatever drifted between
-2026-08-27T15:03Z and whenever this first runs, defeating the whole point of a fixed
-comparison point). `Reference.median_links` is `None` because the obligation's own prose
-never quoted it (only orphans/thin) — reported honestly as missing rather than invented."""
+HEADLINE_TYPE = "Decision"
+"""Kept as the deploy line's headlined type for continuity with ruling d68c57e5's own
+framing (it singled out Decision specifically) — Thread's own cohort curve is arguably the
+SHARPER signal going forward (its connectivity is *entirely* inbound-accrued per Khnum's
+finding, so its birth->30d delta isolates citation discipline with none of a Decision's own
+self-declared-link noise), but swapping the headlined type is a second, unrequested change
+this build does not make unilaterally. Thread/Reference cohorts are computed and returned
+alongside Decision's in `cohorts` regardless — a future call can re-point the headline
+without touching this module's own query."""
 
 
-async def _current_census(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
-    """The two headline numbers, filtered from the SAME census `_fn_triage(mode='census')`
-    already computes — never a second query reimplementing its SQL. `status='active'` only,
-    matching the baseline's own scope."""
-    from src.orchestrator.compositions import _fn_triage
+async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
+    """Per SCOPED_TYPES: the latest birth-week cohort old enough to have reached its own
+    30-day checkpoint, plus that SAME cohort's 7-day figure (always available once 30 days
+    have passed) and the PRIOR eligible cohort's own 30-day figure (so a reader watching
+    this number move deploy over deploy sees trend without two cohorts crammed into one
+    line — see `render_adoption_line`). `status='active'` only, matching the retired
+    metric's own scope. Returns `{}` for a type with no 30-day-eligible cohort yet (an
+    honest absence, not a zero)."""
+    rows = await pool.fetch("""
+        WITH scoped AS (
+            SELECT id, type, created_at, date_trunc('week', created_at) AS cohort_week
+            FROM objects WHERE type = ANY($1) AND status='active'
+        ),
+        per_object AS (
+            SELECT s.id, s.type, s.cohort_week, s.created_at,
+                count(*) FILTER (WHERE l.created_at <= s.created_at)
+                    AS links_at_birth,
+                count(*) FILTER (WHERE l.created_at <= s.created_at + interval '7 days')
+                    AS links_at_7d,
+                count(*) FILTER (WHERE l.created_at <= s.created_at + interval '30 days')
+                    AS links_at_30d
+            FROM scoped s
+            LEFT JOIN links l
+                ON (l.from_id = s.id OR l.to_id = s.id)
+                AND (l.valid_until IS NULL OR l.valid_until > now())
+            GROUP BY s.id, s.type, s.cohort_week, s.created_at
+        )
+        SELECT type, cohort_week, count(*) AS n,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY links_at_birth) AS median_at_birth,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY links_at_7d) AS median_at_7d,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY links_at_30d) AS median_at_30d
+        FROM per_object
+        GROUP BY type, cohort_week
+        -- ELIGIBILITY FILTERED HERE, not in Python: a cohort only counts once it has
+        -- genuinely reached 30 days of age — a fresher cohort's numbers would keep
+        -- changing on every re-query (more links can still land within its own window),
+        -- which is exactly the "live snapshot of an ever-growing present" hazard this
+        -- metric was built to avoid.
+        HAVING cohort_week + interval '30 days' <= now()
+        ORDER BY type, cohort_week DESC
+    """, list(SCOPED_TYPES))
 
-    rows = await _fn_triage(pool, None, {"mode": "census"})
-    return {
-        r["type"]: {
-            "n": r["n"], "orphans": r["orphans"], "thin": r["thin"],
-            "median_links": r["median_links"],
+    by_type: dict[str, list[Any]] = {t: [] for t in SCOPED_TYPES}
+    for r in rows:
+        by_type[r["type"]].append(r)
+
+    out: dict[str, dict[str, Any]] = {}
+    for t, cohort_rows in by_type.items():
+        if not cohort_rows:  # no 30-day-eligible cohort yet for this type
+            continue
+        latest = cohort_rows[0]  # NEWEST eligible cohort (cohort_week DESC)
+        entry: dict[str, Any] = {
+            "week": latest["cohort_week"].date().isoformat(),
+            "n": latest["n"],
+            "median_at_birth": float(latest["median_at_birth"] or 0),
+            "median_at_7d": float(latest["median_at_7d"] or 0),
+            "median_at_30d": float(latest["median_at_30d"] or 0),
         }
-        for r in rows
-        if r["type"] in SCOPED_TYPES and r["status"] == "active"
-    }
+        if len(cohort_rows) > 1:
+            prev = cohort_rows[1]
+            entry["prev_week"] = prev["cohort_week"].date().isoformat()
+            entry["prev_median_at_30d"] = float(prev["median_at_30d"] or 0)
+            entry["trend_30d_delta"] = (
+                entry["median_at_30d"] - entry["prev_median_at_30d"])
+        out[t] = entry
+    return out
 
 
 _HATCH_CAVEAT = (
@@ -128,45 +180,16 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def adoption_meter(
-    pool: asyncpg.Pool, *, seed_baseline_if_missing: bool = True,
-) -> dict[str, Any]:
-    """THE WHOLE INSTRUMENT: current numbers, the durable baseline row, the delta between
-    them, and Imhotep's hatch split. Never writes to the graph itself — the one write is
-    the baseline watermark, and only on its first-ever call (or when explicitly reseeded by
-    a caller who passes `seed_baseline_if_missing=True` after intentionally clearing it)."""
-    from src.orchestrator.monitor import get_cursor, set_cursor
-
-    current = await _current_census(pool)
-
-    raw_baseline = await get_cursor(pool, ADOPTION_BASELINE_KEY)
-    if raw_baseline is None and seed_baseline_if_missing:
-        raw_baseline = json.dumps(_FIXED_BASELINE)
-        await set_cursor(pool, ADOPTION_BASELINE_KEY, raw_baseline)
-    baseline = json.loads(raw_baseline) if raw_baseline else None
-
-    delta: dict[str, dict[str, Any]] = {}
-    if baseline:
-        for t in SCOPED_TYPES:
-            b = baseline["types"].get(t)
-            c = current.get(t)
-            if not b or not c:
-                continue
-            delta[t] = {
-                "orphans_delta": c["orphans"] - b["orphans"],
-                "median_links_delta": (
-                    None if b.get("median_links") is None
-                    else c["median_links"] - b["median_links"]
-                ),
-            }
-
+async def adoption_meter(pool: asyncpg.Pool) -> dict[str, Any]:
+    """THE WHOLE INSTRUMENT: cohort-aged connectivity per SCOPED_TYPES, plus Imhotep's
+    hatch split. Zero writes anywhere — read-only in full, including against `watermarks`
+    (the retired metric's one write; see this module's own docstring for why cohort
+    connectivity needs no persisted baseline)."""
+    cohorts = await _cohort_connectivity(pool)
     hatch = await _hatch_counts(pool)
-
     return {
         "measured_at": datetime.now(UTC).isoformat(),
-        "current": current,
-        "baseline": baseline,
-        "delta": delta,
+        "cohorts": cohorts,
         "hatch": hatch,
     }
 
@@ -177,20 +200,25 @@ def render_adoption_line(meter: dict[str, Any]) -> str:
     something moved. A conditional "only print on change" line was considered and rejected:
     it recreates exactly the failure this instrument exists to prevent (something that
     quietly stops being seen), and a deploy is not so frequent in this house that one more
-    honest, terse line is real noise — the existing lines already accept that trade."""
-    d = meter["current"].get("Decision", {})
-    t = meter["current"].get("Thread", {})
-    r = meter["current"].get("Reference", {})
-    bd = (meter["baseline"] or {}).get("types", {}).get("Decision", {})
+    honest, terse line is real noise — the existing lines already accept that trade. Only
+    the headlined type's cohort renders here (`HEADLINE_TYPE`); the full per-type detail
+    lives in the returned dict for a caller who wants it."""
+    headline = meter["cohorts"].get(HEADLINE_TYPE)
     hatch = meter["hatch"]
     if hatch["split"] is not None:
         hatch_str = (f"extension={hatch['split']['extension_link_pending']} "
                      f"standalone={hatch['split']['standalone_other']}")
     else:
         hatch_str = f"{hatch['total']} total (unsplit — reason constant not on this build)"
+    if headline is None:
+        cohort_str = "no 30-day-aged cohort yet"
+    else:
+        cohort_str = (
+            f"cohort {headline['week']} (n={headline['n']}): "
+            f"birth={headline['median_at_birth']:.1f} -> "
+            f"30d={headline['median_at_30d']:.1f}"
+            f" (Δ{headline['median_at_30d'] - headline['median_at_birth']:+.1f})"
+        )
     return (
-        f"adoption189: Decision median_links={d.get('median_links')} "
-        f"(baseline {bd.get('median_links')}) | orphans D/T/R="
-        f"{d.get('orphans')}/{t.get('orphans')}/{r.get('orphans')} | "
-        f"unlinked_because: {hatch_str}"
+        f"adoption189: {HEADLINE_TYPE} {cohort_str} | unlinked_because: {hatch_str}"
     )
