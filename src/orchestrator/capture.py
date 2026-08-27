@@ -326,12 +326,89 @@ async def link_repo(
                                   evidence_class=evidence_class)
 
 
+# THE DECLARE-OR-REFUSE GATE (task #189, ruling 5ac06206, decision 7ea187b9 — shape (b)):
+# only the link KINDS a door can know about at its OWN atomic commit point are legal here.
+# repo=/grounds=/resolves= mint inside record_decision's own `actions.atomic()` block;
+# obsoletes=/confirms=/refutes=/implements=/rediscovers=/bears_on= mint AFTER it returns
+# (mcp_server.py layer, non-atomic) and are deliberately NOT in this table — see decision
+# 7ea187b9 for the residual gap that leaves. open_thread only ever has "repo" in scope: its
+# own `resolves=` closes a DIFFERENT, pre-existing thread, after its atomic block.
+_REQUIRED_LINK_KIND_TABLE = {"repo": "in_repo", "grounds": "grounded_by", "resolves": "answers"}
+
+
+async def _enforce_required_links(
+    a: Actions, obj_id: uuid.UUID, type_name: str, *, kinds_in_scope: tuple[str, ...],
+    unlinked_because: str | None, source: str, observed: datetime,
+) -> None:
+    """Called at the END of a mint's own atomic block, still INSIDE it — a raise here
+    triggers the caller's real `conn.transaction()` rollback (Actions.atomic's own
+    docstring), so a refusal leaves NO orphan object, a genuine refuse-at-door rather
+    than a post-hoc alarm. `kinds_in_scope` is this DOOR's own atomically-knowable
+    subset (see _REQUIRED_LINK_KIND_TABLE above) — a type's declared requirement outside
+    that subset is silently not checked BY THIS CALL (a different door checks it against
+    its own scope). `unlinked_because`, when given, is the mandatory countable hatch —
+    asserted as a fact on the object in this SAME transaction, and satisfies the gate
+    outright. Otherwise, satisfied ONLY by a SELF_DECLARED-graded link already visible on
+    this connection (this call's own writes above included, via the same transaction) —
+    a DIRECT_OBSERVATION/DERIVED-graded link (e.g. Seshat's mount-defaulted repo=) never
+    counts, per Thoth's explicit instruction (msg 5790/5797)."""
+    # ONE bound connection for this WHOLE call, catalog read included — a.pool.
+    # object_type/fetchval would acquire a DIFFERENT connection from the SAME pool while
+    # this atomic() caller's own connection is still held open, and under concurrent
+    # xdist load with a small pool that is a REAL DEADLOCK (every atomic() caller
+    # blocked needing an (N+1)th connection none of them can ever free) — the exact
+    # class create_or_find_object's own comment already names, hit live here (found via
+    # a hung test_deploy_guard.py boot-check run, not by reasoning). a._read() reuses
+    # the bound connection when inside atomic(), same discipline Actions' own read
+    # helpers (resolve_object_id, current_values) use — and it ALSO fixes the read-
+    # committed-isolation gap noted below: inside an open transaction, a fresh
+    # connection would silently miss this SAME call's own uncommitted writes above.
+    async with a._read() as conn:
+        # UNCACHED, DELIBERATELY (found live: under full-suite concurrent load,
+        # catalog.object_type's process-wide fingerprint cache served a stale EMPTY
+        # required_link_kinds for a type this same test had just declared moments
+        # earlier — a stale-empty read here doesn't misrender a UI, it SILENTLY
+        # DISABLES THE WHOLE GATE. The refuse-check's own correctness must never
+        # depend on a cache invalidating in time; read the live property directly.
+        raw = await conn.fetchval(
+            "SELECT a.value FROM objects o JOIN current_assertions a "
+            "ON a.object_id = o.id WHERE o.type = 'Type' "
+            "AND o.canonical = $1 AND a.name = 'required_link_kinds' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            f"type:object:{type_name}")
+        required = [k for k in (raw or ()) if k in kinds_in_scope]
+        if not required:
+            return  # unenforced for this type (the common case in this pass), or
+                    # nothing this door can even attest to — not this call's problem
+        # REAL LINKS CHECKED FIRST, the hatch only as a fallback (Thoth's condition 2,
+        # msg 5802/5811): if `unlinked_because` were checked BEFORE this, a caller who
+        # passed both a real satisfying link AND a (possibly machine-set)
+        # unlinked_because would take the hatch branch anyway — POISONING the hatch
+        # count, the arc's only metric, with writes that never needed it.
+        for kind in required:
+            link_type = _REQUIRED_LINK_KIND_TABLE[kind]
+            satisfied = await conn.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND type=$2 AND evidence_class=$3 "
+                "LIMIT 1", obj_id, link_type, EvidenceClass.SELF_DECLARED.value)
+            if satisfied:
+                return
+    if unlinked_because:
+        await a.assert_property(obj_id, "unlinked_because", unlinked_because, source,
+                                observed, _CONF, evidence_class=_EC)
+        return
+    raise ValueError(
+        f"{type_name} refused: none of its required link kinds ({', '.join(required)}) "
+        "were declared (a link a caller ASSERTED, not one this server derived/observed) "
+        "— link one, or pass unlinked_because=<reason> to record the gap as a countable "
+        "fact instead of a silent hole (task #189, decision 7ea187b9).")
+
+
 async def record_decision(
     actions: Actions, summary: str, *, kind: str = "ruling",
     rationale: str | None = None, repo: str | None = None, source: str = _SOURCE,
     grounds: list[uuid.UUID] | None = None, protocol: str | None = None,
     supersedes: str | None = None, resolves: str | list[str] | None = None,
-    repo_evidence_class: str | None = None,
+    repo_evidence_class: str | None = None, unlinked_because: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -350,6 +427,14 @@ async def record_decision(
     original shape) would launder an inference into a declaration — the next census reads
     the graph as healed while the link is a guess wearing a citation (Thoth's own framing,
     msg 5782). Pass the class explicitly when defaulting; omit it when the caller declared.
+
+    `unlinked_because` (task #189, decision 7ea187b9) is the declare-or-refuse gate's
+    mandatory countable hatch: if this type declares required link kinds in the catalog
+    (Khnum's content, not this function's) and none are satisfied by a SELF_DECLARED
+    link (repo=/grounds=/resolves= — a mount-defaulted or otherwise derived link never
+    counts), the write REFUSES unless this is given. When given, it is recorded as a
+    fact on the object in the SAME transaction and the write proceeds — this is the
+    metric the whole arc is measured by, so name a real reason, not a placeholder.
 
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
@@ -520,6 +605,9 @@ async def record_decision(
             await a.assert_property(thread_id, "resolved_because",
                                     f"answered by decision {str(d)[:8]}: {summary[:200]}",
                                     source, observed, _CONF, evidence_class=_EC)
+        await _enforce_required_links(
+            a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
+            unlinked_because=unlinked_because, source=source, observed=observed)
     return d
 
 
@@ -1220,10 +1308,18 @@ async def open_thread(
     severity: str | None = None, resolves: str | list[str] | None = None,
     branch: str | None = None, files_touched: list[str] | None = None,
     source: str = _SOURCE, repo_evidence_class: str | None = None,
+    unlinked_because: str | None = None,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
     `briefing`'s open-threads section beside mined ones. Idempotent on the summary hash.
+
+    `unlinked_because` (task #189, decision 7ea187b9) is the declare-or-refuse gate's
+    countable hatch — same contract as record_decision's own parameter: if Thread
+    declares required link kinds and this call's own `repo=` (the only kind this door
+    can know about at its own atomic commit) doesn't satisfy it at SELF_DECLARED grade,
+    the write refuses unless this is given; when given, it's recorded as a fact in the
+    same transaction and the write proceeds.
 
     `repo_evidence_class` grades the `in_repo` link only — same rule as record_decision's
     own parameter of the same name: SELF_DECLARED (default) when the caller typed `repo=`,
@@ -1364,6 +1460,9 @@ async def open_thread(
             rec = repo_evidence_class or _EC
             await link_repo(a, t, repo, observed, source=source, evidence_class=rec,
                             confidence=confidence_for(EvidenceClass(rec)))
+        await _enforce_required_links(
+            a, t, "Thread", kinds_in_scope=("repo",),
+            unlinked_because=unlinked_because, source=source, observed=observed)
     for old_tid in to_resolve:
         if old_tid == t:
             continue  # never resolve yourself (idempotent re-open onto the same summary hash)
