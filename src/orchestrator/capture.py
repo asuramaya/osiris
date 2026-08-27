@@ -217,7 +217,7 @@ async def _object_source(pool: asyncpg.Pool, obj_id: uuid.UUID) -> str | None:
 
 async def mint_cites(
     actions: Actions, from_id: uuid.UUID, to_id: uuid.UUID, source: str,
-    *, self_referential: bool,
+    *, self_referential: bool, origin: str,
 ) -> bool:
     """This object's OWN prose named that one — a declaration recorded in text, not a
     similarity guess, so SELF_DECLARED (same tier `noted_in`/`decided_in` already use
@@ -229,11 +229,22 @@ async def mint_cites(
     shaped for. Reuses `cites` (Reference->Reference, ingest_reference's own `cites=`)
     rather than inventing new vocabulary — the same word this house already uses for
     "my own text points at that object", broadened to legally connect Decision/Thread
-    on either end. `self_referential` (an author citing their own earlier work, vs.
-    citing someone else's) is recorded ON THE LINK's own properties, never folded into
-    the same unmarked population as a cross-author citation — Seshat's own measured
-    split (35.5% self-ref, 64.5% cross-author) is exactly the number this keeps honest
-    going forward. Idempotent: returns whether a NEW link was minted; never a self-loop."""
+    on either end. VERIFIED against the live graph before widening (Thoth's own
+    caution, msg 5881): every existing `cites` edge is Reference->Reference,
+    evidence_class self_declared, empty properties — domain/range is advisory only
+    (no reader in this codebase filters on it), so nothing about an existing edge
+    reinterprets.
+
+    `self_referential` (an author citing their own earlier work, vs. citing someone
+    else's) and `origin` (Thoth's second caution, same message: a PROSE-DERIVED cite —
+    a regex match against free text — and a DECLARED one — a caller naming an exact
+    target on purpose, `ingest_reference`'s own `cites=` or an explicit
+    `acknowledge_prior_art` confirmation — are different confidence shapes even at the
+    same SELF_DECLARED grade, and must stay queryable apart, not merely inferable from
+    context) are both recorded ON THE LINK's own properties — Seshat's own measured
+    split (35.5% self-ref, 64.5% cross-author) is exactly the number `self_referential`
+    keeps honest going forward. Idempotent: returns whether a NEW link was minted;
+    never a self-loop."""
     if from_id == to_id:
         return False
     exists = await actions.pool.fetchval(
@@ -243,7 +254,8 @@ async def mint_cites(
         return False
     await actions.create_link(from_id, to_id, "cites", source, datetime.now(UTC), _CONF,
                               evidence_class=_EC,
-                              properties={"self_referential": self_referential})
+                              properties={"self_referential": self_referential,
+                                        "origin": origin})
     return True
 
 
@@ -269,7 +281,7 @@ async def _mint_prose_citations(
         # not see it yet). Only the TARGET's source needs a lookup: it is a pre-
         # existing, already-committed object this transaction never wrote.
         target_source = await _object_source(a.pool, target_id)
-        await mint_cites(a, obj_id, target_id, source,
+        await mint_cites(a, obj_id, target_id, source, origin="prose",
                          self_referential=(target_source is not None
                                           and target_source == source))
     return skipped
@@ -1214,8 +1226,15 @@ async def ingest_reference(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
                 ref, cited)
             if not exists:
+                # `origin: "declared"` (task #189's derivation lane, Thoth's caution
+                # msg 5881): the caller named this exact target on purpose, same
+                # confidence shape as mint_cites' own "declared" origin — kept
+                # explicitly queryable apart from a prose-derived cite, never merely
+                # inferable from the absence of a marker on this codebase's own
+                # pre-existing (Reference->Reference, unmarked) cites edges.
                 await a.create_link(ref, cited, "cites", source, observed, _CONF,
-                                    evidence_class=_EC)
+                                    evidence_class=_EC,
+                                    properties={"origin": "declared"})
     return ref, canon
 
 
@@ -2429,7 +2448,8 @@ async def acknowledge_prior_art(
         target_id = uuid.UUID(prior_art_id)
     except ValueError:
         return  # not UUID-shaped — the property write above still landed, nothing to link
-    await mint_cites(actions, decision_id, target_id, source, self_referential=False)
+    await mint_cites(actions, decision_id, target_id, source, origin="declared",
+                     self_referential=False)
 
 
 async def refute_practice(

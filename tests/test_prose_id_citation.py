@@ -182,6 +182,7 @@ async def test_acknowledge_prior_art_mints_a_cites_edge_never_self_referential(
         "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
         d, other)
     assert exists is not None and exists["self_referential"] is False
+    assert exists["origin"] == "declared"
     # the property write survives too — additive, not a replacement
     prop = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -189,7 +190,30 @@ async def test_acknowledge_prior_art_mints_a_cites_edge_never_self_referential(
     assert prop == str(other)
 
 
+async def test_prose_citation_is_marked_origin_prose_ingest_reference_marked_declared(
+    actions: Actions,
+) -> None:
+    """Thoth's second caution (msg 5881): a prose-derived cite and a caller-declared
+    one must stay queryable apart, not merely inferable from context."""
+    parent = await capture.record_decision(actions, "a ruling a prose citation will mark")
+    short_id = str(parent)[:8]
+    child = await capture.record_decision(actions, f"a follow-up per ruling {short_id}")
+    prose_props = await actions.pool.fetchval(
+        "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
+        child, parent)
+    assert prose_props["origin"] == "prose"
+
+    ref_a, _ = await capture.ingest_reference(actions, "reference A for declared cites")
+    ref_b, _ = await capture.ingest_reference(
+        actions, "reference B declaring cites", cites=[ref_a])
+    declared_props = await actions.pool.fetchval(
+        "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
+        ref_b, ref_a)
+    assert declared_props["origin"] == "declared"
+
+
 async def test_mint_cites_never_mints_a_self_loop(actions: Actions) -> None:
     d = await capture.record_decision(actions, "a decision that can never cite itself")
-    minted = await capture.mint_cites(actions, d, d, "session", self_referential=True)
+    minted = await capture.mint_cites(actions, d, d, "session", self_referential=True,
+                                      origin="prose")
     assert minted is False
