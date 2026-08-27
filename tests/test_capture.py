@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -3613,6 +3614,141 @@ async def test_ingest_reference_tool_defaults_repo_to_the_callers_own_project(
         "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND r.type='Reference' "
         "AND p.canonical='repo:refdefaultproj'")
     assert linked == 1
+
+
+# --- repo-default TIER (Thoth msg 5776/5782): the identity-defaulted in_repo link is a
+# fact the SERVER directly observed about its own live mount state (this agent is
+# mounted in this project, right now) — not the caller personally asserting the fact
+# about THIS object. That is DIRECT_OBSERVATION (0.6), never SELF_DECLARED (0.9): landing
+# both paths at the same grade would launder an inference into a declaration. -------------
+
+
+async def _in_repo_grade(pool: Any, obj_type: str, canonical_project: str) -> Any:
+    return await pool.fetchrow(
+        f"SELECT l.evidence_class, l.confidence FROM links l "
+        f"JOIN objects o ON o.id=l.from_id JOIN objects p ON p.id=l.to_id "
+        f"WHERE l.type='in_repo' AND o.type='{obj_type}' AND p.canonical=$1",
+        f"repo:{canonical_project}")
+
+
+async def test_record_decision_defaulted_repo_link_grades_direct_observation(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:tiergrade1", session="tiergrade1", project="tiergradeproj1",
+        model=None, cwd=None)
+    try:
+        await srv.record_decision("a decision filed by identity, no repo= typed", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    row = await _in_repo_grade(actions.pool, "Decision", "tiergradeproj1")
+    assert row["evidence_class"] == "direct_observation"
+    assert row["confidence"] == pytest.approx(0.6)
+
+
+async def test_record_decision_explicit_repo_link_stays_self_declared(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        await srv.record_decision(
+            "a decision with repo= typed explicitly, not defaulted", repo="tiergradeproj2")
+    finally:
+        srv._pool = saved_pool
+    row = await _in_repo_grade(actions.pool, "Decision", "tiergradeproj2")
+    assert row["evidence_class"] == "self_declared"
+    assert row["confidence"] == pytest.approx(0.9)
+
+
+async def test_ingest_reference_defaulted_repo_link_grades_direct_observation(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:tiergrade3", session="tiergrade3", project="tiergradeproj3",
+        model=None, cwd=None)
+    try:
+        await srv.ingest_reference("a ref filed by identity, no repo= typed", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    row = await _in_repo_grade(actions.pool, "Reference", "tiergradeproj3")
+    assert row["evidence_class"] == "direct_observation"
+    assert row["confidence"] == pytest.approx(0.6)
+
+
+async def test_open_thread_defaulted_repo_link_grades_direct_observation(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:tiergrade4", session="tiergrade4", project="tiergradeproj4",
+        model=None, cwd=None)
+    try:
+        out = await srv.open_thread("a thread filed by identity, no repo= typed", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "tiergradeproj4",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    row = await _in_repo_grade(actions.pool, "Thread", "tiergradeproj4")
+    assert row["evidence_class"] == "direct_observation"
+    assert row["confidence"] == pytest.approx(0.6)
+
+
+async def test_open_thread_explicit_repo_link_stays_self_declared(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        await srv.open_thread(
+            "a thread with repo= typed explicitly, not defaulted", repo="tiergradeproj5")
+    finally:
+        srv._pool = saved_pool
+    row = await _in_repo_grade(actions.pool, "Thread", "tiergradeproj5")
+    assert row["evidence_class"] == "self_declared"
+    assert row["confidence"] == pytest.approx(0.9)
 
 
 # --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
