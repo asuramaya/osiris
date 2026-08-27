@@ -73,6 +73,18 @@ async def test_ensure_type_link_kind_round_trips_domain_range(actions: Actions) 
     assert fetched.description == "A orbits B"
 
 
+async def test_ensure_type_object_kind_round_trips_required_link_kinds(
+    actions: Actions,
+) -> None:
+    """task #189, decision 7ea187b9 — the declare-or-refuse gate's own declaration
+    surface, same shape as domain/range's round-trip above."""
+    rec = await ensure_type(actions, name="GatedThing", kind="object", actor="test",
+                            required_link_kinds=["repo", "grounds"])
+    assert rec.required_link_kinds == ("repo", "grounds")
+    fetched = await object_type(actions.pool, "GatedThing")
+    assert fetched.required_link_kinds == ("repo", "grounds")
+
+
 async def test_object_type_falls_back_to_default_when_unknown(actions: Actions) -> None:
     rec = await object_type(actions.pool, "NeverDeclared")
     assert rec.name == "Unknown" and rec.category == ("Other",)

@@ -649,7 +649,13 @@ def _tool_chars(t: Any) -> int:
 # damage half), same shape as unwire_informs_fanout's own repair door. Docstring trimmed
 # under the category rule first (1,840 -> 1,451 chars for the tool itself); the remaining
 # growth is the verb existing at all, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 192_981
+# 192,981 -> 193,507 (measured exact). Tool count unchanged (task #189, decision
+# 7ea187b9): record_decision and open_thread each gained one new PARAMETER,
+# `unlinked_because` — the declare-or-refuse gate's mandatory countable hatch, not
+# decoration. Both docstrings were trimmed to one line each under the category rule
+# first; the remaining growth is the two params' own wire schema entries plus that
+# one line apiece, not prose left untrimmed.
+TOOL_CONTRACT_CEILING_CHARS = 193_507
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

@@ -40,7 +40,15 @@ class ObjectType:
     chain. Only declare one when the chain's own members (name/title/summary/
     statement/surface/handle) would pick the WRONG field for this type, or the type
     has none of them at all (Tension's pole_a/pole_b) — most types need neither,
-    because the chain was itself designed around their real shapes."""
+    because the chain was itself designed around their real shapes.
+
+    `required_link_kinds` (task #189, ruling 5ac06206 + decision 7ea187b9) is the
+    declare-or-refuse surface: a write door mints THIS object type mandatory only when
+    at least one kind named here is satisfied by a SELF_DECLARED-graded link (or the
+    caller passed unlinked_because=) — never by a derived/observed one. Empty (the
+    default, and every entry below ships empty in this pass) means unenforced, same as
+    today. Content is Khnum's call, not this file's; this field only exists so there is
+    somewhere to put it."""
 
     name: str
     category: str
@@ -50,6 +58,7 @@ class ObjectType:
     schemes: tuple[str, ...] = ()
     label_field: str | None = None
     subtitle_field: str | None = None
+    required_link_kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

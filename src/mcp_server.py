@@ -5671,6 +5671,19 @@ async def _surface_prior_art(
         return []
 
 
+# THE HATCH'S TWO POPULATIONS MUST STAY SEPARABLE (Thoth's condition 2, msg 5802/5811):
+# a Decision whose ONLY requested connectivity is an extension-link param (obsoletes=/
+# confirms=/refutes=/implements=/rediscovers=/bears_on=, which mint AFTER capture.
+# record_decision's own atomic block — see decision 7ea187b9) must not fall through
+# unlinked_because's HATCH indistinguishably from a genuinely standalone, disconnected
+# write. Never typed by a caller — this string is the machine's own signature on it.
+_EXTENSION_LINK_PENDING_REASON = (
+    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
+    "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
+    "implements=/rediscovers=/bears_on=, which mint after this transaction and cannot "
+    "satisfy the gate at its own commit point")
+
+
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
@@ -5682,6 +5695,7 @@ async def record_decision(
     implements: str | None = None, rediscovers: list[str] | None = None,
     bears_on: list[str] | None = None,
     ack_prior_art: bool = False,
+    unlinked_because: str | None = None,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
@@ -5748,6 +5762,8 @@ async def record_decision(
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
     implements/rediscovers/confirms/grounds/bears_on already answers it, pass True to
     record the dismissal as a graph event instead of a shrug that leaves no trace.
+    `unlinked_because` (task #189) — declare-or-refuse's hatch: a real reason here lets
+    an otherwise-unlinked write through when the type requires a link kind.
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
     confirming your text is now the CURRENT value (a different assertion can silently win
     the tie-break on the same object despite a success response). A `false` entry names
@@ -5895,6 +5911,17 @@ async def record_decision(
                                                                  exclude=old)
         if dup_before is not None:
             prior_content = await capture._decision_snapshot(pool, dup_before)
+    # THE HATCH'S TWO POPULATIONS (Thoth's condition 2): a caller who requested ONLY
+    # extension-link connectivity and gave no unlinked_because of their own gets the
+    # machine-set reason, never silently mixed with a genuinely standalone write's own
+    # (possibly caller-typed) reason. _enforce_required_links only ever USES this when
+    # the atomic-scope check (repo/grounds/resolves) actually fails — a caller who also
+    # gave repo=/grounds=/resolves= that satisfy the gate never sees this value land.
+    effective_unlinked_because = unlinked_because
+    if effective_unlinked_because is None and any(
+        [obsoletes, confirms, refutes, implements, rediscovers, bears_on]
+    ):
+        effective_unlinked_because = _EXTENSION_LINK_PENDING_REASON
     try:
         d = await capture.record_decision(
             Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
@@ -5904,6 +5931,7 @@ async def record_decision(
                      (str(answered[0]) if answered else None),
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
+            unlinked_because=effective_unlinked_because,
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
@@ -6275,6 +6303,7 @@ async def open_thread(
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
     resolves: str | list[str] | None = None,
     branch: str | None = None, files_touched: list[str] | None = None,
+    unlinked_because: str | None = None,
     session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
@@ -6286,6 +6315,8 @@ async def open_thread(
     id (`deduped: "true"`) instead of minting a twin — conservative on purpose, so a
     genuinely new thread is never swallowed. This is how a session hands off its loose ends
     instead of losing them (or doubling them).
+    `unlinked_because` (task #189) — declare-or-refuse's hatch, same shape as
+    record_decision's own parameter of this name.
     `kind='obligation'` marks a DUTY minted by an action ('kernel changed → daemons need
     restart') — record those the moment they're minted; they are neither rulings nor commits
     and otherwise die with the context window. `owner` says WHOSE MOVE it is: 'operator' =
@@ -6394,6 +6425,7 @@ async def open_thread(
             source=await _actor_for(ctx, subagent_id, subagent_type),
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
+            unlinked_because=unlinked_because,
         )
     except ValueError as e:
         return {"error": str(e)}
@@ -7160,7 +7192,8 @@ async def settle(
                 rationale=item.pop("rationale", None), repo=item_repo,
                 resolves=item.pop("resolves", None), source=actor,
                 repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
-                                      if repo_defaulted else None))
+                                      if repo_defaulted else None),
+                unlinked_because=item.pop("unlinked_because", None))
         except ValueError as e:
             rejected.append({"kind": "decision", "summary": summary, "error": str(e)})
             continue
@@ -7201,7 +7234,8 @@ async def settle(
                 Actions(pool), summary, repo=thread_repo,
                 kind=thread_kind, owner=thread_owner, source=actor,
                 repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
-                                      if repo_defaulted else None))
+                                      if repo_defaulted else None),
+                unlinked_because=item.pop("unlinked_because", None))
         except ValueError as e:
             rejected.append({"kind": "thread", "summary": summary, "error": str(e)})
             continue

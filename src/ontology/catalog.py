@@ -77,6 +77,9 @@ class TypeRecord:
     subtitle_field: str | None = None
     domain: tuple[str, ...] = ()
     range: tuple[str, ...] = ()
+    required_link_kinds: tuple[str, ...] = ()  # task #189 — object kinds only; meaningless
+                                                # on a link record, same as domain/range's
+                                                # own object-only-vs-link-only split above
 
 
 _DEFAULT_OBJECT = TypeRecord("Unknown", "object", ("Other",), "#6e7681", "ellipse",
@@ -167,7 +170,8 @@ async def _load_catalog(pool: _PoolOrConn) -> dict[tuple[str, str], TypeRecord]:
             description=props.get("description") or "",
             schemes=tuple(props.get("schemes") or ()),
             label_field=props.get("label_field"), subtitle_field=props.get("subtitle_field"),
-            domain=tuple(props.get("domain") or ()), range=tuple(props.get("range") or ()))
+            domain=tuple(props.get("domain") or ()), range=tuple(props.get("range") or ()),
+            required_link_kinds=tuple(props.get("required_link_kinds") or ()))
     return out
 
 
@@ -250,6 +254,7 @@ async def full_catalog(pool: _PoolOrConn) -> dict[str, Any]:
     object_types = [
         {"name": r.name, "category": list(r.category), "color": r.color,
          "shape": r.shape, "description": r.description, "schemes": list(r.schemes),
+         "required_link_kinds": list(r.required_link_kinds),
          "count": obj_counts.get(r.name, 0)}
         for r in cat.values() if r.kind == "object"
     ]
@@ -333,6 +338,7 @@ async def ensure_type(
     description: str | None = None, schemes: list[str] | None = None,
     label_field: str | None = None, subtitle_field: str | None = None,
     domain: list[str] | None = None, range: list[str] | None = None,
+    required_link_kinds: list[str] | None = None,
 ) -> TypeRecord:
     """Find-or-mint the Type for (kind, name) — idempotent, stub-on-miss, never raises.
     The write path's own tolerance for a novel type (schema.py's original _DEFAULT
@@ -369,6 +375,8 @@ async def ensure_type(
         fields["domain"] = list(domain)
     if range is not None:
         fields["range"] = list(range)
+    if required_link_kinds is not None:
+        fields["required_link_kinds"] = list(required_link_kinds)
     for prop_name, value in fields.items():
         await actions.assert_property(oid, prop_name, value, actor, now, _CONF,
                                       evidence_class=_EC)
@@ -390,7 +398,8 @@ async def seed_catalog(actions: Actions, *, actor: str = "system:catalog-seed") 
         await ensure_type(actions, name=t.name, kind="object", actor=actor,
                           category=[t.category], color=t.color, shape=t.shape,
                           description=t.description, schemes=list(t.schemes),
-                          label_field=t.label_field, subtitle_field=t.subtitle_field)
+                          label_field=t.label_field, subtitle_field=t.subtitle_field,
+                          required_link_kinds=list(t.required_link_kinds))
         n_object += 1
     for lt in schema._LINK_TYPES:
         await ensure_type(actions, name=lt.name, kind="link", actor=actor,
