@@ -19,7 +19,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 (full history) — actions/checkout@v4's default (1) is a shallow
+      # clone with no parent commit, and tests/test_handoff_compiler.py's `git rev-parse
+      # HEAD~1` fails outright against it (exit 128, "ambiguous argument"). Every local
+      # checkout/worktree already has full history; CI's own shallow default was the only
+      # place this ever diverged (Khnum, 2026-08-27, decision ab20fac1's CI-piece follow-up).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv (pinned Python)
         uses: astral-sh/setup-uv@v5
