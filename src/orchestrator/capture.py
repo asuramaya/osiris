@@ -1360,6 +1360,24 @@ async def open_thread(
         if files_touched:
             await a.assert_property(t, "files_touched", files_touched, source, observed,
                                     _CONF, evidence_class=_EC)
+        # noted_in FROM THE OPENER'S OWN PROSE (record_decision's task #101 mechanism for
+        # decided_in, ported here — this door never had it): a thread whose summary already
+        # names a commit ("commit 238b48f broke the gate") is the same self-declared shape
+        # as a decision naming one, but `decided_in`'s schema domain is Decision-only
+        # (schema.py:399) — `noted_in` (Thread -> Commit, schema.py:372) is the type the
+        # session-miner already uses for this exact edge shape (ingest/threads.py:143),
+        # now written at birth too instead of waiting on a mining pass. Only `summary` is
+        # scanned; open_thread has no rationale/protocol field to also check.
+        for sha in _cited_commit_shas(summary):
+            commit_id = await _resolve_commit(a.pool, sha)
+            if commit_id is None:  # not (yet) ingested, or a typo — skip, never guess
+                continue
+            exists = await a.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='noted_in'",
+                t, commit_id)
+            if not exists:
+                await a.create_link(t, commit_id, "noted_in", source, observed, _CONF,
+                                    evidence_class=_EC)
         if repo:
             rec = repo_evidence_class or _EC
             await link_repo(a, t, repo, observed, source=source, evidence_class=rec,

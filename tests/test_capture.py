@@ -2674,6 +2674,41 @@ async def test_record_decision_never_mistakes_a_decision_short_id_for_a_commit(
     assert n == 0
 
 
+# --- open_thread's own noted_in mint (msg 5800/5804's derivation half): the SAME
+# self-declared-in-prose shape record_decision's decided_in already covers, but
+# `decided_in` itself is schema-scoped to Decision only (schema.py:399) — Thread's
+# equivalent edge is `noted_in` (schema.py:372), the type the session-miner already
+# mints for exactly this shape (ingest/threads.py:143), now written at birth too. ------
+
+
+async def test_open_thread_mints_noted_in_from_a_cited_commit_sha(actions: Actions) -> None:
+    c = await actions.create_or_find_object("Commit", "commit:238b48fb7104", "git")
+    t = await open_thread(
+        actions, "Chase the flake in commit 238b48f", source="agent:test-i")
+    edges = await actions.pool.fetch(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='noted_in'", t)
+    assert [e["to_id"] for e in edges] == [c]
+
+
+async def test_open_thread_noted_in_is_idempotent(actions: Actions) -> None:
+    await actions.create_or_find_object("Commit", "commit:69f9842da653", "git")
+    t = await open_thread(actions, "Still broken after commit 69f9842", source="agent:test-i")
+    await open_thread(actions, "Still broken after commit 69f9842", source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='noted_in'", t)
+    assert n == 1
+
+
+async def test_open_thread_never_mistakes_a_decision_short_id_for_a_commit(
+        actions: Actions) -> None:
+    await actions.create_or_find_object("Commit", "commit:335ddd13aaaa", "git")  # a decoy
+    t = await open_thread(
+        actions, "Builds on decision 335ddd13's own measurement", source="agent:test-i")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='noted_in'", t)
+    assert n == 0
+
+
 async def test_backfill_decided_in_mints_what_the_live_path_missed(actions: Actions) -> None:
     """Task #101's named gap, closed: a decision citing a commit BEFORE gitlog reaches it
     mints nothing at write time (identical to test_record_decision_skips_a_sha_with_no_
