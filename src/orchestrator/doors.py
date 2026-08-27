@@ -38,11 +38,23 @@ def _normed(cwd: str) -> str:
     return os.path.normpath(os.path.expanduser(cwd)) if cwd else ""
 
 
-async def _record(pool: asyncpg.Pool, agent_id: str, *, resolved_via: str) -> dict[str, Any]:
+async def _record(
+    pool: asyncpg.Pool, agent_id: str, *, resolved_via: str,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
     """The one coherent record for a KNOWN-OR-GUESSED agent id: that lineage's freshest mount
     row (registry + liveness + office-anchor, folded across every generation) plus its seat
-    off the `holds` link (never the agent_mounts.seat_id cache column)."""
-    from src.orchestrator.agents import _generation
+    off the `holds` link (never the agent_mounts.seat_id cache column).
+
+    `live` IS A REAL GATE, NOT JUST DISPLAY (door census item 4, obligation 555d5eb6/
+    164fc26c, Thoth msg 5772/5741, thread 2c3c2b9a): `lift()`'s own pre-claim_name refusal
+    reads this exact field to decide whether a target is too live to lift — unlike this
+    house's other cache-based liveness reads (co_agents, fleet_pulse), this one actually
+    blocks an action, and both of `doors()`'s own callers (this MCP tool, `lift()`) are
+    rare, deliberate calls, never a hot per-mount/per-message path — so cross-checking the
+    real harness+/proc authority here is both correct and affordable. A fresh mount row
+    alone no longer counts as live; it must be registry_census-confirmed too."""
+    from src.orchestrator.agents import _generation, is_occupied_by_a_live_body
     from src.orchestrator.seats import held_seat
 
     base = _generation(agent_id)[0]
@@ -54,6 +66,10 @@ async def _record(pool: asyncpg.Pool, agent_id: str, *, resolved_via: str) -> di
     last_seen = row["last_seen"] if row else None
     age = (datetime.now(UTC) - last_seen).total_seconds() if last_seen else None
     live = age is not None and age < 900
+    if live:
+        live = await is_occupied_by_a_live_body(
+            pool, str(row["agent_id"]),
+            agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     return {
         "agent_id": row["agent_id"] if row else agent_id,
         "seat": ({"seat_id": seat["seat_id"], "handle": seat["handle"], "house": seat["house"]}
@@ -72,17 +88,26 @@ async def _record(pool: asyncpg.Pool, agent_id: str, *, resolved_via: str) -> di
     }
 
 
-async def doors(pool: asyncpg.Pool, ref: str) -> dict[str, Any]:
+async def doors(
+    pool: asyncpg.Pool, ref: str, *,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
     """The one steward read verb for 'what do I know about this agent / seat / cwd' — replacing
     a hand-rolled query against agent_mounts with a single call. Sniffs `ref`: 'agent:...' → that
     lineage's identity; 'seat:...' → that seat's current holder (vacant/cold seats resolve to no
     match, never a phantom record); a bare name → resolve_seat's handle resolution; an absolute
-    path ('/...' or '~/...') → every distinct lineage (soul-folded) that has EVER mounted there."""
+    path ('/...' or '~/...') → every distinct lineage (soul-folded) that has EVER mounted there.
+
+    `agents_json`/`read_exe`/`read_cwd` are the SAME injection seam `_record`'s own harness-
+    confirmation check uses (default: the real census) — both of this verb's own callers
+    (the MCP tool, `lift()`'s own pre-claim refusal) are rare, deliberate calls, never a
+    hot path, so paying that real cost here is affordable and correct."""
     ref = (ref or "").strip()
     matches: list[dict[str, Any]] = []
+    kw = {"agents_json": agents_json, "read_exe": read_exe, "read_cwd": read_cwd}
 
     if ref.startswith("agent:"):
-        rec = await _record(pool, ref, resolved_via="agent-id")
+        rec = await _record(pool, ref, resolved_via="agent-id", **kw)
         if rec["last_seen"] is not None or rec["seat"] is not None:
             matches = [rec]
     elif ref.startswith("seat:"):
@@ -90,7 +115,7 @@ async def doors(pool: asyncpg.Pool, ref: str) -> dict[str, Any]:
 
         occ = await seat_occupancy(pool, ref)
         if occ["holder"]:
-            matches = [await _record(pool, occ["holder"], resolved_via="seat-link")]
+            matches = [await _record(pool, occ["holder"], resolved_via="seat-link", **kw)]
     elif ref.startswith("/") or ref.startswith("~"):
         cwd = _normed(ref)
         souls = await pool.fetch(
@@ -99,7 +124,7 @@ async def doors(pool: asyncpg.Pool, ref: str) -> dict[str, Any]:
             "  FROM agent_mounts WHERE cwd=$1"
             ") s ORDER BY soul, last_seen DESC NULLS LAST", cwd)
         for s in souls:
-            matches.append(await _record(pool, s["soul"], resolved_via="cwd"))
+            matches.append(await _record(pool, s["soul"], resolved_via="cwd", **kw))
     else:
         from src.actions.core import Actions
         from src.orchestrator.agents import resolve_seat
@@ -114,8 +139,10 @@ async def doors(pool: asyncpg.Pool, ref: str) -> dict[str, Any]:
         ineligible = await seat_holder_ineligible(pool, ref)
         if ineligible is not None:
             return {"ref": ref, "resolved": False, "matches": [], "note": ineligible}
+        # resolve_seat's own harness cross-check is a SEPARATE fix (branch
+        # sekhmet-liveness-doors, not yet merged here) — no kw threaded through it yet.
         found = await resolve_seat(Actions(pool), ref)
         if found["agent"]:
-            matches = [await _record(pool, found["agent"], resolved_via="handle")]
+            matches = [await _record(pool, found["agent"], resolved_via="handle", **kw)]
 
     return {"ref": ref, "resolved": bool(matches), "matches": matches}

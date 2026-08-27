@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -96,15 +97,51 @@ async def test_lift_refuses_an_ambiguous_cwd(actions: Actions, tmp_path: Path) -
 
 
 async def test_lift_refuses_a_live_target(actions: Actions, tmp_path: Path) -> None:
+    """A GENUINELY live target (door census item 4/ninth-specimen fix, Thoth msg 5772/5741,
+    thread 2c3c2b9a): both doors()'s own liveness check (lift's pre-claim gate) and
+    establish_office's own separate one now cross-check registry_census, so this test
+    injects a fake confirming occupancy — a bare fresh mount row alone is no longer
+    sufficient to prove liveness, by design (the atlas-shape fix)."""
     cwd = str(tmp_path / "livecwd")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:livrogue1", cwd, live=True)
+    # job_dir's own basename is exactly 8 chars ("livrogu1") so a fake harness census can
+    # confirm this row (registry_census keys agent_mounts.job_dir's basename against
+    # sessionId[:8]).
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET job_dir='/jobs/livrogu1' WHERE agent_id='agent:livrogue1'")
 
-    out = await lift(actions.pool, "agent:livrogue1", "TooSoon",
-                     office_root=tmp_path / "seats")
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "livrogu1-0000-4000-8000-000000000000", "pid": 555,
+                 "cwd": cwd, "name": "[OS] TooSoon"}]
+
+    out = await lift(
+        actions.pool, "agent:livrogue1", "TooSoon", office_root=tmp_path / "seats",
+        agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: cwd)
     assert "error" in out
     assert "LIVE right now" in out["error"]
     assert not (tmp_path / "seats").exists()
+
+
+async def test_lift_no_longer_refuses_on_a_fresh_but_bodiless_target(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ATLAS SHAPE ITSELF: a fresh/refreshing mount row with NO harness-confirmed body
+    behind it must not block a lift — the exact false refusal this fix closes."""
+    cwd = str(tmp_path / "unhauntedcwd")
+    Path(cwd).mkdir()
+    await _rogue(actions, "agent:unhaunt1", cwd, live=True)
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await lift(
+        actions.pool, "agent:unhaunt1", "Unhaunted", office_root=tmp_path / "seats",
+        agents_json=_empty_agents_json)
+    assert "error" not in out
+    assert out["claimed"]["claimed"] == "Unhaunted"
 
 
 async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: Path) -> None:

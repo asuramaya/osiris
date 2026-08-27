@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.doors import doors
@@ -13,11 +14,22 @@ async def test_agent_ref_resolves_project_cwd_model_and_seat(actions: Actions) -
     seat = await ensure_seat(actions, house="osiris", handle="Anhur", source="test")
     await actions.create_or_find_object("Agent", "agent:live00001", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:live00001")
-    await save_mount(actions.pool, job_dir="/jobs/live00001", agent_id="agent:live00001",
+    # job_dir's own basename is exactly 8 chars ("live0001") so a fake harness census can
+    # confirm this row is occupied (registry_census keys agent_mounts.job_dir's basename
+    # against sessionId[:8]) — doors()'s own "live" now cross-checks that authority
+    # (door census item 4, Thoth msg 5772/5741, thread 2c3c2b9a).
+    await save_mount(actions.pool, job_dir="/jobs/live0001", agent_id="agent:live00001",
                      project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
                      session_key=None)
 
-    out = await doors(actions.pool, "agent:live00001")
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "live0001-0000-4000-8000-000000000000", "pid": 444,
+                 "cwd": "/w/osiris", "name": "[OS] Anhur"}]
+
+    out = await doors(
+        actions.pool, "agent:live00001", agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/w/osiris")
     assert out["ref"] == "agent:live00001" and out["resolved"] is True
     assert len(out["matches"]) == 1
     m = out["matches"][0]
@@ -31,6 +43,23 @@ async def test_agent_ref_resolves_project_cwd_model_and_seat(actions: Actions) -
 async def test_agent_ref_with_no_evidence_at_all_is_unresolved(actions: Actions) -> None:
     out = await doors(actions.pool, "agent:ghost0001")
     assert out == {"ref": "agent:ghost0001", "resolved": False, "matches": []}
+
+
+async def test_a_fresh_but_bodiless_mount_row_is_not_live(actions: Actions) -> None:
+    """THE ATLAS SHAPE (door census item 4, Thoth msg 5772/5741, thread 2c3c2b9a): a
+    fresh/refreshing agent_mounts row alone used to be enough to call an identity 'live' —
+    even with no harness-confirmed body behind it. doors()'s own `_record` now requires
+    registry_census confirmation too; lift()'s pre-claim refusal reads exactly this field."""
+    await actions.create_or_find_object("Agent", "agent:phantom1", "test")
+    await save_mount(actions.pool, job_dir="/jobs/phantom1", agent_id="agent:phantom1",
+                     project="osiris", cwd="/w/osiris", model=None, session_key=None)
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await doors(actions.pool, "agent:phantom1", agents_json=_empty_agents_json)
+    m = out["matches"][0]
+    assert m["live"] is False and m["reachable"] == {"mail": False}
 
 
 async def test_seat_binding_reads_the_holds_link_never_the_cache_column(

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.mounts import save_mount
@@ -256,18 +257,49 @@ async def test_establish_office_refuses_a_live_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The rollout guard: extraction moves the lineage's transcripts, and a running
-    harness appends to its own by path — a live seat (any generation) is never moved."""
+    harness appends to its own by path — a live seat (any generation) is never moved.
+
+    Confirmed via a fake harness census (door census item 4/ninth-specimen fix, Thoth msg
+    5772/5741, thread 2c3c2b9a): a bare fresh mount row is no longer sufficient by
+    itself — _seat_fixture's own job_dir ("/jobs/0ff1cee1") is exactly 8 chars on purpose
+    (registry_census keys agent_mounts.job_dir's basename against sessionId[:8])."""
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1", agent)
 
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "0ff1cee1-0000-4000-8000-000000000000", "pid": 666,
+                 "cwd": "/x", "name": "[OS] Butler"}]
+
     out = await establish_office(
         actions, seat_or_agent=agent, actor="agent:test",
         office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
-        claude_json=tmp_path / "cj.json")
+        claude_json=tmp_path / "cj.json", agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/x")
 
     assert "error" in out
     assert "LIVE right now" in out["error"]
+
+
+async def test_establish_office_no_longer_refuses_on_a_fresh_but_bodiless_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ATLAS SHAPE ITSELF: a fresh/refreshing mount row with no harness-confirmed body
+    behind it must not block the ceremony — the exact false refusal this fix closes."""
+    agent = await _seat_fixture(actions, tmp_path, handle="Ghostly")
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1", agent)
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await establish_office(
+        actions, seat_or_agent=agent, actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json", agents_json=_empty_agents_json)
+
+    assert "error" not in out
 
 
 # ═══ plan_pin_migration (ruling 719ed5b1's five-key schema — DRY RUN, never writes) ═══

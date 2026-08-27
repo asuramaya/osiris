@@ -634,6 +634,7 @@ async def establish_office(
     actions: Actions, *, seat_or_agent: str, actor: str | None = None,
     office_root: Path | None = None, projects_root: Path | None = None,
     claude_json: Path | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """The whole ceremony, one receipt: resolve the seat, write its standing orders
     (never clobbering — an occupied office's orders may be hand-tuned), then
@@ -692,18 +693,36 @@ async def establish_office(
     # mid-tab splits the session's history between two slugs. The ceremony waits for a
     # quiet seat (lineage-wide: a live heir blocks moving the base); close the tab,
     # establish, relaunch at the office.
+    #
+    # A NINTH SPECIMEN OF THE SAME ATLAS SHAPE, found live while fixing door census item 4
+    # (Thoth msg 5772/5741, thread 2c3c2b9a): a fresh/refreshing agent_mounts row alone
+    # used to be enough to refuse this whole ceremony — even with no harness-confirmed
+    # body behind it. This door was not in the original count; found because it was
+    # masking doors.py's own `_record` fix inside lift()'s own call chain (establish_office
+    # runs its own, separate liveness check AFTER lift()'s pre-claim check already passed).
+    # establish_office is a rare, deliberate ceremony (never a hot per-mount path), so the
+    # same registry_census cross-check is affordable here too.
     from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import registry_census
 
     base = _generation(agent_id)[0]
-    fresh = await actions.pool.fetchval(
-        "SELECT max(last_seen) FROM agent_mounts "
+    fresh_rows = await actions.pool.fetch(
+        "SELECT agent_id, last_seen FROM agent_mounts "
         "WHERE (agent_id=$1 OR agent_id LIKE $1 || '-%') "
-        "AND last_seen > now() - interval '15 minutes'", base)
-    if fresh is not None:
+        "AND last_seen > now() - interval '15 minutes' "
+        "ORDER BY last_seen DESC", base)
+    confirmed_fresh = None
+    if fresh_rows:
+        census = await registry_census(
+            actions.pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+        matched_ids = {m.get("agent_id") for m in census.get("matched", [])}
+        confirmed_fresh = next(
+            (r for r in fresh_rows if str(r["agent_id"]) in matched_ids), None)
+    if confirmed_fresh is not None:
         return {"error": f"{handle} ({agent_id}) is LIVE right now (last seen "
-                         f"{fresh.isoformat()}) — moving a live seat splits its running "
-                         "session's history between two homes. Close its tab first, "
-                         "then establish; it wakes up in the office"}
+                         f"{confirmed_fresh['last_seen'].isoformat()}) — moving a live "
+                         "seat splits its running session's history between two homes. "
+                         "Close its tab first, then establish; it wakes up in the office"}
     root = office_root or _DEFAULT_OFFICE_ROOT
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
