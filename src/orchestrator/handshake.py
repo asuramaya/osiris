@@ -98,6 +98,7 @@ async def _lineage_handle(actions: Actions, base: str) -> str | None:
 
 async def office_seat(
     actions: Actions, *, cwd: str, office_root: Path | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> str | None:
     """The seat whose OFFICE this cwd is — IDENTITY AT BIRTH for office-born sessions
     (operator, 2026-07-16: 'the point of the migration is that i dont have to end the
@@ -146,9 +147,28 @@ async def office_seat(
     if not head:
         return None
     base = _generation(str(head))[0]
-    alive = await actions.pool.fetchval(
-        "SELECT max(last_seen) > now() - interval '15 minutes' FROM agent_mounts "
-        "WHERE agent_id=$1 OR agent_id LIKE $1||'-%'", base)
+    # ONE LIVENESS AUTHORITY, "REGISTER_AGENT/MOUNT ON AN OCCUPIED SEAT" DOOR (door census
+    # item 3, obligation 555d5eb6/164fc26c, Thoth msg 5772: "you have measured its real
+    # scope" — this fires only for an UNNAMED lineage's first office-claim, never on every
+    # mount, so it is safe to cross-check here). A fresh agent_mounts row alone used to be
+    # enough to call the lineage "alive" and refuse the office-birth mint — the exact atlas
+    # shape (thread 2c3c2b9a): a fresh/refreshing row for a generation with NO harness-
+    # confirmed body behind it. Fetch every fresh row in this lineage, then ask
+    # registry_census ONCE (not once per row — a real subprocess+/proc walk, worth paying
+    # here since this door is rare, not worth paying N times over) whether ANY of them is
+    # actually occupied.
+    fresh_rows = await actions.pool.fetch(
+        "SELECT DISTINCT agent_id FROM agent_mounts "
+        "WHERE (agent_id=$1 OR agent_id LIKE $1||'-%') "
+        "AND last_seen > now() - interval '15 minutes'", base)
+    alive = False
+    if fresh_rows:
+        from src.orchestrator.mounts import registry_census
+
+        census = await registry_census(
+            actions.pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+        matched_ids = {m.get("agent_id") for m in census.get("matched", [])}
+        alive = any(str(r["agent_id"]) in matched_ids for r in fresh_rows)
     # a JUST-BORN heir has a deliberately pulseless row (a heartbeat is earned by an act,
     # never granted by a greeting) — so the seat is also taken when the lineage minted a
     # generation moments ago: two fresh launches seconds apart must not both be the seat
@@ -162,6 +182,7 @@ async def office_seat(
 
 async def office_claim(
     actions: Actions, *, cwd: str, agent_id: str, office_root: Path | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> str | None:
     """THE FIRST ACT SEATS YOU (the title-generator incident, 16e3cee9): the office door
     hands a fresh session NOTHING at the greeting — the whisper fires for plumbing
@@ -179,7 +200,9 @@ async def office_claim(
     base = _generation(agent_id)[0]
     if await _lineage_handle(actions, base):
         return None          # already somebody named — never re-earned through this door
-    return await office_seat(actions, cwd=cwd, office_root=office_root)
+    return await office_seat(
+        actions, cwd=cwd, office_root=office_root,
+        agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
 
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -912,16 +935,25 @@ async def automount(
     # warning used to arrive only at mount() — after a session may already have touched
     # the shared tree. The whisper carries it from breath one; the lease gate (12c225b)
     # is the enforcement half, this is the awareness half. Awareness never blocks.
+    # THE QUERY ITSELF IS `mounts.live_co_agents` — ONE implementation shared with
+    # mcp_server.py's `_co_agents` (Thoth msg 5772/5741, thread 2c3c2b9a: this whisper-side
+    # copy used to be an independent second query, free to drift from mount()/orient()'s
+    # own). Excluded by job_dir, not lineage: at this first breath an agent_id may not be
+    # resolved yet, but job_dir always is.
     co_agents: list[str] = []
+    _CO_AGENTS_WHISPER_CAP = 6
     if ident.project and job_dir:
         try:
-            co_rows = await actions.pool.fetch(
-                "SELECT DISTINCT agent_id FROM agent_mounts WHERE project=$1 "
-                "AND job_dir <> $2 AND last_seen > now() - make_interval(secs => 900)",
-                ident.project, job_dir)
-            for r in co_rows[:6]:
+            from src.orchestrator.mounts import live_co_agents
+
+            all_sibs = await live_co_agents(
+                actions.pool, project=ident.project, exclude_job_dir=job_dir)
+            for r in all_sibs[:_CO_AGENTS_WHISPER_CAP]:
                 seat = await _seat_of(actions, str(r["agent_id"]))
                 co_agents.append(seat or str(r["agent_id"]))
+            if len(all_sibs) > _CO_AGENTS_WHISPER_CAP:
+                co_agents.append(
+                    f"...and {len(all_sibs) - _CO_AGENTS_WHISPER_CAP} more not shown")
         except Exception:  # noqa: BLE001 — awareness must never break the whisper
             co_agents = []
     return {

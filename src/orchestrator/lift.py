@@ -58,7 +58,8 @@ async def lift(
     from src.orchestrator.offices import establish_office as _establish_office
 
     ref = (ref or "").strip()
-    pre = await _doors(pool, ref)
+    census_kw = {"agents_json": agents_json, "read_exe": read_exe, "read_cwd": read_cwd}
+    pre = await _doors(pool, ref, **census_kw)
     matches = pre["matches"]
     if not matches:
         return {"error": f"no such agent/seat/cwd: {ref!r} — lift never guesses at a "
@@ -84,11 +85,12 @@ async def lift(
 
     established = await _establish_office(
         actions, seat_or_agent=agent_id, actor=actor,
-        office_root=office_root, projects_root=projects_root, claude_json=claude_json)
+        office_root=office_root, projects_root=projects_root, claude_json=claude_json,
+        **census_kw)
     if "error" in established:
         return {"error": established["error"], "step": "establish_office", "claimed": claimed}
 
-    post = await _doors(pool, agent_id)
+    post = await _doors(pool, agent_id, **census_kw)
     post_match = post["matches"][0] if post["matches"] else None
     verified = {
         "resolved": bool(post_match),

@@ -1271,6 +1271,57 @@ async def test_live_claimed_sids_sees_other_clients_lineage_aware(actions: Actio
     assert got == {"cafe0001", "beef0002"}  # heir claims its base; my own claim excluded
 
 
+async def test_live_co_agents_excludes_by_job_dir(actions: Actions) -> None:
+    """automount()'s own exclusion shape: at first breath an agent_id may not be resolved
+    yet, so job_dir (always known) is what excludes the caller's own row."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/mine", agent_id="agent:me0001", project="proj",
+                     cwd="/w", model=None, session_key=None)
+    await mounts.save_mount(p, job_dir="/j/sib", agent_id="agent:sib0001", project="proj",
+                     cwd="/w", model=None, session_key=None)
+    got = await mounts.live_co_agents(p, project="proj", exclude_job_dir="/j/mine")
+    assert [r["agent_id"] for r in got] == ["agent:sib0001"]
+
+
+async def test_live_co_agents_excludes_by_lineage_not_just_exact_id(actions: Actions) -> None:
+    """mount()/orient()'s own exclusion shape: every generation of MY OWN lineage is
+    excluded, not just the exact agent_id I called with (a stale row under an older
+    generation of myself is not a co-agent)."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/me-i", agent_id="agent:me0002", project="proj",
+                     cwd="/w", model=None, session_key=None)
+    await mounts.save_mount(p, job_dir="/j/me-ii", agent_id="agent:me0002-ii", project="proj",
+                     cwd="/w", model=None, session_key=None)
+    await mounts.save_mount(p, job_dir="/j/sib", agent_id="agent:sib0002", project="proj",
+                     cwd="/w", model=None, session_key=None)
+    got = await mounts.live_co_agents(p, project="proj", exclude_lineage_base="agent:me0002")
+    assert [r["agent_id"] for r in got] == ["agent:sib0002"]
+
+
+async def test_live_co_agents_returns_every_row_uncapped(actions: Actions) -> None:
+    """NO built-in truncation (the Seshat specimen, msg 5741: a bare LIMIT silently under-
+    reported a live sibling) — every caller decides its own display cap and can therefore
+    say how many it dropped, instead of this shared query dropping them first."""
+    p = actions.pool
+    for i in range(10):
+        await mounts.save_mount(
+            p, job_dir=f"/j/s{i}", agent_id=f"agent:many{i:04d}", project="crowded",
+            cwd="/w", model=None, session_key=None)
+    got = await mounts.live_co_agents(p, project="crowded")
+    assert len(got) == 10
+
+
+async def test_live_co_agents_ignores_a_stale_row(actions: Actions) -> None:
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/j/stale", agent_id="agent:stale001", project="proj2",
+                     cwd="/w", model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE agent_id='agent:stale001'")
+    got = await mounts.live_co_agents(p, project="proj2")
+    assert got == []
+
+
 async def test_retire_will_not_let_the_pile_LEAVE_QUIETLY(actions: Actions, tmp_path: Path) -> None:
     """THE SEAM (ruling ceae1604). A seat that dies with an undisposed pile hands its leftovers to
     the OPERATOR's wall — which is exactly how 3,579 machine guesses became the human's problem

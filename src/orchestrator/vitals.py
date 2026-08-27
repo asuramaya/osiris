@@ -45,7 +45,18 @@ _SOUL = "regexp_replace(m2.agent_id, '-[ivxlcdm]+$', '')"
 
 
 async def live_souls(db: _DB, *, live_secs: int = 900) -> dict[str, int]:
-    """{souls, visitors} — distinct live minds (seated) and distinct live strangers."""
+    """{souls, visitors} — distinct live minds (seated) and distinct live strangers.
+
+    CACHE-BASED, CONFESSED, DELIBERATELY NOT ROUTED THROUGH THE HARNESS AUTHORITY (door
+    census item 2, Thoth msg 5772/5741, thread 2c3c2b9a): `agent_mounts.last_seen`
+    freshness only, never cross-checked against registry_census/is_occupied_by_a_live_body.
+    This feeds fleet_pulse's "N live" — read by EVERY agent on EVERY mount/orient call
+    fleet-wide, which is exactly why it stays cheap on purpose rather than paying a real
+    subprocess+/proc census on that hot a path. The obligation this leaves is DISCLOSURE,
+    not verification: a caller (or a human) reading "N live" must know it is a 15-minute
+    mount-row guess, not a harness-confirmed count — never silently presented as the
+    latter, the same "cache in both directions" law every other liveness fix in this house
+    now applies."""
     row = await db.fetchrow(
         f"SELECT count(DISTINCT {_SOUL}) FILTER (WHERE {_SEATED_ROW}) AS souls, "
         f"       count(DISTINCT {_SOUL}) FILTER (WHERE NOT {_SEATED_ROW}) AS visitors "

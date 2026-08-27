@@ -486,7 +486,17 @@ async def _resolve_subagent_parent(
 async def _parent_live(actions: Actions, parent: str) -> bool:
     """Is the EXACT parent generation (not its whole lineage) live right now? A hand was
     spawned by one specific TURN — if a newer generation has since succeeded it, that turn
-    is over and the hand it spawned can never resume, even though the lineage continues."""
+    is over and the hand it spawned can never resume, even though the lineage continues.
+
+    CACHE-BASED, CONFESSED, DELIBERATELY NOT CROSS-CHECKED (door census item 4, Thoth msg
+    5772/5741, thread 2c3c2b9a): `agent_mounts.last_seen` freshness only, never verified
+    against registry_census/is_occupied_by_a_live_body. Unlike doors.py's own `_record`
+    (a real refusal gate `lift()` reads), this only decides a STATUS LABEL — whether
+    `file_subagent` flips a spawned hand to 'historical' — and getting it wrong in either
+    direction is a mislabeled record, never a lost result or a forked identity. Called at
+    every subagent filing, not a rare admin ceremony, so the cheap read stays the right
+    trade here; a caller that needs a harder guarantee should ask the real authority
+    itself, not assume this one already did."""
     return bool(await actions.pool.fetchval(
         "SELECT max(last_seen) > now() - make_interval(secs => $2) FROM agent_mounts "
         "WHERE agent_id=$1", parent, float(_LIVE_SECS)))

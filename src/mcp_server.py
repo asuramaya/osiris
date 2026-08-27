@@ -1723,61 +1723,66 @@ def _seam_confidently_dated(ident: AgentIdentity) -> bool:
     return len(sides) == 2 and bool(sides[0].strip()) and bool(sides[1].split(" [", 1)[0].strip())
 
 
-async def _co_agents(pool: asyncpg.Pool, project: str, agent_id: str) -> dict[str, Any] | None:
-    """Other LIVE agents on this project RIGHT NOW (Deckard XXVI, msg 258) — the ONE query,
-    shared by mount() and orient() (it used to be copied between them, the exact 'two
-    copies drifting' class this house keeps finding). Enriched with each sibling's
-    context_pct (Thoth's Pit Watch extension, msg 1381, seam-discipline decision 33b7cb10:
-    'a manager can't route around a seam it can't see' — the gap behind mis-assigning a
-    79%-full worker blind) — the freshest reading osiris_hook.py's `stop` subcommand has
-    stamped on that Agent, off the SAME context_lens.ALARM_PCT the hook itself alarms on,
-    never a second copied threshold. Absent (no key) when that sibling has never had a
-    reading stamped; STALENESS is spoken plainly via `context_pct_age_s`, since a reading
-    only refreshes at that sibling's own Stop-hook boundaries — never trust an old snapshot
-    as current. None (not {}) when there are no live siblings at all, so callers can keep
-    their existing `if sibs:` / `if co_agents:` shape unchanged."""
-    from src.orchestrator.context_lens import ALARM_PCT
+_CO_AGENTS_DISPLAY_CAP = 8
 
-    # LATERAL, not two side-by-side scalar subqueries (SQL hygiene tripwire,
-    # test_sql_hygiene.py: a bare LIMIT 1 with no ORDER BY breaks the day a second source
-    # describes the object — and worse here, two INDEPENDENTLY unordered subqueries could
-    # each resolve to a DIFFERENT winning row, pairing a pct with someone else's age). ONE
-    # ordered pick (winning_props's own confidence DESC, observed_at DESC) guarantees both
-    # columns come from the SAME row.
-    sibs = await pool.fetch(
-        "SELECT m.agent_id, m.cwd, cp.pct AS context_pct, cp.observed_at AS context_pct_at "
-        "FROM agent_mounts m LEFT JOIN LATERAL ("
-        "   SELECT a.value #>> '{}' AS pct, a.observed_at FROM current_assertions a "
-        "   JOIN objects o ON o.id = a.object_id "
-        "   WHERE o.canonical = m.agent_id AND a.name = 'context_pct' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1"
-        ") cp ON true "
-        "WHERE m.project = $1 AND m.agent_id <> $2 "
-        "AND m.last_seen > now() - interval '15 minutes' ORDER BY m.last_seen DESC LIMIT 8",
-        project, agent_id)
+
+async def _co_agents(pool: asyncpg.Pool, project: str, agent_id: str) -> dict[str, Any] | None:
+    """Other LIVE agents on this project RIGHT NOW (Deckard XXVI, msg 258). The underlying
+    "who's live" query is `mounts.live_co_agents` — ONE implementation shared with
+    handshake.py's `automount()` (Thoth msg 5772/5741, thread 2c3c2b9a: the two used to be
+    independent copies, free to drift). Enriched here with each sibling's context_pct
+    (Thoth's Pit Watch extension, msg 1381, seam-discipline decision 33b7cb10: 'a manager
+    can't route around a seam it can't see' — the gap behind mis-assigning a 79%-full
+    worker blind) — the freshest reading osiris_hook.py's `stop` subcommand has stamped on
+    that Agent, off the SAME context_lens.ALARM_PCT the hook itself alarms on, never a
+    second copied threshold. Absent (no key) when that sibling has never had a reading
+    stamped; STALENESS is spoken plainly via `context_pct_age_s`, since a reading only
+    refreshes at that sibling's own Stop-hook boundaries — never trust an old snapshot as
+    current. None (not {}) when there are no live siblings at all, so callers can keep
+    their existing `if sibs:` / `if co_agents:` shape unchanged.
+
+    NEVER SILENTLY TRUNCATED (the Seshat specimen, msg 5741: the old bare `LIMIT 8` in
+    this query under-reported a live sibling with no signal at all) — the note names
+    exactly how many more exist beyond the display cap, rather than just dropping them."""
+    from src.orchestrator.context_lens import ALARM_PCT
+    from src.orchestrator.mounts import live_co_agents
+
     # your own lineage is never another hand (thread cb2b0a09)
     _mine = _generation(agent_id)[0]
-    sibs = [s for s in sibs if _generation(s["agent_id"])[0] != _mine]
+    all_sibs = await live_co_agents(pool, project=project, exclude_lineage_base=_mine)
+    sibs = all_sibs[:_CO_AGENTS_DISPLAY_CAP]
     if not sibs:
         return None
+    # ONE batched pick of each sibling's context_pct (winning_props's own confidence DESC,
+    # observed_at DESC per agent), not a LATERAL join per row — the shared query above
+    # already did the one query this needed; this is a second, small, batched query.
+    agent_ids = [s["agent_id"] for s in sibs]
+    pct_rows = await pool.fetch(
+        "SELECT DISTINCT ON (o.canonical) o.canonical AS agent_id, "
+        "a.value #>> '{}' AS pct, a.observed_at "
+        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        "WHERE o.canonical = ANY($1::text[]) AND a.name = 'context_pct' "
+        "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC", agent_ids)
+    pct_by_agent = {r["agent_id"]: r for r in pct_rows}
     now = datetime.now(UTC)
     live = []
     for s in sibs:
         entry: dict[str, Any] = {"agent": s["agent_id"], "cwd": s["cwd"]}
-        if s["context_pct"] is not None:
-            pct = int(s["context_pct"])
+        p = pct_by_agent.get(s["agent_id"])
+        if p is not None and p["pct"] is not None:
+            pct = int(p["pct"])
             entry["context_pct"] = pct
             entry["near_seam"] = pct >= ALARM_PCT
-            if s["context_pct_at"]:
-                entry["context_pct_age_s"] = int((now - s["context_pct_at"]).total_seconds())
+            if p["observed_at"]:
+                entry["context_pct_age_s"] = int((now - p["observed_at"]).total_seconds())
         live.append(entry)
-    return {
-        "live": live,
-        "note": f"{len(live)} other LIVE agent(s) in this project RIGHT NOW — "
-                "assume a shared tree: never `git add -A`, stage your own hunks, "
-                "check for foreign markers before committing, coordinate via "
-                f"send(to='{project}')",
-    }
+    note = (f"{len(live)} other LIVE agent(s) in this project RIGHT NOW — "
+            "assume a shared tree: never `git add -A`, stage your own hunks, "
+            "check for foreign markers before committing, coordinate via "
+            f"send(to='{project}')")
+    if len(all_sibs) > _CO_AGENTS_DISPLAY_CAP:
+        note += f" ({len(all_sibs) - _CO_AGENTS_DISPLAY_CAP} more not shown)"
+    return {"live": live, "note": note}
 
 
 async def _peer_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:

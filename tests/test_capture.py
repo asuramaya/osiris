@@ -2000,6 +2000,41 @@ async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Acti
     assert "six's own estate" in " ".join(n["text"] for n in note["notes"])
 
 
+async def test_orient_co_agents_confesses_when_truncated_past_the_display_cap(
+    actions: Actions,
+) -> None:
+    """THE SESHAT SPECIMEN (Thoth msg 5741): a bare LIMIT used to silently drop a live
+    sibling past the display cap, with no signal at all — every caller of the shared
+    `live_co_agents` query now says exactly how many more it dropped."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    for i in range(10):
+        await mounts.save_mount(
+            actions.pool, job_dir=f"/h/.claude/jobs/crowd{i:04d}",
+            agent_id=f"agent:crowd{i:04d}", project="crowdedtree", cwd="/x",
+            model=None, session_key=f"k{i}")
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:me-crowd", session="mecrowd01", project="crowdedtree",
+        model=None, cwd=None)
+    try:
+        out = await srv.orient(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert len(out["co_agents"]["live"]) == 8               # the display cap, unchanged
+    assert "2 more not shown" in out["co_agents"]["note"]     # 10 siblings, 2 dropped, NAMED
+
+
 async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) -> None:
     """Co-agent blindness (Deckard XXVI, msg 258): a live sibling sharing your repo is the
     one blindness that costs unrecoverable work — orient names them and the shared-tree
