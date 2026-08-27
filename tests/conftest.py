@@ -366,6 +366,27 @@ def _strict_schema() -> Iterator[None]:
         catalog.set_strict(False)
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_deploy_gate_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """thread be24817b, THE SELF-REFUTING FULL-SUITE DEPLOY GATE: arming
+    OSIRIS_DEPLOY_FULL_SUITE_GATE/OSIRIS_DEPLOY_CHAOS_GATE via env for a real deploy makes
+    `full_suite_gate`'s own spawned pytest subprocess INHERIT that exact env. Every
+    `cmd_deploy` call anywhere in this suite that never explicitly injects its own
+    `deploy_settings` (nearly all of them — 20+ call sites across test_cli.py and
+    test_deploy_guard.py test something else entirely and were never meant to care about
+    either flag) would otherwise read the ambient-armed value as True and try to invoke the
+    REAL `_real_full_suite_gate`/`_real_chaos_gate` defaults: a pytest run recursively
+    spawning itself, or a genuine SIGKILL chaos replay against live daemons, fired by a test
+    that never asked for either. Scrubbed here, unconditionally, for every test in the
+    suite — never a partial fix scoped to the handful of tests that happen to name these
+    flags. A test that DOES want one armed passes its own explicit
+    `deploy_settings=Settings(osiris_deploy_..._gate=True)` (`cmd_deploy`'s injectable
+    Settings param — init kwargs beat env in pydantic-settings, so this fixture leaving the
+    env scrubbed never overrides that test's own explicit construction)."""
+    monkeypatch.delenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", raising=False)
+    monkeypatch.delenv("OSIRIS_DEPLOY_CHAOS_GATE", raising=False)
+
+
 @pytest_asyncio.fixture
 async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
     pool = await create_pool(pg_dsn)

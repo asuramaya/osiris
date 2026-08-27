@@ -55,6 +55,7 @@ from src.cli import (
     resolve_model,
     user_unit_sources,
 )
+from src.config.settings import Settings
 from src.orchestrator.seats import bind_holder, ensure_seat
 
 # --- match_session: pure ----------------------------------------------------------------------
@@ -1305,6 +1306,11 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
 async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """thread be24817b: this asserts the FIELD'S OWN DEFAULT in source, never ambient env —
+    an explicitly constructed Settings() is the claim; reading get_settings() here would be
+    testing whatever the process's environment happens to hold (which, the moment this very
+    gate is armed for a real deploy, is exactly the flag this test exists to disprove — the
+    self-refuting loop this fix closes)."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1317,15 +1323,19 @@ async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
                            pool=actions.pool, wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
                            check_whisper_probe=_fake_check_whisper_ok,
-                           full_suite_gate=_boom_full_suite_gate)
+                           full_suite_gate=_boom_full_suite_gate,
+                           deploy_settings=Settings(
+                               osiris_deploy_full_suite_gate=False,
+                               osiris_deploy_chaos_gate=False))
     assert out == 0
 
 
 async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    actions: Actions, tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", "1")
-
+    """thread be24817b: an explicit Settings object arms the flag for THIS call only —
+    never ambient env, which a real armed deploy's own subprocess would otherwise inherit
+    into every test in the suite it spawns, this one included."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1348,17 +1358,18 @@ async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
                                check_whisper_probe=_fake_check_whisper_ok,
-                               full_suite_gate=_ok_full_suite_gate)
+                               full_suite_gate=_ok_full_suite_gate,
+                               deploy_settings=Settings(
+                                   osiris_deploy_full_suite_gate=True,
+                                   osiris_deploy_chaos_gate=False))
     assert out == 0
     assert calls == [tmp_path]
     assert "full suite: green on the merged tree" in buf.getvalue()
 
 
 async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_real_failure(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    actions: Actions, tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", "1")
-
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1384,7 +1395,10 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
                                wait_for_smoke=_fake_wait_for_smoke,
                                check_whisper_probe=_fake_check_whisper_ok,
                                full_suite_gate=_bad_full_suite_gate,
-                               chaos_gate=_unreachable_chaos)
+                               chaos_gate=_unreachable_chaos,
+                               deploy_settings=Settings(
+                                   osiris_deploy_full_suite_gate=True,
+                                   osiris_deploy_chaos_gate=False))
     assert out == 1
     text = buf.getvalue()
     assert "REFUSED" in text and "ModuleNotFoundError" in text
@@ -1399,6 +1413,9 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
 async def test_cmd_deploy_skips_the_chaos_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """thread be24817b: an explicitly constructed Settings() pins the claim to the field's
+    own default in source, not to whatever the process's ambient environment holds — see
+    the full-suite gate's twin test above for the full self-refutation this closes."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1411,15 +1428,18 @@ async def test_cmd_deploy_skips_the_chaos_gate_by_default(
                            pool=actions.pool, wait_for_health=_fake_wait_for_health,
                            wait_for_smoke=_fake_wait_for_smoke,
                            check_whisper_probe=_fake_check_whisper_ok,
-                           chaos_gate=_boom_chaos_gate)
+                           chaos_gate=_boom_chaos_gate,
+                           deploy_settings=Settings(
+                               osiris_deploy_chaos_gate=False,
+                               osiris_deploy_full_suite_gate=False))
     assert out == 0
 
 
 async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    actions: Actions, tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("OSIRIS_DEPLOY_CHAOS_GATE", "1")
-
+    """thread be24817b: see the full-suite gate's twin test above — an explicit Settings
+    object arms the flag for this call only, never ambient env."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1442,7 +1462,10 @@ async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
                                check_whisper_probe=_fake_check_whisper_ok,
-                               chaos_gate=_ok_chaos_gate)
+                               chaos_gate=_ok_chaos_gate,
+                               deploy_settings=Settings(
+                                   osiris_deploy_chaos_gate=True,
+                                   osiris_deploy_full_suite_gate=False))
     assert out == 0
     assert calls == [tmp_path]
     assert "chaos replay: all invariants held" in buf.getvalue()
@@ -1456,10 +1479,8 @@ async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
 
 
 async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_violation(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    actions: Actions, tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("OSIRIS_DEPLOY_CHAOS_GATE", "1")
-
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
 
@@ -1480,7 +1501,10 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
                                check_whisper_probe=_fake_check_whisper_ok,
-                               chaos_gate=_bad_chaos_gate)
+                               chaos_gate=_bad_chaos_gate,
+                               deploy_settings=Settings(
+                                   osiris_deploy_chaos_gate=True,
+                                   osiris_deploy_full_suite_gate=False))
     assert out == 1
     text = buf.getvalue()
     assert "REFUSED" in text and "a stranger was minted over a listed body" in text
