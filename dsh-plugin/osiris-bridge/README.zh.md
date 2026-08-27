@@ -31,7 +31,7 @@
 
 #### 模型看到什么
 
-一条 plugin 来源的 user 消息，文本为 Osiris 服务器渲染的 whisper：会话的舰队身份（`agent:<id>`、项目、观测到的模型）、未读邮件与义务，以及连接掉线后用于重新挂载的持久锚点。确切文本由 Osiris（`scripts/osiris_whisper.py`）拥有，内容随舰队图谱变化；桥接只负责运输。
+一条 plugin 来源的 user 消息，文本为 Osiris 服务器渲染的 whisper：会话的舰队身份（`agent:<id>`、项目、观测到的模型）、未读邮件与义务，以及连接掉线后用于重新挂载的持久锚点。确切文本由 Osiris（`scripts/osiris_hook.py` 的 `render_whisper`）拥有，内容随舰队图谱变化；桥接只负责运输。
 
 #### Token 效应
 

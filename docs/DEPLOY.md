@@ -136,11 +136,12 @@ The manifest is guarded by `tests/test_deploy_topology.py` so it can't silently 
 
 ## Off-box Claude Code session hooks
 
-The session-lifecycle hooks (`osiris_whisper.py`/SessionStart, `osiris_precompact.py`/
-PreCompact, `osiris_spawn.py`/SubagentStart+Stop, `osiris_sessionend.py`/SessionEnd) post
-to the MCP server over loopback by default — correct only when the Claude Code session
-runs on the SAME box as the worker. A session on a different machine (a second dev box, a
-container host) needs each hook pointed at the real worker URL, or its session-death
+The session-lifecycle hooks (`osiris_hook.py whisper`/SessionStart, `osiris_hook.py
+precompact`/PreCompact, `osiris_hook.py spawn`/SubagentStart+Stop, `osiris_hook.py
+session-end`/SessionEnd) post to the MCP server over loopback by default — correct only
+when the Claude Code session runs on the SAME box as the worker. A session on a different
+machine (a second dev box, a container host) needs each hook pointed at the real worker
+URL, or its session-death
 seams (compaction, session end) never reach the fleet's worker at all — invisibly, since
 every hook is fail-open and stays silent on stdout. Set, wherever that machine's Claude
 Code hooks run:
