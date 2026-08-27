@@ -503,7 +503,7 @@ const _CONTENT_TYPES = new Set(['Commit','Reference','SoftwareProject']);
 function actionsFor(type) { const a = []; if (_CONTENT_TYPES.has(type)) a.push({ label: 'Read \u25b8', run: viewContent }); a.push({ label: 'Search around', run: focus }); a.push({ label: 'Tag\u2026', run: tagIt }); return a; }
 function primaryAction(id, type) { const a = actionsFor(type)[0]; if (a) a.run(id); }
 async function viewContent(id) { inspect(id); }
-async function tagIt(id) { const t = prompt('Tag:'); if (!t) return; await fetch('/objects/' + id + '/tag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tag: t }) }); }
+async function tagIt(id) { const t = prompt('Tag:'); if (!t) return; await fetch('/objects/' + id + '/tags', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tag: t }) }); }
 
 let ACTIONMENU = null;
 function closeActionMenu() { if (ACTIONMENU) { ACTIONMENU.remove(); ACTIONMENU = null; } }
