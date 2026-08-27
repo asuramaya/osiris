@@ -1885,6 +1885,17 @@ async def cmd_deploy(
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
               "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
 
+        # #189 ADOPTION METER (Thoth msg 5825, ruling d68c57e5) — an INSTRUMENT, never a
+        # gate: read-only against the graph (its one write is a baseline watermark, seeded
+        # at most once), printed on every deploy so nobody has to remember to run
+        # triage(mode='census') by hand and compare against a number quoted in a decision's
+        # prose — exactly the shape that let #189's own diagnosis (5169686b) sit unmeasured
+        # for 24 days while the population it named grew ~1,800.
+        from src.orchestrator.adoption_meter import adoption_meter, render_adoption_line
+
+        meter = await adoption_meter(pool)
+        print(render_adoption_line(meter))
+
         fails, waited = await wait_for_smoke()
         if fails:
             print(f"SMOKE FAILURES (after waiting {waited:.0f}s for the restart to come up):")
