@@ -1640,6 +1640,7 @@ async def cmd_deploy(
     chaos_gate: ChaosGate = _real_chaos_gate,
     check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
     full_suite_gate: FullSuiteGate = _real_full_suite_gate,
+    deploy_settings: Settings | None = None,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
     src/orchestrator/handshake.py carried another agent's uncommitted WIP and the three
@@ -1794,9 +1795,22 @@ async def cmd_deploy(
         # tonight's two live incidents (a branch's own scoped-gate green, false once
         # merged; an auto-merged capture.py only proven correct by a full re-run) was a
         # daemon-crash-resilience gap — this is the gate that actually covers them.
+        #
+        # `deploy_settings` IS INJECTABLE, DELIBERATELY (thread be24817b, the self-refuting
+        # gate): arming this flag via env makes `full_suite_gate` spawn pytest as a
+        # subprocess that INHERITS that same env — including onto
+        # tests/test_cli.py::test_cmd_deploy_skips_the_full_suite_gate_by_default, which
+        # calls THIS function again to assert the flag is off "by default." Reading ambient
+        # `get_settings()` there was testing the environment the gate itself had just set,
+        # never the actual default in source — arming was guaranteed to refuse itself. A
+        # "skips by default" test now passes an EXPLICITLY CONSTRUCTED `Settings` object
+        # instead, so its claim is about the field's real default, not about whatever
+        # happens to be armed in the process that is running it.
         from src.config.settings import get_settings as _get_deploy_settings
 
-        if _get_deploy_settings().osiris_deploy_full_suite_gate:
+        active_settings = deploy_settings if deploy_settings is not None \
+            else _get_deploy_settings()
+        if active_settings.osiris_deploy_full_suite_gate:
             suite_report = await full_suite_gate(root)
             if suite_report["ok"]:
                 print("full suite: green on the merged tree")
@@ -1813,7 +1827,7 @@ async def cmd_deploy(
         # graceful `restart` above) and refuses the deploy outright on any finding — this
         # is a GATE (577988ed's fail-open clause is for infrastructure this can't control,
         # never for a genuine invariant violation this module exists to catch).
-        if _get_deploy_settings().osiris_deploy_chaos_gate:
+        if active_settings.osiris_deploy_chaos_gate:
             import json
 
             from src.orchestrator.monitor import set_cursor
