@@ -83,16 +83,22 @@ suite's own `-n4` xdist parallelism every worker shares ONE physical Postgres in
 (`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring already names this —
 `pg_locks` is server-wide, never scoped per worker database). A killed-and-restarted
 daemon pair's own teardown/startup housekeeping, or simply an unrelated worker's ordinary
-transient lock, can land inside the narrow post-recovery sampling instant and read as
-`post_locks > baseline_locks` even though nothing leaked — reproduced live: two
-independent chaos tests failed on this exact assertion in the SAME `-n4` run (same xdist
-worker), neither one holding a real lock. `_advisory_lock_count`'s own baseline-diff
-design already existed to filter ordinary noise; it just assumed baseline and post carry
-the SAME noise level, when post is sampled after strictly more real wall-clock time has
-passed and so has strictly more chance of catching a stray lock mid-flight. A tiny
-tolerance closes that asymmetry without touching the "does not scope by key" design this
-check deliberately keeps general-purpose. Sized well below the leak-reproduction test's
-own deliberate 10-key signal so it stays reliably caught."""
+transient lock, can land inside a single sampling instant and read as
+`post_locks > baseline_locks` even though nothing leaked.
+
+THIS TOLERANCE ALONE WAS NOT THE FIX — reproduced live a second time under real
+contention (2/6 runs, Thoth msg 5799, 2026-08-27) even with this margin in place, because
+widening a count-based tolerance cannot distinguish a genuine leak from noise; it can only
+make both harder to see. `_stable_advisory_lock_count` (below) is the actual mechanism fix
+— every lock this codebase takes is xact-scoped, so a real leak is still held on the NEXT
+sample and the one after that, while an unrelated worker's transient lock clears within
+its own short transaction and is gone by the next sample; taking the MIN across a few
+gapped samples removes that class of noise directly instead of papering over it with a
+bigger number. This tolerance now only absorbs whatever tiny residual asymmetry survives
+that resampling (e.g. baseline and post are not sampled under IDENTICAL conditions —
+post follows strictly more wall-clock and a live restart), not the bulk of the noise
+`_stable_advisory_lock_count` already filters. Sized well below the leak-reproduction
+test's own deliberate 10-key signal so it stays reliably caught."""
 
 
 async def _real_kill_units(units: list[str]) -> tuple[int, str]:
@@ -155,6 +161,36 @@ async def _advisory_lock_count(pool: asyncpg.Pool) -> int:
     than asserting an absolute zero, which is the honest way to filter that noise without
     hard-coding this house's own lock key strings into a general-purpose census."""
     return int(await pool.fetchval("SELECT count(*) FROM pg_locks WHERE locktype='advisory'"))
+
+
+async def _stable_advisory_lock_count(
+    pool: asyncpg.Pool, *, samples: int = 3, gap_secs: float = 0.2,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> int:
+    """THE ACTUAL FIX for the #186-followup flake (2/6 runs under real `-n4` contention,
+    tolerance=2 not enough — Thoth msg 5799, 2026-08-27), a MECHANISM change, not a wider
+    tolerance: every lock THIS codebase takes is xact-scoped (`pg_advisory_xact_lock`,
+    #172), so a genuine leak is held by a connection that never commits/rolls back/closes
+    — it is still there on the NEXT sample, and the one after that. An unrelated worker's
+    own transient advisory-lock traffic (`test_seats.py`'s wedge-cancellation specimens,
+    named in `_advisory_lock_count`'s own docstring) is xact-scoped too, on someone else's
+    connection, and clears within its own short transaction — gone by the next sample. So
+    a single point-in-time count cannot tell the two apart; taking the MINIMUM across a
+    few samples spaced `gap_secs` apart can, because only a count that survives EVERY
+    sample was actually still held at the last one — a transient blip that inflated one
+    sample never survives to inflate the min. `gap_secs=0.2` is comfortably above the
+    lifetime of an ordinary test's own advisory-lock xact (typically single-digit
+    milliseconds) and comfortably below anything a real leak would need to survive.
+    `_baseline_seat_map`/deliberate-leak specimens are unaffected: a genuinely held lock
+    (the leak-reproduction test's own 10 keys, held on a connection that never
+    unlocks/releases until the test's own cleanup) reads the same on every sample, so the
+    min equals the raw count — this changes NOTHING for a real leak, only removes false
+    positives from a transient one."""
+    counts = [await _advisory_lock_count(pool)]
+    for _ in range(samples - 1):
+        await sleep(gap_secs)
+        counts.append(await _advisory_lock_count(pool))
+    return min(counts)
 
 
 async def _baseline_seat_map(
@@ -226,7 +262,7 @@ async def chaos_replay(
     from src.orchestrator.mounts import registry_census
 
     started_at = datetime.now(UTC)
-    baseline_locks = await _advisory_lock_count(pool)
+    baseline_locks = await _stable_advisory_lock_count(pool, sleep=sleep)
     baseline_census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     baseline_seats = await _baseline_seat_map(pool, baseline_census.get("matched", []))
@@ -278,7 +314,7 @@ async def chaos_replay(
         stop.set()
         await poller
 
-    post_locks = await _advisory_lock_count(pool)
+    post_locks = await _stable_advisory_lock_count(pool, sleep=sleep)
     post_census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
 
