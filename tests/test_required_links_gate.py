@@ -112,6 +112,27 @@ async def test_enforce_required_links_never_checks_an_unenforced_type(
         "SELECT count(*) FROM objects WHERE id=$1", oid) == 1
 
 
+async def test_enforce_required_links_records_unlinked_because_even_when_unenforced(
+    actions: Actions,
+) -> None:
+    """The hatch is a DECLARATION a caller can offer, not just a refusal-avoider (Thoth
+    msg 5858, its first real user — the boot-alarm watchdog): a caller who already knows
+    it has no repo should get to say so honestly whether or not this type currently
+    enforces anything, so the confession survives arming later rather than needing to be
+    re-declared."""
+    await ensure_type(actions, name="GateWidget7", kind="object", actor="test")
+    async with actions.atomic() as a:
+        oid = await _mint_bare(a, "GateWidget7")
+        await capture._enforce_required_links(
+            a, oid, "GateWidget7", kinds_in_scope=("repo",),
+            unlinked_because="no project applies here", source="test",
+            observed=datetime.now(UTC))
+    recorded = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='unlinked_because'", oid)
+    assert recorded == "no project applies here"
+
+
 async def test_enforce_required_links_ignores_a_kind_outside_this_doors_scope(
     actions: Actions,
 ) -> None:

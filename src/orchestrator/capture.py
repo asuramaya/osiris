@@ -378,6 +378,15 @@ async def _enforce_required_links(
             f"type:object:{type_name}")
         required = [k for k in (raw or ()) if k in kinds_in_scope]
         if not required:
+            if unlinked_because:
+                # THE HATCH IS A DECLARATION, NOT JUST A REFUSAL-AVOIDER (Thoth msg 5858,
+                # its first real user): a caller who KNOWS it has no repo — the boot-alarm
+                # watchdog, a service-scoped claim with no SoftwareProject to name — should
+                # get to say so honestly whether or not this type is currently enforced.
+                # Recording it here, unconditionally, means arming required_link_kinds
+                # later never retroactively silences a gap that was already confessed.
+                await a.assert_property(obj_id, "unlinked_because", unlinked_because,
+                                        source, observed, _CONF, evidence_class=_EC)
             return  # unenforced for this type (the common case in this pass), or
                     # nothing this door can even attest to — not this call's problem
         # REAL LINKS CHECKED FIRST, the hatch only as a fallback (Thoth's condition 2,
