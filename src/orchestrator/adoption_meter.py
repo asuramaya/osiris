@@ -104,8 +104,10 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     summed into the same bucket as a genuinely standalone one) needs Imhotep's own
     `_EXTENSION_LINK_PENDING_REASON` constant, imported live from `src.mcp_server` at
     census time (never copied — he named it as still liable to move before he commits).
-    Pre-merge, the import fails and `split` stays `None`: the raw per-value counts are
-    still returned, just not yet separated into the two named buckets."""
+    The `try` is NOT dead now that the gate has merged (main 45b42cd): it is the guard
+    for a build where that constant has been renamed or removed out from under this
+    reader, and `split=None` then degrades to raw per-value counts rather than
+    silently reporting a zero that would read as "the gate refuses nothing"."""
     rows = await pool.fetch(
         "SELECT (a.value #>> '{}') AS reason, count(*) AS n FROM current_assertions a "
         "WHERE a.name = 'unlinked_because' GROUP BY reason ORDER BY n DESC")
@@ -113,7 +115,7 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     total = sum(by_reason_raw.values())
 
     try:
-        from src.mcp_server import _EXTENSION_LINK_PENDING_REASON  # type: ignore[attr-defined]
+        from src.mcp_server import _EXTENSION_LINK_PENDING_REASON
     except (ImportError, AttributeError):
         split = None
     else:

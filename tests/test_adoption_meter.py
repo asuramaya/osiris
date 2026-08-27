@@ -103,14 +103,32 @@ async def test_hatch_counts_a_real_assertion_and_splits_against_the_live_constan
     assert meter["hatch"]["split"] == {"extension_link_pending": 1, "standalone_other": 1}
 
 
-async def test_render_adoption_line_is_one_line_and_names_the_pending_hatch(
+async def test_render_adoption_line_is_one_line_and_names_the_split_hatch(
     actions: Actions,
 ) -> None:
+    """Post-merge (gate landed at 45b42cd) the reason constant IS importable, so the live
+    render NAMES BOTH BUCKETS. This assertion inverted the day the gate merged, and that is
+    the mechanism working: an extension-link-only write is now distinguishable from a
+    genuinely standalone one, which is the whole reason Thoth required the split."""
     meter = await adoption_meter(actions.pool)
     line = render_adoption_line(meter)
     assert "\n" not in line
     assert line.startswith("adoption189:")
-    assert "unsplit" in line
+    assert "extension=" in line and "standalone=" in line
+    assert "unsplit" not in line
+
+
+def test_render_degrades_to_unsplit_when_the_reason_constant_is_gone() -> None:
+    """The `split is None` branch is NOT dead code — it is what this instrument does on a
+    build where the constant was renamed or removed. Rendered from a synthetic meter rather
+    than by breaking the real import, so it stays a test of the RENDERER, not of import
+    machinery. Without this the branch would go uncovered the moment the gate landed."""
+    line = render_adoption_line({
+        "current": {}, "baseline": None,
+        "hatch": {"total": 7, "by_reason_raw": {}, "split": None, "note": ""},
+    })
+    assert "\n" not in line
+    assert "7 total (unsplit" in line
 
 
 async def test_fixed_baseline_matches_the_obligation_8d510875_numbers() -> None:
