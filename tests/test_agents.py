@@ -1777,18 +1777,32 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
 
     sitting = await mind("agent:dddd1111", "sibling-eight")
     await claim_name(actions, sitting, "Ra", source=sitting)
-    await mounts.save_mount(actions.pool, job_dir="/j/d1", agent_id=sitting,
+    # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
+    # basename against sessionId[:8]) — "dddd1111" is 8 characters on purpose, so the fake
+    # harness census below can confirm this row as a real, live, occupied body (ONE
+    # LIVENESS AUTHORITY, FOURTH DOOR: claim_name's own refusal now cross-checks
+    # is_occupied_by_a_live_body, never trusts a fresh mount row alone).
+    await mounts.save_mount(actions.pool, job_dir="/j/dddd1111", agent_id=sitting,
                             project="sibling-eight", cwd="/x", model=None, session_key="k")
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "dddd1111-0000-4000-8000-000000000000", "pid": 555,
+                 "cwd": "/x", "name": "[OS] Ra"}]
+
+    _exe = lambda pid: "/home/x/.local/share/claude/versions/2.1.210"  # noqa: E731
+    _cwd = lambda pid: "/x"  # noqa: E731
 
     # a CONTEMPORARY in the same house — not an heir, because the holder is still alive
     contemporary = await mind("agent:eeee2222", "sibling-eight")
-    refused = await claim_name(actions, contemporary, "Ra", source=contemporary)
+    refused = await claim_name(actions, contemporary, "Ra", source=contemporary,
+                               agents_json=_agents_json, read_exe=_exe, read_cwd=_cwd)
     assert "LIVE" in refused["error"] and "two jobs" in refused["error"]
 
     # once the holder's seat is vacant, the same claim SUCCEEDS to it as the next holder
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '2 days' WHERE agent_id=$1", sitting)
-    heir = await claim_name(actions, contemporary, "Ra", source=contemporary)
+    heir = await claim_name(actions, contemporary, "Ra", source=contemporary,
+                            agents_json=_agents_json, read_exe=_exe, read_cwd=_cwd)
     assert heir["seat"] == "Ra II" and heir["inherited_from"] == sitting
 
 
@@ -1808,10 +1822,13 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     for a in (ancestor, heir):
         await claim_name(actions, a, "Quokka", source=a)
     # the ancestor has a STALE mount row; the heir has none at all — the exact shape that used to
-    # make a corpse outrank a successor (ORDER BY last_seen DESC NULLS LAST)
+    # make a corpse outrank a successor (ORDER BY last_seen DESC NULLS LAST). job_dir's own
+    # basename is exactly 8 chars ("beef0001") so a fake harness census can later confirm
+    # this exact row as occupied (registry_census keys agent_mounts.job_dir's basename
+    # against sessionId[:8]).
     await actions.pool.execute(
         "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
-        "VALUES ('/j/1',$1,'z','/z', now(), now() - interval '3 days')", ancestor)
+        "VALUES ('/j/beef0001',$1,'z','/z', now(), now() - interval '3 days')", ancestor)
 
     seat = await resolve_seat(actions, "Quokka")
     assert seat["agent"] == heir                       # the heir outranks its ancestor
@@ -1830,7 +1847,15 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     # holder is not live ('a seat a LIVE mind holds is not vacant'):
     reclaim = await claim_name(actions, ancestor, "Quokka", source=ancestor)
     assert "error" not in reclaim
-    live = await resolve_seat(actions, "Quokka")
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "beef0001-0000-4000-8000-000000000000", "pid": 666,
+                 "cwd": "/z", "name": "[OS] Quokka"}]
+
+    live = await resolve_seat(
+        actions, "Quokka", agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/z")
     assert live["agent"] == ancestor and live["live"] is True and "warning" not in live
 
 

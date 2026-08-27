@@ -7,6 +7,7 @@ inside that house it is INHERITED by whoever takes up the job next.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -447,6 +448,18 @@ async def test_claim_name_live_check_is_unconditional_not_gated_by_house_scoped_
                      model=None, session_key="k")
 
     await _agent(actions, "agent:orrrival", project="thirdhouse")
-    refused = await claim_name(actions, "agent:orrrival", "Orrery", source="agent:orrrival")
+
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
+    # refusal now cross-checks is_occupied_by_a_live_body — confirm the real holder as a
+    # harness-verified body so this refusal still fires for the right reason.
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "orrholde-0000-4000-8000-000000000000", "pid": 999,
+                 "cwd": "/x", "name": "[OS] Orrery"}]
+
+    refused = await claim_name(
+        actions, "agent:orrrival", "Orrery", source="agent:orrrival",
+        agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/x")
 
     assert refused.get("error") is not None and "LIVE" in refused["error"]

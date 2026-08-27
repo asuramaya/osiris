@@ -35,6 +35,7 @@ from src.actions.core import Actions
 
 async def walk_in_named(
     pool: asyncpg.Pool, *, agent_id: str, handle: str, wants_office: bool,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """The name + office half, given an already-mounted `agent_id`. Refuses on a blank
     handle (never guesses one) and on a handle that collides with one already claimed by
@@ -61,7 +62,9 @@ async def walk_in_named(
                                "note": f"already claimed as {existing_handle!r}, skipping"}
     else:
         from src.orchestrator.agents import claim_name as _claim_name
-        claimed = await _claim_name(Actions(pool), agent_id, handle, source=agent_id)
+        claimed = await _claim_name(
+            Actions(pool), agent_id, handle, source=agent_id,
+            agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
         if "error" in claimed:
             return {"error": claimed["error"], "step": "claim_name", "steps_so_far": steps}
         final_handle = handle

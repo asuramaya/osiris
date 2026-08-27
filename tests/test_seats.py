@@ -327,7 +327,17 @@ async def test_resolve_seat_prefers_the_holds_binding_over_a_hotter_grave(
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
                          job_dir="/jobs/iiii0002", agent_id="agent:iiii0002")
 
-    out = await resolve_seat(actions, "Payne")
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR: resolve_seat's own "live" cross-checks
+    # is_occupied_by_a_live_body — confirm the TRUE holder (not the impostor) as the
+    # harness-verified body.
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "iiii0002-0000-4000-8000-000000000000", "pid": 888,
+                 "cwd": "/jobs/iiii0002", "name": "[OS] Payne"}]
+
+    out = await resolve_seat(
+        actions, "Payne", agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/jobs/iiii0002")
 
     assert out["agent"] == "agent:iiii0002"       # the binding, not the hotter assertion
     assert out["seat_id"] == seat["seat_id"]
@@ -947,7 +957,20 @@ async def test_backfill_dry_run_reports_without_writing(actions: Actions) -> Non
     from src.orchestrator.seats import backfill_unbound_seats
 
     seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Sekhmet")
-    out = await backfill_unbound_seats(actions)  # dry_run=True by default
+
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): resolve_seat's own
+    # "live" now cross-checks is_occupied_by_a_live_body, so a harness-confirming fake is
+    # needed here too — _legacy_unbound_seat's own job_dir ("/jobs/zzzz0001") is exactly
+    # 8 chars on purpose (registry_census keys agent_mounts.job_dir's basename against
+    # sessionId[:8]).
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "zzzz0001-0000-4000-8000-000000000000", "pid": 777,
+                 "cwd": "/w/osiris", "name": "[OS] Sekhmet"}]
+
+    out = await backfill_unbound_seats(
+        actions, agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/w/osiris")  # dry_run=True by default
 
     assert out["dry_run"] is True and out["bound"] == 0
     row = next(p for p in out["plan"] if p["seat_id"] == seat_id)

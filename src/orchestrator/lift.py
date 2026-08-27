@@ -40,6 +40,7 @@ import asyncpg
 async def lift(
     pool: asyncpg.Pool, ref: str, handle: str, *, actor: str | None = None,
     office_root: Any = None, projects_root: Any = None, claude_json: Any = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """Extract a named, quiet rogue into a clean office. `doors(ref)` resolves the target —
     refuses on 0 matches (never invents one), on >1 (an ambiguous multi-tenant cwd — name a
@@ -75,7 +76,9 @@ async def lift(
     agent_id = target["agent_id"]
     actions = Actions(pool)
 
-    claimed = await _claim_name(actions, agent_id, handle, source=actor or "ceremony:lift")
+    claimed = await _claim_name(
+        actions, agent_id, handle, source=actor or "ceremony:lift",
+        agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if "error" in claimed:
         return {"error": claimed["error"], "step": "claim_name"}
 

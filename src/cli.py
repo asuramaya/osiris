@@ -1559,7 +1559,7 @@ WaitForSmoke = Callable[[], Awaitable[tuple[list[str], float]]]
 CheckWhisperProbe = Callable[[], Awaitable[tuple[bool, str]]]
 ChaosGate = Callable[[asyncpg.Pool], Awaitable[dict[str, Any]]]
 FullSuiteGate = Callable[[Path], Awaitable[dict[str, Any]]]
-CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[str]]]
+CheckFalseMintLive = Callable[[asyncpg.Pool], Awaitable[list[dict[str, Any]]]]
 
 
 async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
@@ -1592,15 +1592,34 @@ async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
         return False, f"whisper probe: REFUSED — /automount round-trip failed: {exc}"
 
 
-async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[str]:
+async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """DEPLOY GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb, 2026-08-18:
     "prevent weird forking like that and reject it architecturally"): a generation
-    carrying false_mint=true with a LIVE mount is the exact zero-turn phantom fold
-    blindness the halcyon incident named — this must read ZERO before a deploy is
-    recorded. Same query graph_lint's own `false-mint-live` check runs (compositions.py's
-    `_fn_lint`), duplicated here as a plain, fast, single-purpose query rather than
-    routing a deploy gate through the full lint composition machinery for one check.
-    Returns the offending canonicals (empty = clean)."""
+    carrying false_mint=true with a LIVE mount is a candidate for the exact zero-turn
+    phantom fold blindness the halcyon incident named — this must read ZERO harness-
+    confirmed specimens before a deploy is recorded. Same base query graph_lint's own
+    `false-mint-live` check runs (compositions.py's `_fn_lint`), duplicated here as a
+    plain, fast, single-purpose query rather than routing a deploy gate through the full
+    lint composition machinery for one check.
+
+    ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26, thread 2c3c2b9a): a
+    fresh/refreshing `agent_mounts` row is NOT proof of a live body — the SAME "cache in
+    both directions" law `is_occupied_by_a_live_body` exists to enforce everywhere else
+    (register_agent/mount, FleetView claim, launch_seat, mailbox's send-to-lineage check,
+    phantom_fold_reap's own reinstate bucket). This door used to trust the mount row
+    alone; a real incident (agent:0123dec2-ii, project atlas) proved that wrong — the
+    flagged id's own mount row was fresh, but registry_census showed NO body under it;
+    the real live body sat under a DIFFERENT generation id entirely. Each candidate is now
+    cross-checked against that SAME authority: `harness_confirmed_live=True` is the actual
+    halcyon shape (a genuinely live body wrongly folded — `reinstate_generation` is the
+    correct repair); `harness_confirmed_live=False` is a DIFFERENT anomaly this door must
+    still refuse on, but must NEVER recommend `reinstate_generation` for — doing so would
+    resurrect a bodiless generation, manufacturing the exact phantom a correct fold
+    already cleaned up (the inverse of #190's Deckard case). Returns one dict per
+    offending canonical (empty = clean); `cmd_deploy` owns picking the remedy text per
+    bucket, never this function (a query has no business writing prose)."""
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+
     rows = await pool.fetch(
         "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -1609,7 +1628,11 @@ async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[str]:
         "AND EXISTS (SELECT 1 FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "  AND m.last_seen > now() - interval '900 seconds') "
         "ORDER BY o.canonical")
-    return [r["canonical"] for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        occupied = await is_occupied_by_a_live_body(pool, r["canonical"])
+        out.append({"agent_id": r["canonical"], "harness_confirmed_live": occupied})
+    return out
 
 
 async def _real_check_whisper_probe() -> tuple[bool, str]:
@@ -1783,10 +1806,22 @@ async def cmd_deploy(
         # recorded, always on (no kill switch — this is a cheap read, not a SIGKILL).
         false_mint_live = await check_false_mint_live(pool)
         if false_mint_live:
+            confirmed = [r["agent_id"] for r in false_mint_live if r["harness_confirmed_live"]]
+            unconfirmed = [r["agent_id"] for r in false_mint_live
+                           if not r["harness_confirmed_live"]]
             print("osiris deploy: REFUSED — false-mint-live: a generation carries "
-                  "false_mint=true with a live mount (the halcyon shape) — "
-                  f"{', '.join(false_mint_live)}. reinstate_generation is the repair "
-                  "door. NOT recording this deploy.")
+                  "false_mint=true with a live mount.")
+            if confirmed:
+                print("  HARNESS-CONFIRMED LIVE (the halcyon shape — a genuinely live body "
+                      f"wrongly folded): {', '.join(confirmed)}. reinstate_generation is the "
+                      "repair door.")
+            if unconfirmed:
+                print("  NOT harness-confirmed live (a fresh/refreshing mount row alone is "
+                      "not proof of a live body): "
+                      f"{', '.join(unconfirmed)}. Do NOT run reinstate_generation on these — "
+                      "that would resurrect a bodiless generation. The real live body may "
+                      "sit under a DIFFERENT generation id; a human must reconcile identity.")
+            print("osiris deploy: NOT recording this deploy.")
             return 1
 
         # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) — OFF

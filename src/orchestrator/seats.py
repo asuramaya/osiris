@@ -1645,6 +1645,7 @@ async def bind_holder(
 
 async def backfill_unbound_seats(
     actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """THE ORPHAN-SEAT BACKFILL (thread 749bf530 / occupancy piece C, 9f566244) — the batch
     cure for the Thoth seat-binding gap. mint_heir's automatic succession only ever MOVES an
@@ -1688,7 +1689,8 @@ async def backfill_unbound_seats(
             plan.append({"seat_id": seat_id, "handle": None, "house": house, "holder": None,
                         "note": "no handle asserted on this seat — nothing to resolve by"})
             continue
-        resolved = await resolve_seat(actions, handle)
+        resolved = await resolve_seat(
+            actions, handle, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
         holder = resolved.get("agent")
         item: dict[str, Any] = {"seat_id": seat_id, "handle": handle, "house": house,
                                 "holder": holder, "live": resolved.get("live", False)}
