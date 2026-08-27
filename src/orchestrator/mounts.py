@@ -655,6 +655,56 @@ async def project_prev_seen(
         project, exclude_job_dir)
 
 
+async def live_co_agents(
+    pool: asyncpg.Pool, *, project: str, exclude_job_dir: str | None = None,
+    exclude_lineage_base: str | None = None, within_secs: int = 900,
+) -> list[dict[str, Any]]:
+    """ONE query for "which OTHER agent_mounts rows are live on this project right now" —
+    shared by mcp_server.py's `_co_agents` (mount()/orient()'s co-agents block) and
+    handshake.py's `automount()` (the whisper's own first-breath co-agents block), which
+    used to be TWO INDEPENDENT copies of this same query, free to drift from each other
+    (Thoth msg 5772/5741, thread 2c3c2b9a — "two drifting copies of one query is precisely
+    the class _co_agents was built to end" the first time, except automount()'s own copy
+    was apparently never consolidated into it).
+
+    CACHE-BASED, CONFESSED, NEVER A GATE: `agent_mounts.last_seen` freshness only — this is
+    never cross-checked against `registry_census`/`is_occupied_by_a_live_body` (the real
+    harness+/proc authority used everywhere this codebase actually REFUSES or MINTS on
+    liveness). Both callers use this purely for AWARENESS ("a sibling might be touching
+    this tree"), never to block anything, so the cheap read is the right one — it just
+    must stop being silently mistaken for a verified fact, the same "cache in both
+    directions" law this house's other liveness fixes already apply.
+
+    Returns EVERY matching row, freshest first, with NO built-in cap — the exact gap that
+    silently under-reported a live sibling process to a caller who trusted a truncated
+    top-N (msg 5741, the Seshat specimen: `_co_agents`'s own old `LIMIT 8` combined with
+    this project having more than 8 fresh rows). Each caller picks its own display count
+    from the full list and can therefore say "N more not shown" instead of just dropping
+    them.
+
+    Two different exclusion needs, since the two callers know different things about
+    "myself" at the point they call this: `exclude_job_dir` (automount()'s whisper fires
+    before an agent_id may even be resolved — job_dir is the one thing always known);
+    `exclude_lineage_base` (mount()/orient() know their own resolved agent_id and want to
+    exclude every generation of their OWN lineage, not just their own exact row)."""
+    where = ["m.project = $1", "m.last_seen > now() - make_interval(secs => $2)"]
+    args: list[Any] = [project, float(within_secs)]
+    if exclude_job_dir is not None:
+        args.append(exclude_job_dir)
+        where.append(f"m.job_dir <> ${len(args)}")
+    rows = await pool.fetch(
+        f"SELECT DISTINCT ON (m.agent_id) m.agent_id, m.cwd, m.job_dir, m.last_seen "
+        f"FROM agent_mounts m WHERE {' AND '.join(where)} "
+        f"ORDER BY m.agent_id, m.last_seen DESC", *args)
+    out = [dict(r) for r in rows]
+    out.sort(key=lambda r: r["last_seen"], reverse=True)
+    if exclude_lineage_base is not None:
+        from src.orchestrator.agents import _generation
+
+        out = [r for r in out if _generation(str(r["agent_id"]))[0] != exclude_lineage_base]
+    return out
+
+
 async def live_claimed_sids(
     pool: asyncpg.Pool, *, exclude_session_key: str | None, within_secs: int = 900
 ) -> set[str]:

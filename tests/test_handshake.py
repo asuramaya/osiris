@@ -592,6 +592,25 @@ async def test_whisper_names_live_co_agents_at_first_breath(
     assert "co_agents" not in lone
 
 
+async def test_whisper_co_agents_confesses_when_truncated_past_the_display_cap(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Same shared `live_co_agents` query as mount()/orient()'s own — the whisper's cap (6)
+    is lower than mount()'s (8), and it confesses a drop the same way (Thoth msg 5741)."""
+    from src.orchestrator.mounts import save_mount
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-crowd")
+    for i in range(8):
+        await save_mount(actions.pool, job_dir=f"/x/jobs/crowd{i:04d}",
+                         agent_id=f"agent:crowd{i:04d}", project="sibling-crowd",
+                         cwd="/w/sibling-crowd", model=None, session_key=None)
+    out = await automount(actions, session_id=SID, cwd="/w/sibling-crowd",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert len(out["co_agents"]) == 7                  # 6 named + the "N more" line
+    assert "2 more not shown" in out["co_agents"][-1]    # 8 siblings, 6 shown, 2 dropped
+
+
 async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
     actions: Actions, tmp_path: Path
 ) -> None:

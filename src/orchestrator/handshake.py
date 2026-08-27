@@ -912,16 +912,25 @@ async def automount(
     # warning used to arrive only at mount() — after a session may already have touched
     # the shared tree. The whisper carries it from breath one; the lease gate (12c225b)
     # is the enforcement half, this is the awareness half. Awareness never blocks.
+    # THE QUERY ITSELF IS `mounts.live_co_agents` — ONE implementation shared with
+    # mcp_server.py's `_co_agents` (Thoth msg 5772/5741, thread 2c3c2b9a: this whisper-side
+    # copy used to be an independent second query, free to drift from mount()/orient()'s
+    # own). Excluded by job_dir, not lineage: at this first breath an agent_id may not be
+    # resolved yet, but job_dir always is.
     co_agents: list[str] = []
+    _CO_AGENTS_WHISPER_CAP = 6
     if ident.project and job_dir:
         try:
-            co_rows = await actions.pool.fetch(
-                "SELECT DISTINCT agent_id FROM agent_mounts WHERE project=$1 "
-                "AND job_dir <> $2 AND last_seen > now() - make_interval(secs => 900)",
-                ident.project, job_dir)
-            for r in co_rows[:6]:
+            from src.orchestrator.mounts import live_co_agents
+
+            all_sibs = await live_co_agents(
+                actions.pool, project=ident.project, exclude_job_dir=job_dir)
+            for r in all_sibs[:_CO_AGENTS_WHISPER_CAP]:
                 seat = await _seat_of(actions, str(r["agent_id"]))
                 co_agents.append(seat or str(r["agent_id"]))
+            if len(all_sibs) > _CO_AGENTS_WHISPER_CAP:
+                co_agents.append(
+                    f"...and {len(all_sibs) - _CO_AGENTS_WHISPER_CAP} more not shown")
         except Exception:  # noqa: BLE001 — awareness must never break the whisper
             co_agents = []
     return {
