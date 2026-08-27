@@ -462,7 +462,10 @@ def seat_label(canonical: str, handle: str | None, generation: int | None = None
 # Soundwave's 8th mind). Claiming it as a handle forks the lineage — see claim_name.
 _SEAT_SUFFIX = re.compile(r"[\s_-]+(?:[IVXLC]+)\s*$", re.IGNORECASE)
 
-async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str) -> dict[str, Any]:
+async def claim_name(
+    actions: Actions, agent_id: str, name: str, *, source: str,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
     """An agent names itself (ruling 1e02e069): the intelligence picks a meaningful name, the
     substrate enforces uniqueness. Refuses a name held by a DIFFERENT lineage (permanent
     exhaustion — a name belongs to one lineage forever; a successor inherits it automatically,
@@ -560,7 +563,8 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
     # house-scoped count — meant a caller whose own computed house didn't match the seat's
     # own stored house skipped the seat-world check entirely, exactly the Vajra shape (a
     # fresh session's CWD-derived house disagreeing with the seat Alfred actually minted).
-    sitting = await resolve_seat(actions, name)
+    sitting = await resolve_seat(
+        actions, name, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if sitting["live"] and sitting["agent"] != agent_id:
         return {"error": f"'{name}' is currently held by {sitting['agent']}, who is LIVE — a seat "
                          "is a job, and two minds in one house do two jobs. Take another seat, or "
@@ -622,7 +626,10 @@ async def claim_name(actions: Actions, agent_id: str, name: str, *, source: str)
             **({"seat_error": seat_error} if seat_error else {})}
 
 
-async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
+async def resolve_seat(
+    actions: Actions, name: str, *,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
     """A human name → WHICH SEAT OF THAT LINEAGE IS ACTUALLY ALIVE, and the truth about it.
 
     THE GRAVE-DELIVERY BUG (two seats on two different projects, independently, within one
@@ -656,7 +663,19 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
     if bound is not None:
         pulse = await actions.pool.fetchval(
             "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", bound["holder"])
-        live = bool(pulse and (datetime.now(UTC) - pulse).total_seconds() < 900)
+        # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26, obligation
+        # 555d5eb6 / thread 164fc26c: "FleetView claim" still didn't consult
+        # is_occupied_by_a_live_body): a fresh/refreshing agent_mounts row is NOT proof of
+        # a live body — the exact shape the atlas incident proved live (agent:0123dec2-ii
+        # carried a fresh mount row with no harness-confirmed body under it at all). A
+        # mount-freshness pulse alone used to be enough to refuse a new claimant here;
+        # cross-checking the SAME occupancy authority launch_seat/mailbox/the deploy gate
+        # already use means a stale-but-fresh row can never again block a name that is
+        # genuinely free to claim.
+        live = bool(pulse and (datetime.now(UTC) - pulse).total_seconds() < 900
+                    and await is_occupied_by_a_live_body(
+                        actions.pool, bound["holder"],
+                        agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd))
         out_b: dict[str, Any] = {
             "name": name, "agent": bound["holder"], "live": live,
             "candidates": [bound["holder"]], "seat_id": bound["seat_id"],
@@ -692,11 +711,19 @@ async def resolve_seat(actions: Actions, name: str) -> dict[str, Any]:
     # a LIVE holder always wins; among the dead, the LATEST HOLDER of the seat (not the highest
     # anchor numeral, which says nothing once a seat outlives its first conversation)
     best = max(rows, key=lambda r: (bool(r["live"]), int(r["gen"] or 0)))
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR — see the bound-seat branch above for the full
+    # rationale. `live` here still RANKS candidates by mount-freshness (unchanged — a
+    # coarse-but-cheap signal is fine for ordering many rows), but the picked winner's
+    # REPORTED liveness (what claim_name's own refusal reads) is cross-checked against the
+    # harness-confirmed authority before it can block a new claimant.
+    best_live = bool(best["live"]) and await is_occupied_by_a_live_body(
+        actions.pool, best["canonical"],
+        agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     out: dict[str, Any] = {
-        "name": name, "agent": best["canonical"], "live": bool(best["live"]),
+        "name": name, "agent": best["canonical"], "live": best_live,
         "candidates": [r["canonical"] for r in rows],
     }
-    if not best["live"]:
+    if not best_live:
         out["warning"] = (
             f"NO LIVE SEAT holds '{name}' — {best['canonical']} is the newest seat of that "
             "lineage and it is NOT listening. This message may never be read.")

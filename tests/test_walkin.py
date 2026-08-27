@@ -4,6 +4,7 @@ tool layer's own mount half — same split as test_lift.py."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -122,12 +123,23 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
     await actions.assert_property(h, "handle", "Taken", "agent:holder0001", now, 0.9,
                                   evidence_class="self_declared")
     from src.orchestrator.mounts import save_mount
-    await save_mount(actions.pool, job_dir="/j/holder", agent_id="agent:holder0001",
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
+    # refusal now cross-checks is_occupied_by_a_live_body — job_dir's basename is exactly
+    # 8 chars ("holder01") so a fake harness census can confirm this row (registry_census
+    # keys agent_mounts.job_dir's basename against sessionId[:8]).
+    await save_mount(actions.pool, job_dir="/j/holder01", agent_id="agent:holder0001",
                      project="stopslop", cwd="/w/holder", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "holder01-0000-4000-8000-000000000000", "pid": 222,
+                 "cwd": "/w/holder", "name": "[OS] Taken"}]
 
     await _mounted(actions, "agent:newcomer1")
     out = await walk_in_named(
-        actions.pool, agent_id="agent:newcomer1", handle="Taken", wants_office=True)
+        actions.pool, agent_id="agent:newcomer1", handle="Taken", wants_office=True,
+        agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/w/holder")
 
     assert "error" in out
     assert out["step"] == "claim_name"

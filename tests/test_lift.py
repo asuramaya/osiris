@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -111,13 +112,27 @@ async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: P
     """A name already LIVE-held by someone else refuses at claim_name, and lift stops there
     — never partially establishes an office under the wrong name."""
     await _rogue(actions, "agent:holder001", "/w/holder", live=True)
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
+    # refusal now cross-checks is_occupied_by_a_live_body — retarget the mount row to an
+    # exactly-8-char basename ("holder01") so a fake harness census can confirm it
+    # (registry_census keys agent_mounts.job_dir's basename against sessionId[:8]).
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET job_dir='/jobs/holder01' WHERE agent_id='agent:holder001'")
     await claim_name(actions, "agent:holder001", "Taken", source="test")
 
     cwd = str(tmp_path / "rogue2")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:rogue0002", cwd)
 
-    out = await lift(actions.pool, "agent:rogue0002", "Taken", office_root=tmp_path / "seats")
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "holder01-0000-4000-8000-000000000000", "pid": 111,
+                 "cwd": "/w/holder", "name": "[OS] Taken"}]
+
+    out = await lift(
+        actions.pool, "agent:rogue0002", "Taken", office_root=tmp_path / "seats",
+        agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/w/holder")
     assert out["step"] == "claim_name"
     assert "currently held by" in out["error"]
     assert not (tmp_path / "seats").exists()
