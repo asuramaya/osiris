@@ -450,9 +450,27 @@ async def test_flooding_child_force_detaches_only_the_stalled_attachment() -> No
         assert stalled.get_nowait() is None
         # the child and the well-behaved sibling are untouched
         assert session.returncode is None
+        # THE #197 FLAKE, ROOT-CAUSED (not a timing tolerance — CI's own failed run pinned
+        # the exact assertion: `more == b'\r\n'`, no 'y' at all, `AssertionError: assert
+        # (b'\r\n' is not None and b'y' in b'\r\n')`): a single next chunk is not a valid
+        # unit to assert content on. `os.read()` on the master fd returns WHATEVER is
+        # currently buffered, with no regard for the child's own line boundaries — under
+        # tighter scheduling a "y\r\n" line lands in one chunk; under looser scheduling
+        # (exactly what real host contention produces, never specifically CI) the read can
+        # land mid-line, so the very next chunk can legitimately be a bare "\r\n" tail with
+        # its own "y" already delivered in the PRIOR chunk. The invariant this assertion
+        # actually wants is "the live stream keeps flowing with real data after the
+        # casualty is gone", not "the immediate next chunk is that data" — so accumulate
+        # across chunks (still bounded by the SAME 2.0s ceiling, never widened) until a
+        # real "y" is actually seen, rather than asserting on an arbitrary one-chunk slice
+        # of a byte stream whose own boundaries were never guaranteed to align with it.
         async with asyncio.timeout(2.0):
-            more = await live.get()
-        assert more is not None and b"y" in more
+            more = b""
+            while b"y" not in more:
+                chunk = await live.get()
+                assert chunk is not None
+                more += chunk
+        assert b"y" in more
 
         # reattach after force-detach: the ring replay is the recovery path
         replay, fresh = session.attach()
