@@ -5196,6 +5196,17 @@ async def list_assertions(ref: str, name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def abstained_derivations(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """READ-ONLY. Every `derive_or_abstain` refusal, `from_id` and every candidate already
+    resolved to (type, summary) — a caller gets the shortlist as it stands now, never bare
+    uuids to re-look-up itself. `link_type=None` pools every lane; pass one (e.g.
+    `in_repo`) to scope to that namespaced `derivation_abstained_<link_type>` property
+    only — never a mixed soup unless asked. `count` is the true total (never capped);
+    `sample` is bounded by `limit`, newest-abstained first."""
+    return await capture.abstained_derivations(await _pool_get(), link_type, limit=limit)
+
+
+@mcp.tool()
 async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
     """THE READ DOOR (thread 09bde57e): every assertion row where `is_current=true`
     (migration 0047's maintained flag) YET a real `supersedes` FK already points at it from
@@ -5902,10 +5913,25 @@ async def record_decision(
     for ref in bears_on or []:
         bid = await capture._find_thread(pool, ref, require_identifier=True)
         if bid is None:
-            bears_on_receipt.append({"ref": ref, "matched": "false",
-                                     "note": "matched no thread — quote its UUID, "
-                                             "canonical, or 8-char short id (no longer a "
-                                             "prose match)"})
+            # THREE SPECIMENS IN TWO DAYS (Thoth's dispatch msg 5937): bears_on mints
+            # `answers`, Decision->Thread ONLY — a ref that names a Decision instead of a
+            # Thread resolved to nothing here and the receipt said only "matched no
+            # thread", easy to miss in a large response, three different people read it
+            # as success. Same cross-type-mismatch discipline `_resolve_cited_object`
+            # already uses for prose citations: check the OTHER type too, so a genuine
+            # mismatch NAMES itself instead of reading like a generic not-found.
+            cross = await capture._find_decision(pool, ref, require_identifier=True)
+            if cross is not None:
+                bears_on_receipt.append({"ref": ref, "matched": "false",
+                                         "note": f"{ref!r} resolves to a Decision, not a "
+                                                 "Thread — bears_on only links to a Thread "
+                                                 "(mints answers, Decision->Thread); this "
+                                                 "id was never linked"})
+            else:
+                bears_on_receipt.append({"ref": ref, "matched": "false",
+                                         "note": "matched no thread — quote its UUID, "
+                                                 "canonical, or 8-char short id (no longer a "
+                                                 "prose match)"})
             continue
         bsumm = await capture._thread_summary(pool, bid)
         bears_on_ids.append(bid)

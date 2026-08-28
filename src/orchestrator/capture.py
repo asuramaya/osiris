@@ -433,6 +433,69 @@ async def backfill_boot_alarm_commit_links(
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(threads), "to_mint": minted,
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
+    """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
+    name this codebase's own generic listing/describe queries already key on across
+    object types (record_decision/open_thread/ingest_reference all write it). Display
+    only, never load-bearing: an object with no `summary` assertion (rare, non-authored
+    types) returns a None summary, not an error."""
+    row = await pool.fetchrow(
+        "SELECT o.type, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "AS summary FROM objects o WHERE o.id=$1", obj_id)
+    if row is None:
+        return None, None
+    return row["type"], row["summary"]
+
+
+async def abstained_derivations(
+    pool: asyncpg.Pool, link_type: str | None = None, *, limit: int = 100,
+) -> dict[str, Any]:
+    """THE READ SURFACE over derive_or_abstain's own refusals (thread f1f14cb3 item 2,
+    Thoth's dispatch msg 5937: 'the miner opens a MATERIALIZED QUEUE with candidate sets
+    already resolved, instead of writing a query against a graph that has moved under
+    it'). Every namespaced `derivation_abstained_<link_type>` property, newest first, with
+    `from_id` AND every candidate already resolved to its own (type, summary) via
+    `_describe` — a caller reading this gets the shortlist as it stands NOW, not a bag of
+    uuids it has to re-look-up itself against a graph that may have moved since the
+    abstention was recorded.
+
+    `link_type=None` returns every lane's abstentions pooled together; passing a specific
+    link_type scopes to one namespaced property, exactly (#75's own ask, msg 5937: 'query
+    every ambiguous in_repo' without filtering a soup — the property name IS the filter).
+    `count` is the TRUE total population for that scope (never capped by `limit`, same
+    convention `stale_current_flags` already uses); `sample` is bounded by `limit`."""
+    name_filter = f"derivation_abstained_{link_type}" if link_type else None
+    total = await pool.fetchval(
+        "SELECT count(DISTINCT (object_id, name)) FROM current_assertions "
+        "WHERE name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR name = $1)",
+        name_filter)
+    rows = await pool.fetch(
+        "WITH latest AS ("
+        "  SELECT DISTINCT ON (a.object_id, a.name) a.object_id, a.name, a.value, "
+        "         a.observed_at, a.source_id "
+        "  FROM current_assertions a "
+        "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "SELECT * FROM latest ORDER BY observed_at DESC LIMIT $2", name_filter, limit)
+    sample: list[dict[str, Any]] = []
+    for r in rows:
+        value = r["value"]
+        from_id = r["object_id"]
+        from_type, from_summary = await _describe(pool, from_id)
+        candidates: list[dict[str, Any]] = []
+        for c in value.get("candidates", []):
+            cid = uuid.UUID(c)
+            c_type, c_summary = await _describe(pool, cid)
+            candidates.append({"id": str(cid)[:8], "type": c_type, "summary": c_summary})
+        sample.append({
+            "from_id": str(from_id)[:8], "from_type": from_type, "from_summary": from_summary,
+            "link_type": value.get("link_type", r["name"].removeprefix("derivation_abstained_")),
+            "reason": value.get("reason"), "candidate_count": value.get("candidate_count"),
+            "candidates": candidates, "observed_at": r["observed_at"], "source": r["source_id"],
+        })
+    return {"count": total, "sample": sample}
 
 
 async def _mint_prose_citations(

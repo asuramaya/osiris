@@ -4713,6 +4713,44 @@ async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
         _agents.pop(_conn_key(ctx), None)
 
 
+async def test_bears_on_names_a_decision_target_instead_of_a_bare_not_found(
+    actions: Actions,
+) -> None:
+    """THREE SPECIMENS IN TWO DAYS (Thoth's dispatch msg 5937): bears_on mints `answers`,
+    Decision->Thread ONLY — a ref that resolves to a Decision instead of a Thread used to
+    report a generic "matched no thread", indistinguishable from a typo, and three
+    different people read the resulting silence as success. The receipt must now NAME the
+    real mismatch, the same cross-type-mismatch discipline `_resolve_cited_object` already
+    uses for prose citations."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:bearsonmismatch", session="bearsonmismatch",
+        project="bearson-mismatch-land", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        other_decision = await record_decision(actions, "a standing ruling, not a thread")
+        out = await rd_tool(
+            "a decision that wrongly bears_on another decision, not a thread",
+            kind="decision", bears_on=[str(other_decision)[:8]], ctx=ctx)
+        resolution = out["bears_on_resolution"][0]
+        assert resolution["matched"] == "false"
+        assert "resolves to a Decision, not a Thread" in resolution["note"]
+        assert "bears_on" not in out or out["bears_on"] == []
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_bears_on_nudge(
     actions: Actions,
 ) -> None:

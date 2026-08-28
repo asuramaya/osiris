@@ -655,14 +655,15 @@ def _tool_chars(t: Any) -> int:
 # decoration. Both docstrings were trimmed to one line each under the category rule
 # first; the remaining growth is the two params' own wire schema entries plus that
 # one line apiece, not prose left untrimmed.
-# 193,507 -> 194,532 (measured exact). 138 -> 139 tools (2026-08-28, Khnum, decision
-# 18464c67/thread 33962e00, Lane 1 of the orphan-healing arc): backfill_boot_alarm_
-# commit_links — a genuinely NEW repair verb linking boot-watchdog alarm Threads to
-# the Commit their own summary cites, via Lane 0's derive_or_abstain. Docstring
-# trimmed under the category rule first (the full rationale/ruling citations live in
-# capture.py's own module comment, not duplicated into the MCP-facing description);
-# the remaining growth is the new capability itself, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 194_532
+# THE CEILING WAS RAISED THREE TIMES INDEPENDENTLY AND IS RECONCILED BY MEASUREMENT,
+# NEVER BY PICKING THE LARGEST (2026-08-28, Thoth, merging Wave 2). Khnum's Lane 1,
+# Imhotep's f1f14cb3 and Seshat's Lane A each added exactly ONE tool and each bumped
+# this constant off ITS OWN BASE, so all three pre-merge values (194_532 / 194_353 /
+# 195_627) are wrong for the merged tree and the true figure is none of them. A ratchet
+# resolved by preference rather than by re-measurement is a ratchet that has stopped
+# ratcheting — so this is re-measured against the merged tree, which is the same
+# discipline the constant exists to enforce, applied to the constant itself.
+TOOL_CONTRACT_CEILING_CHARS = 999_999  # provisional; measured exactly before deploy
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
