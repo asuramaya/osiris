@@ -129,6 +129,164 @@ async def _resolve_commit(pool: asyncpg.Pool, sha: str) -> uuid.UUID | None:
     )
 
 
+# PROSE-ID -> EDGE (task #189's derivation lane, Thoth's dispatch msg 5865/5878, Seshat's
+# measurement: 3,170 active osiris Decision+Thread objects, 37.5% carry at least one
+# recoverable citation, 2,115 recoverable edges — zero same-type collisions at this exact
+# 8-hex length across 9,590 objects). SAME qualifier-word discipline as
+# `_COMMIT_CITATION_RE` above: the qualifier must sit IMMEDIATELY before the hex token, so
+# a bare 8-hex string quoted nearby for some other reason never gets mistaken for a
+# citation (Seshat's own negative-control test). The qualifier word also NAMES which type
+# to resolve against — "ruling"/"decision" -> Decision, "obligation"/"thread" -> Thread —
+# so a citation is never guessed across type, only ever resolved against what its own
+# prose claimed, or skipped.
+_PROSE_ID_QUALIFIER_TYPES = {
+    "decision": "Decision", "decisions": "Decision",
+    "ruling": "Decision", "rulings": "Decision",
+    "thread": "Thread", "threads": "Thread",
+    "obligation": "Thread", "obligations": "Thread",
+}
+_PROSE_ID_CITATION_RE = re.compile(
+    r"\b(decisions?|rulings?|threads?|obligations?)\b\s*[:#]?\s*([0-9a-f]{8})\b",
+    re.IGNORECASE)
+
+
+def _cited_object_refs(*texts: str | None) -> list[tuple[str, str]]:
+    """Every (claimed type, 8-hex short id) pair cited as "decision <id>"/"ruling <id>"/
+    "thread <id>"/"obligation <id>" across the given texts, in first-seen order, deduped
+    on the (type, id) pair — the exact same shape `_cited_commit_shas` already proved
+    safe, ported rather than re-invented."""
+    seen: dict[tuple[str, str], None] = {}
+    out: list[tuple[str, str]] = []
+    for text in texts:
+        if not text:
+            continue
+        for m in _PROSE_ID_CITATION_RE.finditer(text):
+            key = (_PROSE_ID_QUALIFIER_TYPES[m.group(1).lower()], m.group(2).lower())
+            if key not in seen:
+                seen[key] = None
+                out.append(key)
+    return out
+
+
+async def _resolve_cited_object(
+    pool: asyncpg.Pool, claimed_type: str, short_id: str,
+) -> tuple[uuid.UUID | None, str | None]:
+    """Resolve strictly against the type the citation's OWN qualifier word claimed —
+    reusing `_find_decision`/`_find_thread` (ONE resolver family, not a second
+    extraction path beside them), `require_identifier=True` so an 8-hex-shaped citation
+    refuses rather than falls through to a fuzzy text match. THE UUID PREFIX, NOT THE
+    CANONICAL (Seshat's own catch, msg 5878 — her first pass matched the canonical hash
+    and undercounted 27x): `_resolve_ref`'s short-id leg already matches `o.id::text
+    LIKE $2 || '%'`, the house's own actual citation scheme, so this needed no new SQL
+    at all, only reusing the right existing leg.
+
+    Returns `(id, None)` on a clean match. Returns `(None, reason)` on anything else —
+    NEVER a guess across type: a claimed-Decision id that resolves to nothing is checked
+    against Thread too, so the skip reason NAMES a real type mismatch when that's what
+    happened, distinct from a plain not-found."""
+    finder = _find_decision if claimed_type == "Decision" else _find_thread
+    try:
+        hit = await finder(pool, short_id, require_identifier=True)
+    except RefAmbiguous:
+        return None, f"ambiguous — {short_id} matches more than one {claimed_type}"
+    if hit is not None:
+        return hit, None
+    other_type = "Thread" if claimed_type == "Decision" else "Decision"
+    other_finder = _find_thread if claimed_type == "Decision" else _find_decision
+    try:
+        other_hit = await other_finder(pool, short_id, require_identifier=True)
+    except RefAmbiguous:
+        other_hit = None
+    if other_hit is not None:
+        return None, (f"qualifier said {claimed_type} but {short_id} resolves to a "
+                      f"{other_type} instead — skipped, never guessed")
+    return None, f"{short_id} not found as a {claimed_type} (or any other known type)"
+
+
+async def _object_source(pool: asyncpg.Pool, obj_id: uuid.UUID) -> str | None:
+    """Best-effort proxy for 'who wrote this' — the source that asserted the object's
+    own `summary` (every Decision/Thread has exactly one). Used only to flag a citation
+    as self-referential (Thoth's ask, msg 5878: keep that population countable
+    separately from real cross-author structure, same discipline
+    `_EXTENSION_LINK_PENDING_REASON` already applies to the hatch) — never load-bearing
+    for resolution itself."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT source_id FROM current_assertions WHERE object_id=$1 AND name='summary' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", obj_id)
+
+
+async def mint_cites(
+    actions: Actions, from_id: uuid.UUID, to_id: uuid.UUID, source: str,
+    *, self_referential: bool, origin: str,
+) -> bool:
+    """This object's OWN prose named that one — a declaration recorded in text, not a
+    similarity guess, so SELF_DECLARED (same tier `noted_in`/`decided_in` already use
+    for an author's own citation). Distinct link type from `mint_bears_on`'s own
+    `answers` edge (Decision->Thread only, semantically "settled" — record_decision's
+    tested `bears_on=` kwarg, Thoth's no-auto-act ruling DM 4701): a bare prose mention
+    is a weaker, more general claim than "this speaks to that open question", and the
+    prior-art promotion below needs Practice/Superstition targets `answers` was never
+    shaped for. Reuses `cites` (Reference->Reference, ingest_reference's own `cites=`)
+    rather than inventing new vocabulary — the same word this house already uses for
+    "my own text points at that object", broadened to legally connect Decision/Thread
+    on either end. VERIFIED against the live graph before widening (Thoth's own
+    caution, msg 5881): every existing `cites` edge is Reference->Reference,
+    evidence_class self_declared, empty properties — domain/range is advisory only
+    (no reader in this codebase filters on it), so nothing about an existing edge
+    reinterprets.
+
+    `self_referential` (an author citing their own earlier work, vs. citing someone
+    else's) and `origin` (Thoth's second caution, same message: a PROSE-DERIVED cite —
+    a regex match against free text — and a DECLARED one — a caller naming an exact
+    target on purpose, `ingest_reference`'s own `cites=` or an explicit
+    `acknowledge_prior_art` confirmation — are different confidence shapes even at the
+    same SELF_DECLARED grade, and must stay queryable apart, not merely inferable from
+    context) are both recorded ON THE LINK's own properties — Seshat's own measured
+    split (35.5% self-ref, 64.5% cross-author) is exactly the number `self_referential`
+    keeps honest going forward. Idempotent: returns whether a NEW link was minted;
+    never a self-loop."""
+    if from_id == to_id:
+        return False
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
+        from_id, to_id)
+    if exists:
+        return False
+    await actions.create_link(from_id, to_id, "cites", source, datetime.now(UTC), _CONF,
+                              evidence_class=_EC,
+                              properties={"self_referential": self_referential,
+                                        "origin": origin})
+    return True
+
+
+async def _mint_prose_citations(
+    a: Actions, obj_id: uuid.UUID, source: str, *texts: str | None,
+) -> list[dict[str, str]]:
+    """The shared write-time step both record_decision and open_thread call, inside
+    their own atomic block — extract, resolve, mint, same shape `_cited_commit_shas`/
+    `_resolve_commit` already established for `decided_in`/`noted_in`. Returns the
+    skip log (Thoth's hard requirement, mirroring `backfill_decided_in`'s own
+    `skipped` field): every citation that did NOT mint, and exactly why — an
+    ambiguous match, a type mismatch, or nothing found at all, never a silent drop."""
+    skipped: list[dict[str, str]] = []
+    for claimed_type, short_id in _cited_object_refs(*texts):
+        target_id, reason = await _resolve_cited_object(a.pool, claimed_type, short_id)
+        if target_id is None:
+            skipped.append({"ref": f"{claimed_type.lower()} {short_id}",
+                           "reason": reason or "unresolved"})
+            continue
+        # `source` (this call's OWN param) is who is citing, directly — never re-read
+        # from the object's own just-asserted, possibly still-uncommitted summary via
+        # `a.pool` (a DIFFERENT connection than this transaction's own bound one would
+        # not see it yet). Only the TARGET's source needs a lookup: it is a pre-
+        # existing, already-committed object this transaction never wrote.
+        target_source = await _object_source(a.pool, target_id)
+        await mint_cites(a, obj_id, target_id, source, origin="prose",
+                         self_referential=(target_source is not None
+                                          and target_source == source))
+    return skipped
+
+
 # task #101's BACKFILL source, distinct from live capture's `_SOURCE` ("session") — the
 # same trust tier (SELF_DECLARED, below), just a provenance-traceable marker that this
 # particular decided_in edge was minted by the backward pass, not at the decision's own
@@ -606,6 +764,16 @@ async def record_decision(
             if not exists:
                 await a.create_link(d, commit_id, "decided_in", source, observed, _CONF,
                                     evidence_class=_EC)
+        # PROSE-ID -> EDGE (Thoth's dispatch msg 5865/5878, Seshat's measurement):
+        # "ruling <id>"/"decision <id>"/"thread <id>"/"obligation <id>" in this
+        # decision's own prose becomes a real `cites` edge, same atomic block. Any
+        # citation that could not resolve is recorded AS A PROPERTY (never silently
+        # dropped) — the false-positive surface Thoth asked to keep reportable, same
+        # discipline `unlinked_because`/backfill_decided_in's own `skipped` field use.
+        prose_skips = await _mint_prose_citations(a, d, source, summary, rationale, protocol)
+        if prose_skips:
+            await a.assert_property(d, "prose_citation_skips", prose_skips, source,
+                                    observed, _CONF, evidence_class=_EC)
         if old is not None and old != d:  # a decision never buries itself (idempotent re-record)
             await a.assert_property(old, "superseded_by", str(d), source, observed, _CONF,
                                     evidence_class=_EC)
@@ -1058,8 +1226,15 @@ async def ingest_reference(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
                 ref, cited)
             if not exists:
+                # `origin: "declared"` (task #189's derivation lane, Thoth's caution
+                # msg 5881): the caller named this exact target on purpose, same
+                # confidence shape as mint_cites' own "declared" origin — kept
+                # explicitly queryable apart from a prose-derived cite, never merely
+                # inferable from the absence of a marker on this codebase's own
+                # pre-existing (Reference->Reference, unmarked) cites edges.
                 await a.create_link(ref, cited, "cites", source, observed, _CONF,
-                                    evidence_class=_EC)
+                                    evidence_class=_EC,
+                                    properties={"origin": "declared"})
     return ref, canon
 
 
@@ -1530,6 +1705,12 @@ async def open_thread(
             if not exists:
                 await a.create_link(t, commit_id, "noted_in", source, observed, _CONF,
                                     evidence_class=_EC)
+        # PROSE-ID -> EDGE (same mechanism record_decision uses, above) — a Thread's
+        # own summary is its only text field to scan.
+        prose_skips = await _mint_prose_citations(a, t, source, summary)
+        if prose_skips:
+            await a.assert_property(t, "prose_citation_skips", prose_skips, source,
+                                    observed, _CONF, evidence_class=_EC)
         if repo:
             rec = repo_evidence_class or _EC
             await link_repo(a, t, repo, observed, source=source, evidence_class=rec,
@@ -2252,9 +2433,23 @@ async def acknowledge_prior_art(
 ) -> None:
     """'Related standing law, reviewed, no action needed' as a GRAPH EVENT (thread
     169398d6's small-stage fix), not a shrug swallowed in prose — the third path
-    prior_art_flag's two-verb (supersede-or-cite) prompt was missing."""
+    prior_art_flag's two-verb (supersede-or-cite) prompt was missing.
+
+    PROMOTED FROM A STRING TO A REAL EDGE (Thoth's dispatch msg 5865/5878): the system
+    computed relatedness, surfaced it, the author CONFIRMED it — that confirmation is
+    now `mint_cites`'s own edge (never self_referential; acknowledging your own prior
+    art isn't a citation of someone else's work), same SELF_DECLARED grade as prose-id
+    citations, same one mechanism. `prior_art_acknowledged` stays written too — an
+    existing reader of that property keeps working unchanged; the edge is additive."""
+    observed = datetime.now(UTC)
     await actions.assert_property(decision_id, "prior_art_acknowledged", prior_art_id,
-                                  source, datetime.now(UTC), _CONF, evidence_class=_EC)
+                                  source, observed, _CONF, evidence_class=_EC)
+    try:
+        target_id = uuid.UUID(prior_art_id)
+    except ValueError:
+        return  # not UUID-shaped — the property write above still landed, nothing to link
+    await mint_cites(actions, decision_id, target_id, source, origin="declared",
+                     self_referential=False)
 
 
 async def refute_practice(
