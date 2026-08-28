@@ -663,7 +663,11 @@ def _tool_chars(t: Any) -> int:
 # resolved by preference rather than by re-measurement is a ratchet that has stopped
 # ratcheting — so this is re-measured against the merged tree, which is the same
 # discipline the constant exists to enforce, applied to the constant itself.
-TOOL_CONTRACT_CEILING_CHARS = 196_473  # MEASURED against the merged tree: 141 tools.
+# 2026-08-28, Khnum (Wave 4, thread 5ec2b82d): get_thread_list/get_decision_list gained a
+# one-line "charter-aware" note each (both docstrings trimmed twice under the category
+# rule first — this is the remaining load-bearing cost of a real capability, not
+# untrimmed prose). No new tool: still 141, this is chars only.
+TOOL_CONTRACT_CEILING_CHARS = 196_635  # MEASURED against the merged tree: 141 tools.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
