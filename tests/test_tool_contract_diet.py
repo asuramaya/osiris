@@ -675,7 +675,15 @@ def _tool_chars(t: Any) -> int:
 # The merged tree has BOTH the new tool AND both docstring notes, so its real cost is
 # neither number. RE-MEASURED BELOW against the merged tree — never picked, never averaged.
 # (A ratchet settled by preference has stopped ratcheting.)
-TOOL_CONTRACT_CEILING_CHARS = 197_510  # MEASURED against the merged tree: 142 tools.
+# 197,510 -> 198,577 (measured exact). 142 -> 143 tools (2026-08-28, Seshat, thread
+# 72cd8e3c, decision c1073f00, Wave 4's historical backfill): backfill_lineage_repo_
+# links — a genuinely NEW repair verb linking every zero-live-link Decision/Thread
+# authored by a real Agent lineage to its project, via the SAME rung-3 lookup a live
+# write already gets (resolve_repo_default). Docstring trimmed under the category rule
+# first (the full rationale — why this is a missing verb and not a live-safeguard
+# defect, the cross-source supersede trap — lives in capture.py's own module comment,
+# not duplicated here); the remaining growth is the new capability itself, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 198_577  # MEASURED against the merged tree: 143 tools.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -775,6 +783,13 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above).
     139 -> 140 (2026-08-28, Seshat, decision a55b1014/thread 5f47e23d): backfill_
     task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
-    changelog above)."""
+    changelog above).
+    140 -> 142 (2026-08-28, Imhotep, thread e67fc338; Khnum's own charter-aware get_
+    thread_list/get_decision_list changed no count, docstrings only): retryable_abstentions — the
+    structurally-safe zero-candidate subset of abstained_derivations (see the ceiling's
+    own changelog above).
+    142 -> 143 (2026-08-28, Seshat, decision c1073f00/thread 72cd8e3c): backfill_
+    lineage_repo_links — Wave 4's historical backfill repair verb (see the ceiling's
+    own changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 142
+    assert len(per_tool) == 143
