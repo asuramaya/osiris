@@ -696,7 +696,14 @@ def _tool_chars(t: Any) -> int:
 # first (the full rationale — why this is a missing verb and not a live-safeguard
 # defect, the cross-source supersede trap — lives in capture.py's own module comment,
 # not duplicated here); the remaining growth is the new capability itself, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 200229
+# 200,229 -> 202,302 (measured exact). 144 -> 146 tools (2026-08-28, Seshat, thread 6001,
+# Wave 5's ambiguous-abstention retry door): retryable_ambiguous_abstentions (READ-ONLY,
+# the sibling retryable_abstentions never covers — 2+-candidate abstentions reduced by
+# elimination to exactly one live survivor) and retry_ambiguous_abstentions (the write
+# half, lane-agnostic since it only rechecks stored candidate ids' own status, never
+# re-derives). Two genuinely new capabilities, not one padded — docstrings trimmed under
+# the category rule first (full rationale in capture.py's own module comment).
+TOOL_CONTRACT_CEILING_CHARS = 202302
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -823,4 +830,7 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     # arithmetic and would have caught it — but the driver knows nothing about this
     # assertion, so the count had no guard of its own. A ratchet with two numbers and one
     # merge driver protects one of them. Re-measure both together on every merge.
-    assert len(per_tool) == 144
+    # 144 -> 146 (2026-08-28, Seshat, thread 6001): retryable_ambiguous_abstentions +
+    # retry_ambiguous_abstentions — Wave 5's ambiguous-abstention retry door (see the
+    # ceiling's own changelog above for the full account).
+    assert len(per_tool) == 146

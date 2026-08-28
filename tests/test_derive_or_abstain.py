@@ -233,3 +233,38 @@ async def test_derive_or_abstain_first_pass_success_writes_no_resolved_marker(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_implements'", orphan)
     assert row is None
+
+
+async def test_derive_or_abstain_resolves_a_stale_abstention_from_a_different_source(
+    actions: Actions,
+) -> None:
+    """Wave 5's own finding: a retry runs under whatever actor re-derived it, almost
+    never the original abstention's own writer — assert_property's own supersession is
+    same-source-only, so a naive re-assert under the RETRYING actor would leave the
+    ORIGINAL actor's abstention "current" beside the new resolved marker instead of
+    retiring it. This is the cross-source case the sibling same-source test above
+    cannot catch (it uses "test" for both calls)."""
+    orphan = await _mint_bare(actions, "GateWidget")
+    target = await _mint_bare(actions, "GateWidget")
+    first = await capture.derive_or_abstain(
+        actions, orphan, "implements", [], "original-writer")
+    assert first["abstained"] is True
+
+    second = await capture.derive_or_abstain(
+        actions, orphan, "implements", [target], "a-different-retrying-actor",
+        retried=True)
+    assert second["minted"] is True
+
+    rows = await actions.pool.fetch(
+        "SELECT source_id, value FROM assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_implements' "
+        "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=assertions.id)",
+        orphan)
+    # exactly one LIVE row must remain, and it must be the resolved one — not two
+    # "current" rows (one per source) coexisting, the exact bug this test guards.
+    assert len(rows) == 1
+    assert rows[0]["value"]["resolved"] is True
+    assert rows[0]["value"]["resolved_to"] == str(target)
+
+    still_abstained = await capture.abstained_derivations(actions.pool, "implements")
+    assert str(orphan)[:8] not in {r["from_id"] for r in still_abstained["sample"]}
