@@ -64,6 +64,22 @@ unassisted merge result in place and exits nonzero — a normal conflict, not a 
 number. If unrelated hunks elsewhere in the file still conflict after the constant is
 fixed, the constant is still corrected (one less thing for the human resolving the rest by
 hand to get wrong) but the exit stays nonzero — real conflicts still get a real human.
+
+FIRST REAL COLLISION, TWO LATENT BUGS FOUND BY IT (2026-08-28, thread 197164ae — this
+driver had never actually fired against a real merge before): (1) `_const_value` used to
+re-search `[\\d_]+` over the WHOLE matched line rather than read a captured group, so on a
+name containing an underscore (every name this has ever been pointed at) it grabbed the
+bare `_` inside the NAME itself and `int("")` raised straight past this file's own
+`main()` — git folded that into an ordinary content conflict, indistinguishable from two
+humans editing the same line, and the traceback would have scrolled past unread had Thoth
+not been reading closely. (2) the line regex required nothing but whitespace after the
+digits, so a value trailing a "# MEASURED..." changelog comment (this ratchet's own
+actual convention on every recent raise) silently read back as "missing", not present —
+the exact one-sided version of the same "value is really there, this driver just can't
+see it" failure. Both fixed at the root (a captured group; an optional trailing `#.*`).
+`main()`'s own parsing calls are ALSO now wrapped in a `try`/`except` that DECLINES with
+a named reason on any OTHER future parse failure this driver has not yet met, rather than
+raising past the merge machinery again — the belt, not just the one buckle that broke.
 """
 from __future__ import annotations
 
@@ -80,16 +96,37 @@ _BLOCK_RE = re.compile(
 
 
 def _const_re(name: str) -> re.Pattern[str]:
-    return re.compile(rf"^[ \t]*{re.escape(name)}[ \t]*=[ \t]*[\d_]+[ \t]*$", re.MULTILINE)
+    # A TRAILING `# comment` IS THE COMMON CASE, NOT AN EDGE CASE (thread 197164ae's own
+    # real specimen): every raise this ratchet has actually landed with this session
+    # carries a "# MEASURED against the merged tree: N tools." trailing note — the exact
+    # shape the merged commit 1893116 needed a HUMAN to write by hand because this regex,
+    # before this fix, only matched a bare `NAME = NUMBER` line with nothing after it.
+    # `ours`'s own real value (196_635  # MEASURED...) silently read back as "missing"
+    # against the OLD regex — not the crash Thoth hit (that was `theirs`, whose line
+    # happened to be bare), but the identical class of gap: a value that IS present,
+    # parsed as absent, purely because of what trails it on the line.
+    return re.compile(
+        rf"^[ \t]*{re.escape(name)}[ \t]*=[ \t]*(?P<value>[\d_]+)[ \t]*(#.*)?$", re.MULTILINE)
 
 
 def _const_value(text: str, name: str) -> int | None:
+    """THE BUG THIS REPLACES, first live specimen 2026-08-28 (thread 197164ae) rather than
+    a hypothesis: the old version re-searched `[\\d_]+` over the WHOLE matched line
+    (`m.group(0)`, e.g. "TOOL_CONTRACT_CEILING_CHARS = 197_348") instead of reading a
+    captured group — and `re.search` finds the FIRST such run left-to-right, which for
+    any constant name containing an underscore (every name this driver has ever been
+    pointed at) is the bare `_` inside the NAME itself ("TOOL_CONTRACT..."), not the
+    number. `"_".replace("_", "")` is `""`, and `int("")` raised past every caller
+    straight out of the merge driver. This was not intermittent — it fired on every
+    single invocation this constant's own name shape has ever produced; nothing caught
+    it earlier only because this driver had never actually collided in a real merge
+    before. Fixed by reading `(?P<value>...)` directly off `_const_re`'s own match — the
+    number was always right there in the regex that already located it; there was never
+    a reason to re-derive it with a second, unanchored search."""
     m = _const_re(name).search(text)
     if m is None:
         return None
-    digits = re.search(r"[\d_]+", m.group(0))
-    assert digits is not None  # _const_re's own match guarantees this group exists
-    return int(digits.group(0).replace("_", ""))
+    return int(m.group("value").replace("_", ""))
 
 
 def _reconcile(text: str, name: str, resolved: int) -> tuple[str, bool]:
@@ -147,9 +184,27 @@ def main(argv: list[str]) -> int:
     )
     text = Path(args.ours).read_text()
 
-    base_v = _const_value(Path(args.ancestor).read_text(), args.constant_name)
-    ours_v = _const_value(ours_original, args.constant_name)
-    theirs_v = _const_value(Path(args.theirs).read_text(), args.constant_name)
+    # DECLINES, NEVER RAISES (thread 197164ae — the first live specimen, not a
+    # hypothesis: `_const_value`'s own digit-extraction bug once raised an unhandled
+    # ValueError here, which git's merge machinery folded into an ordinary content
+    # conflict indistinguishable from two humans editing the same line — the traceback
+    # scrolled past and nothing else recorded that the automation had abdicated. That
+    # ONE bug is fixed at its root in `_const_value` above; this `try` is the belt for
+    # any OTHER parsing failure this driver has not yet met — same family as
+    # `alarm_withheld_deploy_record`'s own confession: a correct refusal must leave a
+    # named reason, never vanish into a generic failure path a human has to excavate
+    # from a traceback to even notice happened.
+    try:
+        base_v = _const_value(Path(args.ancestor).read_text(), args.constant_name)
+        ours_v = _const_value(ours_original, args.constant_name)
+        theirs_v = _const_value(Path(args.theirs).read_text(), args.constant_name)
+    except (ValueError, OSError) as exc:
+        print(f"reconcile_tool_contract_ceiling: DECLINED — could not parse "
+              f"{args.constant_name} on one side of the merge ({exc!r}); not this "
+              f"collision's shape, or a bug in this driver — leaving git's own merge "
+              f"of {args.path} as-is rather than raising past the merge machinery.",
+              file=sys.stderr)
+        return baseline.returncode or 1
 
     if base_v is None or ours_v is None or theirs_v is None:
         print(f"reconcile_tool_contract_ceiling: {args.constant_name} missing from one of "
