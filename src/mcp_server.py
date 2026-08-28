@@ -7318,16 +7318,16 @@ async def settle(
         is_handoff = bool(item.pop("is_handoff", False))
         summary = item.pop("summary")
         resolves_arg = item.get("resolves")
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix): the
-        # identity-default lives in the MCP record_decision wrapper, not in
-        # capture.record_decision itself — this bulk loop calls capture directly and
-        # bypassed it entirely. Default here too, never refuse; honestly unlinked when
-        # identity offers no project.
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+        # SAME SHARED LADDER record_decision/open_thread/ingest_reference's own wrappers
+        # climb (thread 6c262aee, #151's law): this bulk loop calls capture directly and
+        # bypassed the identity default entirely — resolve_repo_default is the ONE place
+        # that default (and its lineage-wide widen) now lives, so this loop inherits it
+        # for free instead of carrying a fourth differently-shaped copy.
         item_repo = item.pop("repo", None)
-        repo_defaulted = False
-        if not item_repo:
-            item_repo = ident.project
-            repo_defaulted = item_repo is not None
+        _rd = await capture.resolve_repo_default(pool, item_repo, actor, ident.project)
+        item_repo = _rd["repo"]
+        repo_defaulted = _rd["repo_defaulted"]
         try:
             did = await capture.record_decision(
                 Actions(pool), summary, kind=item.pop("kind", "ruling"),
@@ -7349,6 +7349,9 @@ async def settle(
                 "why": "no repo given — defaulted to the caller's own project rather "
                        "than left unlinked (orphan-door fix, msg 5703/5720)",
             }
+        elif _rd["lineage_attempted"]:
+            decision_entry["lineage_repo_derivation"] = await capture.record_lineage_abstain(
+                pool, did, actor, _rd["lineage_candidates"], _rd["lineage_projects"])
         accepted["decisions"].append(decision_entry)
         for ref in (resolves_arg if isinstance(resolves_arg, list) else
                     [resolves_arg] if resolves_arg else []):
@@ -7361,16 +7364,16 @@ async def settle(
         summary = item.pop("summary")
         thread_kind = item.pop("kind", None)
         thread_owner = item.pop("owner", None)
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix): the
-        # repo identity-default lives in the MCP open_thread wrapper, not in
-        # capture.open_thread itself — this bulk loop calls capture directly and bypassed
-        # it entirely (unlike the owner default, which DOES live in capture.open_thread
-        # and so already applied here for free). Default here too, never refuse.
+        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+        # SAME SHARED LADDER (thread 6c262aee, #151's law): this bulk loop calls capture
+        # directly and bypassed the identity default entirely (unlike the owner default,
+        # which DOES live in capture.open_thread and so already applied here for free) —
+        # resolve_repo_default/record_lineage_abstain are the ONE place the repo default
+        # and its lineage-wide widen live, inherited here instead of a fourth copy.
         thread_repo = item.pop("repo", None)
-        repo_defaulted = False
-        if not thread_repo:
-            thread_repo = ident.project
-            repo_defaulted = thread_repo is not None
+        _rd = await capture.resolve_repo_default(pool, thread_repo, actor, ident.project)
+        thread_repo = _rd["repo"]
+        repo_defaulted = _rd["repo_defaulted"]
         try:
             tid = await capture.open_thread(
                 Actions(pool), summary, repo=thread_repo,
@@ -7391,6 +7394,9 @@ async def settle(
                 "why": "no repo given — defaulted to the caller's own project rather "
                        "than left unlinked (orphan-door fix, msg 5703/5720)",
             }
+        elif _rd["lineage_attempted"]:
+            thread_entry["lineage_repo_derivation"] = await capture.record_lineage_abstain(
+                pool, tid, actor, _rd["lineage_candidates"], _rd["lineage_projects"])
         # settle()'s own threads_open is the SECOND live door onto capture.open_thread
         # (#5546 item 3, Thoth msg 5605 — "one door, two callers, same shape"): the
         # DEFAULT-NEVER-REFUSE behavior for kind='obligation' lives once, in

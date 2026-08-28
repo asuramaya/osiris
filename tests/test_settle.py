@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
+from src.orchestrator import capture
 from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 from src.orchestrator.settle import (
     closure_edge_coverage,
@@ -456,6 +457,123 @@ async def test_settle_bulk_loops_default_repo_to_the_callers_own_project(
         "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND t.type='Thread' "
         "AND p.canonical='repo:settlerepoproj'")
     assert d_linked == 1 and t_linked == 1
+
+
+# --- WAVE 2 / LANE B, THE settle() BULK-LOOP LEG (thread 6c262aee): the SAME shared
+# ladder record_decision/open_thread/ingest_reference's own wrappers climb, now covering
+# settle's two capture-calling bulk loops too — the fourth and last deferred surface. ----
+
+async def test_settle_bulk_loops_fall_back_to_the_lineage_when_identity_has_no_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:stlwiwire1", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:stlwiwireproj", "test")
+    await actions.create_link(root, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:stlwiwire1-iii", session="stlwiwire1iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settle's decision, opened by an orphan lineage generation"}],
+            threads_open=[{"summary": "settle's thread, opened by an orphan lineage generation"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    d_entry = out["accepted"]["decisions"][0]
+    t_entry = out["accepted"]["threads_opened"][0]
+    assert d_entry["repo_defaulted"]["to"] == "stlwiwireproj"
+    assert t_entry["repo_defaulted"]["to"] == "stlwiwireproj"
+    assert "lineage_repo_derivation" not in d_entry
+    assert "lineage_repo_derivation" not in t_entry
+    d_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND d.type='Decision' "
+        "AND p.canonical='repo:stlwiwireproj'")
+    t_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND t.type='Thread' "
+        "AND p.canonical='repo:stlwiwireproj'")
+    assert d_linked == 1 and t_linked == 1
+
+
+async def test_settle_bulk_loops_abstain_and_record_why_on_lineage_ambiguity(
+    actions: Actions,
+) -> None:
+    """THE ABSTAIN LAW inside settle's own bulk loops too: two distinct projects across
+    the lineage must mint NOTHING — never break the tie by recency or generation count."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:stlwiwire2", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:stlwiwireproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:stlwiwireprojb", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    gen2 = await actions.create_or_find_object("Agent", "agent:stlwiwire2-ii", "test")
+    await actions.create_link(gen2, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:stlwiwire2-iii", session="stlwiwire2iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settle's decision under a lineage whose works_in disagrees"}],
+            threads_open=[{"summary": "settle's thread under a lineage whose works_in disagrees"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    d_entry = out["accepted"]["decisions"][0]
+    t_entry = out["accepted"]["threads_opened"][0]
+    assert "repo_defaulted" not in d_entry
+    assert "repo_defaulted" not in t_entry
+    assert d_entry["lineage_repo_derivation"]["minted"] is False
+    assert set(d_entry["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
+    assert t_entry["lineage_repo_derivation"]["minted"] is False
+    assert set(t_entry["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
+    # settle's own receipt carries only the 8-char short id — resolve it back the same
+    # way any other caller would, then verify against the durable graph directly.
+    did = await capture._find_decision(actions.pool, d_entry["id"], require_identifier=True)
+    tid = await capture._find_thread(actions.pool, t_entry["id"], require_identifier=True)
+    assert did is not None and tid is not None
+    d_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", did)
+    t_linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", tid)
+    assert d_linked == 0 and t_linked == 0  # nothing minted — both stay honestly unlinked
+    d_abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", did)
+    t_abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", tid)
+    assert d_abstained is not None and set(d_abstained["candidates"]) == {str(proj_a), str(proj_b)}
+    assert t_abstained is not None and set(t_abstained["candidates"]) == {str(proj_a), str(proj_b)}
 
 
 async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
