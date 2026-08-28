@@ -342,6 +342,67 @@ async def alarm_unreviewed_boot(
         )
 
 
+async def alarm_withheld_deploy_record(
+    pool: asyncpg.Pool, *, running_head: str, reason: str,
+) -> None:
+    """THE WITHHELD-RECORD CONFESSION (thread 3b34f6c5, #52's own law: "the ledger's
+    default failure is not rot, it is unrecorded completion"). `cmd_deploy`'s halcyon
+    gate (ruling 921eabcf, `_real_check_false_mint_live`) can CORRECTLY refuse to record
+    a deploy — a live specimen (decision 9992cf39, third of its shape) proved the code
+    was genuinely restarted, healthy, and serving while the ledger record was withheld
+    on a false-mint-live anomaly in ANOTHER house's identity, correctly left unrepaired
+    (ruling a2cf8405-adjacent: not this house's identity to rewrite). REFUSING TO RECORD
+    WAS RIGHT. RECORDING NOTHING WAS NOT: the watermark `_DEPLOY_CURSOR_KEY` reads stale,
+    so the next reader of it alone concludes `running_head` never shipped — exactly #52's
+    disease, except here a MECHANISM produces it on purpose rather than a row nobody
+    updated. This is the confession that makes the silence speak, same family as
+    `alarm_unreviewed_boot` above and Khnum's own inert-hatch fix (`unlinked_because`
+    recorded even when unenforced, commit on thread eea88e1c's own arc) — a refusal that
+    leaves no trace is functionally identical to a bug nobody can see.
+
+    LOUD, NEVER A SECOND GATE: this never blocks, never retries the record, and never
+    touches `_DEPLOY_CURSOR_KEY` itself — writing the watermark here would silently
+    launder the very refusal this function exists to make visible, the same trap a
+    "confession that quietly fixes what it's confessing" would be. `reason` is the
+    caller's own already-composed refusal text (the exact lines `cmd_deploy` printed) —
+    this function does not re-derive or summarize it, matching `_real_check_false_mint_
+    live`'s own contract that a query has no business writing prose and a deploy gate
+    has no business abbreviating the prose it already wrote.
+
+    IDEMPOTENT ON THE EXACT SUMMARY (`open_thread`'s own contract, no `repo` passed —
+    same reason `alarm_unreviewed_boot` passes none: a deploy-ledger alarm has no
+    SoftwareProject to declare): a repeated deploy attempt against the SAME
+    `running_head` with the SAME unresolved refusal mints no second Thread; a NEW head
+    or a changed reason (the anomaly was reconciled differently, or a different
+    candidate now offends) is a genuinely new fact and gets its own."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.mailbox import send_message
+
+    _log.critical("deploy record withheld for HEAD %s: %s", running_head, reason)
+    actions = Actions(pool)
+    await open_thread(
+        actions,
+        f"DEPLOY RECORD WITHHELD: HEAD {running_head!r} deployed successfully (restarted, "
+        "healthy, whisper-probed clean) but `osiris deploy` refused to record it in the "
+        f"ledger. Reason: {reason} The ledger's last recorded deploy is now stale — a "
+        "reader who trusts it alone will wrongly conclude this HEAD never shipped. It did. "
+        "Reconcile the flagged anomaly, then either re-run `osiris deploy` (a no-op restart "
+        "will still re-check and, once clean, record) or correct the watermark by hand so "
+        "the ledger and reality agree again.",
+        kind="obligation", arc="Fleet-Hygiene", severity="alarm", source="deploy:withheld",
+        unlinked_because="service-scoped claim: a deploy-ledger alarm has no SoftwareProject",
+    )
+    with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
+        await send_message(
+            pool, from_agent="system:osiris-deploy", from_project="osiris", to_project="operator",
+            body=f"osiris deploy withheld its ledger record for HEAD {running_head} even "
+                 f"though the code deployed cleanly — {reason} The ledger is stale until "
+                 "this is reconciled.",
+            dedup_window_secs=86400,
+        )
+
+
 async def origin_visibility(repo_root: Path) -> str:
     """THE READ-SIDE ALARM (2026-08-15 incident, ruling 2fc98818): "NO SEAT PUSHES" was
     restated in every deploy report for over a day while origin sat PUBLIC with four

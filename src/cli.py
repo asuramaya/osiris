@@ -1740,6 +1740,8 @@ async def cmd_deploy(
     try:
         from src.orchestrator.deploy_guard import (
             _DEPLOY_CURSOR_KEY,
+            _git_head,
+            alarm_withheld_deploy_record,
             check_diverged_since_last_deploy,
         )
         from src.orchestrator.monitor import get_cursor
@@ -1811,17 +1813,33 @@ async def cmd_deploy(
                            if not r["harness_confirmed_live"]]
             print("osiris deploy: REFUSED — false-mint-live: a generation carries "
                   "false_mint=true with a live mount.")
+            reason_lines = []
             if confirmed:
-                print("  HARNESS-CONFIRMED LIVE (the halcyon shape — a genuinely live body "
-                      f"wrongly folded): {', '.join(confirmed)}. reinstate_generation is the "
-                      "repair door.")
+                line = ("HARNESS-CONFIRMED LIVE (the halcyon shape — a genuinely live body "
+                        f"wrongly folded): {', '.join(confirmed)}. reinstate_generation is the "
+                        "repair door.")
+                print(f"  {line}")
+                reason_lines.append(line)
             if unconfirmed:
-                print("  NOT harness-confirmed live (a fresh/refreshing mount row alone is "
-                      "not proof of a live body): "
-                      f"{', '.join(unconfirmed)}. Do NOT run reinstate_generation on these — "
-                      "that would resurrect a bodiless generation. The real live body may "
-                      "sit under a DIFFERENT generation id; a human must reconcile identity.")
+                line = ("NOT harness-confirmed live (a fresh/refreshing mount row alone is "
+                        "not proof of a live body): "
+                        f"{', '.join(unconfirmed)}. Do NOT run reinstate_generation on these — "
+                        "that would resurrect a bodiless generation. The real live body may "
+                        "sit under a DIFFERENT generation id; a human must reconcile identity.")
+                print(f"  {line}")
+                reason_lines.append(line)
             print("osiris deploy: NOT recording this deploy.")
+            # THE WITHHELD-RECORD CONFESSION (thread 3b34f6c5, #52's own law): the refusal
+            # above is correct, but recording nothing leaves the ledger silently stale — a
+            # mechanism producing "unrecorded completion" on purpose. The code IS deployed
+            # and healthy at this point (restart/health/whisper already passed); only the
+            # ledger write was withheld.
+            running_head = _git_head(root)
+            if running_head is not None:
+                with contextlib.suppress(Exception):  # a confession must never crash the CLI
+                    await alarm_withheld_deploy_record(
+                        pool, running_head=running_head,
+                        reason="false-mint-live: " + " ".join(reason_lines))
             return 1
 
         # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) — OFF
