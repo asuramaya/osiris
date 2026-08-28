@@ -32,6 +32,7 @@ from src.cli import (
     cmd_bootstrap,
     cmd_charter_for,
     cmd_deploy,
+    cmd_desk,
     cmd_fold_project,
     cmd_launch,
     cmd_merge,
@@ -41,6 +42,7 @@ from src.cli import (
     cmd_rematerialize,
     cmd_retention,
     cmd_seed,
+    cmd_show,
     cmd_smoke_chaos,
     cmd_unmerge,
     commit_deployed_notes,
@@ -202,6 +204,52 @@ async def test_cmd_attach_dispatches_to_the_resolved_name(monkeypatch: Any) -> N
     monkeypatch.setattr("src.manager.attach.main", _fake_main)
     assert await cmd_attach("imhotep", manager=_roster) == 0
     assert calls == [["[OS] imhotep"]]
+
+
+# --- cmd_desk / cmd_show (thread 00913be9): thin doors onto inbox/recall — the MCP round
+# trip is mocked, same shape as cmd_attach's own fake `manager` above. -----------------
+
+async def test_cmd_desk_calls_inbox_pinned_to_the_operator_project(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"owed": 0, "letters": 0, "needs_decision": [], "needs_hands": [], "fyi": []}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_desk() == 0
+    assert calls == [("inbox", {"project": "operator", "peek": True})]
+
+
+async def test_cmd_desk_reports_a_dark_daemon_honestly(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    async def _dark(url: str, name: str, arguments: dict[str, Any]) -> str:
+        return "error: connection refused"
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _dark)
+    assert await cmd_desk() == 1
+    assert "osiris-mcp" in capsys.readouterr().err
+
+
+async def test_cmd_show_calls_recall_with_the_ref(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"id": "5f234a1c", "type": "Thread", "summary": "found"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_show("5f234a1c") == 0
+    assert calls == [("recall", {"ref": "5f234a1c"})]
+
+
+async def test_cmd_show_exits_nonzero_when_recall_refuses(monkeypatch: Any) -> None:
+    async def _no_match(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"error": "no thread/decision matches 'nope' — recall never guesses"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _no_match)
+    assert await cmd_show("nope") == 1
 
 
 # --- cmd_seed: a real pool (never mocked), just injected instead of self-created ----------------

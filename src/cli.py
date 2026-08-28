@@ -1052,6 +1052,50 @@ async def cmd_roster(*, repo: str | None, as_json: bool = False) -> int:
     return 0
 
 
+# --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
+# CLI shipped 22 write-shaped subcommands and zero read-shaped ones over the record itself
+# (mail, threads, decisions) — a human at his own terminal could WRITE annotate-thread but
+# could not read his own desk. #138's own lesson applied: both capabilities already existed
+# as MCP tools (inbox(project='operator', peek=True) already IS the organized desk;
+# recall(ref) already IS the untruncated single-object read) — this only NAMES them as CLI
+# doors, the same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new
+# was built underneath; the surface decision was which two, not which seven. --------------
+
+async def cmd_desk(*, as_json: bool = False) -> int:
+    """osiris desk — the operator's own organized queue, read at a terminal instead of only
+    the web console or an agent peeking on his behalf. Always a peek: reading the desk never
+    leases a brief, and settling one is only ever the operator's own explicit word."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "inbox", {"project": "operator", "peek": True})
+    if isinstance(result, str):
+        print(f"osiris desk: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title="desk")
+    return 0
+
+
+async def cmd_show(ref: str, *, as_json: bool = False) -> int:
+    """osiris show <ref> — the full, untruncated record for one Thread or Decision, by
+    UUID, 8-char short id, or summary substring — the same recall() an agent already reads.
+    Refuses loudly (never guesses) when nothing matches; exits nonzero either way a script
+    can check."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "recall", {"ref": ref})
+    if isinstance(result, str):
+        print(f"osiris show: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title=f"show · {ref}")
+    return 1 if result.get("error") else 0
+
+
 # --- deploy ----------------------------------------------------------------------------------
 
 DEPLOY_UNITS = ("osiris-mcp", "osiris-worker", "osiris-console")
@@ -2821,6 +2865,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, boot-status, smoke
+  read the record       desk, show
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize
@@ -2924,6 +2969,24 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="reverse-lookup: which seat owns this repo")
     p_roster.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_desk = sub.add_parser("desk", description=_d(
+        "the operator's own organized queue — needs_decision / needs_hands / fyi bands, "
+        "the your_queue thread list, dimmed moot briefs — read at a terminal instead of "
+        "only the web console or an agent peeking on your behalf. Always a peek; settling "
+        "a brief is still only ever your own explicit word (the desk MCP tool's ack=)"),
+        epilog="example: osiris desk\nexample: osiris desk --json")
+    p_desk.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_show = sub.add_parser("show", description=_d(
+        "the full, untruncated record for one Thread or Decision — by UUID, 8-char short "
+        "id, or summary substring, the same recall() an agent already reads. Refuses "
+        "loudly (never guesses) when nothing matches"),
+        epilog="example: osiris show 5f234a1c\nexample: osiris show 5f234a1c --json")
+    p_show.add_argument("ref", help="UUID, 8-char short id, or summary substring")
+    p_show.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_migrate = sub.add_parser("migrate", description=_d(
         "env-correct `alembic upgrade head` (--check "
@@ -3215,6 +3278,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":
         return asyncio.run(cmd_roster(repo=args.repo, as_json=args.as_json))
+    if args.command == "desk":
+        return asyncio.run(cmd_desk(as_json=args.as_json))
+    if args.command == "show":
+        return asyncio.run(cmd_show(args.ref, as_json=args.as_json))
     if args.command == "migrate":
         return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":

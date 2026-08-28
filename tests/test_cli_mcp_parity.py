@@ -59,6 +59,16 @@ NO_MCP_EQUIVALENT = {
           "precondition, different moment. The unity law binds one act to one name on "
           "both surfaces; it does not force two genuinely different acts to share one "
           "just because they're adjacent in purpose. Reasoned explicitly, not assumed.",
+    "desk": "a deliberately NARROWED, terminal-native door onto inbox(project='operator', "
+           "peek=True) — thread 00913be9, Thoth's CLI-surface audit: the operator's own "
+           "desk was readable only via the web console or an agent peeking on his behalf. "
+           "Not a rename (the MCP tool answers a broader question — any project's mailbox, "
+           "leasing, ack) — 'desk' fixes both params to the one question a human at his "
+           "own terminal actually asks, so it earns its own name rather than exposing "
+           "inbox's full parameter surface as CLI flags.",
+    "show": "a deliberately NARROWED, terminal-native door onto recall(ref=...) — same "
+           "audit, same reasoning as 'desk' above: recall() is already the exact verb, "
+           "'show' is simply the word a human reaches for at a prompt.",
 }
 
 # (cli_command, param) -> reason: a CLI-only param beyond the blanket "actor" exemption.
