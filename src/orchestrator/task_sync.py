@@ -501,3 +501,108 @@ def archive_eligible_targets(
             "thread_ids": list(row["thread_ids"]),
         })
     return targets
+
+
+# ── WAVE 2 LANE A (thread 5f47e23d, Thoth's dispatch msg 5934): `mint_tier2_threads`'s own
+# obligation Threads — "TASK/THREAD DISAGREEMENT: Thread <8-char> ..." /
+# "THREAD SIDE ORPHAN: Thread <8-char> ..." — cite the disputed Thread in their own summary
+# prose but were minted BEFORE `open_thread` grew its door-side `_mint_prose_citations` call
+# (task #189, decision bb2ddf8a), so the citation was never turned into an edge: decision
+# a55b1014, "a defense that erases its own alarm" — the divergence detector has been firing
+# correctly for weeks, depositing every finding as a zero-live-link orphan nothing surfaces.
+#
+# REUSES `parse_thread_citations`, THIS MODULE'S OWN PARSER, NOT A SECOND ONE (Thoth's
+# explicit MUST NOT) — the same regex `resolve_task_citations` already runs against a task's
+# description, run here against task_sync's own generated summary text instead. Measured
+# live (2026-08-28): 41 zero-live-link Threads match the summary shape, all 41 carry exactly
+# one citation, all 41 resolve to exactly one existing Thread via `_find_thread`'s own
+# short-id-prefix leg, zero ambiguous, zero unresolved, zero self-cites — re-measure before
+# trusting this comment, the way every prior count in this arc had to be.
+#
+# Mints via `derive_or_abstain` (Lane 0, capture.py) rather than the older
+# `_resolve_cited_object`/`mint_cites` door-time pair `backfill_decided_in` still uses:
+# Thoth's dispatch asked for the newer, durable-abstention discipline here specifically — a
+# candidate count of zero or >1 records WHY on the orphan itself (candidate ids kept), not
+# just a receipt line that vanishes once this call returns. Link type is `cites`
+# (Reference/Decision/Thread -> Reference/Decision/Thread/Practice/Superstition, decision
+# bb2ddf8a's own broadening) — the exact vocabulary this house already uses for "my own
+# prose named that object", `properties={"origin": "derived"}` marking this specific edge as
+# backfilled through the mechanical lookup rather than declared at the citing object's own
+# birth (mint_cites's `origin="prose"` marks that other case).
+_TASK_SYNC_ORPHAN_SQL = (
+    "SELECT o.id, o.canonical, "
+    " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+    "  AS summary "
+    "FROM objects o "
+    "WHERE o.type='Thread' AND o.status='active' "
+    "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+    "  AND a.name='summary' AND "
+    "  (a.value #>> '{}' LIKE 'TASK/THREAD DISAGREEMENT:%' "
+    "   OR a.value #>> '{}' LIKE 'THREAD SIDE ORPHAN:%')) "
+    "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+    "  AND (l.valid_until IS NULL OR l.valid_until > now()))"
+)
+
+
+async def backfill_task_sync_citation_links(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link `task_sync`-minted obligation Thread (the disagreement/
+    orphan alarms above) to the Thread its own summary names, via `derive_or_abstain`:
+    mints `cites` (DIRECT_OBSERVATION, `origin=derived`) iff `parse_thread_citations` finds
+    exactly one citation AND it resolves to exactly one existing Thread; zero citations, a
+    citation naming no Thread, or an ambiguous short-id prefix each abstain durably with a
+    DISTINCT reason (Khnum's precedent: "named nothing" and "named something that doesn't
+    exist" are different facts, never folded into one bucket) and the candidate set kept.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    `derive_or_abstain` checks the link doesn't already exist before minting, and a repeat
+    call over an already-abstained thread simply re-asserts the same abstention fact."""
+    from src.orchestrator.capture import RefAmbiguous, _find_thread, derive_or_abstain
+
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(_TASK_SYNC_ORPHAN_SQL)
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        summary = row["summary"] or ""
+        tokens = parse_thread_citations(summary)
+        candidates: list[uuid.UUID] = []
+        why: str | None = None
+        if not tokens:
+            why = "no Thread short-id citation found in this Thread's own summary"
+        elif len(tokens) > 1:
+            why = f"summary names {len(tokens)} distinct short ids ({tokens}), not one"
+        else:
+            tok = tokens[0]
+            try:
+                tid = await _find_thread(pool, tok, require_identifier=True)
+            except RefAmbiguous as exc:
+                candidates = [uuid.UUID(c["id"]) for c in exc.candidates]
+                why = f"cited short id {tok!r} matches {len(candidates)} Threads, not 1"
+            else:
+                if tid is None:
+                    why = f"cited short id {tok!r} resolves to no existing Thread"
+                elif tid == row["id"]:
+                    why = f"cited short id {tok!r} resolves to this Thread itself"
+                else:
+                    candidates = [tid]
+        if len(candidates) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidates[0]), "citation": tokens[0] if tokens else None}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": why, "candidate_count": len(candidates)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "cites", candidates, actor,
+                                    why_if_ambiguous=why)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}

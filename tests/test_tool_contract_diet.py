@@ -665,7 +665,6 @@ def _tool_chars(t: Any) -> int:
 # discipline the constant exists to enforce, applied to the constant itself.
 TOOL_CONTRACT_CEILING_CHARS = 999_999  # provisional; measured exactly before deploy
 
-
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
     from src import mcp_server as srv
@@ -761,6 +760,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     orphan_references — the repair-verb half of the bootstrap_project door-gap fix (see
     the ceiling's own changelog above for the full account).
     138 -> 139 (2026-08-28, Khnum, decision 18464c67/thread 33962e00): backfill_boot_
-    alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above)."""
+    alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above).
+    139 -> 140 (2026-08-28, Seshat, decision a55b1014/thread 5f47e23d): backfill_
+    task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
+    changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 139
+    assert len(per_tool) == 140
