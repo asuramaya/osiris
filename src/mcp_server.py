@@ -4476,6 +4476,32 @@ async def backfill_bootstrap_orphan_references(
 
 
 @mcp.tool()
+async def repair_stale_pile_summons(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads,
+    whose summaries froze that day's candidates() count in prose and never re-derive it.
+    Re-measures each still-open one against a live candidates(project=...) call: live count
+    matches the frozen one → untouched; live count is 0 → resolves the thread as moot
+    (nothing left to judge); live count is >0 but differs → corrects the thread's own
+    summary via correct_thread_summary, never resolves it and never disposes anyone's pile
+    on their behalf (only that project's own seat may judge its own pile). Only matches the
+    exact bulk-mint template on a still-open Thread, never one that merely mentions a number.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` requires a non-blank `because` for the resolve
+    actions. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a repair is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.dispose import (
+        repair_stale_pile_summons as _repair_stale_pile_summons,
+    )
+    return await _repair_stale_pile_summons(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def backfill_boot_alarm_commit_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:

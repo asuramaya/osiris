@@ -40,6 +40,7 @@ under it, and the shape of what you shoved will always be visible.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -462,3 +463,125 @@ async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:
                    f"{total} row(s) belong to NO project, so NO seat can ever dispose them. "
                    f"The producer must be made to name an owner, not the pile swept.",
     }
+
+
+# THE ONE-TIME BROADCAST THAT OUTLIVED ITS OWN NUMBER (thread e2326ab7, Soundwave XIV's
+# decepticons report, 2026-08-28): every project's own "DISPOSE OF YOUR MINER PILE" thread
+# was bulk-minted once, 2026-07-13, with that day's pile count baked into the static
+# summary text — the same class of failure Thoth's own standing law names ("NEVER INHERIT
+# A NUMBER"). decepticons' own copy sat at the top of its wall for weeks claiming 257
+# unjudged candidates when candidates() returned ONE — an orphan doing exactly what it
+# accused the miner of doing. MEASURED BEFORE BUILDING (a0339e16's discipline, same as
+# Wave 3): sampled 7 of these threads live. 4 had already self-healed — a seat visited,
+# called candidates() fresh (as dispose()'s own protocol requires), and closed the thread
+# on the TRUE count, the correct behavior this house already has. But 3 remained OPEN and
+# WRONG right now: pokex (149 -> 0), code (38 -> 27), and one (chronohorn, 1 -> 1) that
+# had NOT drifted at all — proof this is real, measurable staleness, not a hypothetical.
+# THE MINER IS DARK (ruling ceae1604) — no new piles are minting, so this is a closed,
+# non-recurring, shrinking population; a permanent recurring janitor would be disproportionate
+# machinery for it. This is a ONE-TIME REPAIR, same idiom as backfill_bootstrap_orphan_
+# references: dry-run by default, mechanical, and it NEVER guesses a disposition on
+# anyone's behalf — judging the pile stays the seat's own job (dispose.py's own rule 1).
+_STALE_PILE_RE = re.compile(
+    r"^DISPOSE OF YOUR MINER PILE — (\d+) candidates on ")
+
+
+async def repair_stale_pile_summons(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads
+    (one per project, `owner`=<project>): re-measures each still-OPEN one's project against
+    a LIVE `candidates(project=..., limit=0)` call and compares it to the frozen count in
+    the thread's own summary text.
+
+    THREE OUTCOMES, never a fourth: (1) live count matches the frozen one — untouched,
+    nothing to fix. (2) live count is 0 — the pile is empty; RESOLVES the thread as moot
+    (mirrors the exact "resolving as moot rather than fabricating a disposal against an
+    empty pile" reasoning a prior seat already used by hand on heinrich's own copy) —
+    there is nothing left for the seat to judge, so leaving it open serves no one. (3) live
+    count is >0 but differs from the frozen one — the seat's own judging duty is real and
+    still theirs; this calls `correct_thread_summary` (never `annotate_thread` — its own
+    docstring names this exact shape as the wrong one: "a caller who means the earlier
+    understanding was wrong wants a different verb entirely", and that verb is this one)
+    so the headline itself stops asserting a number that is simply false, while the duty —
+    never resolved, never disposed on anyone's behalf — stays exactly where it belongs
+    (rule 1).
+
+    MECHANICAL AND CONSERVATIVE: only matches the EXACT bulk-mint template (`_STALE_PILE_RE`)
+    on a still-`open` Thread — never a hand-written or differently-worded thread that merely
+    mentions a candidate count. `owner` (already asserted on every one of these threads at
+    mint time) names the project directly; never re-derived from prose.
+
+    DRY RUN IS THE DEFAULT, same law as every other repair verb in this house.
+    `dry_run=False` requires a non-blank `because` for the RESOLVE actions (the corrected-
+    summary actions carry their own fixed, self-explanatory `corrected_because` and need no
+    separate citation — `correct_thread_summary`'s own supersession semantics). GENUINELY
+    idempotent, not just claimed: a resolved thread no longer matches the `status='open'`
+    scope on a re-run; a corrected summary re-asserting the SAME text on a re-run supersedes
+    onto an unchanged current value via `assert_property`'s own within-source rule — no
+    growing pile of duplicate corrections."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "repairing without a because is an un-audited repair — cite the "
+                         "evidence/finding that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS summary, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS owner "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "    WHERE a.object_id=o.id AND a.name='status' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') = 'open'")
+    to_resolve: list[dict[str, Any]] = []
+    to_correct: list[dict[str, Any]] = []
+    unmatched_owner: list[str] = []
+    for row in rows:
+        summary = row["summary"] or ""
+        m = _STALE_PILE_RE.match(summary)
+        if not m:
+            continue
+        frozen = int(m.group(1))
+        owner = row["owner"]
+        if not owner:
+            unmatched_owner.append(str(row["id"]))
+            continue
+        live = await candidates(pool, project=owner, limit=0)
+        live_count = live["count"]
+        if live_count == frozen:
+            continue
+        entry = {"id": str(row["id"]), "owner": owner, "frozen": frozen, "live": live_count,
+                 "summary": summary}
+        (to_resolve if live_count == 0 else to_correct).append(entry)
+    report: dict[str, Any] = {
+        "dry_run": dry_run,
+        "to_resolve": [{k: v for k, v in e.items() if k != "summary"} for e in to_resolve],
+        "to_correct": [{k: v for k, v in e.items() if k != "summary"} for e in to_correct],
+        "unmatched_owner": unmatched_owner,
+    }
+    if dry_run or not (to_resolve or to_correct):
+        return report
+    from src.orchestrator.capture import correct_thread_summary, resolve_thread
+
+    for entry in to_resolve:
+        await resolve_thread(
+            actions, entry["id"],
+            because=f"pile is empty (candidates(project={entry['owner']!r}) returns 0) — "
+                    f"the thread's own frozen count ({entry['frozen']}) was the count at "
+                    f"mint time (2026-07-13); resolving as moot rather than fabricating a "
+                    f"disposal against an empty pile ({because})",
+            artifact=None, source=actor)
+    for entry in to_correct:
+        corrected = _STALE_PILE_RE.sub(
+            f"DISPOSE OF YOUR MINER PILE — {entry['live']} candidates on ", entry["summary"])
+        await correct_thread_summary(
+            actions, entry["id"], corrected,
+            because=f"the thread's own count ({entry['frozen']}) was frozen at mint time "
+                    f"(2026-07-13) — candidates(project={entry['owner']!r}) returns "
+                    f"{entry['live']} now; repair_stale_pile_summons, thread e2326ab7",
+            source=actor)
+    return report

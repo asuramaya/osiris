@@ -663,7 +663,13 @@ def _tool_chars(t: Any) -> int:
 # resolved by preference rather than by re-measurement is a ratchet that has stopped
 # ratcheting — so this is re-measured against the merged tree, which is the same
 # discipline the constant exists to enforce, applied to the constant itself.
-TOOL_CONTRACT_CEILING_CHARS = 196_473  # MEASURED against the merged tree: 141 tools.
+TOOL_CONTRACT_CEILING_CHARS = 197_670  # MEASURED against the merged tree: 142 tools.
+# 196_473 -> 197_670 (measured exact). 141 -> 142 tools (2026-08-28, Sekhmet, thread
+# e2326ab7, Wave 4 leg (b)): repair_stale_pile_summons — a genuinely new repair verb for
+# the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads, whose frozen counts
+# drift the moment their project's own pile is drained or judged. Docstring trimmed under
+# the category rule first (1,673 -> 1,197 chars for the tool itself); the remaining
+# growth is the verb existing at all, not prose.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -763,6 +769,10 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above).
     139 -> 140 (2026-08-28, Seshat, decision a55b1014/thread 5f47e23d): backfill_
     task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
-    changelog above)."""
+    changelog above).
+    141 -> 142 (2026-08-28, Sekhmet, thread e2326ab7, Wave 4 leg (b)): repair_stale_
+    pile_summons — see the ceiling's own changelog above. The 140 -> 141 raise between
+    the entry above and this one went unrecorded here (same class as the ten-raise gap
+    named earlier in this log); not backfilled for the same reason."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 141
+    assert len(per_tool) == 142
