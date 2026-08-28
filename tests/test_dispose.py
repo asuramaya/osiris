@@ -11,7 +11,12 @@ from datetime import UTC, datetime
 
 from src.actions.core import Actions
 from src.orchestrator.capture import link_repo, open_thread
-from src.orchestrator.dispose import adversary_yield, candidates, dispose
+from src.orchestrator.dispose import (
+    adversary_yield,
+    candidates,
+    dispose,
+    repair_stale_pile_summons,
+)
 
 NOW = datetime.now(UTC)
 SEAT = "agent:thoth-xxviii"
@@ -337,3 +342,126 @@ async def test_the_HONEST_DENOMINATOR_forgives_the_public_retractor(actions: Act
     assert m["judged"] == 2 and m["yield"] == 0.5          # raw: the punishing number
     assert m["corpse_excluded"] == 1 and m["judged_honest"] == 1
     assert m["yield_honest"] == 1.0                        # judged only where the test was fair
+
+
+# --- repair_stale_pile_summons (thread e2326ab7, Soundwave XIV's decepticons report): the
+# 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads froze that day's candidates()
+# count in prose and never re-derive it. -----------------------------------------------
+
+_PILE_BODY = ("\n\nThe session-miner read your transcripts and minted these as though "
+              "they were your duties. NOBODY BUT THIS PROJECT'S SEAT HAS STANDING TO "
+              "JUDGE THEM.")
+
+
+async def _mint_pile_thread(actions: Actions, project: str, frozen_count: int) -> object:
+    """Mints a thread byte-for-byte matching the real 2026-07-13 bulk template — the exact
+    prefix `repair_stale_pile_summons`'s own regex matches, `owner` set the same way the
+    real ones were."""
+    return await open_thread(
+        actions, f"DISPOSE OF YOUR MINER PILE — {frozen_count} candidates on "
+                 f"{project}, and NOBODY BUT THIS PROJECT'S SEAT HAS STANDING TO JUDGE "
+                 f"THEM.{_PILE_BODY}",
+        owner=project, kind="obligation", source="agent:ad1a1cb0-xxviii")
+
+
+async def test_repair_stale_pile_leaves_an_accurate_count_untouched(actions: Actions) -> None:
+    t = await _mint_pile_thread(actions, "accurateproj", 1)
+    await _mined(actions, "thread:accurate-cand", "a real loose end", repo="accurateproj")
+    out = await repair_stale_pile_summons(actions, actor="agent:test", dry_run=True)
+    ids = {e["id"] for e in out["to_resolve"] + out["to_correct"]}
+    assert str(t) not in ids
+
+
+async def test_repair_stale_pile_dry_run_reports_without_writing(actions: Actions) -> None:
+    t = await _mint_pile_thread(actions, "driftedproj", 149)
+    out = await repair_stale_pile_summons(actions, actor="agent:test", dry_run=True)
+    assert out["dry_run"] is True
+    assert [e for e in out["to_resolve"] if e["id"] == str(t)] == [
+        {"id": str(t), "owner": "driftedproj", "frozen": 149, "live": 0}]
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE id=$1", t)
+    assert row["status"] == "active"  # nothing landed — a dry run writes nothing
+
+
+async def test_repair_stale_pile_refuses_dry_run_false_with_no_because(
+    actions: Actions,
+) -> None:
+    await _mint_pile_thread(actions, "needsreason", 5)
+    out = await repair_stale_pile_summons(actions, actor="agent:test", dry_run=False)
+    assert "error" in out and "because" in out["error"]
+
+
+async def test_repair_stale_pile_resolves_as_moot_when_the_pile_is_empty(
+    actions: Actions,
+) -> None:
+    t = await _mint_pile_thread(actions, "emptiedproj", 257)
+    out = await repair_stale_pile_summons(
+        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+    assert out["to_resolve"] == [
+        {"id": str(t), "owner": "emptiedproj", "frozen": 257, "live": 0}]
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert status == "resolved"
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='resolved_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "LIMIT 1", t)
+    assert "empty" in because and "257" in because
+
+
+async def test_repair_stale_pile_corrects_the_summary_when_the_pile_partially_drained(
+    actions: Actions,
+) -> None:
+    t = await _mint_pile_thread(actions, "partialproj", 38)
+    for i in range(27):
+        await _mined(actions, f"thread:partial-cand-{i}", f"real loose end {i}",
+                    repo="partialproj")
+    out = await repair_stale_pile_summons(
+        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+    assert out["to_correct"] == [
+        {"id": str(t), "owner": "partialproj", "frozen": 38, "live": 27}]
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
+    assert status == "open"  # never resolved — the judging duty is still real
+    corrected = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='corrected_summary'", t)
+    assert "DISPOSE OF YOUR MINER PILE — 27 candidates on partialproj" in corrected
+    original = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='summary'", t)
+    assert "38 candidates" in original  # the original identity/dedup key is never touched
+
+
+async def test_repair_stale_pile_never_double_corrects_on_a_rerun(actions: Actions) -> None:
+    """assert_property's own within-source supersede makes this genuinely idempotent, not
+    just claimed: a second run against an unchanged live count re-asserts the SAME
+    corrected_summary rather than growing a pile of duplicates."""
+    t = await _mint_pile_thread(actions, "rerunproj", 38)
+    for i in range(27):
+        await _mined(actions, f"thread:rerun-cand-{i}", f"real loose end {i}",
+                    repo="rerunproj")
+    await repair_stale_pile_summons(
+        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+    await repair_stale_pile_summons(
+        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='corrected_summary'", t)
+    assert n == 2  # two writes landed (event-sourced, never a delete)...
+    current = await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='corrected_summary'", t)
+    assert current == 1  # ...but exactly one is CURRENT — the second superseded the first
+
+
+async def test_repair_stale_pile_never_touches_a_hand_written_thread(actions: Actions) -> None:
+    """MECHANICAL, not a fuzzy match: a thread that merely mentions a number in the same
+    shape must never be swept in — only the EXACT bulk-mint template."""
+    t = await open_thread(
+        actions, "I counted 149 candidates on driftedproj by hand and they're all noise",
+        owner="driftedproj", kind="obligation", source="agent:test")
+    out = await repair_stale_pile_summons(actions, actor="agent:test", dry_run=True)
+    ids = {e["id"] for e in out["to_resolve"] + out["to_correct"]}
+    assert str(t) not in ids

@@ -364,9 +364,62 @@ def _seam_note(pct: int | None, whisper_pct: int) -> str | None:
     return f"{pct}% — seam soon; write back as you go"
 
 
+# ONCE PER CROSSING, NOT ONCE PER CALL (thread e2326ab7, Soundwave XIV's decepticons
+# report): `_seam_note` on its own fires on EVERY tool call while `pct` sits anywhere in a
+# tiered band, unlike the offload ritual's own soft/hard marker files (osiris_hook.py),
+# which fire exactly once per crossing. A 7-hour autonomous run sitting at 63-79% context
+# for most of it saw the same "seam soon" line on ~40 consecutive calls — wallpaper before
+# it was useful, the same disease as Wave 4 legs (a)/(b) inverted: too OFTEN instead of too
+# LATE, training the reader to stop reading the ladder it belongs to. `_seam_last_band`
+# mirrors `_seam_rows`/`_seam_pcts`'s own bounded, in-process, TTL-free cache shape —
+# correct to reset on server restart, since a fresh process has shown nothing yet and the
+# very next crossing fires exactly as it should.
+_seam_last_band: dict[str, tuple[float, str]] = {}
+
+
+def _prune_seam_last_band(cap: int = _SEAM_CACHE_CAP) -> None:
+    """Mirrors `_prune_seam_rows` exactly — least-recently-written half evicted past the
+    cap; safe because a re-shown band after eviction is at worst one redundant note, never
+    a wrong or missing one."""
+    if len(_seam_last_band) <= cap:
+        return
+    cut = len(_seam_last_band) - cap // 2
+    for k in sorted(_seam_last_band, key=_seam_last_band.__getitem__)[:cut]:
+        _seam_last_band.pop(k, None)
+
+
+def _seam_band(pct: int | None, whisper_pct: int, alarm_pct: int) -> str | None:
+    """Which TIER `pct` falls in for the debounce below — a state name, never text, so the
+    same crossing is never re-announced on every call. None below the whisper floor."""
+    if pct is None or not whisper_pct or pct < whisper_pct:
+        return None
+    return "alarm" if pct >= alarm_pct else "seam"
+
+
+def _seam_note_once(agent_id: str, pct: int | None, whisper_pct: int) -> str | None:
+    """`_seam_note`, debounced to fire once per tier-crossing rather than once per call.
+    Stays silent on every later call inside the SAME band; re-arms the moment `pct` drops
+    back below `whisper_pct` (a real write-back/compaction happened) or steps UP from
+    'seam' into 'alarm' (a real escalation, worth exactly one more note — the house alarm,
+    context_lens.ALARM_PCT, is one authority; this never re-derives its own threshold)."""
+    from src.orchestrator.context_lens import ALARM_PCT
+
+    band = _seam_band(pct, whisper_pct, ALARM_PCT)
+    if band is None:
+        _seam_last_band.pop(agent_id, None)  # dropped below the floor — re-arm for later
+        return None
+    prior = _seam_last_band.get(agent_id)
+    if prior is not None and prior[1] == band:
+        return None  # already shown this band — wallpaper, not news
+    _seam_last_band[agent_id] = (time.monotonic(), band)
+    _prune_seam_last_band()  # opportunistic: this write is where churn shows up
+    return _seam_note(pct, whisper_pct)
+
+
 async def _seam_field(ctx: Context | None) -> str | None:
     """The ambient context line for a mounted caller, or None (unmounted callers, young
-    sessions, guessed windows, any failure — the whisper never becomes a hazard)."""
+    sessions, guessed windows, an already-shown tier, any failure — the whisper never
+    becomes a hazard)."""
     try:
         st = get_settings()
         if not st.osiris_seam_whisper_pct:
@@ -390,7 +443,7 @@ async def _seam_field(ctx: Context | None) -> str | None:
         if not job:
             return None
         pct = await asyncio.to_thread(_seam_pct_sync, job, model_raw, window_hint)
-        return _seam_note(pct, st.osiris_seam_whisper_pct)
+        return _seam_note_once(ident.agent_id, pct, st.osiris_seam_whisper_pct)
     except Exception:  # noqa: BLE001 — ambient, never load-bearing
         return None
 
@@ -4532,6 +4585,32 @@ async def backfill_bootstrap_orphan_references(
         backfill_bootstrap_orphan_references as _backfill_bootstrap_orphan_references,
     )
     return await _backfill_bootstrap_orphan_references(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
+async def repair_stale_pile_summons(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb for the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads,
+    whose summaries froze that day's candidates() count in prose and never re-derive it.
+    Re-measures each still-open one against a live candidates(project=...) call: live count
+    matches the frozen one → untouched; live count is 0 → resolves the thread as moot
+    (nothing left to judge); live count is >0 but differs → corrects the thread's own
+    summary via correct_thread_summary, never resolves it and never disposes anyone's pile
+    on their behalf (only that project's own seat may judge its own pile). Only matches the
+    exact bulk-mint template on a still-open Thread, never one that merely mentions a number.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` requires a non-blank `because` for the resolve
+    actions. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a repair is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.dispose import (
+        repair_stale_pile_summons as _repair_stale_pile_summons,
+    )
+    return await _repair_stale_pile_summons(
         Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
 
 

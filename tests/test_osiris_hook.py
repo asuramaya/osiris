@@ -516,6 +516,20 @@ def test_render_whisper_identity_anchor_unconditional_no_mint_needed() -> None:
     assert "your charter file is /home/asuramaya/.osiris/seats/thoth/charter.md" in text
 
 
+def test_render_whisper_names_a_missing_charter_loudly() -> None:
+    """Thread e2326ab7: the same fact settle()'s terminal box checks, said at first
+    breath instead — must render with the ⚠ marker every other loud whisper line uses."""
+    out = _whisper_base(charter_missing="UNDECLARED — call charter(repos=[...]) naming "
+                                         "the repos you govern before writing anywhere")
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert "⚠ CHARTER: UNDECLARED — call charter(repos=[...])" in text
+
+
+def test_render_whisper_omits_charter_line_when_chartered() -> None:
+    text = osiris_hook.render_whisper(_whisper_base(), cwd="/x", env_job="")
+    assert "CHARTER:" not in text
+
+
 def test_render_whisper_already_mounted_when_env_matches_anchor() -> None:
     out = _whisper_base(job_dir="/home/asuramaya/.claude/jobs/abc12345")
     text = osiris_hook.render_whisper(

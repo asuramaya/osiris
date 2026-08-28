@@ -587,6 +587,8 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
         if anchors:
             bits.append("Identity anchor, cwd-independent: " + " and ".join(anchors) +
                         " — read them if this is your first breath in a while.")
+    if out.get("charter_missing"):
+        bits.append(f"⚠ CHARTER: {out['charter_missing']}")
     if out.get("minted"):
         succ = out.get("succession") or {}
         if succ.get("thread_id"):

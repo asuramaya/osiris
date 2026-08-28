@@ -1221,6 +1221,69 @@ async def test_automount_ranks_a_seat_owned_obligation_above_an_unrelated_one(
         summaries.index("an unrelated project-wide obligation")
 
 
+# --- SAY IT AT THE MOMENT IT IS ACTIONABLE (thread e2326ab7, Soundwave XIV's report): the
+# whisper now carries `charter_missing` on every boot for a seated-but-uncharted agent, the
+# same live governs-edge fact settle.py's own `seat_chartered` box checks — but surfaced at
+# the FIRST breath, not only at the terminal ritual. --------------------------------------
+
+async def test_whisper_names_charter_missing_for_a_seated_uncharted_agent(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/uncharted-project")
+    seat = await ensure_seat(actions, house="uncharted-project", handle="unseated1",
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:unseated1x")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
+                     agent_id="agent:unseated1x", project="uncharted-project",
+                     cwd="/w/uncharted-project", model=None, session_key=None)
+
+    out = await automount(actions, session_id=SID, cwd="/w/uncharted-project",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert "charter_missing" in out
+    assert "charter(repos=[...])" in out["charter_missing"]
+
+
+async def test_whisper_omits_charter_missing_once_the_seat_is_chartered(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The SAME seated agent as above, but chartered first — the whisper must not nag a
+    seat that already governs a repo. Reads the live governs edge, never a stale file."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/charted-project")
+    seat = await ensure_seat(actions, house="charted-project", handle="chartered1",
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:chartered1x")
+    await actions.create_or_find_object("SoftwareProject", "repo:charted-project", "test")
+    await set_charter(actions, seat["seat_id"], ["charted-project"], actor="test")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
+                     agent_id="agent:chartered1x", project="charted-project",
+                     cwd="/w/charted-project", model=None, session_key=None)
+
+    out = await automount(actions, session_id=SID, cwd="/w/charted-project",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert "charter_missing" not in out
+
+
+async def test_whisper_omits_charter_missing_for_an_anonymous_agent(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No seat held at all — the anonymous-mind claim_name prompt already covers this gap
+    (seat_bearings' own `vacant_seats` note); this nudge must not double up on it."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/anon-project")
+    out = await automount(actions, session_id=SID, cwd="/w/anon-project",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert "charter_missing" not in out
+
+
 async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_thread(
     actions: Actions, tmp_path: Path
 ) -> None:
