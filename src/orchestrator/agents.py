@@ -186,6 +186,55 @@ def next_generation(canonical: str) -> str:
     return f"{root}-{_to_roman(gen + 1)}"
 
 
+async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
+    """THE PREVENTION-HALF LOOKUP (thread 79e785d1, Lane 3 of Thoth msg 5906) — read-only,
+    never a write: does this agent's own LINEAGE agree on a single project.
+
+    THE FINDING THIS ANSWERS: `record_decision`'s repo= identity default (0dfbfb4) reads
+    the WRITING GENERATION's own live `works_in` — and of 251 agent-written orphan
+    Decisions, only 19 authors had one. The default was never missing; it fired on
+    nothing, because the specific generation that happened to write is itself commonly an
+    orphan (a fresh mint, a compacted heir, a body that never called `mount()` with a
+    resolvable cwd). But `works_in` is a LINEAGE property in practice — every generation
+    of one seat/session chain works the same project by construction — so widening the
+    read from "this one generation" to "every generation sharing this lineage's root"
+    (reusing `_generation()`'s own root string, the SAME op #170 already ships, no new
+    identity notion) recovers the answer for the generations that themselves never
+    resolved one.
+
+    THE ABSTAIN LAW (operator ruling a0339e16, "only if the derivation is already obvious
+    and mechanically retrieved, otherwise it's moot" — #141/#137's law, both this seat's
+    own): returns the single project ONLY when EVERY live `works_in` edge across the
+    WHOLE lineage names the exact same one. Two or more DISTINCT projects across the
+    lineage is a genuine disagreement (measured live: 7 of 23 lineage roots span 2-4
+    projects, 106 Decisions sit under them) and must never be broken by recency, by
+    generation count, or by any other magnitude test deciding an identity question — the
+    exact bug caught in `rename_evidence_verdict`'s first cut, where "does new_name have
+    signal" would have returned CONFIRMS for khepri and buried the disagreement. Zero
+    projects anywhere in the lineage is a THIRD, distinct outcome (genuinely nothing to
+    derive), reported honestly apart from the ambiguous case rather than collapsed into
+    the same `None`.
+
+    Returns `{"root": <lineage root>, "projects": <sorted distinct canonicals, "repo:"
+    prefix stripped>, "resolved": <the one project, or None>}` — `resolved is None` with
+    `len(projects) == 0` is "nothing anywhere"; `resolved is None` with `len(projects) >
+    1` is "genuine disagreement, name it". THIS FUNCTION DOES NOT WRITE — it is the
+    lookup half `derive_or_abstain` (Imhotep, thread e1b85216e89c, Lane 0, blocks this
+    lane) will call to decide whether an edge is writable at all; the write-time cardinality
+    contract (tier, origin, invalidatable) belongs to that primitive, not here."""
+    root = _generation(agent_id)[0]
+    rows = await pool.fetch(
+        "SELECT DISTINCT p.canonical FROM links l "
+        "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
+        "  AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        root)
+    projects = sorted({r["canonical"].removeprefix("repo:") for r in rows})
+    resolved = projects[0] if len(projects) == 1 else None
+    return {"root": root, "projects": projects, "resolved": resolved}
+
+
 # Full roman numerals for the human DISPLAY generation (Anna IV, Anna IX) — unlike the id
 # suffix (restricted to i/v/x for hex-safety), a display label parses nothing, so it can use
 # the whole numeral system.

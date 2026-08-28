@@ -2111,6 +2111,102 @@ async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
     assert n == 1, "no duplicate live edge minted just because the ancestor also had one"
 
 
+# ═══ lineage_works_in (thread 79e785d1, Lane 3 of Thoth msg 5906 — the prevention half):
+# read-only lookup `derive_or_abstain` (Lane 0, still unbuilt) will call to decide whether
+# an orphan-write's repo= is mechanically derivable at all. ═══
+
+async def test_lineage_works_in_resolves_when_only_the_writing_generation_has_one(
+    actions: Actions,
+) -> None:
+    """The base case 0dfbfb4's own default already covers — included here so the lineage
+    widening is proven to never REGRESS the simple case, not just extend it."""
+    from src.orchestrator.agents import lineage_works_in
+
+    now = datetime.now(UTC)
+    author = await actions.create_or_find_object("Agent", "agent:lwi1", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:lwiproj1", "test")
+    await actions.create_link(author, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await lineage_works_in(actions.pool, "agent:lwi1")
+    assert out == {"root": "agent:lwi1", "projects": ["lwiproj1"], "resolved": "lwiproj1"}
+
+
+async def test_lineage_works_in_falls_back_to_a_sibling_generation(actions: Actions) -> None:
+    """THE FIX ITSELF: the WRITING generation (agent:lwi2-iii) has no works_in of its own —
+    orphan, exactly Thoth's specimen shape — but an earlier sibling generation
+    (agent:lwi2) does, and they share the same lineage root. The old, generation-scoped
+    default would have found nothing; the lineage-root widening finds it."""
+    from src.orchestrator.agents import lineage_works_in
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:lwi2", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:lwiproj2", "test")
+    await actions.create_link(root, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_or_find_object("Agent", "agent:lwi2-iii", "test")  # the orphan writer
+
+    out = await lineage_works_in(actions.pool, "agent:lwi2-iii")
+    assert out == {"root": "agent:lwi2", "projects": ["lwiproj2"], "resolved": "lwiproj2"}
+
+
+async def test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement(
+    actions: Actions,
+) -> None:
+    """THE ABSTAIN LAW (operator ruling a0339e16, #141/#137's law): two DISTINCT projects
+    across the lineage must resolve to None — the both-named case Thoth's own dispatch
+    measured (7 of 23 lineage roots span 2-4 projects) — never broken by which generation
+    is "newer" or holds more links. `resolved` is None but `projects` names BOTH, so a
+    caller can report the disagreement rather than silently discard it."""
+    from src.orchestrator.agents import lineage_works_in
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:lwi3", "test")
+    gen2 = await actions.create_or_find_object("Agent", "agent:lwi3-ii", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:lwiproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:lwiprojb", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(gen2, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    out = await lineage_works_in(actions.pool, "agent:lwi3-ii")
+    assert out["resolved"] is None
+    assert out["projects"] == ["lwiproja", "lwiprojb"]  # BOTH named, never one silently picked
+
+
+async def test_lineage_works_in_reports_nothing_anywhere_distinctly_from_ambiguous(
+    actions: Actions,
+) -> None:
+    """A THIRD outcome, deliberately distinct from the ambiguous case: zero live works_in
+    edges anywhere in the lineage is "genuinely nothing to derive", not "disagreement" —
+    both render `resolved=None`, but only ambiguity carries more than one project name."""
+    from src.orchestrator.agents import lineage_works_in
+
+    await actions.create_or_find_object("Agent", "agent:lwi4", "test")
+
+    out = await lineage_works_in(actions.pool, "agent:lwi4")
+    assert out == {"root": "agent:lwi4", "projects": [], "resolved": None}
+
+
+async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) -> None:
+    """A works_in edge that has been superseded (valid_until set) must never count toward
+    resolution — matches every other live-edge read in this codebase."""
+    from src.orchestrator.agents import lineage_works_in
+
+    now = datetime.now(UTC)
+    author = await actions.create_or_find_object("Agent", "agent:lwi5", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:lwiproj5", "test")
+    await actions.create_link(author, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.pool.execute(
+        "UPDATE links SET valid_until = now() - interval '1 hour' "
+        "WHERE from_id=$1 AND to_id=$2 AND type='works_in'", author, proj)
+
+    out = await lineage_works_in(actions.pool, "agent:lwi5")
+    assert out == {"root": "agent:lwi5", "projects": [], "resolved": None}
+
+
 # ═══ threads f6f11d78/20af2c95 (decision 5b217d13, 2026-08-04): mint_heir's house-relink
 # and register_agent's own identity.project assertion used to fire unconditionally in the
 # SAME call, sharing one `now` — a seat's stale derived `house` disagreeing with the
