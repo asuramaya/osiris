@@ -81,6 +81,14 @@ from testcontainers.redis import RedisContainer
 _RESET_TABLES = (
     "agent_mounts", "agent_wakes", "alerts", "audit_log", "body_usage", "case_objects",
     "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
+    # harness_messages (migration 0051) joined its three siblings here on 2026-08-28,
+    # closing obligation 4ffb2b37. It was missing from the day the table shipped: every
+    # OTHER harness_* table was listed, so the omission read as deliberate rather than
+    # forgotten, and the only symptom was test_cross_channel's recover-execute tests
+    # seeing rows a PREVIOUS test had inserted (assert 3 == 0). FK-free by construction
+    # (0051 declares none — anchor_sid/from_agent are plain text, resolution is best
+    # effort), so it has no ordering constraint and belongs in this unordered group.
+    "harness_messages",
     "harness_telemetry", "harness_telemetry_files", "harness_turns", "helper_cache",
     "links", "llm_usage", "mcp_tool_stats", "merge_candidates", "message_recipients",
     "object_events", "outbox", "pit_watch_alarms", "resource_leases", "search_log",

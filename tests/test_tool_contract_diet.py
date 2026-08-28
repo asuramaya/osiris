@@ -816,4 +816,11 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     A RATCHET SETTLED BY PREFERENCE HAS STOPPED RATCHETING — so no side was picked and
     no two numbers were averaged; the tree was re-measured."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 143
+    # 2026-08-28 — MEASURED, NOT MERGED. This line came out of the Wave 4/5 merge reading
+    # 143 with no conflict at all: only one branch touched it, so git took that side
+    # silently while the merged tree actually carried 144 tools. THE CEILING BESIDE IT WAS
+    # SAFE — reconcile_tool_contract_ceiling reconciles TOOL_CONTRACT_CEILING_CHARS by
+    # arithmetic and would have caught it — but the driver knows nothing about this
+    # assertion, so the count had no guard of its own. A ratchet with two numbers and one
+    # merge driver protects one of them. Re-measure both together on every merge.
+    assert len(per_tool) == 144
