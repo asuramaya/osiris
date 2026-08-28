@@ -140,6 +140,83 @@ async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
     return out
 
 
+async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
+    """PREVENTION, not healing (thread eea88e1c, decision 185d5072's own correction to
+    #189's headline): does the FRACTION OF EACH BIRTH-WEEK COHORT that never acquired a
+    single live link WITHIN 7 DAYS OF ITS OWN BIRTH fall over time — the question
+    Sekhmet's lineage-root fallback (main 5001f00) was shipped to move, and the one
+    instrument this house had nothing to answer it with (Thoth msg 5936).
+
+    A FIXED HISTORICAL FACT, same discipline as `_cohort_connectivity` above and for the
+    identical reason: the link check is bounded to `created_at + 7 days`, so a LATER
+    backfill (Lane 0/1, or any future one) can never revise an already-eligible week's
+    number. Not a hypothetical risk — re-deriving 185d5072's own literal protocol (an
+    UNBOUNDED "still orphan right now" check, no window) live this session found
+    Thread's own weekly rate for 07-27..08-24 moved by up to 12 points, because Lane 1's
+    boot-alarm backfill happened to land mid-session and retroactively linked ~127
+    previously-orphaned Threads spanning those very weeks. An unbounded check is exactly
+    the "live snapshot of an ever-growing present" trap this file's own cohort metric
+    was already built to avoid (see this module's top docstring); 185d5072's protocol
+    predates this file and inherited the trap. The 7-day bound closes it: generous
+    against the congenital-settle finding itself (92.8%/92.3% of Decisions/Threads get
+    every link they will ever declare within 60 SECONDS of birth), so it costs this
+    metric nothing a stricter window would also catch, while making the number
+    un-revisable by a later healing pass — the property `_cohort_connectivity` already
+    has and an unbounded read does not.
+
+    SCOPE/ELIGIBILITY: same SCOPED_TYPES, `status='active'`, and
+    `cohort_week + 7 days <= now()` eligibility gate as `_cohort_connectivity` — a week
+    is not reported until every member of it has actually had its own full 7-day window.
+    Newest eligible week headlines; the prior eligible week rides along for trend, same
+    shape as `_cohort_connectivity`'s own return."""
+    rows = await pool.fetch("""
+        WITH scoped AS (
+            SELECT id, type, created_at, date_trunc('week', created_at) AS cohort_week
+            FROM objects WHERE type = ANY($1) AND status='active'
+        ),
+        flagged AS (
+            SELECT s.id, s.type, s.cohort_week,
+                NOT EXISTS (
+                    SELECT 1 FROM links l
+                    WHERE (l.from_id = s.id OR l.to_id = s.id)
+                    AND l.created_at <= s.created_at + interval '7 days'
+                ) AS born_orphan
+            FROM scoped s
+        )
+        SELECT type, cohort_week, count(*) AS n,
+            count(*) FILTER (WHERE born_orphan) AS n_orphan
+        FROM flagged
+        GROUP BY type, cohort_week
+        HAVING cohort_week + interval '7 days' <= now()
+        ORDER BY type, cohort_week DESC
+    """, list(SCOPED_TYPES))
+
+    by_type: dict[str, list[Any]] = {t: [] for t in SCOPED_TYPES}
+    for r in rows:
+        by_type[r["type"]].append(r)
+
+    out: dict[str, dict[str, Any]] = {}
+    for t, cohort_rows in by_type.items():
+        if not cohort_rows:  # no 7-day-eligible cohort yet for this type
+            continue
+        latest = cohort_rows[0]
+        rate = (latest["n_orphan"] / latest["n"]) if latest["n"] else 0.0
+        entry: dict[str, Any] = {
+            "week": latest["cohort_week"].date().isoformat(),
+            "n": latest["n"],
+            "n_orphan": latest["n_orphan"],
+            "rate": rate,
+        }
+        if len(cohort_rows) > 1:
+            prev = cohort_rows[1]
+            prev_rate = (prev["n_orphan"] / prev["n"]) if prev["n"] else 0.0
+            entry["prev_week"] = prev["cohort_week"].date().isoformat()
+            entry["prev_rate"] = prev_rate
+            entry["trend_delta"] = rate - prev_rate
+        out[t] = entry
+    return out
+
+
 _HATCH_CAVEAT = (
     "a 0 here is NOT proof the gate is broken (Imhotep msg 5828): the gate only fires on "
     "types that declare required_link_kinds, and none do yet — Khnum's content pass for "
@@ -181,15 +258,18 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def adoption_meter(pool: asyncpg.Pool) -> dict[str, Any]:
-    """THE WHOLE INSTRUMENT: cohort-aged connectivity per SCOPED_TYPES, plus Imhotep's
-    hatch split. Zero writes anywhere — read-only in full, including against `watermarks`
-    (the retired metric's one write; see this module's own docstring for why cohort
+    """THE WHOLE INSTRUMENT: cohort-aged connectivity per SCOPED_TYPES, orphan BIRTH rate
+    per SCOPED_TYPES (thread eea88e1c — prevention, not healing), plus Imhotep's hatch
+    split. Zero writes anywhere — read-only in full, including against `watermarks` (the
+    retired metric's one write; see this module's own docstring for why cohort
     connectivity needs no persisted baseline)."""
     cohorts = await _cohort_connectivity(pool)
+    orphan_birth_rate = await _orphan_birth_rate(pool)
     hatch = await _hatch_counts(pool)
     return {
         "measured_at": datetime.now(UTC).isoformat(),
         "cohorts": cohorts,
+        "orphan_birth_rate": orphan_birth_rate,
         "hatch": hatch,
     }
 
@@ -204,6 +284,7 @@ def render_adoption_line(meter: dict[str, Any]) -> str:
     the headlined type's cohort renders here (`HEADLINE_TYPE`); the full per-type detail
     lives in the returned dict for a caller who wants it."""
     headline = meter["cohorts"].get(HEADLINE_TYPE)
+    ob_headline = meter.get("orphan_birth_rate", {}).get(HEADLINE_TYPE)
     hatch = meter["hatch"]
     if hatch["split"] is not None:
         hatch_str = (f"extension={hatch['split']['extension_link_pending']} "
@@ -219,6 +300,13 @@ def render_adoption_line(meter: dict[str, Any]) -> str:
             f"30d={headline['median_at_30d']:.1f}"
             f" (Δ{headline['median_at_30d'] - headline['median_at_birth']:+.1f})"
         )
+    if ob_headline is None:
+        ob_str = "no 7d-aged cohort yet"
+    else:
+        ob_str = f"{ob_headline['week']} {ob_headline['rate'] * 100:.1f}%"
+        if "trend_delta" in ob_headline:
+            ob_str += f" (Δ{ob_headline['trend_delta'] * 100:+.1f})"
     return (
-        f"adoption189: {HEADLINE_TYPE} {cohort_str} | unlinked_because: {hatch_str}"
+        f"adoption189: {HEADLINE_TYPE} {cohort_str} | "
+        f"orphan_birth: {HEADLINE_TYPE} {ob_str} | unlinked_because: {hatch_str}"
     )
