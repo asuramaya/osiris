@@ -5026,6 +5026,69 @@ async def test_record_decision_narrows_links_and_recall_surfaces_narrowed_by(
         _agents.pop(_conn_key(ctx), None)
 
 
+async def test_record_decision_cites_declares_the_edge_bears_on_and_narrows_refused(
+    actions: Actions,
+) -> None:
+    """The live specimen (msg 6000, decision 7706efb4): a decision that ADDS a new facet
+    to two earlier ones — neither bounds their scope (`narrows`) nor settles a thread
+    (`bears_on`, Decision->Thread only, correctly refused both). `cites` is the SAME edge
+    the prose-citation miner already mints, declared explicitly via origin="declared"."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:citesland", session="citesland",
+        project="cites-land", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await rd_tool(
+            "THE FIFTH DISEASE, FIRST SUB-SHAPE: a census inherits survivorship",
+            kind="ruling", ctx=ctx)
+        second = await rd_tool(
+            "THE FIFTH DISEASE, SECOND SUB-SHAPE: a search inherits the objective's "
+            "blind spot", kind="ruling", ctx=ctx)
+        out = await rd_tool(
+            "THE FIFTH DISEASE, THIRD SUB-SHAPE: an absence inherits the reader's "
+            "stopping point", kind="ruling",
+            cites=[first["id"], second["id"]], ctx=ctx)
+        ids = {r["id"] for r in out["cites"]}
+        assert ids == {first["id"][:8], second["id"][:8]}
+        assert all(r["new_link"] for r in out["cites"])
+        for target in (first, second):
+            row = await actions.pool.fetchrow(
+                "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 "
+                "AND type='cites'", uuid.UUID(out["id"]), uuid.UUID(target["id"]))
+            assert row is not None
+            assert row["properties"]["origin"] == "declared"
+            assert row["properties"]["self_referential"] is True  # same source, ctx
+
+        # idempotent
+        again = await rd_tool(
+            "THE FIFTH DISEASE, THIRD SUB-SHAPE: an absence inherits the reader's "
+            "stopping point", kind="ruling", cites=[first["id"]], ctx=ctx)
+        assert again["cites"][0]["new_link"] is False
+
+        # one bad ref among good ones is reported, never fatal to the rest
+        mixed = await rd_tool(
+            "a decision citing one real thing and one fake thing", kind="ruling",
+            cites=[first["id"], "not-a-real-decision-xyz"], ctx=ctx)
+        matched = {r["ref"]: r["matched"] for r in mixed["cites_resolution"]}
+        assert matched[first["id"]] == "true"
+        assert matched["not-a-real-decision-xyz"] == "false"
+        assert len(mixed["cites"]) == 1
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_bears_on_nudge(
     actions: Actions,
 ) -> None:

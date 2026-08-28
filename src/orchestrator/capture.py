@@ -1102,7 +1102,7 @@ async def record_decision(
     repo_evidence_class: str | None = None, unlinked_because: str | None = None,
     implements: uuid.UUID | None = None, confirms: list[uuid.UUID] | None = None,
     rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
-    narrows: list[uuid.UUID] | None = None,
+    narrows: list[uuid.UUID] | None = None, cites: list[uuid.UUID] | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -1129,7 +1129,18 @@ async def record_decision(
     construction, same guarantee `mint_rediscovers` already proves: no property write on
     either side, no `status` touch, no path that could gray the target out of orient's
     recent list the way `supersedes` deliberately does. See `mint_narrows` below.
-    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their five siblings
+    `cites` (thread e05e439d follow-up, msg 6000, live specimen 7706efb4) joins the same
+    fold — the door `bears_on` (Decision->Thread only) and `narrows` (bounds SCOPE, the
+    wrong relation) both correctly refused: a decision that ADDS a new facet to an
+    earlier one's ongoing finding, neither bounding, refuting, nor independently re-
+    deriving it. Reuses the EXISTING `cites` link type (already legal Decision->Decision,
+    already carrying the origin=prose|declared split) rather than a new edge — the
+    prose-citation miner already mints this exact relation when an author's own
+    qualifier-worded prose happens to match; this is the SAME edge, DECLARED explicitly
+    (`origin="declared"`) for a caller who names the target on purpose without the
+    qualifier-word convention. `self_referential` computed the same way `_mint_prose_
+    citations` already does: the target's own asserted source, compared to this call's.
+    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their six siblings
     above — found live, not reasoned: refute_practice mutates the target Practice and
     mints a live Superstition BEFORE commit, and the wrapper's own prior-art search
     (runs AFTER this returns) would then see that already-changed state, silently
@@ -1363,6 +1374,11 @@ async def record_decision(
             await mint_bears_on(a, d, bid, source)
         for nid in narrows or []:
             await mint_narrows(a, d, nid, source)
+        for cid in cites or []:
+            target_source = await _object_source(a.pool, cid)
+            await mint_cites(a, d, cid, source, origin="declared",
+                             self_referential=(target_source is not None
+                                              and target_source == source))
         await _enforce_required_links(
             a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
             unlinked_because=unlinked_because, source=source, observed=observed)
