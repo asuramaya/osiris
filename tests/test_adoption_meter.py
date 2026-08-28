@@ -113,6 +113,101 @@ async def test_trend_compares_the_two_newest_eligible_cohorts(actions: Actions) 
     assert dec["week"] != dec["prev_week"]
 
 
+async def test_orphan_birth_rate_reports_zero_when_every_member_links_within_7_days(
+    actions: Actions,
+) -> None:
+    await _aged_decision(actions, "decision:obr-ok1", born_days_ago=10)
+
+    meter = await adoption_meter(actions.pool)
+    dec = meter["orphan_birth_rate"]["Decision"]
+    assert dec["n"] >= 1
+    assert dec["n_orphan"] == 0
+    assert dec["rate"] == 0.0
+
+
+async def test_orphan_birth_rate_counts_a_member_with_no_link_within_7_days(
+    actions: Actions,
+) -> None:
+    await _aged_decision(actions, "decision:obr-late1", born_days_ago=10,
+                          birth_links=0, later_link_at_days=8)
+
+    meter = await adoption_meter(actions.pool)
+    dec = meter["orphan_birth_rate"]["Decision"]
+    assert dec["n_orphan"] == 1
+    assert dec["rate"] == 1.0
+
+
+async def test_orphan_birth_rate_is_unmoved_by_a_link_landing_after_the_7_day_window(
+    actions: Actions,
+) -> None:
+    """The whole point of the bound: a LATER backfill (any lane) minting a link on an
+    already-eligible cohort must never revise that cohort's own reported rate — a fixed
+    historical fact, same discipline as `_cohort_connectivity`'s own 30-day checkpoint."""
+    await _aged_decision(actions, "decision:obr-backfilled1", born_days_ago=45,
+                          birth_links=0, later_link_at_days=30)
+
+    meter = await adoption_meter(actions.pool)
+    dec = meter["orphan_birth_rate"]["Decision"]
+    assert dec["n_orphan"] == 1  # still counted orphan — the day-30 link is outside 7d
+    assert dec["rate"] == 1.0
+
+
+async def test_orphan_birth_rate_absent_when_no_cohort_has_reached_7_days(
+    actions: Actions,
+) -> None:
+    await _aged_decision(actions, "decision:obr-toosoon1", born_days_ago=2)
+
+    meter = await adoption_meter(actions.pool)
+    assert "Decision" not in meter["orphan_birth_rate"]
+
+
+async def test_orphan_birth_rate_trend_compares_the_two_newest_eligible_weeks(
+    actions: Actions,
+) -> None:
+    await _aged_decision(actions, "decision:obr-trendA", born_days_ago=90, birth_links=0)
+    await _aged_decision(actions, "decision:obr-trendB", born_days_ago=45)
+
+    meter = await adoption_meter(actions.pool)
+    dec = meter["orphan_birth_rate"]["Decision"]
+    assert "prev_week" in dec
+    assert "trend_delta" in dec
+    assert dec["week"] != dec["prev_week"]
+
+
+async def test_render_adoption_line_names_the_orphan_birth_headline(
+    actions: Actions,
+) -> None:
+    await _aged_decision(actions, "decision:obr-render1", born_days_ago=10)
+
+    meter = await adoption_meter(actions.pool)
+    line = render_adoption_line(meter)
+    assert "\n" not in line
+    assert "orphan_birth: Decision" in line
+    assert "%" in line
+
+
+def test_render_reports_orphan_birth_absence_honestly_when_no_cohort_is_eligible() -> None:
+    line = render_adoption_line({
+        "cohorts": {},
+        "orphan_birth_rate": {},
+        "hatch": {"total": 0, "by_reason_raw": {}, "split": None, "note": ""},
+    })
+    assert "\n" not in line
+    assert "no 7d-aged cohort yet" in line
+
+
+def test_render_orphan_birth_degrades_honestly_when_the_key_is_entirely_absent() -> None:
+    """A meter dict built before this instrument existed (or a caller that only wants the
+    old two fields) must not crash the renderer — same "absence, not failure" contract
+    as the cohort half already has."""
+    line = render_adoption_line({
+        "cohorts": {},
+        "hatch": {"total": 0, "by_reason_raw": {}, "split": None, "note": ""},
+    })
+    assert "\n" not in line
+    assert "no 7d-aged cohort yet" in line
+
+
 async def test_hatch_reads_a_real_zero_when_nothing_has_hatched(actions: Actions) -> None:
     """No `unlinked_because` assertions exist anywhere in a fresh test DB — the real
     fail-honest path, never a fabricated schema-missing flag."""
