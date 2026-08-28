@@ -3853,6 +3853,101 @@ async def test_ingest_reference_tool_defaults_repo_to_the_callers_own_project(
     assert linked == 1
 
 
+# --- WAVE 2 / LANE B, THE ingest_reference LEG (thread 6c262aee): the SAME shared ladder
+# as record_decision and open_thread, now on the third door. ------------------------------
+
+async def test_ingest_reference_tool_falls_back_to_the_lineage_when_identity_has_no_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:irlwiwire1", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:irlwiwireproj", "test")
+    await actions.create_link(root, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:irlwiwire1-iii", session="irlwiwire1iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.ingest_reference(
+            "a reference ingested by an orphan generation of a well-known lineage", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "irlwiwireproj",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects r ON r.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND r.type='Reference' "
+        "AND p.canonical='repo:irlwiwireproj'")
+    assert linked == 1
+
+
+async def test_ingest_reference_tool_abstains_and_records_why_on_lineage_ambiguity(
+    actions: Actions,
+) -> None:
+    """THE ABSTAIN LAW on the Reference door too: two distinct projects across the
+    lineage must mint NOTHING — never break the tie by recency or generation count."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:irlwiwire2", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:irlwiwireproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:irlwiwireprojb", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    gen2 = await actions.create_or_find_object("Agent", "agent:irlwiwire2-ii", "test")
+    await actions.create_link(gen2, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:irlwiwire2-iii", session="irlwiwire2iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.ingest_reference(
+            "a reference ingested under a lineage whose own works_in disagrees", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert out["lineage_repo_derivation"]["minted"] is False
+    assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
+        uuid.UUID(out["id"]))
+    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
+    assert abstained is not None
+    assert abstained["candidate_count"] == 2
+    assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
+
+
 # --- repo-default TIER (Thoth msg 5776/5782): the identity-defaulted in_repo link is a
 # fact the SERVER directly observed about its own live mount state (this agent is
 # mounted in this project, right now) — not the caller personally asserting the fact

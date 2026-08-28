@@ -6326,25 +6326,28 @@ async def ingest_reference(
     Graded SELF_DECLARED (your testimony of what you read). Returns the id + canonical
     to cite."""
     pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
     cids: list[uuid.UUID] = []
     missing: list[str] = []
     for c in cites or []:
         rid = await _resolve(pool, c)
         (cids.append(rid) if rid is not None else missing.append(c))
-    repo_defaulted = False
-    if not repo:
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix):
-        # open_thread's wrapper already falls back to the mounted identity's project when
-        # none is given; this door had no equivalent. Default, never refuse; honestly
-        # unlinked when identity offers none.
-        ident = await _ident_for(ctx)
-        repo = ident.project if ident else None
-        repo_defaulted = repo is not None
+    # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+    # SAME SHARED LADDER record_decision/open_thread climb (thread 6c262aee, #151's law):
+    # generation-scoped mount default, then the lineage-wide widen when that finds nothing.
+    ident = await _ident_for(ctx)
+    _repo_default = await capture.resolve_repo_default(
+        pool, repo, actor, ident.project if ident else None)
+    repo = _repo_default["repo"]
+    repo_defaulted = _repo_default["repo_defaulted"]
+    lineage_attempted = _repo_default["lineage_attempted"]
+    lineage_candidates = _repo_default["lineage_candidates"]
+    lineage_projects = _repo_default["lineage_projects"]
     try:
         ref, canon = await capture.ingest_reference(
             Actions(pool), title, source_url=source_url, vendor=vendor,
             body=body, caveats=caveats, repo=repo, cites=cids,
-            source=await _actor_for(ctx, subagent_id, subagent_type),
+            source=actor,
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
         )
@@ -6358,6 +6361,13 @@ async def ingest_reference(
             "why": "no repo given — defaulted to the caller's own project rather than "
                    "left unlinked (orphan-door fix, msg 5703/5720)",
         }
+    elif lineage_attempted:
+        # SAME SHARED POST-MINT STEP record_decision/open_thread's wrappers use (thread
+        # 6c262aee): the generation-scoped default AND the lineage-root widening both
+        # failed to name a single project — abstain and record why, candidate ids kept
+        # whole, via the ONE primitive every orphan-healing lane calls.
+        out["lineage_repo_derivation"] = await capture.record_lineage_abstain(
+            pool, ref, actor, lineage_candidates, lineage_projects)
     if missing:
         out["unresolved_cites"] = missing
         out["cites_note"] = ("unresolved cites SKIPPED — ingest_reference each cited work "
