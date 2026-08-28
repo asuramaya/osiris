@@ -108,6 +108,10 @@ CLI_ONLY_PARAMS = {
         "caller, so it has no second format to choose between — the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
         "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("stop", "as_json"): "a PRESENTATION flag, not an act — same reason as the four read "
+        "verbs above; the stop receipt renders for a human by default and as one compact "
+        "JSON line under --json, for the teardown scripts this verb exists to serve "
+        "(Thoth LXXXVII, 2026-08-28)",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -125,6 +129,11 @@ RENAMED_PARAMS = {
     ("launch", "handle", "launch", "target"):
         "the same seat reference, two names — found building this detector, not by a "
         "human; not yet reconciled",
+    ("stop", "handle", "stop", "target"):
+        "the same seat reference, two names — MATCHES launch's own handle/target split "
+        "exactly (the entry above), and deliberately so: stop is launch's inverse and the "
+        "pair must read identically at the terminal. Reconciling this means reconciling "
+        "BOTH together, never one of them (Thoth LXXXVII, 2026-08-28)",
     ("charter-for", "seat", "charter_for", "seat_id"):
         "the same seat reference, two names — found building this detector; not yet "
         "reconciled",

@@ -710,8 +710,21 @@ async def _cmd_launch_harness(
             f"agent_mounts ({twin['mounts']['agent_id']}, last_seen "
             f"{twin['mounts']['last_seen']})" if twin["mounts"] else None,
         ) if s]
-        print(f"osiris launch: a live body already holds {handle!r} — not minting a twin "
-              f"(seen via {', '.join(seen_via)}).")
+        # ALREADY-LIVE IS THE GOAL STATE, NOT A REFUSAL — exit 0, and say so in success
+        # language. Diagnosed live 2026-08-28 (operator: "osiris launch complains about a
+        # lot of things"): this was the ONLY outcome in this function printing a
+        # refusal-shaped line to STDOUT and returning 0, while its two siblings
+        # (missing tree_cwd, resident-unknown) both print to stderr and return 1. So it
+        # read as a complaint to a human AND as a plain success to a script, which is the
+        # #151 disease — one channel that cannot distinguish what actually happened.
+        #
+        # THE LAW, symmetric with `osiris stop`: each verb exits 0 when the world is
+        # already in the state it was asked for. launch => a body exists. stop => none
+        # does. Neither is a failure and neither should shout. The DIAGNOSTIC (how we
+        # know) goes to stderr so `osiris launch X | ...` stays clean; the VERDICT stays
+        # on stdout, and now names which of the two things happened.
+        print(f"already-live: {handle} — a body is already there, nothing started")
+        print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
@@ -944,6 +957,58 @@ async def cmd_launch(
     finally:
         if owns_pool:
             await pool.close()
+
+
+# --- stop ------------------------------------------------------------------------------------
+
+async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
+                   pool: asyncpg.Pool | None = None) -> int:
+    """`osiris launch`'s INVERSE, and the reason it exists: launch has had a terminal door
+    since task #72 and stop had none, so a human could start a body from the shell and had
+    no way to end one from the shell. Every other exit was a raw kill by hand — untracked,
+    unaudited, and exactly the "dead ends and corpses" the operator named.
+
+    Calls trigger.stop_seat DIRECTLY as caller='operator' — the same function the MCP
+    `stop` tool calls, never a second implementation. The operator lane skips ONE check
+    (the managed_by edge, which governs agent-to-agent authority and has nothing to say
+    about the human); the seat must still resolve, still have a holder, and the body must
+    still be /proc-confirmed by the same census every other door reads."""
+    from src import cli_render as render
+    from src.actions.core import Actions
+    from src.orchestrator.trigger import stop_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:stop")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris stop: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await stop_seat(Actions(pool), caller="operator", target=handle,
+                              reason=reason)
+    finally:
+        if owns_pool:
+            await pool.close()
+
+    render.emit(out, as_json=as_json, title=f"stop · {handle}")
+    # EXIT CODE CARRIES THE VERDICT so a script can branch on it. `no-live-body` is exit 0
+    # ON PURPOSE: "there is nothing running there" is a SUCCESSFUL outcome for anyone
+    # cleaning up — a teardown loop must not treat an already-dead body as a failure, or
+    # every clean run ends red and nobody trusts the signal.
+    status = out.get("status")
+    if status in ("stopped", "no-live-body"):
+        return 0
+    print(f"osiris stop: {status} — {out.get('detail', '')}", file=sys.stderr)
+    return 1
 
 
 # --- fleet -----------------------------------------------------------------------------------
@@ -2754,6 +2819,7 @@ to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, mint-seat, attach
+  end one               stop
   see the fleet         fleet, roster, boot-status, smoke
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project
@@ -2822,6 +2888,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--debug", action="store_true",
                           help="use the osiris PTY-broker lane instead of the default "
                                "`claude --bg` — for an incident or a build with no --bg")
+
+    p_stop = sub.add_parser("stop", description=_d(
+        "END a live body — `osiris launch`'s inverse. SIGTERMs the seat's own process and "
+        "nothing more: not a pause, no promised thaw-where-you-left-off (ruling b3ccd3f6). "
+        "Reachability afterward is governed by the SAME occupancy authority launch/wake "
+        "already read, so a later launch just works — there is no 'unstop' to remember. "
+        "`no-live-body` exits 0: nothing running there is a SUCCESS for a teardown"),
+        epilog="example, ending a worker you started:\n"
+               "    osiris stop Khnum --reason 'test run done'\n"
+               "example, in a teardown loop (0 whether it was live or already gone):\n"
+               "    osiris stop probe-seat || echo 'refused, see stderr'")
+    p_stop.add_argument("handle", help="the seat handle whose body to end")
+    p_stop.add_argument("--reason", default="",
+                        help="recorded on the seat as stopped_reason — say why, for whoever "
+                             "reads this later")
+    p_stop.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: one compact JSON line")
 
     p_fleet = sub.add_parser("fleet", description=_d(
         "the fleet roster, grouped by project — the same "
@@ -3126,6 +3209,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
+    if args.command == "stop":
+        return asyncio.run(cmd_stop(args.handle, reason=args.reason, as_json=args.as_json))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":

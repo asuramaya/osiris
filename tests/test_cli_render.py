@@ -165,3 +165,24 @@ def test_none_and_false_are_distinguishable() -> None:
     """A missing value and a measured false are different facts; #142's whole lesson."""
     paint = r.Paint(False)
     assert r.fmt_value(None, paint) != r.fmt_value(False, paint)
+
+
+# --- launch's verdict shape (2026-08-28, diagnosed live in tmux) ---------------------------
+
+def test_already_live_reads_as_a_state_not_a_refusal() -> None:
+    """DIAGNOSED LIVE: `osiris launch <occupied-seat>` was the ONLY outcome in cmd_launch
+    printing a refusal-shaped line to STDOUT and returning 0 — its two siblings (missing
+    tree_cwd, resident-unknown) both go to stderr and return 1. So it read as a complaint to
+    a human AND as an ordinary success to a script: one channel, two meanings, #151's disease.
+
+    THE LAW, symmetric across the pair: each verb exits 0 when the world is ALREADY in the
+    state it was asked for — launch => a body exists, stop => none does. This asserts the
+    source states that law, so a later edit that flips the exit code has to argue with it."""
+    import inspect
+
+    from src.cli import _cmd_launch_harness
+    src = inspect.getsource(_cmd_launch_harness)
+    assert "already-live" in src, "the already-live verdict word is gone"
+    # the diagnostic goes to stderr so a pipe carries only the verdict
+    idx = src.index("already-live")
+    assert "stderr" in src[idx:idx + 400], "the how-we-know line must not pollute stdout"

@@ -65,3 +65,34 @@ def test_read_verbs_offer_the_machine_door(command: str) -> None:
     sub = _subparsers(build_parser())[command]
     flags = {opt for action in sub._actions for opt in action.option_strings}
     assert "--json" in flags, f"osiris {command} lost its --json escape hatch"
+
+
+# --- the stop door (2026-08-28) ------------------------------------------------------------
+
+def test_launch_has_an_inverse_on_the_same_surface() -> None:
+    """THE ASYMMETRY THIS CLOSED: `osiris launch` had a terminal door since #72 and stop had
+    none, so a human could START a body from the shell and had no way to END one from it.
+    Every exit was a raw kill by hand — untracked, unaudited, and exactly the "dead ends and
+    corpses" the operator named. A lifecycle with only one door is not a lifecycle."""
+    names = set(_subparsers(build_parser()))
+    assert "launch" in names
+    assert "stop" in names, "launch exists with no inverse on the same surface"
+
+
+def test_stop_calls_the_same_function_the_mcp_tool_does() -> None:
+    """One implementation, two doors. If the CLI grew its own copy of the stop logic, the
+    two surfaces would drift the way #135's bootstrap path did — caught there by the parity
+    gate, prevented here by construction."""
+    import inspect
+
+    from src.cli import cmd_stop
+    assert "stop_seat" in inspect.getsource(cmd_stop)
+
+
+def test_stop_help_states_the_no_live_body_exit_contract() -> None:
+    """A teardown loop must not go red because the thing it was cleaning up was already
+    gone. That contract only helps if it is written where the person scripting it looks."""
+    sub = _subparsers(build_parser())["stop"]
+    blurb = f"{sub.description or ''} {sub.epilog or ''}".lower()
+    assert "no-live-body" in blurb
+    assert "0" in blurb

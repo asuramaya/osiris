@@ -2785,6 +2785,12 @@ async def _real_kill_pid(pid: int) -> None:
     os.kill(pid, signal.SIGTERM)
 
 
+# The human's own address, reused from the mailbox rather than invented here — one notion
+# of "the operator" in the codebase, never a second (task #82's lesson: a third copy of the
+# operator-actor list was exactly how 'analyst:operator' went missing from one of them).
+_OPERATOR_CALLER = "operator"
+
+
 async def stop_seat(
     actions: Actions, *, caller: str, target: str | None, reason: str = "",
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
@@ -2822,6 +2828,24 @@ async def stop_seat(
         if target_seat is None:
             return {"status": "refused-no-seat",
                     "detail": f"{caller} holds no seat — nothing to stop"}
+    elif caller == _OPERATOR_CALLER:
+        # THE OPERATOR'S OWN HAND (Thoth LXXXVII, 2026-08-28, operator's instruction "make
+        # sure to also build the other end of stopping and cleaning up"). DOWNWARD-ONLY
+        # exists to stop AGENTS reaching sideways or upward at each other; the human at a
+        # terminal is not a peer in that chart, he is above all of it — and `osiris launch`
+        # has had a terminal door since #72 while stop had none, so a body could be started
+        # from the shell and never ended from it. That asymmetry is the whole defect.
+        #
+        # NOTHING ELSE IS RELAXED: the seat must resolve, it must have a real holder, and
+        # the body must be /proc-CONFIRMED by the same registry_census every other door
+        # reads. This skips ONE check — the managed_by edge — and says so in the receipt
+        # (`authority: "operator"`), because an authority that is not visible in the record
+        # is indistinguishable from a missing check.
+        assert target is not None
+        target_seat = await _seat_for_target(actions, target)
+        if target_seat is None:
+            return {"status": "refused-no-seat",
+                    "detail": f"'{target}' resolves to no living Seat — nothing to stop"}
     else:
         assert target is not None  # self_stop is False only when target was given
         caller_held = await held_seat(pool, caller)
@@ -2868,7 +2892,10 @@ async def stop_seat(
         await actions.assert_property(oid, "stopped_reason", reason[:500], caller, now, 0.9,
                                       evidence_class="self_declared")
     return {"status": "stopped", "seat": target_seat, "holder": holder, "pid": pid,
-            "by": caller, **({"reason": reason} if reason else {}),
+            "by": caller, "authority": ("self" if self_stop else
+                                        "operator" if caller == _OPERATOR_CALLER
+                                        else "manager"),
+            **({"reason": reason} if reason else {}),
             "detail": f"SIGTERM sent to {holder}'s live body (pid {pid}) — reachability "
                       "afterward is governed entirely by the SAME occupancy authority "
                       "launch()/wake() already consult; no separate release step exists"}
