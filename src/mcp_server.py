@@ -4476,6 +4476,30 @@ async def backfill_bootstrap_orphan_references(
 
 
 @mcp.tool()
+async def backfill_boot_alarm_commit_links(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link `UNREVIEWED BOOT` alarm Thread (deploy_guard's own
+    boot watchdog — no caller identity to default a repo= from) to the Commit its own
+    summary cites by sha, via `derive_or_abstain`: mints `noted_in` (DIRECT_OBSERVATION)
+    iff the sha resolves to exactly one Commit; no sha, or an ambiguous match, abstains
+    durably with the candidate set kept. Does NOT arm required_link_kinds (stays empty) —
+    a boot alarm still can't satisfy a repo= requirement, this only gives it the
+    connectivity it actually has.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.capture import (
+        backfill_boot_alarm_commit_links as _backfill_boot_alarm_commit_links,
+    )
+    return await _backfill_boot_alarm_commit_links(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
