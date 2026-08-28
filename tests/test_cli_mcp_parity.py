@@ -84,6 +84,30 @@ CLI_ONLY_PARAMS = {
         "port, own testcontainer DB/Redis) — so the crash-replay mechanism itself is now "
         "exercised for real in the suite; neither a CLI param nor an MCP tool, so this "
         "table's own claim is untouched by it.",
+    ("fleet", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
+        "one-line machine render over the human one at the terminal boundary "
+        "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
+        "caller, so it has no second format to choose between — the counterpart would be "
+        "meaningless, not missing. Identical content either way; this changes bytes on a "
+        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("roster", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
+        "one-line machine render over the human one at the terminal boundary "
+        "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
+        "caller, so it has no second format to choose between — the counterpart would be "
+        "meaningless, not missing. Identical content either way; this changes bytes on a "
+        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
+        "one-line machine render over the human one at the terminal boundary "
+        "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
+        "caller, so it has no second format to choose between — the counterpart would be "
+        "meaningless, not missing. Identical content either way; this changes bytes on a "
+        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("retention", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
+        "one-line machine render over the human one at the terminal boundary "
+        "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
+        "caller, so it has no second format to choose between — the counterpart would be "
+        "meaningless, not missing. Identical content either way; this changes bytes on a "
+        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.

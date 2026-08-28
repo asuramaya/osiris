@@ -948,9 +948,8 @@ async def cmd_launch(
 
 # --- fleet -----------------------------------------------------------------------------------
 
-async def cmd_fleet(*, full: bool) -> int:
-    import json
-
+async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
+    from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
     url = await _mcp_url()
@@ -959,19 +958,23 @@ async def cmd_fleet(*, full: bool) -> int:
         print(f"osiris fleet: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
+    # `tree` is fleet()'s OWN pre-rendered ASCII picture — when the server sends one it is
+    # already the human answer and this side must not second-guess it. --json still wins
+    # over it, because a machine asked for data, not a drawing.
     tree = result.get("tree")
-    if isinstance(tree, str):
+    if as_json:
+        render.emit(result, as_json=True)
+    elif isinstance(tree, str):
         print(tree)
     else:
-        print(json.dumps(result, indent=2, default=str))
+        render.emit(result, as_json=False, title="fleet")
     return 0
 
 
 # --- roster ------------------------------------------------------------------------------------
 
-async def cmd_roster(*, repo: str | None) -> int:
-    import json
-
+async def cmd_roster(*, repo: str | None, as_json: bool = False) -> int:
+    from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
     url = await _mcp_url()
@@ -980,7 +983,7 @@ async def cmd_roster(*, repo: str | None) -> int:
         print(f"osiris roster: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    print(json.dumps(result, indent=2, default=str))
+    render.emit(result, as_json=as_json, title=f"roster · {repo}" if repo else "roster")
     return 0
 
 
@@ -2070,7 +2073,7 @@ async def cmd_fold_project(
 
 async def cmd_unmerge(
     dupe: str, because: str, *, actor: str, execute: bool = False,
-    pool: asyncpg.Pool | None = None,
+    pool: asyncpg.Pool | None = None, as_json: bool = False,
 ) -> int:
     """osiris unmerge <dupe> --because <text> [--actor <who>] [--execute] — the console-
     script door onto orchestrator.merge.unmerge, the SAME function the unmerge MCP tool
@@ -2107,13 +2110,14 @@ async def cmd_unmerge(
     if "error" in out:
         print(f"osiris unmerge: refused — {out['error']}", file=sys.stderr)
         return 1
-    print(json.dumps(out, indent=2, default=str))
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="unmerge")
     return 0
 
 
 async def cmd_retention(
     table: str, *, days: int | None, execute: bool, batch_size: int = 5000,
-    pool: asyncpg.Pool | None = None,
+    pool: asyncpg.Pool | None = None, as_json: bool = False,
 ) -> int:
     """osiris retention outbox|audit-log [--days N] [--execute] [--batch-size N] — thread
     e6fd3772 piece 1. COLD BY DEFAULT: without --execute this only COUNTS what's eligible
@@ -2153,7 +2157,8 @@ async def cmd_retention(
     finally:
         if owns_pool:
             await pool.close()
-    print(json.dumps(out, indent=2, default=str))
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="retention")
     if not execute:
         print(f"osiris retention: dry run — {out['eligible']} row(s) eligible, "
               "nothing deleted. Pass --execute to delete.", file=sys.stderr)
@@ -2749,12 +2754,13 @@ to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, mint-seat, attach
-  see the fleet         fleet, boot-status, smoke
+  see the fleet         fleet, roster, boot-status, smoke
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
-                        merge, unmerge
-  operate               deploy, migrate, seed, bootstrap
+                        merge, unmerge, fold-project
+  operate               deploy, migrate, seed, bootstrap, retention, rematerialize
 
-Run `osiris <command> --help` for that command's own flags and a worked example.
+Every read verb takes --json: one compact line for a script or an agent, instead of the
+human view. Run `osiris <command> --help` for that command's own flags and a worked example.
 """
 
 
@@ -2822,6 +2828,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                          "fleet() the MCP tool answers, called over the wire"),
                              epilog="example: osiris fleet\nexample: osiris fleet --full")
     p_fleet.add_argument("--full", action="store_true")
+    p_fleet.add_argument("--json", action="store_true", dest="as_json",
+                         help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_roster = sub.add_parser("roster", description=_d(
         "which seat owns a repo, and is anybody home — the same roster() the MCP tool "
@@ -2831,6 +2839,8 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris roster\nexample: osiris roster --repo coldspot")
     p_roster.add_argument("--repo", default=None,
                           help="reverse-lookup: which seat owns this repo")
+    p_roster.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_migrate = sub.add_parser("migrate", description=_d(
         "env-correct `alembic upgrade head` (--check "
@@ -2881,6 +2891,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                 f"{_CONSOLE_ACTOR!r}")
     p_unmerge.add_argument("--execute", action="store_true",
                            help="apply the reversal plan instead of only showing it")
+    p_unmerge.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_retention = sub.add_parser(
         "retention", description=_d("Prune outbox/audit_log rows past their retention "
@@ -2899,6 +2911,8 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="delete the eligible rows instead of only counting them")
     p_retention.add_argument("--batch-size", type=int, default=5000,
                              help="rows deleted per statement when --execute (default 5000)")
+    p_retention.add_argument("--json", action="store_true", dest="as_json",
+                             help="machine-readable: one compact JSON line")
 
     # DEPRECATED (dispatch 3683): fold_project no longer exists as an MCP tool — see
     # cmd_fold_project's own docstring. Kept working, hidden from the front-door listing
@@ -3113,9 +3127,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "fleet":
-        return asyncio.run(cmd_fleet(full=args.full))
+        return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":
-        return asyncio.run(cmd_roster(repo=args.repo))
+        return asyncio.run(cmd_roster(repo=args.repo, as_json=args.as_json))
     if args.command == "migrate":
         return asyncio.run(cmd_migrate(check=args.check))
     if args.command == "deploy":
@@ -3124,10 +3138,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_merge(args.dupe, args.into, args.evidence, actor=args.actor))
     if args.command == "unmerge":
         return asyncio.run(cmd_unmerge(args.dupe, args.because, actor=args.actor,
-                                       execute=args.execute))
+                                       execute=args.execute, as_json=args.as_json))
     if args.command == "retention":
         return asyncio.run(cmd_retention(args.table, days=args.days, execute=args.execute,
-                                         batch_size=args.batch_size))
+                                         batch_size=args.batch_size,
+                                         as_json=args.as_json))
     if args.command == "fold-project":
         return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
                                             actor=args.actor))

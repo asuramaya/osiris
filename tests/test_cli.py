@@ -2946,12 +2946,15 @@ async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_unmerge("unmdupe1", "reconsidered", actor="operator",
-                                pool=actions.pool)
+                                pool=actions.pool, as_json=True)
     assert out == 0
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:unmdupe1'")
     assert row["status"] == "merged"  # dry run: still merged, nothing executed
-    assert '"execute": false' in buf.getvalue().lower() or "false" in buf.getvalue().lower()
+    # Through --json, the machine contract. The old form ORed in a bare "false"
+    # substring, which would have passed on almost any output at all — tightened
+    # to the actual receipt field while fixing the render.
+    assert '"execute":false' in buf.getvalue().lower()
 
 
 async def test_cmd_retention_dry_run_by_default(actions: Actions) -> None:
@@ -2966,9 +2969,12 @@ async def test_cmd_retention_dry_run_by_default(actions: Actions) -> None:
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_retention("audit-log", days=90, execute=False, pool=actions.pool)
+        out = await cmd_retention("audit-log", days=90, execute=False, pool=actions.pool,
+                                  as_json=True)
     assert out == 0
-    assert '"executed": false' in buf.getvalue().lower()
+    # Asserted through --json, the MACHINE contract: the human render is a presentation
+    # layer and may be restyled, but this receipt field is a promise to any script.
+    assert '"executed":false' in buf.getvalue().lower()
 
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='osiris_test_cli_retention'")
