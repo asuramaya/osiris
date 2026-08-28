@@ -30,7 +30,12 @@ every live `answers` edge FROM a Decision INTO it (mint_bears_on's own edge) - d
 that speak to this row without having closed it, oldest first. Scoped to recall() only,
 not orient()'s summary view: this is a per-object query, appropriate for the one-thread-
 at-a-time surface, not for a per-session listing that would multiply it by every open
-thread on the board."""
+thread on the board.
+
+NARROWS' OWN READ-BACK (thread e05e439d), same reasoning: a Decision's `narrowed_by`
+list is every live `narrows` edge FROM a later Decision INTO it — `mint_narrows` is
+non-burying by construction, so nothing about the bounded decision's own record would
+otherwise show that a later ruling limited it."""
 from __future__ import annotations
 
 import re
@@ -124,6 +129,26 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         addenda = await decision_addenda(pool, oid)
         record["addenda"] = [{**a, "observed_at": a["observed_at"].isoformat()}
                               for a in addenda]
+        # NARROWS' OWN READ-BACK (thread e05e439d, Soundwave XV's specimen 0c4dc7ce):
+        # `mint_narrows` is non-burying by construction — the bounded decision's own
+        # standing and status are untouched, so nothing about ITS OWN record would ever
+        # show that a later ruling limited it. The edge existing in the links table is
+        # not the fix by itself: a reader who finds this decision and not its bound
+        # inherits an overreaching verdict at full authority, the exact failure this
+        # edge exists to prevent. Same shape Thread's `bears_on_from` already proves.
+        # Live edges only (valid_until IS NULL) — an unmerge/retraction must not go on
+        # citing a bound that no longer holds.
+        narrowers = await pool.fetch(
+            "SELECT d.id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS summary "
+            "FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
+            "WHERE l.to_id=$1 AND l.type='narrows' AND l.valid_until IS NULL "
+            "ORDER BY d.created_at", oid)
+        record["narrowed_by"] = [
+            {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]}
+            for r in narrowers]
     return record
 
 

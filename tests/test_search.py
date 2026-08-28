@@ -226,6 +226,28 @@ async def test_a_superseded_decision_is_flagged_never_hidden(actions: Actions) -
     assert len(buried) == 1 and "read the successor" in buried[0]
 
 
+async def test_a_scope_narrowed_decision_is_flagged_and_stays_fully_live(
+    actions: Actions,
+) -> None:
+    """The narrows edge reaches search too (thread e05e439d): unlike supersedes, the
+    bounded hit is never buried — it stays fully live and ranked, only flagged, since
+    its own measurement is still correct within its now-visible limit."""
+    from src.orchestrator.capture import record_decision
+
+    bounded = await record_decision(
+        actions, "the bank architecture loses at every training-joule budget measured",
+        kind="ruling", source="agent:a")
+    narrower = await record_decision(
+        actions, "SCOPE LIMIT: that verdict holds at training-joule parity only",
+        kind="ruling", source="agent:a", narrows=[bounded])
+    out = await _search(actions, "bank architecture training-joule budget")
+    hit = next(h for h in out["hits"] if h["id"] == str(bounded))
+    assert hit.get("scope_limited_by") is not None
+    assert str(narrower)[:8] in hit["scope_limited_by"]
+    # never buried — no `superseded` flag, and the hit is present at full standing
+    assert not hit.get("superseded")
+
+
 async def test_one_row_per_object_best_witness(actions: Actions) -> None:
     """Two sources co-asserting one decision's summary → ONE hit (the multi-source set must
     not double-list), carrying the better witness."""

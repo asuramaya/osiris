@@ -681,7 +681,14 @@ def _tool_chars(t: Any) -> int:
 # drift the moment their project's own pile is drained or judged. Docstring trimmed under
 # the category rule first (1,673 -> 1,197 chars for the tool itself); the remaining
 # growth is the verb existing at all, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 198707
+# 197,510 -> 197,965 (measured exact). Tool count unchanged (2026-08-28, Imhotep, thread
+# e05e439d, Soundwave XV's specimen 0c4dc7ce, operator ruling "same problem as 1" — build
+# it): record_decision gained one new PARAMETER, `narrows` — a Decision->Decision edge
+# that bounds an earlier ruling's scope without refuting or superseding it, non-burying
+# by construction (mirrors `rediscovers`: no property write on either side). Docstring
+# line trimmed to match the sibling params' own one-line shape first; the remaining
+# growth is the new param's own wire schema entry plus that one line.
+TOOL_CONTRACT_CEILING_CHARS = 199162
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -975,6 +975,7 @@ async def record_decision(
     repo_evidence_class: str | None = None, unlinked_because: str | None = None,
     implements: uuid.UUID | None = None, confirms: list[uuid.UUID] | None = None,
     rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
+    narrows: list[uuid.UUID] | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -994,7 +995,14 @@ async def record_decision(
     to one of these — this function's own strictness laws (UUID/canonical/short-id only,
     no prose fallback) apply at THAT resolution step, same as always; a wrong-typed id
     here is the caller's bug, not this function's to catch twice.
-    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their four siblings
+    `narrows` (thread e05e439d, Soundwave XV's specimen 0c4dc7ce) joins the same fold —
+    a pure link mint, same shape as `rediscovers`. Points FROM this decision TO an
+    earlier one whose SCOPE it bounds without refuting or superseding it: the earlier
+    ruling's own measurement stays correct within its now-visible limit. Non-burying by
+    construction, same guarantee `mint_rediscovers` already proves: no property write on
+    either side, no `status` touch, no path that could gray the target out of orient's
+    recent list the way `supersedes` deliberately does. See `mint_narrows` below.
+    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their five siblings
     above — found live, not reasoned: refute_practice mutates the target Practice and
     mints a live Superstition BEFORE commit, and the wrapper's own prior-art search
     (runs AFTER this returns) would then see that already-changed state, silently
@@ -1226,6 +1234,8 @@ async def record_decision(
             await mint_rediscovers(a, d, rdid, source)
         for bid in bears_on or []:
             await mint_bears_on(a, d, bid, source)
+        for nid in narrows or []:
+            await mint_narrows(a, d, nid, source)
         await _enforce_required_links(
             a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
             unlinked_because=unlinked_because, source=source, observed=observed)
@@ -2788,6 +2798,36 @@ async def mint_rediscovers(
     if exists:
         return False
     await actions.create_link(from_decision, to_decision, "rediscovers", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_narrows(
+    actions: Actions, from_decision: uuid.UUID, to_decision: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """This (later) Decision BOUNDS the scope of an earlier one without refuting or
+    superseding it (thread e05e439d, Soundwave XV's specimen 0c4dc7ce, decepticons):
+    the target's own measurement stays CORRECT within its now-visible limit. Points FROM
+    the bounding decision TO the one it bounds — same direction as `rediscovers`.
+
+    NON-BURYING BY CONSTRUCTION, the entire design constraint (the exact opposite of
+    `supersedes`): this function writes ONLY the link. No `superseded_by`/`superseded_
+    because` property, no status touch, on EITHER side — nothing here can gray the
+    target out of orient's recent list or the decision-log's live section, structurally,
+    the same guarantee `mint_rediscovers` already proves for its own edge. A `narrows`
+    implementation that could bury its target would be `supersedes` wearing a new name.
+
+    `recall()` surfaces inbound `narrows` edges on the bounded decision as `narrowed_by`
+    (same shape Thread's `bears_on_from` already proves) — the edge existing in the
+    links table is not the deliverable by itself; a reader who finds the bounded ruling
+    must find the bound too, or nothing was fixed. Idempotent: returns whether a NEW
+    link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='narrows'",
+        from_decision, to_decision)
+    if exists:
+        return False
+    await actions.create_link(from_decision, to_decision, "narrows", source,
                               datetime.now(UTC), _CONF, evidence_class=_EC)
     return True
 

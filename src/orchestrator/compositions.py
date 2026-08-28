@@ -509,6 +509,20 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             if h["id"] in refuted:
                 h["refuted"] = (f"by decision {refuted[h['id']][:8]} — a dead lesson, "
                                 "not standing law")
+        # a scope-narrowed decision must not read as unbounded testimony either — unlike
+        # supersedes/refutes this is a real EDGE (`narrows`, thread e05e439d), not a
+        # property, and non-burying by construction: the hit stays fully live and ranked
+        # on its own merits, only flagged. Same batched shape, one lookup on the links
+        # table instead of current_assertions.
+        narrowed = {str(r["to_id"]): r["from_id"] for r in await pool.fetch(
+            "SELECT DISTINCT ON (to_id) to_id, from_id FROM links "
+            "WHERE type='narrows' AND valid_until IS NULL AND to_id = ANY($1::uuid[]) "
+            "ORDER BY to_id, created_at DESC",
+            [h["id"] for h in hits])}
+        for h in hits:
+            if h["id"] in narrowed:
+                h["scope_limited_by"] = (f"decision {str(narrowed[h['id']])[:8]} — "
+                                         "read it for the boundary")
 
     # GRAPH SCOPE FILTER (Phase 2): hit-set filtering by project and/or lineage scope
     if (scope_project or scope_lineage) and hits:

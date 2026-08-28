@@ -448,6 +448,13 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "earlier one's plan, it re-derives its conclusion independently. Minted by "
              "record_decision(rediscovers=…).",
              ("Decision",), ("Decision",)),
+    LinkType("narrows", "This (later) Decision BOUNDS the scope of an earlier one "
+             "without refuting or superseding it (thread e05e439d) — the target's own "
+             "measurement stays correct within its now-visible limit. Non-burying by "
+             "construction: no property write, no status touch, on either side, unlike "
+             "supersedes. Minted by record_decision(narrows=…); surfaced on the bounded "
+             "decision via recall()'s narrowed_by field.",
+             ("Decision",), ("Decision",)),
     LinkType("managed_by", "THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's "
              "manager of record — the seat that minted it, or the seat it was adopted "
              "under. The org chart's FIRST real link type: Seat-to-Seat, distinct from "
