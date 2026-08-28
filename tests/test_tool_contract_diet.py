@@ -655,7 +655,14 @@ def _tool_chars(t: Any) -> int:
 # decoration. Both docstrings were trimmed to one line each under the category rule
 # first; the remaining growth is the two params' own wire schema entries plus that
 # one line apiece, not prose left untrimmed.
-TOOL_CONTRACT_CEILING_CHARS = 193_507
+# 193,507 -> 194,353 (measured exact). 138 -> 139 tools (2026-08-28, Imhotep, thread
+# f1f14cb3 item 2, Thoth's dispatch msg 5937): a genuinely NEW verb, `abstained_
+# derivations` — the read surface over derive_or_abstain's own refusals, resolving
+# `from_id` and every candidate to (type, summary) so a miner opens a materialized
+# queue instead of re-deriving one against a graph that has moved. Docstring trimmed
+# under the category rule first (war-story/thread citations cut); the remaining
+# growth is the new capability's own wire schema plus what's left of its docstring.
+TOOL_CONTRACT_CEILING_CHARS = 194_353
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -753,4 +760,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     orphan_references — the repair-verb half of the bootstrap_project door-gap fix (see
     the ceiling's own changelog above for the full account)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 138
+    assert len(per_tool) == 139
