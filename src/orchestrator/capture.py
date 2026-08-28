@@ -353,6 +353,88 @@ async def derive_or_abstain(
            "candidate_count": len(candidates), "candidates": list(candidates)}
 
 
+# LANE 1 (thread 33962e00, off Lane 0's derive_or_abstain above): the boot-startup
+# watchdog's own UNREVIEWED BOOT alarm Threads (deploy_guard.alarm_unreviewed_boot) —
+# minted with no ctx and no mounted caller, so #189 correctly left them unable to satisfy
+# a repo= requirement (decision 59672c26/18464c67: unlinkable by THAT ONE KIND, not
+# unlinkable full stop). 178 of 186 name the exact sha they booted on in their own summary
+# text ("running HEAD '<sha>' was never recorded") and that sha already resolves to a real
+# Commit object 95.7% of the time (operator-measured a0339e16, independently re-verified).
+# NOT `_cited_commit_shas` (that regex requires the literal word "commit(s)" immediately
+# before the hex token, task #101's own qualifier-word guard against mismatching a
+# decision/thread short id — this alarm's own fixed template never uses that word at all).
+_BOOT_ALARM_HEAD_RE = re.compile(r"running HEAD '([0-9a-f]{7,40})' was never recorded")
+
+
+async def backfill_boot_alarm_commit_links(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Repair verb for Lane 1 (decision 18464c67's own named population): every zero-live-
+    link Thread stamped `source_id` in {boot:osiris-mcp, boot:osiris-worker} whose summary
+    cites a boot sha, linked `noted_in` its own already-existing Commit object via Lane 0's
+    `derive_or_abstain` — never a guess, never a low-confidence edge (the operator's own
+    binary rule, a0339e16). A thread whose cited sha resolves to zero or more-than-one
+    Commit abstains, durably, via `derive_or_abstain`'s own `derivation_abstained_noted_in`
+    record — the candidate SET is kept, not just a count, so a later pass or mind inherits
+    the shortlist instead of re-deriving it. A thread with no sha in its summary at all (the
+    ~8 that print none) abstains the same way, with `why_if_ambiguous` naming that specific
+    cause rather than a bare candidate-count reason.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    `derive_or_abstain` checks the link doesn't already exist before minting, and a repeat
+    call over an already-abstained thread simply re-asserts the same abstention fact."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    threads = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS summary "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='summary' AND a.value #>> '{}' LIKE 'UNREVIEWED BOOT:%') "
+        "AND EXISTS (SELECT 1 FROM assertions a2 WHERE a2.object_id=o.id "
+        "  AND a2.name='summary' "
+        "  AND a2.source_id IN ('boot:osiris-mcp', 'boot:osiris-worker')) "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in threads:
+        m = _BOOT_ALARM_HEAD_RE.search(row["summary"] or "")
+        if m is None:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": "no HEAD sha in summary"}
+            if not dry_run:
+                await derive_or_abstain(
+                    actions, row["id"], "noted_in", [], actor,
+                    why_if_ambiguous="thread's summary contains no HEAD sha to resolve")
+            plan.append(entry)
+            abstained += 1
+            continue
+        sha = m.group(1).lower()
+        candidates = [r["id"] for r in await pool.fetch(
+            "SELECT id FROM objects WHERE type='Commit' "
+            "AND canonical LIKE 'commit:' || $1 || '%'", sha[:12])]
+        if len(candidates) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidates[0]), "sha": sha}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "sha": sha, "candidate_count": len(candidates)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "noted_in", candidates, actor)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(threads), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 async def _mint_prose_citations(
     a: Actions, obj_id: uuid.UUID, source: str, *texts: str | None,
 ) -> list[dict[str, str]]:

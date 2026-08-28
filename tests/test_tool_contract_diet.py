@@ -655,7 +655,14 @@ def _tool_chars(t: Any) -> int:
 # decoration. Both docstrings were trimmed to one line each under the category rule
 # first; the remaining growth is the two params' own wire schema entries plus that
 # one line apiece, not prose left untrimmed.
-TOOL_CONTRACT_CEILING_CHARS = 193_507
+# 193,507 -> 194,532 (measured exact). 138 -> 139 tools (2026-08-28, Khnum, decision
+# 18464c67/thread 33962e00, Lane 1 of the orphan-healing arc): backfill_boot_alarm_
+# commit_links — a genuinely NEW repair verb linking boot-watchdog alarm Threads to
+# the Commit their own summary cites, via Lane 0's derive_or_abstain. Docstring
+# trimmed under the category rule first (the full rationale/ruling citations live in
+# capture.py's own module comment, not duplicated into the MCP-facing description);
+# the remaining growth is the new capability itself, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 194_532
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -751,6 +758,8 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     launch()'s process-lifecycle inverse, #156's own held half, finally ships.
     137 -> 138 (2026-08-27, Khnum, decision 49231693/operator ruling): backfill_bootstrap_
     orphan_references — the repair-verb half of the bootstrap_project door-gap fix (see
-    the ceiling's own changelog above for the full account)."""
+    the ceiling's own changelog above for the full account).
+    138 -> 139 (2026-08-28, Khnum, decision 18464c67/thread 33962e00): backfill_boot_
+    alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 138
+    assert len(per_tool) == 139
