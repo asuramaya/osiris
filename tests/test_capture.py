@@ -4943,6 +4943,89 @@ async def test_bears_on_names_a_decision_target_instead_of_a_bare_not_found(
         _agents.pop(_conn_key(ctx), None)
 
 
+async def test_mint_narrows_buries_neither_side(actions: Actions) -> None:
+    from src.orchestrator.capture import mint_narrows
+
+    bounded = await record_decision(actions, "a measurement that will later be bounded")
+    bounder = await record_decision(actions, "a follow-up ruling that bounds the first")
+    minted = await mint_narrows(actions, bounder, bounded, "test")
+    assert minted is True
+    row = await actions.pool.fetchrow(
+        "SELECT evidence_class, properties FROM links "
+        "WHERE from_id=$1 AND to_id=$2 AND type='narrows'", bounder, bounded)
+    assert row["evidence_class"] == "self_declared"
+    # neither side carries a superseded_by/status write — pure link, no property mutation
+    for oid in (bounded, bounder):
+        superseded = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='superseded_by'", oid)
+        assert not superseded
+        status = await actions.pool.fetchval(
+            "SELECT status FROM objects WHERE id=$1", oid)
+        assert status == "active"
+    # idempotent
+    again = await mint_narrows(actions, bounder, bounded, "test")
+    assert again is False
+
+
+async def test_record_decision_narrows_links_and_recall_surfaces_narrowed_by(
+    actions: Actions,
+) -> None:
+    """The end-to-end proof Soundwave's own specimen needed: a successor who recalls the
+    BOUNDED decision (not the bounding one) must still find the boundary."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.recall import recall as recall_fn
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:narrowland", session="narrowland",
+        project="narrow-land", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        bounded = await rd_tool(
+            "THE ARCHITECTURE VERDICT: transformer beats bank at every training-joule "
+            "budget measured", kind="ruling", ctx=ctx)
+        out = await rd_tool(
+            "SCOPE LIMIT: the verdict holds at training-joule parity only, not at "
+            "inference-watt parity", kind="ruling", narrows=[bounded["id"]], ctx=ctx)
+        assert out["narrows"][0]["id"] == bounded["id"][:8]
+        assert out["narrows"][0]["new_link"] is True
+
+        rec = await recall_fn(actions.pool, bounded["id"])
+        assert rec["narrowed_by"][0]["id"] == out["id"][:8]
+        assert "SCOPE LIMIT" in rec["narrowed_by"][0]["summary"]
+
+        # the bounded decision keeps its own standing — not buried, not graded down
+        bounded_rec = await recall_fn(actions.pool, bounded["id"])
+        assert "superseded_by" not in bounded_rec
+
+        # idempotent
+        again = await rd_tool(
+            "SCOPE LIMIT: the verdict holds at training-joule parity only, not at "
+            "inference-watt parity", kind="ruling", narrows=[bounded["id"]], ctx=ctx)
+        assert again["narrows"][0]["new_link"] is False
+
+        # one bad ref among a good one is reported, never fatal to the rest
+        mixed = await rd_tool(
+            "a second scope limit, one real bound and one fake", kind="ruling",
+            narrows=[bounded["id"], "not-a-real-decision-xyz"], ctx=ctx)
+        matched = {r["ref"]: r["matched"] for r in mixed["narrows_resolution"]}
+        assert matched[bounded["id"]] == "true"
+        assert matched["not-a-real-decision-xyz"] == "false"
+        assert len(mixed["narrows"]) == 1
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_bears_on_nudge(
     actions: Actions,
 ) -> None:

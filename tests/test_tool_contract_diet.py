@@ -675,7 +675,14 @@ def _tool_chars(t: Any) -> int:
 # The merged tree has BOTH the new tool AND both docstring notes, so its real cost is
 # neither number. RE-MEASURED BELOW against the merged tree — never picked, never averaged.
 # (A ratchet settled by preference has stopped ratcheting.)
-TOOL_CONTRACT_CEILING_CHARS = 197_510  # MEASURED against the merged tree: 142 tools.
+# 197,510 -> 197,965 (measured exact). Tool count unchanged (2026-08-28, Imhotep, thread
+# e05e439d, Soundwave XV's specimen 0c4dc7ce, operator ruling "same problem as 1" — build
+# it): record_decision gained one new PARAMETER, `narrows` — a Decision->Decision edge
+# that bounds an earlier ruling's scope without refuting or superseding it, non-burying
+# by construction (mirrors `rediscovers`: no property write on either side). Docstring
+# line trimmed to match the sibling params' own one-line shape first; the remaining
+# growth is the new param's own wire schema entry plus that one line.
+TOOL_CONTRACT_CEILING_CHARS = 197_965  # MEASURED against the merged tree: 142 tools.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
