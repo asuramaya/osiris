@@ -663,7 +663,13 @@ def _tool_chars(t: Any) -> int:
 # resolved by preference rather than by re-measurement is a ratchet that has stopped
 # ratcheting — so this is re-measured against the merged tree, which is the same
 # discipline the constant exists to enforce, applied to the constant itself.
-TOOL_CONTRACT_CEILING_CHARS = 196_473  # MEASURED against the merged tree: 141 tools.
+# 196,473 -> 197,348 (measured exact). 141 -> 142 tools (2026-08-28, Imhotep, thread
+# e67fc338, Thoth's ruling): a genuinely NEW verb, `retryable_abstentions` — the
+# structurally-safe zero-candidate subset of abstained_derivations, filtered in SQL so
+# a 2+-candidate (genuinely ambiguous) abstention can never appear regardless of caller
+# behavior. Docstring trimmed under the category rule first; the remaining growth is
+# the new capability's own wire schema plus what's left of its docstring.
+TOOL_CONTRACT_CEILING_CHARS = 197_348
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -765,4 +771,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
     changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 141
+    assert len(per_tool) == 142

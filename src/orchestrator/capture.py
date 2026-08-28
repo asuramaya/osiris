@@ -286,7 +286,7 @@ _DERIVE_CONF = confidence_for(_DERIVE_TIER)
 
 async def derive_or_abstain(
     actions: Actions, from_id: uuid.UUID, link_type: str, candidates: list[uuid.UUID],
-    source: str, *, why_if_ambiguous: str | None = None,
+    source: str, *, why_if_ambiguous: str | None = None, retried: bool = False,
 ) -> dict[str, Any]:
     """`candidates` is the CALLER's own lane-specific lookup, already run — this
     function never queries for them itself, so it stays the same one primitive
@@ -321,6 +321,22 @@ async def derive_or_abstain(
     already proved. Recovering a discarded candidate set later is strictly harder
     than keeping it now.
 
+    `retried=True` (thread e67fc338, Thoth's own ask — "derived at write time" and
+    "derived nine hours later when ingest caught up" are different provenance facts a
+    reader may care about) stamps `properties["retried"]=True` on the minted edge — the
+    caller's own declaration that this call is a re-attempt at a PREVIOUSLY zero-
+    candidate abstention (see `retryable_abstentions` below for the structurally-safe
+    door onto that population), never inferred here.
+
+    A successful mint that lands on an object carrying a live (unresolved)
+    `derivation_abstained_<link_type>` property SUPERSEDES it with a `resolved` marker
+    (`{"link_type", "resolved": True, "resolved_to": <this to_id>}`) — otherwise a
+    resolved case would sit in `retryable_abstentions`' own queue forever, the exact
+    detector-without-a-door failure this whole lane exists to fix, just moved one step
+    over. A fresh cardinality-1 success with NO prior abstention on record (the common
+    case — 127 of Wave 1's own mints) writes nothing extra: this is a correction to a
+    stale record, not a receipt every mint owes.
+
     Returns `{"minted": bool, "to": uuid|None, "abstained": bool, "reason": str|None,
     "candidate_count": int, "candidates": list[uuid.UUID]}` — the caller's own receipt,
     not durable state by itself (the durable half is the property write on `from_id`
@@ -331,9 +347,21 @@ async def derive_or_abstain(
             "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3",
             from_id, to_id, link_type)
         if not exists:
+            props: dict[str, Any] = {"origin": "derived"}
+            if retried:
+                props["retried"] = True
             await actions.create_link(from_id, to_id, link_type, source, datetime.now(UTC),
                                       _DERIVE_CONF, evidence_class=_DERIVE_TIER.value,
-                                      properties={"origin": "derived"})
+                                      properties=props)
+            had_live_abstention = await actions.pool.fetchval(
+                "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name=$2 "
+                "AND NOT (value ? 'resolved')",
+                from_id, f"derivation_abstained_{link_type}")
+            if had_live_abstention:
+                await actions.assert_property(
+                    from_id, f"derivation_abstained_{link_type}",
+                    {"link_type": link_type, "resolved": True, "resolved_to": str(to_id)},
+                    source, datetime.now(UTC), _DERIVE_CONF, evidence_class=_DERIVE_TIER.value)
         return {"minted": not exists, "to": to_id, "abstained": False, "reason": None,
                "candidate_count": 1}
     reason = why_if_ambiguous or (
@@ -538,12 +566,17 @@ async def abstained_derivations(
     `link_type=None` returns every lane's abstentions pooled together; passing a specific
     link_type scopes to one namespaced property, exactly (#75's own ask, msg 5937: 'query
     every ambiguous in_repo' without filtering a soup — the property name IS the filter).
-    `count` is the TRUE total population for that scope (never capped by `limit`, same
-    convention `stale_current_flags` already uses); `sample` is bounded by `limit`."""
+    LIVE ABSTENTIONS ONLY: a case `derive_or_abstain` has since resolved (its own
+    `resolved` marker, thread e67fc338) is excluded — reading a resolved case as still-
+    abstained would be the exact stale-record failure this lane exists to fix, just
+    surfaced through the wrong door. `count` is the TRUE total population for that scope
+    (never capped by `limit`, same convention `stale_current_flags` already uses);
+    `sample` is bounded by `limit`."""
     name_filter = f"derivation_abstained_{link_type}" if link_type else None
     total = await pool.fetchval(
         "SELECT count(DISTINCT (object_id, name)) FROM current_assertions "
-        "WHERE name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR name = $1)",
+        "WHERE name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR name = $1) "
+        "AND NOT (value ? 'resolved')",
         name_filter)
     rows = await pool.fetch(
         "WITH latest AS ("
@@ -552,7 +585,8 @@ async def abstained_derivations(
         "  FROM current_assertions a "
         "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
         "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
-        "SELECT * FROM latest ORDER BY observed_at DESC LIMIT $2", name_filter, limit)
+        "SELECT * FROM latest WHERE NOT (value ? 'resolved') "
+        "ORDER BY observed_at DESC LIMIT $2", name_filter, limit)
     sample: list[dict[str, Any]] = []
     for r in rows:
         value = r["value"]
@@ -568,6 +602,56 @@ async def abstained_derivations(
             "link_type": value.get("link_type", r["name"].removeprefix("derivation_abstained_")),
             "reason": value.get("reason"), "candidate_count": value.get("candidate_count"),
             "candidates": candidates, "observed_at": r["observed_at"], "source": r["source_id"],
+        })
+    return {"count": total, "sample": sample}
+
+
+async def retryable_abstentions(
+    pool: asyncpg.Pool, link_type: str | None = None, *, limit: int = 100,
+) -> dict[str, Any]:
+    """THE STRUCTURALLY-SAFE RETRY DOOR (thread e67fc338, Thoth's ruling): the SQL itself
+    filters to `candidate_count = 0` — a ZERO-candidate abstention means the lookup found
+    nothing YET, which time can change (an ingest that catches up, a deploy that lands),
+    so retrying it later is sound. A 2+-candidate abstention means the lookup found a
+    genuine ambiguity under a0339e16; time changes nothing about that fact, and a later
+    retry that happens to see one candidate is a RACE, not a resolution — minting from it
+    would be the guess the ruling forbids. That distinction is baked into the WHERE
+    clause, not a post-fetch filter a caller (or a future edit) could accidentally widen
+    to include the ambiguous population.
+
+    Oldest-abstained first (the longest-waiting cases surface first for a re-attempt).
+    Same {count, sample} shape as `abstained_derivations`, already excluding resolved
+    cases (a case this function names is BY CONSTRUCTION never a resolved one — a
+    resolved case's value carries no `candidate_count` key at all, since a resolution
+    replaces the abstention value entirely). The caller still owns re-running its own
+    lane-specific lookup and calling `derive_or_abstain(..., retried=True)` — this
+    function only names WHICH objects are safe to re-attempt, never re-attempts them."""
+    name_filter = f"derivation_abstained_{link_type}" if link_type else None
+    total = await pool.fetchval(
+        "SELECT count(DISTINCT (object_id, name)) FROM current_assertions "
+        "WHERE name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR name = $1) "
+        "AND (value ? 'candidate_count') AND (value->>'candidate_count')::int = 0",
+        name_filter)
+    rows = await pool.fetch(
+        "WITH latest AS ("
+        "  SELECT DISTINCT ON (a.object_id, a.name) a.object_id, a.name, a.value, "
+        "         a.observed_at, a.source_id "
+        "  FROM current_assertions a "
+        "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
+        "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC) "
+        "SELECT * FROM latest "
+        "WHERE (value ? 'candidate_count') AND (value->>'candidate_count')::int = 0 "
+        "ORDER BY observed_at ASC LIMIT $2", name_filter, limit)
+    sample = []
+    for r in rows:
+        value = r["value"]
+        from_id = r["object_id"]
+        from_type, from_summary = await _describe(pool, from_id)
+        sample.append({
+            "from_id": str(from_id)[:8], "from_type": from_type, "from_summary": from_summary,
+            "link_type": value.get("link_type", r["name"].removeprefix("derivation_abstained_")),
+            "reason": value.get("reason"), "observed_at": r["observed_at"],
+            "source": r["source_id"],
         })
     return {"count": total, "sample": sample}
 
