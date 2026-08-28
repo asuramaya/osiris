@@ -4500,6 +4500,30 @@ async def backfill_boot_alarm_commit_links(
 
 
 @mcp.tool()
+async def backfill_task_sync_citation_links(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link `task_sync`-minted obligation Thread ("TASK/THREAD
+    DISAGREEMENT: ..." / "THREAD SIDE ORPHAN: ...", decision a55b1014 — the tracker-vs-graph
+    divergence detector that has been firing correctly for weeks into an unread orphan) to
+    the Thread its own summary names, via `derive_or_abstain`: mints `cites`
+    (DIRECT_OBSERVATION, origin=derived) iff `task_sync.parse_thread_citations` (reused, not
+    re-implemented) finds exactly one citation and it resolves to exactly one existing
+    Thread; anything else abstains durably with a distinct reason and the candidate set kept.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.task_sync import (
+        backfill_task_sync_citation_links as _backfill_task_sync_citation_links,
+    )
+    return await _backfill_task_sync_citation_links(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:

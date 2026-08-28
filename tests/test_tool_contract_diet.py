@@ -662,7 +662,17 @@ def _tool_chars(t: Any) -> int:
 # trimmed under the category rule first (the full rationale/ruling citations live in
 # capture.py's own module comment, not duplicated into the MCP-facing description);
 # the remaining growth is the new capability itself, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 194_532
+# 194,532 -> 195,627 (measured exact). 139 -> 140 tools (2026-08-28, Seshat, decision
+# a55b1014/thread 5f47e23d, Wave 2 Lane A of the orphan-healing arc): backfill_
+# task_sync_citation_links — a genuinely NEW repair verb linking task_sync's own
+# TASK/THREAD DISAGREEMENT / THREAD SIDE ORPHAN obligation Threads to the Thread
+# their own summary names, reusing task_sync.parse_thread_citations (no second
+# parser) and Lane 0's derive_or_abstain (no second abstention discipline).
+# Docstring trimmed under the category rule first (the full rationale — why these
+# 41 Threads exist, why they predate the door-side citation mint — lives in
+# task_sync.py's own module comment, not duplicated here); the remaining growth is
+# the new capability itself, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 195_627
 
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
@@ -760,6 +770,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     orphan_references — the repair-verb half of the bootstrap_project door-gap fix (see
     the ceiling's own changelog above for the full account).
     138 -> 139 (2026-08-28, Khnum, decision 18464c67/thread 33962e00): backfill_boot_
-    alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above)."""
+    alarm_commit_links — Lane 1's repair verb (see the ceiling's own changelog above).
+    139 -> 140 (2026-08-28, Seshat, decision a55b1014/thread 5f47e23d): backfill_
+    task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
+    changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 139
+    assert len(per_tool) == 140
