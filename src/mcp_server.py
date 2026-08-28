@@ -5913,6 +5913,9 @@ async def record_decision(
                                  "summary": bsumm or ""})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     repo_defaulted = False
+    lineage_attempted = False
+    lineage_candidates: list[uuid.UUID] = []
+    lineage_projects: list[str] = []
     if not repo:
         # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix):
         # open_thread's wrapper already falls back to the mounted identity's project when
@@ -5922,6 +5925,31 @@ async def record_decision(
         ident = await _ident_for(ctx)
         repo = ident.project if ident else None
         repo_defaulted = repo is not None
+        # LANE 3, THE PREVENTION HALF (thread 79e785d1, Thoth msg 5906): the generation
+        # default above reads the WRITING GENERATION's own works_in — and the writing
+        # generation is commonly itself an orphan (a fresh mint, a compacted heir), which
+        # is why 251 agent-written Decisions stayed unlinked even with the default in
+        # place. works_in is a LINEAGE property in practice, so when the narrow default
+        # above found nothing AND the actor is a real lineage (never the bare "session"
+        # back-compat source, which has no lineage to walk), widen the read across every
+        # generation sharing this actor's own root. Feeds straight into the SAME atomic
+        # capture.record_decision(repo=...) call below when unambiguous — no separate
+        # write, same evidence tier as the generation-scoped default. Ambiguous or
+        # genuinely-nothing cases are handed to derive_or_abstain AFTER the object exists
+        # (see below) rather than resolved here, since only that primitive owns the
+        # durable, queryable abstention record — this default stays repo=None-or-a-single-
+        # string, exactly its existing contract.
+        if repo is None and actor.startswith("agent:"):
+            from src.orchestrator.agents import lineage_works_in
+
+            lineage_attempted = True
+            lineage = await lineage_works_in(pool, actor)
+            if lineage["resolved"] is not None:
+                repo = lineage["resolved"]
+                repo_defaulted = True
+            else:
+                lineage_candidates = lineage["candidate_ids"]
+                lineage_projects = lineage["projects"]
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
     # existing decision, run here FIRST so the receipt can show what a hit is about to
@@ -5997,6 +6025,25 @@ async def record_decision(
             "to": repo,
             "why": "no repo given — defaulted to the caller's own project rather than "
                    "left unlinked (orphan-door fix, msg 5703/5720)",
+        }
+    elif lineage_attempted:
+        # LANE 3'S OWN ABSTAIN, RECORDED (thread 79e785d1): the generation-scoped default
+        # AND the lineage-root widening both failed to name a single project — genuinely
+        # nothing (lineage_candidates empty) or a real disagreement (2+ candidates, never
+        # broken by recency/generation count). Either way `derive_or_abstain` (Lane 0,
+        # capture.py) is the ONE shared primitive that records why, durably and
+        # queryably, with the actual candidate set kept for #75's future work queue —
+        # never a silent drop the way an unresolved repo= used to be.
+        reason = (
+            f"{len(lineage_projects)} distinct projects across this lineage's own "
+            f"works_in ({', '.join(lineage_projects)}) — not a unique lookup, never "
+            "guessed" if lineage_projects else None)
+        abstain = await capture.derive_or_abstain(
+            Actions(pool), d, "in_repo", lineage_candidates, actor,
+            why_if_ambiguous=reason)
+        out["lineage_repo_derivation"] = {
+            "attempted": True, "minted": abstain["minted"],
+            "candidates": [str(c) for c in abstain.get("candidates", [])],
         }
     # CONTENT-LANDED, MEASURED NOT INFERRED (task #149, thread 20145def): a READ-BACK, not
     # a guess from the pre-write dup-check below — that check can only ever say WHICH

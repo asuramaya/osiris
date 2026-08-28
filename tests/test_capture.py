@@ -3598,6 +3598,111 @@ async def test_record_decision_tool_never_defaults_repo_when_explicitly_given(
     assert linked == 1
 
 
+# --- Lane 3, the prevention half (thread 79e785d1, Thoth msg 5906): the identity default
+# above reads the WRITING GENERATION's own mounted project — None for a degraded/never-
+# resolved identity even when its LINEAGE has a real, unambiguous works_in elsewhere. These
+# exercise the fallback through the live MCP wrapper, not just agents.lineage_works_in in
+# isolation. --------------------------------------------------------------------------
+
+async def test_record_decision_tool_falls_back_to_the_lineage_when_identity_has_no_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:lwiwire1", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:lwiwireproj", "test")
+    await actions.create_link(root, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    # THE ORPHAN WRITER: a later generation of the same lineage, mounted with NO project
+    # of its own (a degraded identity, a fresh mint, a compacted heir) — exactly the shape
+    # that made 251 agent-written Decisions stay unlinked even with the generation-scoped
+    # default in place.
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:lwiwire1-iii", session="lwiwire1iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.record_decision(
+            "a decision written by an orphan generation of a well-known lineage", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "lwiwireproj",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path, no
+                                                  # separate derive_or_abstain call needed
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND d.type='Decision' "
+        "AND p.canonical='repo:lwiwireproj'")
+    assert linked == 1
+
+
+async def test_record_decision_tool_abstains_and_records_why_on_lineage_ambiguity(
+    actions: Actions,
+) -> None:
+    """THE ABSTAIN LAW, live through the wrapper: two distinct projects across the
+    lineage must mint NOTHING — never break the tie by recency or generation count —
+    and `derive_or_abstain` (Lane 0) records the disagreement durably, with the actual
+    candidate ids, not just a bare reason string."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:lwiwire2", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:lwiwireproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:lwiwireprojb", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    gen2 = await actions.create_or_find_object("Agent", "agent:lwiwire2-ii", "test")
+    await actions.create_link(gen2, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:lwiwire2-iii", session="lwiwire2iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.record_decision(
+            "a decision written under a lineage whose own works_in disagrees", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert out["lineage_repo_derivation"]["minted"] is False
+    assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
+        uuid.UUID(out["id"]))
+    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
+    assert abstained is not None
+    assert abstained["candidate_count"] == 2
+    assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
+
+
 async def test_record_decision_tool_stays_unlinked_when_identity_offers_no_project(
     actions: Actions,
 ) -> None:
