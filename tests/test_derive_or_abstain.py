@@ -152,3 +152,84 @@ async def test_abstained_derivations_count_is_never_capped_by_limit(actions: Act
     out = await capture.abstained_derivations(actions.pool, "implements", limit=0)
     assert out["count"] == 1
     assert out["sample"] == []
+
+
+# --- the retry door (thread e67fc338, Thoth's ruling): zero-candidate is retryable, ---
+# --- ambiguous never is — structurally, not by a filter someone could widen -----------
+
+async def test_retryable_abstentions_includes_zero_candidate_excludes_ambiguous(
+    actions: Actions,
+) -> None:
+    zero = await _mint_bare(actions, "GateWidget")
+    t1 = await _mint_bare(actions, "GateWidget")
+    t2 = await _mint_bare(actions, "GateWidget")
+    ambiguous = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, zero, "implements", [], "test")
+    await capture.derive_or_abstain(actions, ambiguous, "implements", [t1, t2], "test")
+    out = await capture.retryable_abstentions(actions.pool, "implements")
+    ids = {r["from_id"] for r in out["sample"]}
+    assert str(zero)[:8] in ids
+    assert str(ambiguous)[:8] not in ids
+    assert out["count"] == 1
+
+
+async def test_retryable_abstentions_never_returns_an_ambiguous_row_even_unscoped(
+    actions: Actions,
+) -> None:
+    """The structural guarantee: even pooling every link_type together (link_type=None),
+    a 2+-candidate abstention can never appear — the SQL's own WHERE clause excludes it,
+    not application code that a later edit could accidentally widen."""
+    t1 = await _mint_bare(actions, "GateWidget")
+    t2 = await _mint_bare(actions, "GateWidget")
+    ambiguous = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, ambiguous, "confirms", [t1, t2], "test")
+    out = await capture.retryable_abstentions(actions.pool, None)
+    assert str(ambiguous)[:8] not in {r["from_id"] for r in out["sample"]}
+
+
+async def test_derive_or_abstain_resolves_a_stale_abstention_on_a_successful_retry(
+    actions: Actions,
+) -> None:
+    """A zero-candidate abstention that later resolves must stop appearing as still-
+    abstained (or still-retryable) — otherwise the abstention record itself becomes the
+    stale, never-revisited fact this whole lane exists to fix."""
+    orphan = await _mint_bare(actions, "GateWidget")
+    target = await _mint_bare(actions, "GateWidget")
+    first = await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    assert first["abstained"] is True
+    retryable = await capture.retryable_abstentions(actions.pool, "implements")
+    assert str(orphan)[:8] in {r["from_id"] for r in retryable["sample"]}
+
+    second = await capture.derive_or_abstain(
+        actions, orphan, "implements", [target], "test", retried=True)
+    assert second["minted"] is True
+
+    still_abstained = await capture.abstained_derivations(actions.pool, "implements")
+    assert str(orphan)[:8] not in {r["from_id"] for r in still_abstained["sample"]}
+    now_retryable = await capture.retryable_abstentions(actions.pool, "implements")
+    assert str(orphan)[:8] not in {r["from_id"] for r in now_retryable["sample"]}
+
+    row = await actions.pool.fetchrow(
+        "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='implements'",
+        orphan, target)
+    assert row["properties"]["retried"] is True
+
+    resolved_value = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_implements'", orphan)
+    assert resolved_value["resolved"] is True
+    assert resolved_value["resolved_to"] == str(target)
+
+
+async def test_derive_or_abstain_first_pass_success_writes_no_resolved_marker(
+    actions: Actions,
+) -> None:
+    """The common case — a fresh cardinality-1 mint with no prior abstention on record —
+    must not write a spurious 'resolved' property implying one existed."""
+    orphan = await _mint_bare(actions, "GateWidget")
+    target = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [target], "test")
+    row = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_implements'", orphan)
+    assert row is None

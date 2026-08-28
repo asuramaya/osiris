@@ -663,11 +663,19 @@ def _tool_chars(t: Any) -> int:
 # resolved by preference rather than by re-measurement is a ratchet that has stopped
 # ratcheting — so this is re-measured against the merged tree, which is the same
 # discipline the constant exists to enforce, applied to the constant itself.
-# 2026-08-28, Khnum (Wave 4, thread 5ec2b82d): get_thread_list/get_decision_list gained a
-# one-line "charter-aware" note each (both docstrings trimmed twice under the category
-# rule first — this is the remaining load-bearing cost of a real capability, not
-# untrimmed prose). No new tool: still 141, this is chars only.
-TOOL_CONTRACT_CEILING_CHARS = 196_635  # MEASURED against the merged tree: 141 tools.
+# 2026-08-28, THREE-WAY MERGE RECONCILED BY MEASUREMENT (Thoth LXXXVII). Both sides were
+# correct per-branch and BOTH ARE WRONG FOR THE MERGED TREE, which carries both changes:
+#   Khnum  (Wave 4, thread 5ec2b82d): 196,635 — chars only, still 141 tools. get_thread_list
+#          and get_decision_list each gained a one-line "charter-aware" note, both docstrings
+#          trimmed twice under the category rule first.
+#   Imhotep (Wave 4, thread e67fc338): 197,348 — 141 -> 142 tools. A genuinely new verb,
+#          `retryable_abstentions`: the structurally-safe zero-candidate subset of
+#          abstained_derivations, filtered in SQL so a 2+-candidate abstention can never
+#          appear regardless of caller behaviour.
+# The merged tree has BOTH the new tool AND both docstring notes, so its real cost is
+# neither number. RE-MEASURED BELOW against the merged tree — never picked, never averaged.
+# (A ratchet settled by preference has stopped ratcheting.)
+TOOL_CONTRACT_CEILING_CHARS = 197_510  # MEASURED against the merged tree: 142 tools.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -769,4 +777,4 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
     changelog above)."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 141
+    assert len(per_tool) == 142

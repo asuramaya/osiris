@@ -5291,6 +5291,17 @@ async def abstained_derivations(link_type: str | None = None, limit: int = 100) 
 
 
 @mcp.tool()
+async def retryable_abstentions(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """READ-ONLY. The zero-candidate SUBSET of abstained_derivations, structurally —
+    filtered in SQL, not by a condition a caller could widen. A zero-candidate abstention
+    means the lookup found nothing YET, which time can change; a 2+-candidate one is a
+    genuine ambiguity time cannot resolve, and never appears here. Oldest-abstained first
+    — names which objects are safe to re-attempt; does not re-attempt them. Re-run your
+    own lane's lookup on each and call derive_or_abstain(..., retried=True) yourself."""
+    return await capture.retryable_abstentions(await _pool_get(), link_type, limit=limit)
+
+
+@mcp.tool()
 async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
     """THE READ DOOR (thread 09bde57e): every assertion row where `is_current=true`
     (migration 0047's maintained flag) YET a real `supersedes` FK already points at it from
