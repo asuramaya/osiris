@@ -18,6 +18,7 @@ from src.orchestrator.deploy_guard import (
     _is_ancestor,
     alarm_schema_drift,
     alarm_unreviewed_boot,
+    alarm_withheld_deploy_record,
     audit_graph_merge_claims,
     check_diverged_since_last_deploy,
     check_schema_drift,
@@ -476,6 +477,90 @@ async def test_reboot_alarm_survives_the_desk_being_unreachable(
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
         "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%bbb%'")
     assert thread == 1
+
+
+# --- the withheld-deploy-record confession (thread 3b34f6c5, #52's own law) ----------------
+
+async def test_withheld_record_alarm_opens_one_durable_thread_and_briefs_the_desk(
+    actions: Actions,
+) -> None:
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head="deadbeef",
+        reason="false-mint-live: NOT harness-confirmed live: agent:x. Do NOT reinstate.")
+    thread = await actions.pool.fetchrow(
+        "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
+        "JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%'")
+    assert thread is not None
+    assert "deadbeef" in thread["summary"]
+    assert "agent:x" in thread["summary"]
+    brief = await actions.pool.fetchrow(
+        "SELECT body FROM fleet_messages WHERE from_agent = 'system:osiris-deploy' "
+        "AND to_project = 'operator'")
+    assert brief is not None and "deadbeef" in brief["body"]
+
+
+async def test_withheld_record_alarm_declares_its_own_repo_gap_honestly(
+    actions: Actions,
+) -> None:
+    """Same hatch discipline as `alarm_unreviewed_boot` (Thoth msg 5858): this alarm has
+    no ctx and no mounted caller, so it must DECLARE the repo gap rather than land as a
+    silent orphan."""
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head="deadbeef", reason="false-mint-live")
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.type = 'Thread' AND a.name = 'unlinked_because' "
+        "AND a.source_id = 'deploy:withheld'")
+    assert reason == "service-scoped claim: a deploy-ledger alarm has no SoftwareProject"
+
+
+async def test_withheld_record_alarm_is_idempotent_on_the_same_head_and_reason(
+    actions: Actions,
+) -> None:
+    for _ in range(3):
+        await alarm_withheld_deploy_record(
+            actions.pool, running_head="deadbeef", reason="false-mint-live: agent:x")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%deadbeef%'")
+    assert count == 1
+
+
+async def test_withheld_record_alarm_mints_a_second_thread_for_a_different_head(
+    actions: Actions,
+) -> None:
+    """A genuinely new fact — a different withheld HEAD — must get its own confession,
+    never fold into an older one just because the refusal category matches."""
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head="aaaaaaa", reason="false-mint-live: agent:x")
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head="bbbbbbb", reason="false-mint-live: agent:x")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%'")
+    assert count == 2
+
+
+async def test_withheld_record_alarm_survives_the_desk_being_unreachable(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.mailbox as mailbox
+
+    async def _boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("mailbox down")
+
+    monkeypatch.setattr(mailbox, "send_message", _boom)
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head="deadbeef", reason="false-mint-live")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
+        "WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%deadbeef%'")
+    assert count == 1
 
 
 # --- wiring: both services actually call the reboot guard at their own boot too ------------

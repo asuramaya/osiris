@@ -1550,6 +1550,48 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
     assert "NOT recording this deploy" in text
 
 
+async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#52's own law (thread 3b34f6c5): a correct refusal to record must not leave the
+    ledger silently stale — the halcyon gate above still refuses the RECORD, but this
+    proves it also mints the withheld-record confession naming the real HEAD, so a later
+    reader of the graph (not just the deploy's own stdout) can tell this HEAD shipped."""
+    from src.actions.core import Actions as _Actions
+    from src.orchestrator import mounts
+
+    victim = await actions.create_or_find_object("Agent", "agent:dh0002", "test")
+    await actions.assert_property(victim, "false_mint", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/dh0002", agent_id="agent:dh0002",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    import src.orchestrator.deploy_guard as _dg
+    monkeypatch.setattr(_dg, "_git_head", lambda root: "deadbeef1234567890")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _unreachable(pool: Any, repo_root: Path) -> str | None:
+        raise AssertionError("must never be called — the false-mint-live gate refused first")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, record_deploy=_unreachable,
+                           wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 1
+
+    thread = await _Actions(actions.pool).pool.fetchrow(
+        "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
+        "JOIN objects o ON o.id = a.object_id "
+        "WHERE o.type='Thread' AND a.name='summary' "
+        "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%'")
+    assert thread is not None
+    assert "deadbeef1234567890" in thread["summary"]
+    assert "agent:dh0002" in thread["summary"]
+
+
 # --- cmd_smoke_chaos — the standalone `osiris smoke --chaos` entry point --------------------
 
 async def test_cmd_smoke_chaos_records_the_ledger_and_prints_the_findings(
