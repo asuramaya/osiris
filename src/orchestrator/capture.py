@@ -353,6 +353,80 @@ async def derive_or_abstain(
            "candidate_count": len(candidates), "candidates": list(candidates)}
 
 
+async def resolve_repo_default(
+    pool: asyncpg.Pool, repo: str | None, actor: str, ident_project: str | None,
+) -> dict[str, Any]:
+    """THE ONE LADDER (thread 6c262aee, Thoth's #151 law): every repo= identity-default
+    caller (record_decision, open_thread, and the still-deferred ingest_reference /
+    settle() bulk loops) climbs the SAME three rungs, never a caller-specific reinvention
+    — Lane 3's own record_decision-only version (47ee496) is folded back into this shared
+    shape rather than left to drift as the first of four differently-worded copies.
+
+    Rung 1: the caller's own explicit `repo=` — untouched, no lookup runs at all.
+    Rung 2: `ident_project` — the WRITING GENERATION's own works_in (what the mounted
+    identity already resolved; this function never queries for it itself).
+    Rung 3: only when rung 2 found nothing AND `actor` is a real lineage (never the bare
+    "session" back-compat source, which has no lineage to walk) — `lineage_works_in`
+    widens the read across every generation sharing this actor's own root (Lane 3,
+    thread 79e785d1). Unanimous across the lineage's own works_in -> resolves; anything
+    else (zero, or 2+ disagreeing) -> this rung ALSO fails, and the candidate set is
+    handed back for the caller to pass to `derive_or_abstain` (`record_lineage_abstain`,
+    below) AFTER its own object exists — this function mints and asserts nothing itself,
+    same as Lane 3's original inline version never did.
+
+    Returns `{"repo": str|None, "repo_defaulted": bool, "lineage_attempted": bool,
+    "lineage_candidates": list[uuid.UUID], "lineage_projects": list[str]}`."""
+    if repo:
+        return {"repo": repo, "repo_defaulted": False, "lineage_attempted": False,
+               "lineage_candidates": [], "lineage_projects": []}
+    repo = ident_project
+    repo_defaulted = repo is not None
+    lineage_attempted = False
+    lineage_candidates: list[uuid.UUID] = []
+    lineage_projects: list[str] = []
+    if repo is None and actor.startswith("agent:"):
+        from src.orchestrator.agents import lineage_works_in
+
+        lineage_attempted = True
+        lineage = await lineage_works_in(pool, actor)
+        if lineage["resolved"] is not None:
+            repo = lineage["resolved"]
+            repo_defaulted = True
+        else:
+            lineage_candidates = lineage["candidate_ids"]
+            lineage_projects = lineage["projects"]
+    return {"repo": repo, "repo_defaulted": repo_defaulted,
+           "lineage_attempted": lineage_attempted,
+           "lineage_candidates": lineage_candidates, "lineage_projects": lineage_projects}
+
+
+async def record_lineage_abstain(
+    pool: asyncpg.Pool, object_id: uuid.UUID, actor: str,
+    lineage_candidates: list[uuid.UUID], lineage_projects: list[str],
+) -> dict[str, Any]:
+    """The SAME post-mint abstain-and-record step `resolve_repo_default`'s rung 3 defers
+    to, shared so every caller reports it identically. Call only when
+    `resolve_repo_default` returned `lineage_attempted=True` and no `repo`. Mints the
+    `in_repo` edge iff `lineage_candidates` is a singleton (never happens in practice —
+    `resolve_repo_default` would have resolved it already — kept for defensive symmetry
+    with `derive_or_abstain`'s own general contract); otherwise records the durable
+    `derivation_abstained_in_repo` property, candidate ids kept whole (#75's future work
+    queue), never broken by recency or generation count.
+
+    Returns the same receipt shape `record_decision`'s wrapper already exposed as
+    `lineage_repo_derivation`: `{"attempted": True, "minted": bool, "candidates":
+    list[str]}`."""
+    reason = (
+        f"{len(lineage_projects)} distinct projects across this lineage's own "
+        f"works_in ({', '.join(lineage_projects)}) — not a unique lookup, never "
+        "guessed" if lineage_projects else None)
+    abstain = await derive_or_abstain(
+        Actions(pool), object_id, "in_repo", lineage_candidates, actor,
+        why_if_ambiguous=reason)
+    return {"attempted": True, "minted": abstain["minted"],
+           "candidates": [str(c) for c in abstain.get("candidates", [])]}
+
+
 # LANE 1 (thread 33962e00, off Lane 0's derive_or_abstain above): the boot-startup
 # watchdog's own UNREVIEWED BOOT alarm Threads (deploy_guard.alarm_unreviewed_boot) —
 # minted with no ctx and no mounted caller, so #189 correctly left them unable to satisfy

@@ -5912,44 +5912,19 @@ async def record_decision(
         bears_on_receipt.append({"ref": ref, "matched": "true", "id": str(bid)[:8],
                                  "summary": bsumm or ""})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    repo_defaulted = False
-    lineage_attempted = False
-    lineage_candidates: list[uuid.UUID] = []
-    lineage_projects: list[str] = []
-    if not repo:
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix):
-        # open_thread's wrapper already falls back to the mounted identity's project when
-        # none is given; this door had no equivalent, so a decision written without repo=
-        # landed unlinked even when the caller's own identity named a project. Default,
-        # never refuse; honestly unlinked when identity offers none.
-        ident = await _ident_for(ctx)
-        repo = ident.project if ident else None
-        repo_defaulted = repo is not None
-        # LANE 3, THE PREVENTION HALF (thread 79e785d1, Thoth msg 5906): the generation
-        # default above reads the WRITING GENERATION's own works_in — and the writing
-        # generation is commonly itself an orphan (a fresh mint, a compacted heir), which
-        # is why 251 agent-written Decisions stayed unlinked even with the default in
-        # place. works_in is a LINEAGE property in practice, so when the narrow default
-        # above found nothing AND the actor is a real lineage (never the bare "session"
-        # back-compat source, which has no lineage to walk), widen the read across every
-        # generation sharing this actor's own root. Feeds straight into the SAME atomic
-        # capture.record_decision(repo=...) call below when unambiguous — no separate
-        # write, same evidence tier as the generation-scoped default. Ambiguous or
-        # genuinely-nothing cases are handed to derive_or_abstain AFTER the object exists
-        # (see below) rather than resolved here, since only that primitive owns the
-        # durable, queryable abstention record — this default stays repo=None-or-a-single-
-        # string, exactly its existing contract.
-        if repo is None and actor.startswith("agent:"):
-            from src.orchestrator.agents import lineage_works_in
-
-            lineage_attempted = True
-            lineage = await lineage_works_in(pool, actor)
-            if lineage["resolved"] is not None:
-                repo = lineage["resolved"]
-                repo_defaulted = True
-            else:
-                lineage_candidates = lineage["candidate_ids"]
-                lineage_projects = lineage["projects"]
+    # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), THEN LANE 3
+    # (thread 79e785d1), NOW THE SHARED LADDER (thread 6c262aee, #151's law): both rungs
+    # — the generation-scoped mount default and the lineage-wide widen — live in
+    # capture.resolve_repo_default so record_decision and open_thread never carry two
+    # differently-shaped copies of the same fallback.
+    ident = await _ident_for(ctx)
+    _repo_default = await capture.resolve_repo_default(
+        pool, repo, actor, ident.project if ident else None)
+    repo = _repo_default["repo"]
+    repo_defaulted = _repo_default["repo_defaulted"]
+    lineage_attempted = _repo_default["lineage_attempted"]
+    lineage_candidates = _repo_default["lineage_candidates"]
+    lineage_projects = _repo_default["lineage_projects"]
     # NEAR-DUP RECEIPT HONESTY (task #117, thread ed9f73ce, Seshat's live specimen): the
     # SAME lookup `capture.record_decision` runs internally to decide whether to reuse an
     # existing decision, run here FIRST so the receipt can show what a hit is about to
@@ -6027,24 +6002,14 @@ async def record_decision(
                    "left unlinked (orphan-door fix, msg 5703/5720)",
         }
     elif lineage_attempted:
-        # LANE 3'S OWN ABSTAIN, RECORDED (thread 79e785d1): the generation-scoped default
-        # AND the lineage-root widening both failed to name a single project — genuinely
-        # nothing (lineage_candidates empty) or a real disagreement (2+ candidates, never
-        # broken by recency/generation count). Either way `derive_or_abstain` (Lane 0,
-        # capture.py) is the ONE shared primitive that records why, durably and
-        # queryably, with the actual candidate set kept for #75's future work queue —
-        # never a silent drop the way an unresolved repo= used to be.
-        reason = (
-            f"{len(lineage_projects)} distinct projects across this lineage's own "
-            f"works_in ({', '.join(lineage_projects)}) — not a unique lookup, never "
-            "guessed" if lineage_projects else None)
-        abstain = await capture.derive_or_abstain(
-            Actions(pool), d, "in_repo", lineage_candidates, actor,
-            why_if_ambiguous=reason)
-        out["lineage_repo_derivation"] = {
-            "attempted": True, "minted": abstain["minted"],
-            "candidates": [str(c) for c in abstain.get("candidates", [])],
-        }
+        # LANE 3'S OWN ABSTAIN, RECORDED (thread 79e785d1), NOW THE SHARED POST-MINT STEP
+        # (thread 6c262aee): the generation-scoped default AND the lineage-root widening
+        # both failed to name a single project — genuinely nothing (lineage_candidates
+        # empty) or a real disagreement (2+ candidates, never broken by recency/generation
+        # count). capture.record_lineage_abstain wraps derive_or_abstain (Lane 0) the same
+        # way for every caller, so the receipt shape stays identical across doors.
+        out["lineage_repo_derivation"] = await capture.record_lineage_abstain(
+            pool, d, actor, lineage_candidates, lineage_projects)
     # CONTENT-LANDED, MEASURED NOT INFERRED (task #149, thread 20145def): a READ-BACK, not
     # a guess from the pre-write dup-check below — that check can only ever say WHICH
     # object a call landed on, never whether THIS call's own rationale/protocol actually
@@ -6451,15 +6416,22 @@ async def open_thread(
     `branch`/`files_touched` mark held work (gated, unmerged); `colliding_work` in the
     receipt names any open held-work thread already touching one of `files_touched`."""
     pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
     # while his successor mined transcripts with regex). The mounted identity already
     # knows the project — filing there is the default; unfiled takes deliberate effort.
-    repo_defaulted = False
-    if not repo:
-        ident = await _ident_for(ctx)
-        repo = ident.project if ident else None
-        repo_defaulted = repo is not None
+    # SAME LADDER record_decision's wrapper climbs (thread 6c262aee, #151's law): the
+    # generation-scoped mount default, THEN — Threads are the worse orphan bleeder,
+    # 15-21%/week vs Decision's 5-11% — the lineage-wide widen when that finds nothing.
+    ident = await _ident_for(ctx)
+    _repo_default = await capture.resolve_repo_default(
+        pool, repo, actor, ident.project if ident else None)
+    repo = _repo_default["repo"]
+    repo_defaulted = _repo_default["repo_defaulted"]
+    lineage_attempted = _repo_default["lineage_attempted"]
+    lineage_candidates = _repo_default["lineage_candidates"]
+    lineage_projects = _repo_default["lineage_projects"]
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
         out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
@@ -6525,7 +6497,7 @@ async def open_thread(
         t = await capture.open_thread(
             Actions(pool), summary, repo=repo, kind=kind, owner=owner, assignee=assignee,
             arc=arc, resolves=resolves, branch=branch, files_touched=files_touched,
-            source=await _actor_for(ctx, subagent_id, subagent_type),
+            source=actor,
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
             unlinked_because=unlinked_because,
@@ -6544,6 +6516,13 @@ async def open_thread(
             "why": "no repo given — defaulted to the caller's own project rather than "
                    "left unlinked (orphan-door fix, msg 5703/5720)",
         }
+    elif lineage_attempted:
+        # SAME SHARED POST-MINT STEP record_decision's wrapper uses (thread 6c262aee):
+        # the generation-scoped default AND the lineage-root widening both failed to name
+        # a single project — abstain and record why, candidate ids kept whole, via the
+        # ONE primitive every orphan-healing lane calls (Lane 0, capture.derive_or_abstain).
+        out["lineage_repo_derivation"] = await capture.record_lineage_abstain(
+            pool, t, actor, lineage_candidates, lineage_projects)
     if assignee:
         out["assignee"] = assignee.strip()
     elif kind == "obligation" and not owner:

@@ -3703,6 +3703,103 @@ async def test_record_decision_tool_abstains_and_records_why_on_lineage_ambiguit
     assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
 
 
+# --- WAVE 2 / LANE B (thread 6c262aee, Thoth msg 5935): the SAME lineage ladder as
+# above, now shared via capture.resolve_repo_default/record_lineage_abstain and wired
+# through open_thread's own wrapper — Threads are the worse orphan bleeder (15-21%/week
+# vs Decision's 5-11%), same contract, same abstain-and-name-the-ambiguity discipline. --
+
+async def test_open_thread_tool_falls_back_to_the_lineage_when_identity_has_no_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    root = await actions.create_or_find_object("Agent", "agent:otlwiwire1", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:otlwiwireproj", "test")
+    await actions.create_link(root, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:otlwiwire1-iii", session="otlwiwire1iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.open_thread(
+            "a thread opened by an orphan generation of a well-known lineage", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["repo_defaulted"] == {
+        "to": "otlwiwireproj",
+        "why": "no repo given — defaulted to the caller's own project rather than "
+               "left unlinked (orphan-door fix, msg 5703/5720)",
+    }
+    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND t.type='Thread' "
+        "AND p.canonical='repo:otlwiwireproj'")
+    assert linked == 1
+
+
+async def test_open_thread_tool_abstains_and_records_why_on_lineage_ambiguity(
+    actions: Actions,
+) -> None:
+    """THE ABSTAIN LAW on the Thread door too: two distinct projects across the lineage
+    must mint NOTHING — never break the tie by recency or generation count."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:otlwiwire2", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:otlwiwireproja", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:otlwiwireprojb", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    gen2 = await actions.create_or_find_object("Agent", "agent:otlwiwire2-ii", "test")
+    await actions.create_link(gen2, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:otlwiwire2-iii", session="otlwiwire2iii", project=None,
+        model=None, cwd=None)
+    try:
+        out = await srv.open_thread(
+            "a thread opened under a lineage whose own works_in disagrees", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert out["lineage_repo_derivation"]["minted"] is False
+    assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
+    linked = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
+        uuid.UUID(out["id"]))
+    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
+    assert abstained is not None
+    assert abstained["candidate_count"] == 2
+    assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
+
+
 async def test_record_decision_tool_stays_unlinked_when_identity_offers_no_project(
     actions: Actions,
 ) -> None:
