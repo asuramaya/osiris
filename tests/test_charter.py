@@ -679,3 +679,162 @@ def test_charter_tool_stays_self_declaration_only() -> None:
 
     params = set(inspect.signature(srv.charter).parameters)
     assert params == {"repos", "ctx"}
+
+
+# ═══ Wave 4 (thread 5ec2b82d, Soundwave's #1 defect): get_thread_list/get_decision_list
+# are CHARTER-AWARE — a multi-repo seat asking about one repo it governs gets its whole
+# charter's items, never a leak past that seat's own governs set. ═══
+
+
+async def test_get_thread_list_spans_the_callers_multi_repo_charter(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread
+
+    await _repo(actions, "chronohorn")
+    await _repo(actions, "decepticons")
+    seat_id = await _seated(actions, "agent:soundwave1", "Soundwave1")
+    await set_charter(actions, seat_id, ["chronohorn", "decepticons"],
+                      actor="agent:soundwave1")
+    await open_thread(actions, "a ruling filed under chronohorn", repo="chronohorn")
+    await open_thread(actions, "a ruling filed under decepticons", repo="decepticons")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:soundwave1", session="sw1", project="decepticons",
+        model=None, cwd=None)
+    try:
+        out = await srv.get_thread_list("decepticons", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    summaries = {t["summary"] for t in out["threads"]}
+    assert summaries == {"a ruling filed under chronohorn", "a ruling filed under decepticons"}
+    assert out["total"] == 2
+    assert out["charter_repos"] == ["chronohorn", "decepticons"]
+
+
+async def test_get_decision_list_spans_the_callers_multi_repo_charter(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import record_decision
+
+    await _repo(actions, "chronohorn")
+    await _repo(actions, "decepticons")
+    seat_id = await _seated(actions, "agent:soundwave2", "Soundwave2")
+    await set_charter(actions, seat_id, ["chronohorn", "decepticons"],
+                      actor="agent:soundwave2")
+    await record_decision(actions, "a ruling filed under chronohorn", repo="chronohorn")
+    await record_decision(actions, "a ruling filed under decepticons", repo="decepticons")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:soundwave2", session="sw2", project="decepticons",
+        model=None, cwd=None)
+    try:
+        out = await srv.get_decision_list("decepticons", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    summaries = {d["summary"] for d in out["decisions"]}
+    assert summaries == {"a ruling filed under chronohorn", "a ruling filed under decepticons"}
+    assert out["total"] == 2
+    assert out["charter_repos"] == ["chronohorn", "decepticons"]
+
+
+async def test_get_thread_list_never_widens_past_the_callers_own_charter(
+    actions: Actions,
+) -> None:
+    """THE ACL BOUNDARY (#42's reflection ACL): a chartered seat asking about a repo it
+    does NOT govern must get exactly that repo's own items — never widened, and never
+    leaking the caller's OWN charter siblings into an unrelated project's results
+    either. Two separate houses' data must never cross."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread
+
+    await _repo(actions, "chronohorn")
+    await _repo(actions, "decepticons")
+    await _repo(actions, "anotherhouse")
+    seat_id = await _seated(actions, "agent:soundwave3", "Soundwave3")
+    await set_charter(actions, seat_id, ["chronohorn", "decepticons"],
+                      actor="agent:soundwave3")
+    await open_thread(actions, "not soundwave's own charter", repo="anotherhouse")
+    await open_thread(actions, "a ruling filed under chronohorn", repo="chronohorn")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:soundwave3", session="sw3", project="anotherhouse",
+        model=None, cwd=None)
+    try:
+        out = await srv.get_thread_list("anotherhouse", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    summaries = {t["summary"] for t in out["threads"]}
+    assert summaries == {"not soundwave's own charter"}
+    assert out["total"] == 1
+    assert "charter_repos" not in out
+
+
+async def test_get_thread_list_a_single_repo_charter_does_not_widen(actions: Actions) -> None:
+    """A charter of exactly one repo has nothing to span — the widening branch must be a
+    no-op, not a size-1 array wrapped around the same single project."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import open_thread
+
+    await _repo(actions, "osiris")
+    seat_id = await _seated(actions, "agent:soundwave4", "Soundwave4")
+    await set_charter(actions, seat_id, ["osiris"], actor="agent:soundwave4")
+    await open_thread(actions, "the only thread here", repo="osiris")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:soundwave4", session="sw4", project="osiris",
+        model=None, cwd=None)
+    try:
+        out = await srv.get_thread_list("osiris", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["total"] == 1
+    assert "charter_repos" not in out
+
+
+async def test_get_thread_list_an_unmounted_caller_gets_the_unwidened_view(
+    actions: Actions,
+) -> None:
+    """No ctx, no ident, no seat to consult — the exact pre-Wave-4 behavior, unchanged.
+    Never widen on behalf of a caller this tool cannot attribute to any seat."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import open_thread
+
+    await _repo(actions, "chronohorn")
+    await _repo(actions, "decepticons")
+    seat_id = await _seated(actions, "agent:soundwave5", "Soundwave5")
+    await set_charter(actions, seat_id, ["chronohorn", "decepticons"],
+                      actor="agent:soundwave5")
+    await open_thread(actions, "chronohorn's own thread", repo="chronohorn")
+    await open_thread(actions, "decepticons' own thread", repo="decepticons")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_thread_list("decepticons")
+    finally:
+        srv._pool = saved_pool
+    summaries = {t["summary"] for t in out["threads"]}
+    assert summaries == {"decepticons' own thread"}
+    assert out["total"] == 1
+    assert "charter_repos" not in out

@@ -2720,12 +2720,63 @@ async def get_status(ctx: Context | None = None) -> dict[str, Any]:
     return result
 
 
+async def _charter_scoped_project_ids(
+    pool: asyncpg.Pool, ctx: Context | None, project: str, proj_id: Any,
+) -> tuple[list[Any], list[str]]:
+    """CHARTER-AWARE READ SCOPE (Wave 4, thread 5ec2b82d — Soundwave's #1 defect): a
+    chartered seat's OWN writes land under EVERY repo it governs (`in_repo` follows the
+    write's own target, not the caller's mount), but `get_thread_list`/`get_decision_list`
+    used to resolve exactly one literal `repo:{project}` and stop there — a successor
+    mounting under any ONE name in a multi-repo charter saw only that slice of its own
+    seat's work, silently, at every succession. `settle()` already detects and names this
+    exact shape three times over (the "filed under X but its own writes went to [X,Y]"
+    warning, decision-index workarounds already rotting under Soundwave/chronohorn) — the
+    charter already knows what a seat governs; these two read verbs simply never asked it.
+
+    DEFAULT-TO-CHARTER, not an opt-in `spans_charter` flag (Thoth's own two named shapes,
+    thread 5ec2b82d — this is the chosen one, not the only one considered): an opt-in flag
+    does nothing for the successor who does not know to ask for it, which is the entire
+    failure mode Soundwave hit — the same "gate exists, nobody calls it" shape #189/#52
+    were built to stop being acceptable. Defaulting closes the gap for every future
+    successor without requiring them to learn a parameter first.
+
+    THE ACL BOUNDARY (#42's reflection ACL / cross-project boundary — read this before
+    touching this function): a chartered seat reading its OWN chartered repos is within
+    authority; anything wider is a data leak between houses. This function can NEVER widen
+    past the caller's own charter, by construction, not by a permission check that could
+    drift: it only ever expands the scope when `project` (the literal name the caller
+    asked for) is ITSELF a member of the CALLING SEAT's own `governs` set — the widened
+    set is then that SAME charter, nothing else. A caller peeking at a project it does not
+    govern (no ident, no held seat, or `project` absent from its own charter) gets the
+    exact single-repo behavior this tool always had — unchanged, and never widened on
+    someone else's behalf. Returns (project object ids to scope the query to, the full
+    charter list — empty unless expansion actually applied, so a caller can tell whether
+    it got one repo's items or several)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return [proj_id], []
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import held_seat
+
+    charter_seat = await held_seat(pool, ident.agent_id)
+    if charter_seat is None:
+        return [proj_id], []
+    charter_repos = await charter_of(pool, charter_seat["seat_id"])
+    if project not in charter_repos or len(charter_repos) <= 1:
+        return [proj_id], []
+    rows = await pool.fetch(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical = ANY($1)",
+        [f"repo:{r}" for r in charter_repos])
+    return [r["id"] for r in rows], charter_repos
+
+
 @mcp.tool()
 async def get_thread_list(
     project: str, kind: str | None = None, owner: str | None = None,
     limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Open threads for a project, paginated. Returns {threads, total, more}.
+    """Open threads for a project, paginated (charter-aware — spans the caller's own
+    governed repos; see `charter_repos`). Returns {threads, total, more}.
     kind filter: obligation/question/task. owner filter: agent id / 'operator'.
     limit=0 for count only (no bodies)."""
     pool = await _pool_get()
@@ -2734,6 +2785,7 @@ async def get_thread_list(
         f"repo:{project}")
     if proj is None:
         return {"error": f"no project {project!r}", "threads": [], "total": 0}
+    project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
     # dispatch #195 defect 2, measured live before this fix: 75.5% false-open (2,553 of
     # 3,380 "active" Thread objects were actually resolved/retracted). `o.status='active'`
     # is the OBJECT's own lifecycle column (active vs merged/retired) — a completely
@@ -2748,7 +2800,7 @@ async def get_thread_list(
         " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
         "'open')='open'"
     ]
-    params = [proj]
+    params: list[Any] = [project_ids]
     idx = 2
     if kind:
         clauses.append("(SELECT a.value #>> '{}' FROM current_assertions a "
@@ -2765,10 +2817,13 @@ async def get_thread_list(
     where = " AND ".join(clauses)
     total = await pool.fetchval(
         "SELECT count(*) FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
         "WHERE " + where, *params) or 0
+    result: dict[str, Any] = {"project": project}
+    if charter_repos:
+        result["charter_repos"] = charter_repos
     if limit == 0:
-        return {"project": project, "threads": [], "total": total, "more": total}
+        return {**result, "threads": [], "total": total, "more": total}
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         "(SELECT a.value #>> '{}' FROM current_assertions a "
@@ -2781,7 +2836,7 @@ async def get_thread_list(
         " WHERE a.object_id=o.id AND a.name='owner' "
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner "
         "FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
         "WHERE " + where + " "
         "ORDER BY o.created_at DESC "
         "OFFSET $" + str(idx) + " LIMIT $" + str(idx + 1),
@@ -2792,7 +2847,7 @@ async def get_thread_list(
                         "summary": (r["summary"] or "")[:200],
                         "kind": r["kind"], "owner": r["owner"]})
     more = max(0, total - offset - len(threads))
-    return {"project": project, "threads": threads, "total": total, "more": more,
+    return {**result, "threads": threads, "total": total, "more": more,
             "note": "recall(ref) for full text; orient() for the ranked wall"}
 
 
@@ -2800,7 +2855,8 @@ async def get_thread_list(
 async def get_decision_list(
     project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Recent decisions for a project, paginated. Returns {decisions, total, more}.
+    """Recent decisions for a project, paginated (charter-aware — spans the caller's own
+    governed repos; see `charter_repos`). Returns {decisions, total, more}.
     limit=0 for count only."""
     pool = await _pool_get()
     proj = await pool.fetchval(
@@ -2808,14 +2864,18 @@ async def get_decision_list(
         f"repo:{project}")
     if proj is None:
         return {"error": f"no project {project!r}", "decisions": [], "total": 0}
+    project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
     total = await pool.fetchval(
         "SELECT count(*) FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
         "WHERE o.type='Decision' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='superseded_by')", proj) or 0
+        "  AND s.name='superseded_by')", project_ids) or 0
+    result: dict[str, Any] = {"project": project}
+    if charter_repos:
+        result["charter_repos"] = charter_repos
     if limit == 0:
-        return {"project": project, "decisions": [], "total": total, "more": total}
+        return {**result, "decisions": [], "total": total, "more": total}
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, "
         "(SELECT a.value #>> '{}' FROM current_assertions a "
@@ -2825,19 +2885,19 @@ async def get_decision_list(
         " WHERE a.object_id=o.id AND a.name='kind' "
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
         "FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
         "WHERE o.type='Decision' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='superseded_by') "
         "ORDER BY o.created_at DESC "
-        "OFFSET $2 LIMIT $3", proj, offset, limit)
+        "OFFSET $2 LIMIT $3", project_ids, offset, limit)
     decisions = []
     for r in rows:
         decisions.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
                           "summary": (r["summary"] or "")[:200],
                           "kind": r["kind"]})
     more = max(0, total - offset - len(decisions))
-    return {"project": project, "decisions": decisions, "total": total, "more": more}
+    return {**result, "decisions": decisions, "total": total, "more": more}
 
 
 @mcp.tool()
