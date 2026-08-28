@@ -956,6 +956,29 @@ async def automount(
                     f"...and {len(all_sibs) - _CO_AGENTS_WHISPER_CAP} more not shown")
         except Exception:  # noqa: BLE001 — awareness must never break the whisper
             co_agents = []
+    # SAY IT AT THE MOMENT IT IS ACTIONABLE (thread e2326ab7, Soundwave XIV's report):
+    # settle.py's `seat_chartered` box already answers "does this seat govern any repo at
+    # all" — but until now it only fired at settle(), the terminal ritual, sometimes seven
+    # hours and fourteen generations too late. The whisper delivers `identity_anchor`'s
+    # charter_file POINTER unconditionally on every boot (above) but never read the FACT the
+    # pointer's own prose depends on — a compiled CLAUDE.md's "First act: charter(...)" line
+    # is itself just boot_compiler's own live rendering of this same governs-edge check
+    # (boot_compiler.py: charter_block is `charter_of(...)`-or-else), so re-checking it here
+    # is truer than re-parsing the file's text would be, and immune to a stale compile.
+    # SEATED-BUT-UNCHARTERED ONLY: an anonymous mind has no seat to hold a charter yet (its
+    # own claim_name prompt already covers that gap) — this fires only once a seat is real.
+    charter_missing = False
+    if ident.agent_id:
+        try:
+            from src.orchestrator.seats import held_seat
+            from src.orchestrator.settle import seat_chartered
+
+            bound_seat = await held_seat(actions.pool, ident.agent_id)
+            if bound_seat and bound_seat.get("seat_id"):
+                charter_missing = (
+                    await seat_chartered(actions.pool, bound_seat["seat_id"]) is False)
+        except Exception:  # noqa: BLE001 — the whisper must never break on this
+            charter_missing = False
     return {
         "agent": ident.agent_id,
         "project": ident.project,
@@ -987,6 +1010,12 @@ async def automount(
         # first-breath, review loop, practices), cwd-independent, never gated on succession
         # (#155 — gating this on minted status was itself the bug)
         **({"identity_anchor": identity_anchor} if identity_anchor else {}),
+        # SAY IT AT THE MOMENT IT IS ACTIONABLE (thread e2326ab7): a seated mind that
+        # governs no repo yet, surfaced on THIS breath — not just at settle()'s terminal
+        # box, sometimes seven hours and fourteen generations too late.
+        **({"charter_missing": "UNDECLARED — call charter(repos=[...]) naming the repos "
+                                "you govern before writing anywhere; a house is what a "
+                                "seat GOVERNS, not where it sits"} if charter_missing else {}),
         # a freshly minted heir's steering anchor: the newest succession-owned obligation,
         # resolved BY QUERY, not a copied id (d80621a7 piece 4)
         **({"succession": succession} if succession else {}),
