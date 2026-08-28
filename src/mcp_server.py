@@ -4663,6 +4663,30 @@ async def backfill_task_sync_citation_links(
 
 
 @mcp.tool()
+async def backfill_lineage_repo_links(
+    dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link Decision/Thread authored by a real Agent lineage to its
+    project — the historical half of the repo= lineage ladder (Lane 3 + Wave 2 Lane B's
+    resolve_repo_default), which is write-time-only by design and never touches an object
+    that already existed before it deployed (decision c1073f00). Re-runs the same rung-3
+    lineage-wide works_in lookup a NEW write already gets: mints `in_repo`
+    (DIRECT_OBSERVATION) iff the author's lineage names exactly one project; zero or 2+
+    abstains durably via derive_or_abstain, candidate set kept, never a guess (a0339e16).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.capture import (
+        backfill_lineage_repo_links as _backfill_lineage_repo_links,
+    )
+    return await _backfill_lineage_repo_links(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+
+
+@mcp.tool()
 async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:

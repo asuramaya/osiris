@@ -455,6 +455,133 @@ async def record_lineage_abstain(
            "candidates": [str(c) for c in abstain.get("candidates", [])]}
 
 
+# WAVE 4 HISTORICAL BACKFILL (thread 72cd8e3c, decision c1073f00, operator ruling: "gotta
+# build the missing verbs before we hammer a screw"): `resolve_repo_default`'s ladder is
+# write-time-only BY DESIGN (Lane 3, thread 79e785d1) — it fires once, when a Decision/
+# Thread is minted, and was never going to retroactively touch an object that already
+# existed before it deployed. Live-measured (2026-08-28, decision c1073f00): 468 pre-
+# existing, zero-live-link Decision/Thread objects predate the Lane 3 merge (47ee496),
+# 281 of which `resolve_repo_default` would mint cleanly today if it ever ran against
+# them — a MISSING VERB, not a defect in the live safeguard, exactly the same shape Lane 1
+# and Wave 2 Lane A each already got a backfill for. Re-measured at THIS tree (four
+# branches landed since c1073f00's own count, including Imhotep's retryable_abstentions
+# and Khnum's charter-aware reads): the population moved to 498/302/194/2 — re-measure
+# again before trusting either number, per the same charter law Thoth named ("a
+# measurement can be invalidated by your own repair").
+#
+# THE SUPERSEDE QUESTION, ANSWERED EXPLICITLY, TWICE OVER (Thoth's own ask, msg 5978):
+# (1) `derive_or_abstain`'s own "a successful mint supersedes a live abstention" step
+# (its docstring) fires ONLY when `derive_or_abstain` ITSELF performs the mint — and
+# `resolve_repo_default`'s successful path (rung 2 or 3 naming a project) returns a plain
+# STRING, minted via `link_repo` (the same call the LIVE record_decision/open_thread path
+# already uses for that exact case), never through `derive_or_abstain`. So the two lanes
+# do NOT interact for free here; this backfill supersedes a live `derivation_abstained_
+# in_repo` record itself, right after a `link_repo` mint. (2) THAT SUPERSESSION MUST BE
+# CROSS-SOURCE, a second and sharper trap found building this: `assert_property`'s own
+# supersession is scoped to the SAME source only (actions/core.py) — the ORIGINAL
+# abstention was stamped under the object's own WRITER's actor (or an earlier backfill
+# run's actor), never this call's own `actor`, so re-asserting under `actor` would just
+# add a second, DIFFERENT-source "current" row that coexists beside the stale one rather
+# than retiring it (the exact multi-source-coexistence bug Khnum's own correct_agent_
+# house call diagnosed live). `actions.supersede_assertion` — the one legitimate cross-
+# source retirement door — is used instead, so a case this backfill (or a future pass)
+# once abstained on and later resolves does not sit in `retryable_abstentions`' queue
+# forever regardless of which actor recorded the original abstention. Checked live
+# (2026-08-28): the overlap is empty today (zero rows carry a live `derivation_abstained_
+# in_repo` at all, since Lane 3 never abstained on anything before this backfill existed)
+# — but the handling below is unconditional, not contingent on that measurement staying
+# true. The abstain path itself (candidates 0-or-2+) DOES go through `derive_or_abstain`
+# directly, so it already gets the shared abstention-recording discipline for free.
+async def backfill_lineage_repo_links(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link Decision/Thread authored by a real Agent lineage (never
+    the bare `session` back-compat source) to its project, via the SAME two rungs a NEW
+    write already climbs: `resolve_repo_default(repo=None, ident_project=None)` — rung 1
+    (explicit repo=) is moot for an object that already exists without one; rung 2
+    (`ident_project`) has no live mount to read for a historical object, so this always
+    passes `None` and lets the function fall straight to rung 3 (the author's own current
+    LINEAGE-wide works_in, which may have resolved since the object was written).
+
+    A clean rung-3 name mints `in_repo` via `link_repo`, graded DIRECT_OBSERVATION (never
+    SELF_DECLARED — nobody typed this repo=, a mechanical lookup recovered it after the
+    fact) — and explicitly supersedes any live `derivation_abstained_in_repo` record on
+    the same object with a `resolved` marker, since `link_repo` (unlike `derive_or_
+    abstain`) does not do that on its own (see the module comment above this function).
+    Zero or 2+ lineage-wide projects abstains via `derive_or_abstain` directly — never a
+    guess, the operator's own binary rule (a0339e16): exactly one answer or nothing
+    written.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once an object is linked, and re-abstaining just
+    re-asserts the same fact."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT DISTINCT o.id, o.type, a.source_id FROM objects o "
+        "JOIN assertions a ON a.object_id=o.id AND a.name='summary' "
+        "WHERE o.type IN ('Decision','Thread') AND o.status='active' "
+        "AND a.source_id LIKE 'agent:%' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    observed = datetime.now(UTC)
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        result = await resolve_repo_default(pool, None, row["source_id"], None)
+        repo = result["repo"]
+        if repo is not None:
+            entry = {"id": str(row["id"]), "type": row["type"], "verdict": "mint",
+                     "to": repo, "source": row["source_id"]}
+            minted += 1
+            if not dry_run:
+                await link_repo(actions, row["id"], repo, observed, source=actor,
+                                evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                # CROSS-SOURCE, ON PURPOSE: a live abstention was stamped under its OWN
+                # writer's actor at the object's own birth (or a prior backfill run under
+                # a different actor than this one) — `assert_property`'s own supersession
+                # is same-source-only (actions/core.py), so retiring a DIFFERENT source's
+                # abstention needs `supersede_assertion`, the one legitimate cross-source
+                # retirement door, not a second same-source row that would merely coexist
+                # beside the stale one (Khnum's own correct_agent_house precedent).
+                stale = await pool.fetch(
+                    "SELECT id FROM assertions WHERE object_id=$1 "
+                    "AND name='derivation_abstained_in_repo' AND NOT (value ? 'resolved') "
+                    "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
+                    row["id"])
+                if stale:
+                    proj_id = await _resolve_repo(pool, repo)
+                    for s in stale:
+                        await actions.supersede_assertion(
+                            row["id"], "derivation_abstained_in_repo", s["id"],
+                            {"link_type": "in_repo", "resolved": True,
+                             "resolved_to": str(proj_id)},
+                            actor, observed, _DERIVE_CONF,
+                            f"backfill_lineage_repo_links resolved this object to "
+                            f"{repo!r}, superseding the stale abstention",
+                            evidence_class=_DERIVE_TIER.value)
+        else:
+            reason = (
+                f"{len(result['lineage_projects'])} distinct projects across this "
+                f"lineage's own works_in ({', '.join(result['lineage_projects'])}) — not "
+                "a unique lookup, never guessed" if result["lineage_projects"] else
+                "no project found anywhere across this lineage's own works_in")
+            entry = {"id": str(row["id"]), "type": row["type"], "verdict": "abstain",
+                     "reason": reason, "candidate_count": len(result["lineage_candidates"]),
+                     "source": row["source_id"]}
+            abstained += 1
+            if not dry_run:
+                await derive_or_abstain(actions, row["id"], "in_repo",
+                                        result["lineage_candidates"], actor,
+                                        why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 # LANE 1 (thread 33962e00, off Lane 0's derive_or_abstain above): the boot-startup
 # watchdog's own UNREVIEWED BOOT alarm Threads (deploy_guard.alarm_unreviewed_boot) —
 # minted with no ctx and no mounted caller, so #189 correctly left them unable to satisfy

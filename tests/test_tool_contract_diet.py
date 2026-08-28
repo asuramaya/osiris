@@ -688,7 +688,15 @@ def _tool_chars(t: Any) -> int:
 # by construction (mirrors `rediscovers`: no property write on either side). Docstring
 # line trimmed to match the sibling params' own one-line shape first; the remaining
 # growth is the new param's own wire schema entry plus that one line.
-TOOL_CONTRACT_CEILING_CHARS = 199162
+# 197,510 -> 198,577 (measured exact). 142 -> 143 tools (2026-08-28, Seshat, thread
+# 72cd8e3c, decision c1073f00, Wave 4's historical backfill): backfill_lineage_repo_
+# links — a genuinely NEW repair verb linking every zero-live-link Decision/Thread
+# authored by a real Agent lineage to its project, via the SAME rung-3 lookup a live
+# write already gets (resolve_repo_default). Docstring trimmed under the category rule
+# first (the full rationale — why this is a missing verb and not a live-safeguard
+# defect, the cross-source supersede trap — lives in capture.py's own module comment,
+# not duplicated here); the remaining growth is the new capability itself, not prose.
+TOOL_CONTRACT_CEILING_CHARS = 200229
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -789,9 +797,23 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     139 -> 140 (2026-08-28, Seshat, decision a55b1014/thread 5f47e23d): backfill_
     task_sync_citation_links — Wave 2 Lane A's repair verb (see the ceiling's own
     changelog above).
-    141 -> 142 (2026-08-28, Sekhmet, thread e2326ab7, Wave 4 leg (b)): repair_stale_
-    pile_summons — see the ceiling's own changelog above. The 140 -> 141 raise between
-    the entry above and this one went unrecorded here (same class as the ten-raise gap
-    named earlier in this log); not backfilled for the same reason."""
+    140 -> 144 (2026-08-28, THE WAVE 4/5 MERGE, reconciled by Thoth LXXXVII): four
+    branches landed together and EACH SIDE'S CHANGELOG WAS CORRECT FOR ITS OWN BRANCH
+    AND WRONG FOR THE MERGED TREE — one said 141 -> 142, the other 140 -> 142 -> 143,
+    and the tree that carries all of them is neither. The raises, all four measured
+    against the merged tree rather than inherited from any branch:
+      · repair_stale_pile_summons (Sekhmet, thread e2326ab7, Wave 4 leg (b)) — a frozen
+        count in a bulk-minted summons goes false the moment its pile is drained.
+      · retryable_abstentions (Imhotep, thread e67fc338) — the structurally-safe
+        zero-candidate subset of abstained_derivations, filtered in SQL so a 2+-candidate
+        abstention can never appear regardless of caller behaviour.
+      · backfill_lineage_repo_links (Seshat, decision c1073f00/thread 72cd8e3c) — Wave 4's
+        historical repair for the repo= lineage ladder.
+      · desk + show (Sekhmet, Wave 5) — the CLI's read half; see the ceiling's changelog.
+    Khnum's charter-aware get_thread_list/get_decision_list changed no count, docstrings
+    only. The 140 -> 141 raise predating this wave still went unrecorded here, same class
+    as the ten-raise gap named earlier in this log; not backfilled for the same reason.
+    A RATCHET SETTLED BY PREFERENCE HAS STOPPED RATCHETING — so no side was picked and
+    no two numbers were averaged; the tree was re-measured."""
     _, per_tool = await _measure_tool_contract()
-    assert len(per_tool) == 142
+    assert len(per_tool) == 143
