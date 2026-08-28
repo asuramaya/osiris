@@ -113,3 +113,74 @@ def test_main_leaves_a_real_conflict_untouched_when_the_constant_is_missing(
     rc = rtc.main([str(ancestor), str(ours), str(theirs), "unrelated/file.py"])
 
     assert rc != 0
+
+
+# ═══ two constants, one file, one driver invocation (thread 5999): the actual defect
+# that lived through four real merges — the char ceiling always conflicted (both
+# branches touch adjacent prose) and always got reconciled; the tool count sat lines
+# away, touched by only ONE branch at a time, so it never even reached a conflict marker
+# and this driver never saw it. ═══
+
+_COUNT_NAME = "TOOL_CONTRACT_EXPECTED_COUNT"
+
+
+_UNCHANGED_GAP = "\n".join(f"# unrelated context line {i}" for i in range(10)) + "\n"
+# git's own diff3 groups ADJACENT changed lines into one conflict block — the real
+# specimen had the two constants nine lines apart (thread 5999's own count), so a
+# fixture with them touching would misrepresent the actual bug shape (one combined
+# block, not one real conflict beside one silent, markerless auto-merge).
+
+
+def test_main_defaults_to_reconciling_both_named_constants(tmp_path: Path) -> None:
+    """The char ceiling collides (both sides touch it — a real conflict block, separated
+    by unchanged context from the count so git treats them as independent hunks); the
+    count line does NOT (only `theirs` touched it — no conflict marker at all, git took
+    theirs' side silently). Both must still resolve correctly in ONE invocation, with no
+    explicit --constant-name needed — this is what `_DEFAULT_CONSTANTS` is for."""
+    ancestor = _write(tmp_path / "base.py", (
+        f"{_NAME} = 196_473  # MEASURED: 141 tools.\n" + _UNCHANGED_GAP
+        + f"{_COUNT_NAME} = 141\n"
+    ))
+    ours = _write(tmp_path / "ours.py", (
+        f"{_NAME} = 196_635  # MEASURED against the merged tree: 141 tools.\n"
+        + _UNCHANGED_GAP + f"{_COUNT_NAME} = 141\n"  # ours never touched the count
+    ))
+    theirs = _write(tmp_path / "theirs.py", (
+        f"{_NAME} = 197_348\n" + _UNCHANGED_GAP
+        + f"{_COUNT_NAME} = 142\n"  # theirs added one tool
+    ))
+
+    rc = rtc.main([str(ancestor), str(ours), str(theirs), "tests/test_tool_contract_diet.py"])
+
+    assert rc == 0
+    text = ours.read_text()
+    assert "<<<<<<<" not in text
+    assert f"{_NAME} = 197510" in text  # 196_473 + 162 + 875
+    assert f"{_COUNT_NAME} = 142" in text  # 141 + 0 + 1 — theirs' own real addition
+
+
+def test_main_reconciles_the_count_even_with_zero_conflict_markers(tmp_path: Path) -> None:
+    """THE EXACT SHAPE THAT SLIPPED THROUGH (thread 5999): the char ceiling is untouched
+    by either side (no conflict there at all, elsewhere in the same merge), and the count
+    line is ALSO untouched by git's own merge (only one side changed it, so `git
+    merge-file` just keeps that side with zero markers) — yet the resolved value must
+    still be the true combined total, not whatever one branch happened to leave behind."""
+    ancestor = _write(tmp_path / "base.py", (
+        f"{_NAME} = 196_473  # MEASURED: 141 tools.\n"
+        f"{_COUNT_NAME} = 141\n"
+    ))
+    ours = _write(tmp_path / "ours.py", (
+        f"{_NAME} = 196_473  # MEASURED: 141 tools.\n"
+        f"{_COUNT_NAME} = 141\n"  # ours untouched
+    ))
+    theirs = _write(tmp_path / "theirs.py", (
+        f"{_NAME} = 196_473  # MEASURED: 141 tools.\n"
+        f"{_COUNT_NAME} = 142\n"  # theirs added one tool, git will take this silently
+    ))
+
+    rc = rtc.main([str(ancestor), str(ours), str(theirs), "tests/test_tool_contract_diet.py"])
+
+    assert rc == 0
+    text = ours.read_text()
+    assert "<<<<<<<" not in text
+    assert f"{_COUNT_NAME} = 142" in text

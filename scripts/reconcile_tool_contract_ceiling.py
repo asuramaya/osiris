@@ -164,74 +164,104 @@ def _reconcile(text: str, name: str, resolved: int) -> tuple[str, bool]:
     return new_text, fixed
 
 
+_DEFAULT_CONSTANTS = ("TOOL_CONTRACT_CEILING_CHARS", "TOOL_CONTRACT_EXPECTED_COUNT")
+# TWO NUMBERS, ONE FILE, ONE DRIVER (thread 5999 — Thoth's own live proof of the char fix,
+# ten minutes after it landed, ALSO surfaced this: a wave of four merges left the char
+# ceiling correctly reconciled at every step, but `assert len(per_tool) == N` sat nine
+# lines below it, touched by only ONE branch at a time — no conflict at all, so git took
+# that branch's side with nothing for this driver to even see, and main read 143 while the
+# tree actually carried 144. A ratchet with two numbers and one merge driver only
+# protected one of them. Fixed by (1) hoisting the bare inline assert into a NAMED
+# constant, `TOOL_CONTRACT_EXPECTED_COUNT`, the exact same shape as the char ceiling, and
+# (2) reconciling BOTH constants in one driver invocation — git calls this script once per
+# conflicting file, never once per constant, so multiple names must be walked in the same
+# pass. THE UNCONFLICTED CASE IS NOT A GAP HERE: `_reconcile`'s own fallback already
+# force-corrects an unconflicted single line to the arithmetically resolved value (never
+# trusts a textual number, even one no conflict marker ever touched) — this is exactly
+# the property the count number was missing, and it falls out of the existing mechanism
+# for free once the count has a name this driver can find.
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("ancestor")
     ap.add_argument("ours")
     ap.add_argument("theirs")
     ap.add_argument("path")  # %P — git's own convention; unused directly, kept for logging
-    ap.add_argument("--constant-name", default="TOOL_CONTRACT_CEILING_CHARS")
+    ap.add_argument("--constant-name", action="append", default=None,
+                    help="repeatable; defaults to both TOOL_CONTRACT_CEILING_CHARS and "
+                         "TOOL_CONTRACT_EXPECTED_COUNT")
     args = ap.parse_args(argv)
+    names = args.constant_name or list(_DEFAULT_CONSTANTS)
 
     # capture %A's PRE-merge content first — `git merge-file` below overwrites it in
-    # place, so this is the only chance to read ours' own original constant value.
+    # place, so this is the only chance to read ours' own original constant value(s).
     ours_original = Path(args.ours).read_text()
 
-    baseline = subprocess.run(
+    # Its own exit code is not consulted below — a leftover conflict is detected by
+    # scanning for markers after every constant name has had its own turn, which is the
+    # only way to know once this loop may have handled more than one name's own hunk.
+    subprocess.run(
         ["git", "merge-file", "-L", "ours", "-L", "base", "-L", "theirs",
          args.ours, args.ancestor, args.theirs],
         check=False,
     )
-    text = Path(args.ours).read_text()
 
-    # DECLINES, NEVER RAISES (thread 197164ae — the first live specimen, not a
-    # hypothesis: `_const_value`'s own digit-extraction bug once raised an unhandled
-    # ValueError here, which git's merge machinery folded into an ordinary content
-    # conflict indistinguishable from two humans editing the same line — the traceback
-    # scrolled past and nothing else recorded that the automation had abdicated. That
-    # ONE bug is fixed at its root in `_const_value` above; this `try` is the belt for
-    # any OTHER parsing failure this driver has not yet met — same family as
-    # `alarm_withheld_deploy_record`'s own confession: a correct refusal must leave a
-    # named reason, never vanish into a generic failure path a human has to excavate
-    # from a traceback to even notice happened.
-    try:
-        base_v = _const_value(Path(args.ancestor).read_text(), args.constant_name)
-        ours_v = _const_value(ours_original, args.constant_name)
-        theirs_v = _const_value(Path(args.theirs).read_text(), args.constant_name)
-    except (ValueError, OSError) as exc:
-        print(f"reconcile_tool_contract_ceiling: DECLINED — could not parse "
-              f"{args.constant_name} on one side of the merge ({exc!r}); not this "
-              f"collision's shape, or a bug in this driver — leaving git's own merge "
-              f"of {args.path} as-is rather than raising past the merge machinery.",
-              file=sys.stderr)
-        return baseline.returncode or 1
+    any_fixed = False
+    any_unresolved = False
+    for name in names:
+        # DECLINES, NEVER RAISES (thread 197164ae — the first live specimen, not a
+        # hypothesis: `_const_value`'s own digit-extraction bug once raised an unhandled
+        # ValueError here, which git's merge machinery folded into an ordinary content
+        # conflict indistinguishable from two humans editing the same line — the
+        # traceback scrolled past and nothing else recorded that the automation had
+        # abdicated. That ONE bug is fixed at its root in `_const_value` above; this
+        # `try` is the belt for any OTHER parsing failure this driver has not yet met —
+        # same family as `alarm_withheld_deploy_record`'s own confession: a correct
+        # refusal must leave a named reason, never vanish into a generic failure path a
+        # human has to excavate from a traceback to even notice happened.
+        try:
+            base_v = _const_value(Path(args.ancestor).read_text(), name)
+            ours_v = _const_value(ours_original, name)
+            theirs_v = _const_value(Path(args.theirs).read_text(), name)
+        except (ValueError, OSError) as exc:
+            print(f"reconcile_tool_contract_ceiling: DECLINED — could not parse {name} on "
+                  f"one side of the merge ({exc!r}); not this collision's shape, or a bug "
+                  f"in this driver — leaving it as git's own merge left it.", file=sys.stderr)
+            any_unresolved = True
+            continue
 
-    if base_v is None or ours_v is None or theirs_v is None:
-        print(f"reconcile_tool_contract_ceiling: {args.constant_name} missing from one of "
-              f"ancestor/ours/theirs — not this collision's shape, leaving git's own merge "
-              f"of {args.path} as-is", file=sys.stderr)
-        return baseline.returncode or 1
+        if base_v is None or ours_v is None or theirs_v is None:
+            print(f"reconcile_tool_contract_ceiling: {name} missing from one of "
+                  f"ancestor/ours/theirs — not this collision's shape for this constant, "
+                  f"leaving it as git's own merge left it.", file=sys.stderr)
+            continue  # absent from this file entirely is not this driver's problem
 
-    resolved = ours_v + theirs_v - base_v
-    new_text, fixed = _reconcile(text, args.constant_name, resolved)
-    Path(args.ours).write_text(new_text)
-    still_conflicted = "<<<<<<<" in new_text
+        resolved = ours_v + theirs_v - base_v
+        # re-read %A fresh each iteration: a prior name's own rewrite already changed it.
+        text = Path(args.ours).read_text()
+        new_text, fixed = _reconcile(text, name, resolved)
+        Path(args.ours).write_text(new_text)
+        if fixed:
+            any_fixed = True
+            print(f"reconcile_tool_contract_ceiling: {name} = {resolved} "
+                  f"({ours_v} + {theirs_v} - {base_v}, never the larger of the two)")
+        else:
+            any_unresolved = True
+            print(f"reconcile_tool_contract_ceiling: {name} did not match the shape this "
+                  f"driver expects in {args.path} — leaving a real conflict, resolve by "
+                  f"hand (never take the larger of two values; run "
+                  f"scripts/measure_tool_contract.py on the merged tree instead).",
+                  file=sys.stderr)
 
-    if fixed and not still_conflicted:
-        print(f"reconcile_tool_contract_ceiling: {args.path} merged clean, "
-              f"{args.constant_name} = {resolved} ({ours_v} + {theirs_v} - {base_v}, "
-              f"never the larger of the two)")
+    still_conflicted = "<<<<<<<" in Path(args.ours).read_text()
+    if any_fixed and not any_unresolved and not still_conflicted:
+        print(f"reconcile_tool_contract_ceiling: {args.path} merged clean.")
         return 0
-    if fixed:
-        print(f"reconcile_tool_contract_ceiling: {args.constant_name} corrected to "
-              f"{resolved}, but other hunks in {args.path} still conflict — resolve those "
-              f"by hand, the number is already right.", file=sys.stderr)
-    else:
-        print(f"reconcile_tool_contract_ceiling: {args.constant_name} did not match the "
-              f"shape this driver expects in {args.path} — leaving a real conflict, "
-              f"resolve by hand (never take the larger of two values; run "
-              f"scripts/measure_tool_contract.py on the merged tree instead).",
-              file=sys.stderr)
+    if any_fixed:
+        print(f"reconcile_tool_contract_ceiling: some constant(s) corrected, but "
+              f"{args.path} still needs hand resolution — the number(s) already right "
+              f"are one less thing to get wrong.", file=sys.stderr)
     return 1
 
 
