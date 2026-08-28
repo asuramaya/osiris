@@ -2780,8 +2780,12 @@ async def test_dispatch_dm_refuses_to_fork_a_body_confirmed_via_agents_json(
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
                           agents_json=_agents_json)
-    assert d["mode"] == "resume-refused-occupied"
-    assert "claude agents --json" in d["detail"] and FULL_SID[:8] in d["detail"]
+    # SPLIT 2026-08-28: the addressee's OWN session being live is a DELIVERY OUTCOME
+    # (it reads at its next turn), never a refusal — the collapse that made a reachable
+    # seat read as unreachable. No resume is spent either way; that invariant is below.
+    assert d["mode"] == "queued-live-holder"
+    assert "own session" in d["detail"].lower() and FULL_SID[:8] in d["detail"]
+    assert "nothing is owed" in d["detail"].lower()
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -2806,8 +2810,11 @@ async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
                           sender="agent:sender",
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
-    assert d["mode"] == "resume-refused-occupied"
+    # ...whereas an unidentified body in the office is the real refusal, and says the
+    # reader is UNKNOWN rather than claiming a delivery nobody observed.
+    assert d["mode"] == "resume-refused-occupied-foreign"
     assert "999999" in d["detail"] and "/repo/demo" in d["detail"]
+    assert "unknown" in d["detail"].lower()
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -2893,7 +2900,7 @@ async def test_178_acceptance_replays_the_incident_shape_neither_door_mints_a_st
         actions.pool, addressee="agent:abcd1234", msg_id=msg_id, sender="agent:sender",
         settings=_settings(enabled=True, sense=str(sense)),
         spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom, agents_json=listing)
-    assert dispatch_receipt["mode"] == "resume-refused-occupied"
+    assert dispatch_receipt["mode"] == "queued-live-holder"
     # THE GRAPH HEAD WAS ACTUALLY SELECTED (identity), not just refused blind (occupancy):
     # the correct session id names itself in the very detail that then refuses it.
     assert FULL_SID[:8] in dispatch_receipt["detail"]
@@ -5102,3 +5109,28 @@ async def test_stop_seat_reports_process_lookup_error_honestly(actions: Actions)
 
     assert d["status"] == "no-live-body"
     assert "already gone" in d["detail"]
+
+
+# ═══ THE COLLAPSE ITSELF (2026-08-28) ══════════════════════════════════════════════════
+# The occupancy gate answered two structurally different findings with one word, and the
+# mode it emitted was never added to _WAKE_STATUS at all — so it rode an unnamed default
+# written for rate-brakes and pauses. Both halves are pinned here because both are how a
+# reader ends up believing a reachable seat is unreachable (60bc15db's own incident, hit
+# again by a coordinator on 2026-08-28 before this fix).
+
+def test_occupancy_gate_arms_are_distinguishable_and_both_named_in_wake_status() -> None:
+    from src.orchestrator.trigger import _WAKE_STATUS
+
+    # NEITHER ARM MAY RIDE A DEFAULT. Every other resume-refused-* is named explicitly;
+    # the occupancy pair was the one sibling missing from the family.
+    assert "queued-live-holder" in _WAKE_STATUS
+    assert "resume-refused-occupied-foreign" in _WAKE_STATUS
+    # the pre-split mode stays mapped so stored receipts never fall through either.
+    assert "resume-refused-occupied" in _WAKE_STATUS
+
+    # AND THEY MUST NOT AGREE. The addressee's own live session is a delivery outcome;
+    # an unidentified body in its office is a refusal with an unknown reader. Collapsing
+    # them is the defect — ruling f624d114, one rung further down the ladder.
+    assert _WAKE_STATUS["queued-live-holder"] != (
+        _WAKE_STATUS["resume-refused-occupied-foreign"])
+    assert _WAKE_STATUS["queued-live-holder"] == "queued"

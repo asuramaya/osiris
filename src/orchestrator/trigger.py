@@ -1397,7 +1397,7 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
 
 async def _resume_occupancy_gate(
     resume: tuple[str, str, float, str], *, agents_json: Any,
-) -> str | None:
+) -> tuple[str, str] | None:
     """IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave, operator's tonight-law:
     mechanisms not patches, 7d6815bb/df646654): `_lineage_resume_candidate` (and
     `_resume_guard` beside it) answer IDENTITY — whose session, graph-truth, via
@@ -1416,18 +1416,38 @@ async def _resume_occupancy_gate(
     land in, whatever session id it thinks it has (a manually-run `claude` that hasn't
     self-mounted yet is invisible to the first signal, visible to this one).
 
-    Either signal firing refuses. Returns a short reason naming WHICH, or None when
-    neither finds anybody home (safe to resume) — never a silent block; the caller's own
-    receipt names exactly why."""
+    Either signal firing refuses the RESUME. They are NOT the same finding and this
+    returns `(which, reason)` so the caller can never flatten them again (the collapse
+    fixed 2026-08-28; ruling f624d114's law one turn further down the ladder — an
+    ignorance must never wear the same status as a finding, and here a POSITIVE
+    IDENTIFICATION OF THE RIGHT MIND had been wearing the same status as an
+    unidentified process):
+
+      'self'    — `_confirm_listener` matched THIS RESUME'S OWN SESSION ID. The
+                  addressee itself is live and holding the very session the mail is
+                  addressed to. It reads this from its own inbox at its next turn.
+                  NOTHING IS LOST AND NOTHING IS OWED — an OUTCOME, never a failure
+                  (the `queued-live-unresolved` class, whose own comment records
+                  Alfred concluding a reachable seat was unreachable and retracting).
+      'foreign' — only `live_bodies_by_cwd` matched: a claude process sits in the
+                  office, identity UNKNOWN — a stranger, a manual run that has not
+                  self-mounted, or another lineage entirely. Whether anyone ever reads
+                  this mail is genuinely unknown, and the receipt must say so.
+
+    Returns None when neither finds anybody home (safe to resume) — never a silent
+    block; the caller's own receipt names exactly which signal fired and what it means."""
     session_id, repo = resume[0], resume[1]
     if await _confirm_listener({"sessionId": session_id, "short": ""}, agents_json):
-        return (f"a live body is already listed in `claude agents --json` for session "
-                f"{session_id[:8]}")
+        return ("self",
+                f"the addressee's OWN session ({session_id[:8]}) is live in "
+                "`claude agents --json`")
     from src.orchestrator.census import live_bodies_by_cwd
     bodies = await asyncio.to_thread(live_bodies_by_cwd)
     if bodies is not None and bodies.get(repo):
         pids = ", ".join(str(p) for p in bodies[repo])
-        return f"a live claude process (pid {pids}) is already sitting at {repo!r}"
+        return ("foreign",
+                f"a live claude process (pid {pids}) of UNKNOWN identity is already "
+                f"sitting at {repo!r}")
     return None
 
 
@@ -1838,9 +1858,21 @@ async def dispatch_dm(
     # body forks the mind — refuse it here, before the spend, never after.
     occupied = await _resume_occupancy_gate(graph_resume, agents_json=agents_json)
     if occupied is not None:
-        return {"mode": "resume-refused-occupied",
-                "detail": f"{occupied} — refusing to fork a second mind beside it; the "
-                          "mail stays pull-only for now"}
+        which, reason = occupied
+        if which == "self":
+            # NOT A FAILURE. The addressee is live and holds this exact session; the mail
+            # is in its box and its next turn's inbox() finds it. Resuming would fork the
+            # mind for no gain, so we don't — but saying "refused, pull-only" here reads
+            # as unreachable and is how a reader (Alfred on 60bc15db, Thoth on 2026-08-28)
+            # concludes a reachable seat is lost and escalates. Name the outcome instead.
+            return {"mode": "queued-live-holder",
+                    "detail": f"{reason} — it reads this from its own inbox at its next "
+                              "turn; a resume would only fork the mind, so none was "
+                              "spent. Nothing is lost and nothing is owed"}
+        return {"mode": "resume-refused-occupied-foreign",
+                "detail": f"{reason} — refusing to fork a second mind beside it; whether "
+                          "that body ever reads this mail is UNKNOWN, never a resolved "
+                          "delivery (practice 2c45d78e)"}
     # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
     # (send's immediate leg + a concurrent tick) can both reach here for one message —
     # exactly one of them may spend
@@ -2073,6 +2105,16 @@ _WAKE_STATUS = {
     # same status as a finding, even at the bucket level.
     "resume-refused-resident-unknown": "refused-resident-unknown",
     "resume-refused-unknown": "refused-unknown",
+    # OCCUPANCY, SPLIT (2026-08-28). #178 added `resume-refused-occupied` and never added
+    # it here, so it rode an unnamed default written for rate-brakes and pauses. Worse, it
+    # answered two different findings with one word. Both arms are named now:
+    # the addressee's OWN live session is a DELIVERY OUTCOME (it reads at its next turn,
+    # exactly what `queued-live-unresolved` above exists to stop mislabelling)...
+    "queued-live-holder": "queued",
+    # ...while an unidentified body in the office is a real refusal with an unknown reader.
+    "resume-refused-occupied-foreign": "refused-occupied-foreign",
+    # the pre-split mode, kept mapped so stored receipts never fall to a default.
+    "resume-refused-occupied": "queued",
     # a manager is a LIVE human body, not a missing one — the human-attended guard queues the
     # knock in its box (perceived by pull), it does not forge the human's live turn (d8a77f80).
     "queued-human": "queued-human-attended",
