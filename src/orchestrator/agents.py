@@ -216,23 +216,29 @@ async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     the same `None`.
 
     Returns `{"root": <lineage root>, "projects": <sorted distinct canonicals, "repo:"
-    prefix stripped>, "resolved": <the one project, or None>}` — `resolved is None` with
-    `len(projects) == 0` is "nothing anywhere"; `resolved is None` with `len(projects) >
-    1` is "genuine disagreement, name it". THIS FUNCTION DOES NOT WRITE — it is the
-    lookup half `derive_or_abstain` (Imhotep, thread e1b85216e89c, Lane 0, blocks this
-    lane) will call to decide whether an edge is writable at all; the write-time cardinality
-    contract (tier, origin, invalidatable) belongs to that primitive, not here."""
+    prefix stripped>, "candidate_ids": <the matching SoftwareProject object ids, same
+    order as `projects`>, "resolved": <the one project, or None>}` — `resolved is None`
+    with `len(projects) == 0` is "nothing anywhere"; `resolved is None` with
+    `len(projects) > 1` is "genuine disagreement, name it". `candidate_ids` is exactly
+    the shape `derive_or_abstain` (capture.py, Lane 0) wants for its own `candidates`
+    parameter — this function stays the lane-specific LOOKUP `derive_or_abstain` calls;
+    the write-time cardinality contract (tier, origin, invalidatable, the durable
+    abstention record) belongs to that primitive, not here. THIS FUNCTION DOES NOT
+    WRITE."""
     root = _generation(agent_id)[0]
     rows = await pool.fetch(
-        "SELECT DISTINCT p.canonical FROM links l "
+        "SELECT DISTINCT p.id, p.canonical FROM links l "
         "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
         "  AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
         root)
-    projects = sorted({r["canonical"].removeprefix("repo:") for r in rows})
+    by_project = sorted({(r["canonical"].removeprefix("repo:"), r["id"]) for r in rows})
+    projects = [name for name, _id in by_project]
+    candidate_ids = [pid for _name, pid in by_project]
     resolved = projects[0] if len(projects) == 1 else None
-    return {"root": root, "projects": projects, "resolved": resolved}
+    return {"root": root, "projects": projects, "candidate_ids": candidate_ids,
+           "resolved": resolved}
 
 
 # Full roman numerals for the human DISPLAY generation (Anna IV, Anna IX) — unlike the id

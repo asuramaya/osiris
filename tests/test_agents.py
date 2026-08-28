@@ -2129,7 +2129,10 @@ async def test_lineage_works_in_resolves_when_only_the_writing_generation_has_on
                               evidence_class="self_declared")
 
     out = await lineage_works_in(actions.pool, "agent:lwi1")
-    assert out == {"root": "agent:lwi1", "projects": ["lwiproj1"], "resolved": "lwiproj1"}
+    assert out["root"] == "agent:lwi1"
+    assert out["projects"] == ["lwiproj1"]
+    assert out["resolved"] == "lwiproj1"
+    assert out["candidate_ids"] == [proj]  # the exact shape derive_or_abstain wants
 
 
 async def test_lineage_works_in_falls_back_to_a_sibling_generation(actions: Actions) -> None:
@@ -2147,7 +2150,10 @@ async def test_lineage_works_in_falls_back_to_a_sibling_generation(actions: Acti
     await actions.create_or_find_object("Agent", "agent:lwi2-iii", "test")  # the orphan writer
 
     out = await lineage_works_in(actions.pool, "agent:lwi2-iii")
-    assert out == {"root": "agent:lwi2", "projects": ["lwiproj2"], "resolved": "lwiproj2"}
+    assert out["root"] == "agent:lwi2"
+    assert out["projects"] == ["lwiproj2"]
+    assert out["resolved"] == "lwiproj2"
+    assert out["candidate_ids"] == [proj]
 
 
 async def test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement(
@@ -2173,6 +2179,7 @@ async def test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement
     out = await lineage_works_in(actions.pool, "agent:lwi3-ii")
     assert out["resolved"] is None
     assert out["projects"] == ["lwiproja", "lwiprojb"]  # BOTH named, never one silently picked
+    assert set(out["candidate_ids"]) == {proj_a, proj_b}  # both ids too, ready for the caller
 
 
 async def test_lineage_works_in_reports_nothing_anywhere_distinctly_from_ambiguous(
@@ -2186,7 +2193,7 @@ async def test_lineage_works_in_reports_nothing_anywhere_distinctly_from_ambiguo
     await actions.create_or_find_object("Agent", "agent:lwi4", "test")
 
     out = await lineage_works_in(actions.pool, "agent:lwi4")
-    assert out == {"root": "agent:lwi4", "projects": [], "resolved": None}
+    assert out == {"root": "agent:lwi4", "projects": [], "candidate_ids": [], "resolved": None}
 
 
 async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) -> None:
@@ -2204,7 +2211,7 @@ async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) ->
         "WHERE from_id=$1 AND to_id=$2 AND type='works_in'", author, proj)
 
     out = await lineage_works_in(actions.pool, "agent:lwi5")
-    assert out == {"root": "agent:lwi5", "projects": [], "resolved": None}
+    assert out == {"root": "agent:lwi5", "projects": [], "candidate_ids": [], "resolved": None}
 
 
 # ═══ threads f6f11d78/20af2c95 (decision 5b217d13, 2026-08-04): mint_heir's house-relink
