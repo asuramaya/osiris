@@ -259,6 +259,100 @@ async def mint_cites(
     return True
 
 
+# LANE 0 (thread aac54abb, operator ruling a0339e16, Thoth's dispatch msg 5901): 92.8% of
+# Decisions and 92.3% of Threads get every link they will ever have inside 60 seconds of
+# birth (decision 185d5072) — nothing in osiris walks back over an already-minted, unlinked
+# object and links it. THE OPERATOR'S RULE, BINARY, NO DIAL: a derived edge may be written
+# with no mind in the loop IFF the lookup that produces it returns EXACTLY ONE answer.
+# Anything else — zero candidates, two or more — is written as NOTHING, never a low-
+# confidence guess ("a guess with a discount sticker," his own framing rejected). Ruling
+# dd06cb18's DERIVABLE-vs-GUESSED axis reaching this arc, cited not re-derived.
+#
+# ONE SHARED KERNEL, #139's law (one guard, not three differently-shaped guards on one
+# class): every orphan-healing lane (Agent-by-session, Decision-by-lineage-root, and
+# whatever the third lane turns out to need) resolves its OWN lane-specific lookup —
+# that part cannot be unified without knowing what each lane actually joins on — and
+# hands the resulting candidate list here for the one part that IS shared: the
+# cardinality check, the mint-or-abstain decision, the evidence tier, and the durable,
+# queryable record of why a write did NOT happen. Thoth made this exact mistake twice in
+# one day before asking for it: claiming 219 orphan Agents were derivable by shared
+# session (one session held 232 linked agents — not unique) and 203 orphan Decisions by
+# lineage root (7 of 23 roots span 2-4 projects — not unique). Both times a join
+# confirmed a story and nobody asked whether it returned one row or many; this function
+# IS that question, asked mechanically, every time.
+_DERIVE_TIER = EvidenceClass.DIRECT_OBSERVATION
+_DERIVE_CONF = confidence_for(_DERIVE_TIER)
+
+
+async def derive_or_abstain(
+    actions: Actions, from_id: uuid.UUID, link_type: str, candidates: list[uuid.UUID],
+    source: str, *, why_if_ambiguous: str | None = None,
+) -> dict[str, Any]:
+    """`candidates` is the CALLER's own lane-specific lookup, already run — this
+    function never queries for them itself, so it stays the same one primitive
+    regardless of what a lane joins on. Tier is DIRECT_OBSERVATION (0.6), not
+    DERIVED (0.4) and not SELF_DECLARED (0.9): a cardinality-1 join over facts the
+    graph ALREADY asserts is deterministic, not a probabilistic guess (what DERIVED
+    means everywhere else in this module — the miner's regex inference over prose);
+    but no author typed this specific relationship or chose its link-type word either
+    (the same reasoning Seshat's mount-derived repo= tier fix already established as
+    precedent — spawned_by links are graded direct_observation for the identical
+    reason). `properties={"origin": "derived"}` on every edge this mints — the same
+    `cites` origin=prose|declared marker, generalized, so a future census can always
+    tell a mechanically-derived edge from a caller-declared or prose-cited one, never
+    merely infer it.
+
+    NO CONFIDENCE PARAMETER EXISTS ON THIS FUNCTION, DELIBERATELY — that is the
+    operator's own rule, not an omission: a caller cannot lower the bar, because there
+    is no dial to turn. `len(candidates) == 1` mints (idempotent — checks the link
+    doesn't already exist first). Anything else — zero or two-or-more — mints NOTHING
+    and records why as a durable, queryable `derivation_abstained_<link_type>` property
+    on `from_id` (same shape `prose_citation_skips`/`unlinked_because` already use,
+    namespaced by link_type so a SECOND lane abstaining on the same object under a
+    DIFFERENT link_type never clobbers the first lane's own record — assert_property's
+    own last-write-wins would otherwise silently lose it): `why_if_ambiguous`, when
+    given, names the caller's own reason (e.g. "session df4c827f holds 232 linked
+    agents, not 1"); omitted, a generic candidate-count reason is recorded instead —
+    either way, never a silent drop. THE CANDIDATE IDS THEMSELVES ARE KEPT, not just
+    the count (Thoth's own addition, msg 5909): an abstention is #75's future work
+    queue, not a dead end — a miner (or a mind) that later re-visits an unresolved
+    lookup arrives with the shortlist ALREADY COMPUTED instead of re-deriving it
+    against a graph that has moved on, the same hand-off shape `unlinked_because`
+    already proved. Recovering a discarded candidate set later is strictly harder
+    than keeping it now.
+
+    Returns `{"minted": bool, "to": uuid|None, "abstained": bool, "reason": str|None,
+    "candidate_count": int, "candidates": list[uuid.UUID]}` — the caller's own receipt,
+    not durable state by itself (the durable half is the property write on `from_id`
+    when abstaining, and the link itself when minting)."""
+    if len(candidates) == 1:
+        to_id = candidates[0]
+        exists = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3",
+            from_id, to_id, link_type)
+        if not exists:
+            await actions.create_link(from_id, to_id, link_type, source, datetime.now(UTC),
+                                      _DERIVE_CONF, evidence_class=_DERIVE_TIER.value,
+                                      properties={"origin": "derived"})
+        return {"minted": not exists, "to": to_id, "abstained": False, "reason": None,
+               "candidate_count": 1}
+    reason = why_if_ambiguous or (
+        f"{len(candidates)} candidates for {link_type} — not a unique lookup, "
+        "never guessed" if candidates else
+        f"no candidate found for {link_type}")
+    # property name carries `link_type` (never a bare "derivation_abstained") — assert_
+    # property's own last-write-wins semantics mean a SECOND lane abstaining on the SAME
+    # object under a DIFFERENT link_type must not silently clobber the first lane's own
+    # abstention record.
+    await actions.assert_property(
+        from_id, f"derivation_abstained_{link_type}",
+        {"link_type": link_type, "candidate_count": len(candidates), "reason": reason,
+         "candidates": [str(c) for c in candidates]},
+        source, datetime.now(UTC), _DERIVE_CONF, evidence_class=_DERIVE_TIER.value)
+    return {"minted": False, "to": None, "abstained": True, "reason": reason,
+           "candidate_count": len(candidates), "candidates": list(candidates)}
+
+
 async def _mint_prose_citations(
     a: Actions, obj_id: uuid.UUID, source: str, *texts: str | None,
 ) -> list[dict[str, str]]:
