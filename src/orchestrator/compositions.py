@@ -1416,10 +1416,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     generation minted while a different door of its own lineage held a live pulse — the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
     the mint, thread 4bcd6541), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
-    than one simultaneously-live works_in edge — orient() resolves through exactly one, so
-    a live lineage's own threads/decisions can hide from itself, John XVII's own specimen;
-    thread 8640a625/decision fce39baa — invalidate_works_in is the repair, this only
-    counts, per ruling 1973d46f's own law that a reconciler with no trigger is worse than
+    than one simultaneously-live works_in edge — orient() itself never resolves project
+    through this edge, but the repo= default and the pin self-heal vote both abstain
+    instead of resolving one, John XVII's own specimen; thread 8640a625/decision fce39baa,
+    text corrected by c3504289 — invalidate_works_in is the repair, this only counts, per
+    ruling 1973d46f's own law that a reconciler with no trigger is worse than
     none), PEER-SILENT (warn: an active peer_of pair with no direct mail between either
     side's holders in `stale_days` — a mechanical proxy for v1's fiduciary-disclosure duty,
     task #76 item 2, spec e6636c7e; testimony that a pair has gone quiet, never proof a
@@ -1922,17 +1923,25 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "predecessor was not dead. Verify the seam; fold by hand if false"}
         for r in par])
 
-    # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen):
-    # a LIVE agent carrying more than one simultaneously-live works_in edge. orient()
-    # resolves through exactly one of them, so the duplicate is not cosmetic — it can hide
-    # a lineage's own threads/decisions from itself while it is running (measured live,
-    # 2026-08-03: 41 agents fleet-wide carry the shape, but only currently-LIVE agents are
-    # operationally dangerous — a dead generation's leftover duplicate resolves nothing for
-    # anyone, the same reasoning orphan-link already applies; that larger historical count
-    # is thread 20af2c95's own separate, still-open concern, not this check's). Scoped to
-    # `live_secs` — the SAME liveness window phantom-twin already uses, not a second
-    # definition of "live". Testimony only: this counts, it never judges which edge is the
-    # stale one — invalidate_works_in is the repair, a mind names the target.
+    # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen;
+    # detail text corrected by decision c3504289, thread 6028/6037 — Thoth's own dispatch
+    # had quoted the ORIGINAL wording below as fact and it was false): a LIVE agent
+    # carrying more than one simultaneously-live works_in edge. THIS DOES NOT MEAN orient()
+    # can resolve the wrong project: measured directly (c3504289) — a seated agent's
+    # project comes from seat→derive_house (governs/charter), an unseated one from cwd
+    # pin/basename; NEITHER reads works_in at all. The two live readers that DO consult a
+    # single agent's own works_in for an answer (lineage_works_in's repo= default rung 3,
+    # offices.py's pin self-heal vote) already abstain to None the instant they see 2+
+    # distinct projects, by construction — a duplicate can never feed either one a wrong
+    # single answer. The real, measured cost is narrower: an honest repo= abstention where
+    # a default could otherwise have resolved, and an inflated agent_count in ledger-style
+    # reports. (Historical scope note unchanged: measured live, 2026-08-03, 41 agents
+    # fleet-wide carry the shape, but only currently-LIVE agents are flagged here — a dead
+    # generation's leftover duplicate feeds neither consumer above for anyone; that larger
+    # historical count is thread 20af2c95's own separate, still-open concern, not this
+    # check's.) Scoped to `live_secs` — the SAME liveness window phantom-twin already uses,
+    # not a second definition of "live". Testimony only: this counts, it never judges which
+    # edge is the stale one — invalidate_works_in is the repair, a mind names the target.
     dup = await pool.fetch(
         "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
         "  WHERE last_seen > now() - make_interval(secs => $1)) "
@@ -1949,11 +1958,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     land("duplicate-works-in", "warn", [
         {"subject": r["agent"],
          "detail": f"{r['agent']} is live right now and carries {r['n']} simultaneously-"
-                   f"live works_in edges ({', '.join(r['projects'])}) — orient() resolves "
-                   "through exactly one, so a successor mounting here may see the wrong "
-                   "project's threads/decisions entirely. Name the stale one and "
-                   "invalidate_works_in it; this check only counts, it never guesses "
-                   "which"}
+                   f"live works_in edges ({', '.join(r['projects'])}) — orient() itself "
+                   "does not resolve project through this edge (seat->derive_house or "
+                   "cwd pin/basename instead), but lineage_works_in's repo= default and "
+                   "offices.py's pin self-heal vote both abstain here instead of resolving "
+                   "one. Name the stale one and invalidate_works_in it; this check only "
+                   "counts, it never guesses which"}
         for r in dup])
 
     # PEER-SILENT — task #76 item 2 (spec e6636c7e): v1's fiduciary-disclosure duty
