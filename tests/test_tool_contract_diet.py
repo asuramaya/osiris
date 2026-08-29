@@ -741,7 +741,11 @@ TOOL_CONTRACT_EXPECTED_COUNT = 146  # MEASURED against the merged tree, 2026-08-
 # --bg-substrate body gets silently respawned by the harness's own daemon; `stop_seat`
 # now prefers the harness's own `claude stop <id>` and falls back to SIGTERM only when
 # no harness-tracked id exists). The growth is a corrected fact, not added prose.
-TOOL_CONTRACT_CEILING_CHARS = 202888
+TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on measurement.
+# Seshat trimmed the duplicate-works-in lint text under the category rule while fixing its
+# overclaim, so the merged tree came in 17 chars UNDER the standing ceiling. Left alone that
+# is 17 chars of headroom nobody measured and the next raise would silently spend it — which
+# is how a ratchet stops ratcheting. Lowered to the real number instead.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
