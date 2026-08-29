@@ -1508,11 +1508,23 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # flagging them is the same "cry wolf" class the orphan-link check already excludes for
     # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS — seam-debounce and
     # husk-heal both write succeeded_by='' at debounce/heal time as a "no successor seen
-    # yet" placeholder; once a real generation self-declares succeeded_from back at the
-    # predecessor, the guess is permanently stale but NEVER a live dispute (walked and
-    # verified live: lineage_head's walk continues through the winner regardless of whether
-    # it later gets healed as false_mint itself — decision c41f74a6 — so this is resolver
-    # noise from a known automated observer, not a coin-flip a mind needs to referee).
+    # yet" placeholder, WRITTEN BEFORE the real answer exists; once a real generation
+    # self-declares succeeded_from back at the predecessor, the guess is permanently stale
+    # but NEVER a live dispute (walked and verified live: lineage_head's walk continues
+    # through the winner regardless of whether it later gets healed as false_mint itself —
+    # decision c41f74a6 — so this is resolver noise from a known automated observer, not a
+    # coin-flip a mind needs to referee). THIS EXCLUSION IS NARROW ON PURPOSE (decision
+    # c14f8b0d, thread 6027/6036): `phantom-fold` ALSO writes succeeded_by='' but is
+    # DELIBERATELY LEFT OUT of the IN-list below, because its mechanism is the opposite of
+    # seam-debounce/husk-heal's — it RETRACTS an already-declared successor later proven a
+    # zero-turn phantom (atomic with false_mint/retired/retired_by), landing AFTER the real
+    # declaration by up to fold_existing_zero_turn_phantoms's own 15-minute sweep window,
+    # not before it. That retraction is legitimate lifecycle noise in the general case
+    # (measured 22/24 self-consistent), but a hand-reversed fold that never restores the
+    # pointer is a genuine live defect the lint SHOULD keep surfacing — silently folding
+    # phantom-fold into this exclusion would have hidden exactly that specimen
+    # (agent:seat-8187daaa-vii, repaired 2026-08-29). Do not generalize this comment's
+    # reasoning to any other blank-writing source without checking which mechanism it is.
     # rn=1 vs rn=2 ALONE used to miss a rank-3+ rival hiding behind an agreeing top-2 (the
     # auditor's completeness gap, thread 59e95366/decision 93d8d15c — confirmed on
     # repo:bytebye/name: 19 rows sat invisible at rn=3+ purely because rn=1 and rn=2
