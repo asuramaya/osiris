@@ -754,11 +754,12 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     agent_id = str(hook.get("agent_id") or "")
     if not agent_id:
         return 0
+    is_start = hook.get("hook_event_name") != "SubagentStop"
     body: dict[str, Any] = {
         "session_id": str(hook.get("session_id") or ""),
         "agent_id": agent_id,
         "agent_type": str(hook.get("agent_type") or ""),
-        "phase": "stop" if hook.get("hook_event_name") == "SubagentStop" else "start",
+        "phase": "start" if is_start else "stop",
     }
     tp = str(hook.get("agent_transcript_path") or "")
     if tp:
@@ -766,6 +767,17 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     url = _URLS["spawn"]
     resp = _post(url, body, timeout=_TIMEOUTS["spawn"])
     _log_post("osiris_hook.spawn", url, resp)
+    # TELL THE FORK, AT SPAWN (obligation 706c27dc's second half, msg 6034): SubagentStart is
+    # NOT in Claude Code's plain-stdout-as-context exception list (that's SessionStart/
+    # UserPromptSubmit/UserPromptExpansion/PostModelSwitch only) — a fork only ever sees this
+    # if it's shaped as the documented hookSpecificOutput.additionalContext JSON, so this is
+    # the one place in the whole client that emits that shape rather than plain text.
+    if is_start and resp is not None:
+        out = resp.get("result") if isinstance(resp.get("result"), dict) else resp
+        ctx = out.get("fork_orientation") if isinstance(out, dict) else None
+        if ctx:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "SubagentStart", "additionalContext": ctx}}))
     return 0
 
 

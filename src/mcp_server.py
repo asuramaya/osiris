@@ -8289,17 +8289,48 @@ async def spawn_route(request: Any) -> Any:
             if row is not None:
                 parent, project = row.agent_id, row.project
         tp = str(body.get("agent_transcript_path") or "")
+        agent_type = str(body.get("agent_type") or "") or None
+        phase = str(body.get("phase") or "")
         child = await lineage.register_spawn(
             Actions(pool), raw_id,
-            agent_type=(str(body.get("agent_type") or "") or None),
+            agent_type=agent_type,
             parent_agent=parent, project=project,
             session=(session_id[:8] or None),
             transcript=(Path(tp.replace("~", str(Path.home()), 1) if tp.startswith("~")
                              else tp) if tp else None),
-            done=(str(body.get("phase") or "") == "stop"))
+            done=(phase == "stop"))
         if child:
             _spawns_seen[child] = time.monotonic()
-        return JSONResponse({"spawn": child, "of": parent})
+        # TELL THE FORK, AT SPAWN (obligation 706c27dc's second half, msg 6034, operator's own
+        # correction: "the subagent forks need to know they are forks though"). The prior fix
+        # (read_inbox/read_desk) only helped a READER catch a fork after the fact; this is the
+        # fork's own orientation, delivered the one way confirmed to reach it — SubagentStart's
+        # own additionalContext (SessionStart/whisper never fires for a subagent at all; a fork
+        # inherits the parent's own "already mounted" belief and, by mount()'s documented
+        # contract, has every reason never to call mount() itself and hit its SPAWN note there).
+        # ONLY for agent_type == "fork" (inherits the parent's FULL context — an ordinary fresh
+        # subagent has no parent identity to confuse itself with) and only on the START phase
+        # (Stop has nothing left to orient). Disclosure, never a refusal: a fork doing real work
+        # and reporting it stays legitimate, it just needs to know which "it" it is.
+        fork_orientation = None
+        if child and phase != "stop" and agent_type == "fork":
+            pat = await pool.fetchval(
+                "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+                "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='patronym' "
+                "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", child)
+            fork_orientation = (
+                f"OSIRIS: you are a FORK{f' — {pat}' if pat else ''} — not your parent, not a "
+                "new generation, a separate hand that inherited the parent session's FULL "
+                "conversation context (its mail, its dispatch, its sense of self). Your parent "
+                "is a live seat that may be working right now, in parallel with you: never "
+                "report the parent's own actions, sent messages, or decisions as your own. "
+                "Inherited memory is not authorship — what you remember from the parent's "
+                "context is background, not something you did. Do the job, return your result "
+                "to the parent; the parent's mail, seat, and succession are never yours to act "
+                "through.")
+        return JSONResponse({"spawn": child, "of": parent,
+                             **({"fork_orientation": fork_orientation} if fork_orientation
+                                else {})})
     except Exception as e:  # noqa: BLE001 — a spawn announcement must never block the harness
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 

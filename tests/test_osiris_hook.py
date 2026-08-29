@@ -729,6 +729,65 @@ def test_spawn_logs_the_diagnostic_only_with_an_agent_id(monkeypatch: Any) -> No
     assert "connected" in "".join(out)
 
 
+def _fake_stdout_print(out: list[str]) -> Any:
+    """Captures only STDOUT prints (the hookSpecificOutput JSON) — _log_post's own
+    diagnostic always targets file=sys.stderr and must not be conflated with it."""
+    def _p(s: str = "", **kw: Any) -> None:
+        if kw.get("file") is None:
+            out.append(s)
+    return _p
+
+
+def test_spawn_start_prints_the_fork_orientation_as_additional_context(
+    monkeypatch: Any,
+) -> None:
+    """obligation 706c27dc's second half (msg 6034): SubagentStart is NOT in Claude Code's
+    plain-stdout-as-context exception list, so a fork only ever sees this if it's shaped as
+    hookSpecificOutput.additionalContext JSON — the one place this client emits that shape."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:forkabcd", "of": "agent:parent",
+                                      "fork_orientation": "you are a FORK — Khnum XLII.15"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-forkabcd",
+                                 "agent_type": "fork", "hook_event_name": "SubagentStart"})
+    assert rc == 0
+    payload = json.loads(out[0])
+    assert payload["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+    assert "you are a FORK" in payload["hookSpecificOutput"]["additionalContext"]
+
+
+def test_spawn_stop_never_prints_orientation(monkeypatch: Any) -> None:
+    """Stop has nothing left to orient — even if the server echoed a fork_orientation, the
+    Stop phase must never print it (it would be a stray, unexplained stdout line)."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:forkabcd", "of": "agent:parent",
+                                      "fork_orientation": "you are a FORK"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-forkabcd",
+                                 "agent_type": "fork", "hook_event_name": "SubagentStop"})
+    assert rc == 0
+    assert out == []
+
+
+def test_spawn_start_with_no_orientation_prints_nothing(monkeypatch: Any) -> None:
+    """An ordinary (non-fork) subagent's start carries no fork_orientation — silent, as
+    before this fix."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:plainxyz", "of": "agent:parent"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-plainxyz",
+                                 "agent_type": "general-purpose",
+                                 "hook_event_name": "SubagentStart"})
+    assert rc == 0
+    assert out == []
+
+
 # --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------
 # The stub that shipped at the hook migration only stamped a raw session_id onto EVERY
 # osiris call, ungated, and echoed the whole hook payload back in the WRONG envelope (no
