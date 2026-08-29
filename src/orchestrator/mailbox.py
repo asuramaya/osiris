@@ -858,6 +858,30 @@ async def read_inbox(
             "VALUES ($1,$2,now(),1) ON CONFLICT (message_id, agent_id) DO UPDATE SET "
             "delivered_at=now(), deliveries=message_recipients.deliveries+1",
             [(r["id"], reader_agent) for r in rows])
+    # THE SENDER'S OWN is_sidechain/patronym (obligation 706c27dc, msg 6029, Thoth
+    # LXXXVIII): the graph already models a fork correctly (agent_type=fork, is_sidechain,
+    # patronym, spawned_by) — the mail layer's only is_sidechain read site checked the
+    # ADDRESSEE (mcp_server.py's send(), "it cannot be woken and may never read this") and
+    # never the SENDER, so a fork DMing in its parent's voice with a fork's own full
+    # inherited context read as a bare unfamiliar id, indistinguishable from impersonation
+    # to a reader who hadn't independently caught it. Disclosure, not prohibition: a fork
+    # doing real work and reporting it is legitimate, it just needs to say so. Batched, one
+    # query for the whole page — never a per-row lookup.
+    from_ids = list({r["from_agent"] for r in rows if r["from_agent"]})
+    sender_meta: dict[str, dict[str, Any]] = {}
+    if from_ids:
+        meta_rows = await pool.fetch(
+            "SELECT o.canonical AS agent_id, "
+            " EXISTS(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='is_sidechain' AND a.value #>> '{}' = 'true') AS is_sidechain, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS patronym "
+            "FROM objects o WHERE o.canonical = ANY($1::text[])", from_ids)
+        sender_meta = {
+            r["agent_id"]: {"is_sidechain": r["is_sidechain"], "patronym": r["patronym"]}
+            for r in meta_rows if r["is_sidechain"]
+        }
     return [
         {"id": r["id"], "from": r["from_agent"], "from_project": r["from_project"],
          "body": r["body"], "when": r["created_at"].isoformat(),
@@ -869,7 +893,11 @@ async def read_inbox(
          # THE READ-SIDE PRIOR-ART HOP (obligation a6198075): computed ONCE at send()
          # time (see mcp_server.py's send()), never re-run here — a reader sees the same
          # hits the sender already saw, no second search on the read path.
-         **({"prior_art": r["prior_art"]} if r["prior_art"] else {})}
+         **({"prior_art": r["prior_art"]} if r["prior_art"] else {}),
+         **({"from_sidechain": True,
+             **({"from_patronym": sender_meta[r["from_agent"]]["patronym"]}
+                if sender_meta[r["from_agent"]]["patronym"] else {})}
+            if r["from_agent"] in sender_meta else {})}
         for r in rows
     ]
 
@@ -1153,6 +1181,24 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.agent_id=$1 AND r.read_at IS NOT NULL) "
         "ORDER BY m.created_at DESC LIMIT $2", OPERATOR_ADDR, limit)
+    # THE SENDER'S OWN is_sidechain/patronym (obligation 706c27dc, msg 6029): same
+    # disclosure as read_inbox's fix — a fork briefing the operator's desk in its parent's
+    # voice must be legible as such, not a bare unfamiliar id. Batched once for the page.
+    from_ids = list({r["from_agent"] for r in rows if r["from_agent"]})
+    sender_meta: dict[str, dict[str, Any]] = {}
+    if from_ids:
+        meta_rows = await pool.fetch(
+            "SELECT o.canonical AS agent_id, "
+            " EXISTS(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='is_sidechain' AND a.value #>> '{}' = 'true') AS is_sidechain, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "  AND a.name='patronym' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS patronym "
+            "FROM objects o WHERE o.canonical = ANY($1::text[])", from_ids)
+        sender_meta = {
+            r["agent_id"]: {"is_sidechain": r["is_sidechain"], "patronym": r["patronym"]}
+            for r in meta_rows if r["is_sidechain"]
+        }
     # thread-fold: the newest brief in a thread speaks for it; earlier ones ride under it
     by_thread: dict[int, list[Any]] = {}
     for r in rows:  # rows arrive newest-first
@@ -1163,6 +1209,10 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         card: dict[str, Any] = {
             "id": lead["id"], "from": lead["from_agent"], "from_project": lead["from_project"],
             "body": lead["body"], "when": lead["created_at"].isoformat()}
+        if lead["from_agent"] in sender_meta:
+            card["from_sidechain"] = True
+            if sender_meta[lead["from_agent"]]["patronym"]:
+                card["from_patronym"] = sender_meta[lead["from_agent"]]["patronym"]
         if earlier:
             card["thread_folded"] = {
                 "count": len(earlier), "ids": [e["id"] for e in earlier],
