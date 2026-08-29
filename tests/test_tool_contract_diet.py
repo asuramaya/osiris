@@ -725,7 +725,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 144
 # half, lane-agnostic since it only rechecks stored candidate ids' own status, never
 # re-derives). Two genuinely new capabilities, not one padded — docstrings trimmed under
 # the category rule first (full rationale in capture.py's own module comment).
-TOOL_CONTRACT_CEILING_CHARS = 202809
+# 200,229 -> 200,308 (measured exact). Tool count unchanged (2026-08-29, Sekhmet, thread
+# 6002, Wave 6 half 2): `stop`'s own docstring corrected — it claimed "SIGTERMs a LIVE
+# body's OS process", no longer true after the live-reproduced fix (a raw SIGTERM to a
+# --bg-substrate body gets silently respawned by the harness's own daemon; `stop_seat`
+# now prefers the harness's own `claude stop <id>` and falls back to SIGTERM only when
+# no harness-tracked id exists). The growth is a corrected fact, not added prose.
+TOOL_CONTRACT_CEILING_CHARS = 202888
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

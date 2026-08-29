@@ -4170,16 +4170,17 @@ async def stop(target: str | None = None, reason: str = "",
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """launch()'s process-lifecycle inverse — SIGTERMs a LIVE body's OS process, nothing
-    more. Not a symmetric 'sleep' (ruling b3ccd3f6: no promised thaw-where-you-left-off) —
-    an honest termination, auditable, not a pause. Gates no reachability flag of its own:
+    """launch()'s process-lifecycle inverse — stops a LIVE body's OS process (the
+    harness's own `claude stop <id>` when harness-tracked, else SIGTERM), nothing more.
+    Not a symmetric 'sleep' (ruling b3ccd3f6: no promised thaw-where-you-left-off) — an
+    honest termination, auditable, not a pause. Gates no reachability flag of its own:
     launch()/wake() already read the SAME occupancy authority this does, so once the
     process actually exits a fresh launch()/wake() proceeds — no 'unstop' call needed.
 
     `target=None` stops YOURSELF, always allowed. Otherwise DOWNWARD-ONLY, mirroring
     launch() (a manager stops a seat it manages; a worker may never stop its manager's).
 
-    `status`: `stopped` (SIGTERM sent, see `pid`/`holder`), `no-live-body` (nothing
+    `status`: `stopped` (stop signal sent, see `pid`/`holder`), `no-live-body` (nothing
     harness/proc-confirmed running there), `refused-not-your-worker`, `refused-signal`."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:

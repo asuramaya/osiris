@@ -21,9 +21,20 @@ satisfy them by being added to a duplicate roll-call somewhere.
 from __future__ import annotations
 
 import argparse
+import inspect
 
-import pytest
+from src import cli as cli_mod
 from src.cli import _build_parser as build_parser
+
+
+def _cmd_function(name: str) -> object:
+    """The REAL command function for a subcommand, by the naming convention every
+    subcommand in this file already follows (`fold-project` -> `cmd_fold_project`) — never
+    a hand-maintained name->function table."""
+    fn = getattr(cli_mod, f"cmd_{name.replace('-', '_')}", None)
+    assert fn is not None, (
+        f"osiris {name} has no cmd_{name.replace('-', '_')} — naming convention drift")
+    return fn
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
@@ -57,14 +68,29 @@ def test_every_subcommand_carries_a_worked_example() -> None:
         "The top-level help promises every command has one.")
 
 
-@pytest.mark.parametrize("command", ["fleet", "roster", "unmerge", "retention"])
-def test_read_verbs_offer_the_machine_door(command: str) -> None:
-    """Every verb that used to print `json.dumps(..., indent=2)` at a human now renders for
-    the human AND keeps --json for a script or an agent. Neither audience is served the
-    other's format, and the flag must not silently disappear in a refactor."""
-    sub = _subparsers(build_parser())[command]
-    flags = {opt for action in sub._actions for opt in action.option_strings}
-    assert "--json" in flags, f"osiris {command} lost its --json escape hatch"
+def test_every_command_that_renders_structured_output_offers_the_machine_door() -> None:
+    """DERIVED FROM THE REAL IMPLEMENTATION, never a hand-maintained list of read verbs
+    (2026-08-28 CLI-surface audit, thread 00913be9's own follow-up): the earlier version of
+    this test named `["fleet", "roster", "unmerge", "retention"]` by hand — the exact shape
+    this module's own docstring warns against ("never a hand-maintained list, so a new
+    subcommand cannot satisfy them by being added to a duplicate roll-call somewhere"), and
+    it silently missed `desk`/`show` the moment they shipped. Any command whose own source
+    calls `render.emit` is showing a human a structure, so cli_render.py's own promise
+    (a human render AND `--json` for nothing extra) must hold for it — checked by reading
+    `inspect.getsource` on the REAL `cmd_*` function, not a name a person remembered to
+    add. A future command that starts emitting structured output is covered for free; one
+    that means to offer `--json` but drops the flag in a refactor is caught the same way."""
+    missing = []
+    for name, sub in _subparsers(build_parser()).items():
+        fn = _cmd_function(name)
+        if "render.emit(" not in inspect.getsource(fn):  # type: ignore[arg-type]
+            continue
+        flags = {opt for action in sub._actions for opt in action.option_strings}
+        if "--json" not in flags:
+            missing.append(name)
+    assert not missing, (
+        f"these commands render structured output via cli_render.emit but offer no "
+        f"--json escape hatch: {missing}")
 
 
 # --- the stop door (2026-08-28) ------------------------------------------------------------

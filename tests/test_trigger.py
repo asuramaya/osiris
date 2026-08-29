@@ -5005,7 +5005,7 @@ async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
                             project="osiris", cwd="/repo/demo", model=None, session_key=None)
     killed: list[int] = []
 
-    async def _kill(pid: int) -> None:
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
         killed.append(pid)
 
     d = await trigger_module.stop_seat(
@@ -5037,7 +5037,7 @@ async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing
     await save_mount(actions.pool, job_dir="/x/jobs/nowhere", agent_id="agent:stop02",
                             project="osiris", cwd="/repo/demo", model=None, session_key=None)
 
-    async def _boom(pid: int) -> None:
+    async def _boom(pid: int, job_dir_key: str | None) -> None:
         raise AssertionError("nothing confirmed live — no signal should ever be sent")
 
     async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
@@ -5058,7 +5058,7 @@ async def test_stop_seat_is_downward_only_a_worker_cannot_stop_its_manager(
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:stop03w", manager_agent="agent:stop03m")
 
-    async def _boom(pid: int) -> None:
+    async def _boom(pid: int, job_dir_key: str | None) -> None:
         raise AssertionError("downward-only: a worker stopping its manager must refuse first")
 
     d = await trigger_module.stop_seat(
@@ -5077,7 +5077,7 @@ async def test_stop_seat_self_target_needs_no_managed_by_edge(actions: Actions) 
                             project="demo", cwd="/repo/demo", model=None, session_key=None)
     killed: list[int] = []
 
-    async def _kill(pid: int) -> None:
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
         killed.append(pid)
 
     d = await trigger_module.stop_seat(
@@ -5098,7 +5098,7 @@ async def test_stop_seat_reports_process_lookup_error_honestly(actions: Actions)
     await save_mount(actions.pool, job_dir="/x/jobs/wg8888ii", agent_id="agent:stop04",
                             project="osiris", cwd="/repo/demo", model=None, session_key=None)
 
-    async def _kill(pid: int) -> None:
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
         raise ProcessLookupError()
 
     d = await trigger_module.stop_seat(
@@ -5109,6 +5109,112 @@ async def test_stop_seat_reports_process_lookup_error_honestly(actions: Actions)
 
     assert d["status"] == "no-live-body"
     assert "already gone" in d["detail"]
+
+
+async def test_stop_seat_passes_the_census_job_dir_key_to_kill(actions: Actions) -> None:
+    """The wiring proof: stop_seat's own census match already carries `job_dir_key`
+    (identical to `claude agents --json`'s own `id`) — this must reach `kill` unchanged,
+    with no separate lookup, so `_real_kill_pid` can prefer `claude stop <id>`."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop05", manager_agent="agent:stopm05",
+        worker_handle="Stop-Test-5", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/wgjobkey", agent_id="agent:stop05",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+    seen: list[tuple[int, str | None]] = []
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        seen.append((pid, job_dir_key))
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm05", target=worker_seat,
+        agents_json=_fake_census_agents_json(
+            6161, session_id="wgjobkey-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert seen == [(6161, "wgjobkey")]
+
+
+# --- _real_kill_pid (thread 6002, live-reproduced Wave 6): prefer the harness's own
+# `claude stop <id>` — a raw SIGTERM to a --bg-substrate body's inner process gets
+# silently respawned by the harness's own background-agent daemon, which reads an
+# unexpected exit as a crash to heal rather than a stop request. -------------------------
+
+async def test_real_kill_pid_prefers_claude_stop_when_a_harness_id_is_known(
+    monkeypatch: Any,
+) -> None:
+    calls: list[list[str]] = []
+
+    class _FakeProc:
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_exec(*argv: str, **kw: Any) -> _FakeProc:
+        calls.append(list(argv))
+        return _FakeProc()
+
+    killed: list[int] = []
+
+    def _fake_os_kill(pid: int, sig: int) -> None:
+        killed.append(pid)
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr("os.kill", _fake_os_kill)
+
+    await trigger_module._real_kill_pid(4242, "wgjobkey5")
+
+    assert calls == [["claude", "stop", "wgjobkey5"]]
+    assert killed == []  # claude stop succeeded — SIGTERM must never also fire
+
+
+async def test_real_kill_pid_falls_back_to_sigterm_when_claude_stop_fails(
+    monkeypatch: Any,
+) -> None:
+    class _FakeProc:
+        async def wait(self) -> int:
+            return 1  # unknown id, or a dark daemon — claude stop itself refused
+
+    async def _fake_exec(*argv: str, **kw: Any) -> _FakeProc:
+        return _FakeProc()
+
+    killed: list[tuple[int, int]] = []
+
+    def _fake_os_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr("os.kill", _fake_os_kill)
+
+    await trigger_module._real_kill_pid(4242, "some-unknown-id")
+
+    import signal
+    assert killed == [(4242, signal.SIGTERM)]
+
+
+async def test_real_kill_pid_uses_sigterm_directly_with_no_harness_id(
+    monkeypatch: Any,
+) -> None:
+    """The PTY-broker fallback lane: no harness-tracked id exists at all, so no
+    subprocess is even attempted — straight to the ordinary graceful SIGTERM."""
+    exec_calls: list[Any] = []
+
+    async def _fake_exec(*argv: str, **kw: Any) -> Any:
+        exec_calls.append(argv)
+        raise AssertionError("no harness id — claude stop must never be attempted")
+
+    killed: list[tuple[int, int]] = []
+
+    def _fake_os_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr("os.kill", _fake_os_kill)
+
+    await trigger_module._real_kill_pid(4242, None)
+
+    import signal
+    assert exec_calls == []
+    assert killed == [(4242, signal.SIGTERM)]
 
 
 # ═══ THE COLLAPSE ITSELF (2026-08-28) ══════════════════════════════════════════════════
