@@ -5913,8 +5913,8 @@ async def _surface_prior_art(
 _EXTENSION_LINK_PENDING_REASON = (
     "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
     "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
-    "implements=/rediscovers=/bears_on=/narrows=, which mint after this transaction and "
-    "cannot satisfy the gate at its own commit point")
+    "implements=/rediscovers=/bears_on=/narrows=/cites=, which mint after this transaction "
+    "and cannot satisfy the gate at its own commit point")
 
 
 @mcp.tool()
@@ -5927,6 +5927,7 @@ async def record_decision(
     confirms: list[str] | None = None, refutes: str | None = None,
     implements: str | None = None, rediscovers: list[str] | None = None,
     bears_on: list[str] | None = None, narrows: list[str] | None = None,
+    cites: list[str] | None = None,
     ack_prior_art: bool = False,
     unlinked_because: str | None = None,
     subagent_id: str | None = None,
@@ -5996,9 +5997,14 @@ async def record_decision(
     superseding — the target stays correct within its now-visible limit. Non-burying by
     construction, same guarantee as `rediscovers`; surfaced on the bounded decision as
     `narrowed_by` via recall(). Resolves like `rediscovers`.
+    `cites` = earlier decision(s) this one ADDS a new facet to, without bounding
+    (`narrows`), refuting, or independently re-deriving (`rediscovers`) them — the
+    declared form of the prose-citation miner's own `cites` edge (origin="declared"
+    instead of "prose"), for a caller naming the target without the miner's qualifier-
+    word convention. Resolves like `rediscovers`.
     `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/rediscovers/confirms/grounds/bears_on/narrows already answers it, pass
-    True to record the dismissal as a graph event instead of a shrug that leaves no trace.
+    implements/rediscovers/confirms/grounds/bears_on/narrows/cites already answers it,
+    pass True to record the dismissal as a graph event instead of a shrug with no trace.
     `unlinked_because` (task #189) — declare-or-refuse's hatch: a real reason here lets
     an otherwise-unlinked write through when the type requires a link kind.
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
@@ -6119,6 +6125,21 @@ async def record_decision(
             continue
         narrow_ids.append(nid)
         narrow_receipt.append({"ref": ref, "matched": "true", "id": str(nid)[:8]})
+    # cites resolves the same best-effort way as rediscovers/narrows (msg 6000, live
+    # specimen 7706efb4: bears_on refused it, narrows was the wrong relation) — the
+    # declared form of the prose-citation miner's own edge
+    cite_ids: list[uuid.UUID] = []
+    cite_receipt: list[dict[str, str]] = []
+    for ref in cites or []:
+        cid = await capture._find_decision(pool, ref, require_identifier=True)
+        if cid is None:
+            cite_receipt.append({"ref": ref, "matched": "false",
+                                 "note": "matched no decision — quote its UUID, "
+                                         "canonical, or 8-char short id (no longer a "
+                                         "prose match)"})
+            continue
+        cite_ids.append(cid)
+        cite_receipt.append({"ref": ref, "matched": "true", "id": str(cid)[:8]})
     # bears_on resolves the same best-effort way as confirms/rediscovers — one bad ref
     # must not veto the threads that DID match (thread 898840dc). Same addressing law as
     # resolves/supersedes (require_identifier=True): a citation act refuses rather than
@@ -6223,6 +6244,8 @@ async def record_decision(
                         for bid in bears_on_ids}
     narrows_was_new = {nid: not await _link_exists(existing_target, nid, "narrows")
                        for nid in narrow_ids}
+    cites_was_new = {cid: not await _link_exists(existing_target, cid, "cites")
+                     for cid in cite_ids}
     try:
         d = await capture.record_decision(
             Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
@@ -6235,7 +6258,7 @@ async def record_decision(
             unlinked_because=effective_unlinked_because,
             implements=impl_id, confirms=confirm_ids or None,
             rediscovers=rediscover_ids or None, bears_on=bears_on_ids or None,
-            narrows=narrow_ids or None,
+            narrows=narrow_ids or None, cites=cite_ids or None,
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
@@ -6435,6 +6458,11 @@ async def record_decision(
                           for nid in narrow_ids]
     if narrow_receipt:
         out["narrows_resolution"] = narrow_receipt
+    if cite_ids:
+        out["cites"] = [{"id": str(cid)[:8], "new_link": cites_was_new[cid]}
+                        for cid in cite_ids]
+    if cite_receipt:
+        out["cites_resolution"] = cite_receipt
     # `refutes`/`obsoletes` stay NON-ATOMIC, called here AFTER record_decision's own
     # transaction commits — same partial-commit debt as before, deliberately not folded
     # in with their four siblings above (see record_decision's own docstring): folding

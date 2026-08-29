@@ -696,7 +696,16 @@ def _tool_chars(t: Any) -> int:
 # first (the full rationale — why this is a missing verb and not a live-safeguard
 # defect, the cross-source supersede trap — lives in capture.py's own module comment,
 # not duplicated here); the remaining growth is the new capability itself, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 200229
+# 200,229 -> 200,736 (measured exact). Tool count unchanged (2026-08-28, Imhotep, msg
+# 6000, live specimen decision 7706efb4): record_decision gained one new PARAMETER,
+# `cites` — the declared form of the prose-citation miner's own `cites` edge
+# (origin="declared"), for a Decision that adds a new facet to an earlier one without
+# bounding (`narrows`), refuting, or independently re-deriving it. `bears_on` and
+# `narrows` both correctly refused this specimen; no new LinkType needed, `cites`
+# already legal Decision->Decision. Docstring line trimmed to the sibling params' own
+# one-line shape first; the remaining growth is the new param's own wire schema entry
+# plus that one line.
+TOOL_CONTRACT_CEILING_CHARS = 200736
 
 # HOISTED FROM A BARE INLINE ASSERT (2026-08-28, thread 5999): the count used to live only
 # as `assert len(per_tool) == N` inside the test function below, with no name a merge
