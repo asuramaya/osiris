@@ -698,6 +698,18 @@ def _tool_chars(t: Any) -> int:
 # not duplicated here); the remaining growth is the new capability itself, not prose.
 TOOL_CONTRACT_CEILING_CHARS = 200229
 
+# HOISTED FROM A BARE INLINE ASSERT (2026-08-28, thread 5999): the count used to live only
+# as `assert len(per_tool) == N` inside the test function below, with no name a merge
+# driver could find. A wave of four merges left the char ceiling above correctly
+# reconciled at every step (only one branch at a time touched IT too, so it always
+# conflicted and this driver always fired) while this count sat NINE LINES BELOW, touched
+# by only one branch — no conflict at all, so git silently kept that branch's own number
+# and main read 143 while the merged tree actually carried 144. Same shape, same name
+# convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
+# `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
+# both of them findable by name, not one.
+TOOL_CONTRACT_EXPECTED_COUNT = 144
+
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
     from src import mcp_server as srv
@@ -816,11 +828,6 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     A RATCHET SETTLED BY PREFERENCE HAS STOPPED RATCHETING — so no side was picked and
     no two numbers were averaged; the tree was re-measured."""
     _, per_tool = await _measure_tool_contract()
-    # 2026-08-28 — MEASURED, NOT MERGED. This line came out of the Wave 4/5 merge reading
-    # 143 with no conflict at all: only one branch touched it, so git took that side
-    # silently while the merged tree actually carried 144 tools. THE CEILING BESIDE IT WAS
-    # SAFE — reconcile_tool_contract_ceiling reconciles TOOL_CONTRACT_CEILING_CHARS by
-    # arithmetic and would have caught it — but the driver knows nothing about this
-    # assertion, so the count had no guard of its own. A ratchet with two numbers and one
-    # merge driver protects one of them. Re-measure both together on every merge.
-    assert len(per_tool) == 144
+    # See TOOL_CONTRACT_EXPECTED_COUNT's own comment above for why this is a named
+    # constant now, not a bare inline literal.
+    assert len(per_tool) == TOOL_CONTRACT_EXPECTED_COUNT
