@@ -705,7 +705,7 @@ def _tool_chars(t: Any) -> int:
 # already legal Decision->Decision. Docstring line trimmed to the sibling params' own
 # one-line shape first; the remaining growth is the new param's own wire schema entry
 # plus that one line.
-TOOL_CONTRACT_CEILING_CHARS = 200736
+
 
 # HOISTED FROM A BARE INLINE ASSERT (2026-08-28, thread 5999): the count used to live only
 # as `assert len(per_tool) == N` inside the test function below, with no name a merge
@@ -718,6 +718,14 @@ TOOL_CONTRACT_CEILING_CHARS = 200736
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
 TOOL_CONTRACT_EXPECTED_COUNT = 144
+# 200,229 -> 202,302 (measured exact). 144 -> 146 tools (2026-08-28, Seshat, thread 6001,
+# Wave 5's ambiguous-abstention retry door): retryable_ambiguous_abstentions (READ-ONLY,
+# the sibling retryable_abstentions never covers — 2+-candidate abstentions reduced by
+# elimination to exactly one live survivor) and retry_ambiguous_abstentions (the write
+# half, lane-agnostic since it only rechecks stored candidate ids' own status, never
+# re-derives). Two genuinely new capabilities, not one padded — docstrings trimmed under
+# the category rule first (full rationale in capture.py's own module comment).
+TOOL_CONTRACT_CEILING_CHARS = 202809
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
@@ -837,6 +845,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     A RATCHET SETTLED BY PREFERENCE HAS STOPPED RATCHETING — so no side was picked and
     no two numbers were averaged; the tree was re-measured."""
     _, per_tool = await _measure_tool_contract()
-    # See TOOL_CONTRACT_EXPECTED_COUNT's own comment above for why this is a named
-    # constant now, not a bare inline literal.
+    # Khnum's named-constant form wins over the inline literal, and the two sides were
+    # each right for their own branch: his hoisted this into TOOL_CONTRACT_EXPECTED_COUNT
+    # so the merge driver could reconcile it (the fix for Wave 4/5's silent 143-vs-144),
+    # hers bumped the literal to 146 for Wave 5's two new abstention-retry verbs. The
+    # merged tree is neither number — re-measured below, never picked.
     assert len(per_tool) == TOOL_CONTRACT_EXPECTED_COUNT

@@ -5405,6 +5405,43 @@ async def retryable_abstentions(link_type: str | None = None, limit: int = 100) 
 
 
 @mcp.tool()
+async def retryable_ambiguous_abstentions(
+    link_type: str | None = None, limit: int = 100,
+) -> dict[str, Any]:
+    """READ-ONLY. The sibling door retryable_abstentions doesn't cover: every LIVE 2+-
+    candidate abstention whose ORIGINAL candidate set has, by elimination alone (a merge,
+    a retire, an invalidation — never a fresh re-derivation), shrunk to exactly one
+    `status='active'` survivor. Structurally safe the same way retryable_abstentions is —
+    only the stored candidate ids' current status is rechecked, nothing is re-derived, so
+    a0339e16 is never relaxed. `eliminated_to_zero` (alongside `count`) names the DIFFERENT
+    population whose every candidate is now gone — real, but nothing to retry-mint from,
+    never folded into `count`/`sample`. Oldest-abstained first; names what's safe to
+    retry, never retries it. See retry_ambiguous_abstentions for the write half."""
+    return await capture.retryable_ambiguous_abstentions(
+        await _pool_get(), link_type, limit=limit)
+
+
+@mcp.tool()
+async def retry_ambiguous_abstentions(
+    dry_run: bool = True, because: str | None = None, link_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Mints the one surviving candidate for every row retryable_ambiguous_abstentions
+    names, via derive_or_abstain(retried=True) — lane-agnostic (no lane-specific lookup
+    re-run, only the stored candidate ids' own current status), so this one verb covers
+    every lane's ambiguous abstentions, present or future, not just in_repo's own.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    return await capture.retry_ambiguous_abstentions(
+        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because,
+        link_type=link_type)
+
+
+@mcp.tool()
 async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
     """THE READ DOOR (thread 09bde57e): every assertion row where `is_current=true`
     (migration 0047's maintained flag) YET a real `supersedes` FK already points at it from

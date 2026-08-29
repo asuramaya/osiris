@@ -333,9 +333,16 @@ async def derive_or_abstain(
     (`{"link_type", "resolved": True, "resolved_to": <this to_id>}`) — otherwise a
     resolved case would sit in `retryable_abstentions`' own queue forever, the exact
     detector-without-a-door failure this whole lane exists to fix, just moved one step
-    over. A fresh cardinality-1 success with NO prior abstention on record (the common
-    case — 127 of Wave 1's own mints) writes nothing extra: this is a correction to a
-    stale record, not a receipt every mint owes.
+    over. CROSS-SOURCE, DELIBERATELY (the exact same trap Wave 4's own backfill_lineage_
+    repo_links found and fixed for its own mint path, now fixed here at the shared root):
+    a retry runs under whatever actor re-derived it, almost never the original
+    abstention's own writer, and `assert_property`'s supersession is
+    same-source-only — a same-source re-assert would leave the stale, different-source
+    row "current" beside the new resolved marker instead of retiring it. This uses
+    `supersede_assertion`, the one legitimate cross-source door, against every live row
+    found (never just the first). A fresh cardinality-1 success with NO prior abstention
+    on record (the common case — 127 of Wave 1's own mints) writes nothing extra: this is
+    a correction to a stale record, not a receipt every mint owes.
 
     Returns `{"minted": bool, "to": uuid|None, "abstained": bool, "reason": str|None,
     "candidate_count": int, "candidates": list[uuid.UUID]}` — the caller's own receipt,
@@ -353,15 +360,32 @@ async def derive_or_abstain(
             await actions.create_link(from_id, to_id, link_type, source, datetime.now(UTC),
                                       _DERIVE_CONF, evidence_class=_DERIVE_TIER.value,
                                       properties=props)
-            had_live_abstention = await actions.pool.fetchval(
-                "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name=$2 "
-                "AND NOT (value ? 'resolved')",
+            # CROSS-SOURCE, ON PURPOSE (Wave 4's own finding, decision c1073f00): the
+            # LIVE abstention was very likely stamped under a DIFFERENT actor than THIS
+            # mint's own `source` — a retry (this function's own `retried=True` case,
+            # thread e67fc338) runs under whichever actor re-derived it, almost never
+            # the original writer. `assert_property`'s own supersession is same-source-
+            # only (actions/core.py) — re-asserting under `source` would leave the
+            # stale, different-source abstention "current" BESIDE the new resolved
+            # marker rather than retiring it, a contradiction minted by the very act
+            # meant to resolve it. `actions.supersede_assertion` is the one legitimate
+            # cross-source retirement door; every LIVE (non-resolved) row is superseded,
+            # not just the first — multiple sources can each hold their own abstention
+            # on the same object/link_type in principle, and a genuine resolution
+            # retires all of them, not an arbitrarily-picked one.
+            stale = await actions.pool.fetch(
+                "SELECT id FROM assertions WHERE object_id=$1 AND name=$2 "
+                "AND NOT (value ? 'resolved') "
+                "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
                 from_id, f"derivation_abstained_{link_type}")
-            if had_live_abstention:
-                await actions.assert_property(
-                    from_id, f"derivation_abstained_{link_type}",
+            for s in stale:
+                await actions.supersede_assertion(
+                    from_id, f"derivation_abstained_{link_type}", s["id"],
                     {"link_type": link_type, "resolved": True, "resolved_to": str(to_id)},
-                    source, datetime.now(UTC), _DERIVE_CONF, evidence_class=_DERIVE_TIER.value)
+                    source, datetime.now(UTC), _DERIVE_CONF,
+                    f"derive_or_abstain minted {link_type}={to_id}, superseding this "
+                    "abstention",
+                    evidence_class=_DERIVE_TIER.value)
         return {"minted": not exists, "to": to_id, "abstained": False, "reason": None,
                "candidate_count": 1}
     reason = why_if_ambiguous or (
@@ -781,6 +805,145 @@ async def retryable_abstentions(
             "source": r["source_id"],
         })
     return {"count": total, "sample": sample}
+
+
+# WAVE 5, THE OTHER HALF OF THE RETRY DOOR (thread 6001... Thoth's own instruction: "do
+# not collapse" the zero-candidate and ambiguous populations, they have DIFFERENT re-scan
+# conditions). `retryable_abstentions` above is deliberately scoped to `candidate_count=0`
+# ONLY — its own docstring's reasoning ("a later retry that happens to see one candidate
+# is a RACE") is correct for RE-RUNNING THE ORIGINAL LOOKUP FROM SCRATCH, which is exactly
+# what that function's callers do (re-derive candidates fresh, e.g. `resolve_repo_default`
+# catching up as ingest lands). It says nothing about a DIFFERENT, safer operation: an
+# ambiguous abstention already KEEPS its full original candidate set (Thoth's own msg
+# 5909 addition to `derive_or_abstain`) — checking whether some of THOSE SPECIFIC,
+# ALREADY-RECORDED candidates have since been formally eliminated (merged, retired,
+# invalidated — a real, audited event, never a guess) is not a race with a fresh lookup;
+# it is the SAME question a0339e16 asks, re-asked against a candidate set that may have
+# shrunk since it was last asked. `retryable_ambiguous_abstentions` is exactly that check,
+# LANE-AGNOSTIC (unlike a zero-candidate retry, which needs each lane's own lookup re-run
+# — no such thing exists here or is proposed by this lane): it needs only the STORED
+# candidate ids, never re-derives anything, so one generic write verb
+# (`retry_ambiguous_abstentions`, below) can safely serve every lane's ambiguous
+# abstentions at once, present or future.
+_AMBIGUOUS_SURVIVOR_CTE = (
+    "WITH latest AS ("
+    "  SELECT DISTINCT ON (a.object_id, a.name) a.object_id, a.name, a.value, "
+    "         a.observed_at, a.source_id "
+    "  FROM current_assertions a "
+    "  WHERE a.name LIKE 'derivation_abstained_%' AND ($1::text IS NULL OR a.name = $1) "
+    "  ORDER BY a.object_id, a.name, a.confidence DESC, a.observed_at DESC), "
+    "ambiguous AS ("
+    "  SELECT *, jsonb_array_length(value->'candidates') AS original_candidate_count "
+    "  FROM latest "
+    "  WHERE (value ? 'candidate_count') AND (value->>'candidate_count')::int >= 2), "
+    "surviving AS ("
+    "  SELECT amb.*, ("
+    "    SELECT count(*) FROM jsonb_array_elements_text(amb.value->'candidates') cid "
+    "    JOIN objects o ON o.id = cid::uuid AND o.status='active'"
+    "  ) AS active_count, ("
+    "    SELECT o.id FROM jsonb_array_elements_text(amb.value->'candidates') cid "
+    "    JOIN objects o ON o.id = cid::uuid AND o.status='active' LIMIT 1"
+    "  ) AS survivor_id "
+    "  FROM ambiguous amb) "
+)
+
+
+async def _ambiguous_survivor_rows(
+    pool: asyncpg.Pool, link_type: str | None, limit: int,
+) -> list[asyncpg.Record]:
+    """The shared, full-precision fetch both `retryable_ambiguous_abstentions` (display,
+    truncated ids) and `retry_ambiguous_abstentions` (write, needs the real uuids) build
+    on — one query, never re-derived differently by the two callers."""
+    name_filter = f"derivation_abstained_{link_type}" if link_type else None
+    return await pool.fetch(  # type: ignore[no-any-return]
+        _AMBIGUOUS_SURVIVOR_CTE + "SELECT * FROM surviving WHERE active_count = 1 "
+        "ORDER BY observed_at ASC LIMIT $2", name_filter, limit)
+
+
+async def retryable_ambiguous_abstentions(
+    pool: asyncpg.Pool, link_type: str | None = None, *, limit: int = 100,
+) -> dict[str, Any]:
+    """Every LIVE (non-resolved), 2+-candidate abstention whose ORIGINAL candidate set
+    has been reduced, by elimination alone, to EXACTLY ONE `objects.status='active'`
+    survivor — never a fresh re-derivation, only a status recheck of ids the abstention
+    itself already recorded, so the safety is structural (SQL-enforced, same discipline
+    `retryable_abstentions` uses for its own zero-candidate scope) rather than a promise
+    a caller has to keep. A candidate set reduced to ZERO survivors is a real, different
+    fact (every named answer is now gone) but is NOT included here — nothing to retry-
+    mint from it, and conflating it with the one-survivor case would be exactly the
+    collapse Thoth's own instruction refused; a caller wanting that population reads
+    `abstained_derivations`/this function's own `eliminated_to_zero` count and decides
+    separately what (if anything) it means for THAT lane.
+
+    Oldest-abstained first, same {count, sample} shape as `retryable_abstentions` plus
+    `surviving_candidate` (the one id this call's own sibling, `retry_ambiguous_
+    abstentions`, would mint) and `original_candidate_count` (so a reader can see HOW
+    ambiguous it originally was, not just that it wasn't). `eliminated_to_zero` (top-
+    level, alongside `count`) is the TRUE total of the zero-survivor population, for
+    visibility only — never folded into `count` or `sample`."""
+    name_filter = f"derivation_abstained_{link_type}" if link_type else None
+    total = await pool.fetchval(
+        _AMBIGUOUS_SURVIVOR_CTE + "SELECT count(*) FROM surviving WHERE active_count = 1",
+        name_filter)
+    eliminated_to_zero = await pool.fetchval(
+        _AMBIGUOUS_SURVIVOR_CTE + "SELECT count(*) FROM surviving WHERE active_count = 0",
+        name_filter)
+    rows = await _ambiguous_survivor_rows(pool, link_type, limit)
+    sample: list[dict[str, Any]] = []
+    for r in rows:
+        value = r["value"]
+        from_id = r["object_id"]
+        survivor_id = r["survivor_id"]
+        from_type, from_summary = await _describe(pool, from_id)
+        survivor_type, survivor_summary = await _describe(pool, survivor_id)
+        sample.append({
+            "from_id": str(from_id)[:8], "from_type": from_type, "from_summary": from_summary,
+            "link_type": value.get("link_type", r["name"].removeprefix("derivation_abstained_")),
+            "original_candidate_count": r["original_candidate_count"],
+            "surviving_candidate": {"id": str(survivor_id)[:8], "type": survivor_type,
+                                    "summary": survivor_summary},
+            "observed_at": r["observed_at"], "source": r["source_id"],
+        })
+    return {"count": total, "eliminated_to_zero": eliminated_to_zero, "sample": sample}
+
+
+async def retry_ambiguous_abstentions(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+    link_type: str | None = None,
+) -> dict[str, Any]:
+    """The write half `retryable_ambiguous_abstentions` names but never touches: mints
+    the ONE surviving candidate for every row that function reports, via `derive_or_
+    abstain(..., retried=True)` — `len(candidates) == 1` there always mints (the
+    surviving set is a singleton by this function's own selection), and its own cross-
+    source supersede step retires the stale abstention regardless of which actor
+    originally recorded it. LANE-AGNOSTIC BY CONSTRUCTION: no lane-specific lookup is
+    re-run, only the STORED candidate ids' current status is rechecked, so this one verb
+    already covers every present and future lane's ambiguous abstentions, not just this
+    house's own current single lane (in_repo).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to retry once minted (the abstention is superseded, so
+    `retryable_ambiguous_abstentions` no longer names it)."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    rows = await _ambiguous_survivor_rows(actions.pool, link_type, 1_000_000)
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    for r in rows:
+        from_id = r["object_id"]
+        survivor_id = r["survivor_id"]
+        row_link_type = r["value"].get(
+            "link_type", r["name"].removeprefix("derivation_abstained_"))
+        plan.append({"id": str(from_id), "link_type": row_link_type,
+                    "to": str(survivor_id),
+                    "original_candidate_count": r["original_candidate_count"]})
+        minted += 1
+        if not dry_run:
+            await derive_or_abstain(actions, from_id, row_link_type, [survivor_id], actor,
+                                    retried=True)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "plan": plan, "because": because if not dry_run else None}
 
 
 async def _mint_prose_citations(
