@@ -1484,6 +1484,22 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # satisfy the lint). The family's one true failure mode — a close being overridden —
     # gets its own check below (status-regression).
     #
+    # `is_handoff` JOINS THE LIFECYCLE FAMILY (thread 6027, Thoth's own "504 contradictions
+    # are probably one bug" dispatch): record_decision/settle stamp is_handoff='true' at
+    # confidence 0.9 (mcp_server.py's `settle` handler); `_retire_stale_handoffs`/
+    # `_retire_handoff_backlog` (the #150 backlog disposition) retire an OLDER marker within
+    # the SAME lineage by asserting is_handoff='false' at the SAME fixed 0.9 confidence — a
+    # deliberate supersession, not a second source disagreeing. Measured against the live
+    # graph (2026-08-29, script-verified via the same ranked-CTE this check runs): of 295
+    # is_handoff findings, ALL 295 had the 'false' winner's observed_at strictly later than
+    # the 'true' rival's, and ALL 295 were the false-over-true retirement direction — zero
+    # cases of the reverse (a stale 'false' overridden by a later 'true'), zero cases of a
+    # tie. The resolver was never wrong; this check's confidence-only heuristic just can't
+    # tell a designed two-state lifecycle (true at mint, false at retirement, same confidence
+    # both times) from a live dispute — exactly the class `status` was already excluded for.
+    # No dedicated regression check is added: the reverse direction has never been observed,
+    # so there is nothing yet to guard against (build one if it ever is).
+    #
     # TWO MORE EXCLUSIONS (thread 4a7da43a/12a210ab, reap Stage 1b leg 1, 2026-07-28):
     # (1) NON-ACTIVE SUBJECTS — a merged/historical/archived object's internal coin-flips
     # are history, not live ambiguity: nothing in the read-path (lineage_head resolves
@@ -1509,7 +1525,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # current-winning assertion exactly as before); only the AUDITOR's coverage widens.
     con = await pool.fetch(
         "WITH multi AS (SELECT object_id, name FROM current_assertions "
-        "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because') "
+        "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because', 'is_handoff') "
         "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
         "per_value AS (SELECT DISTINCT ON (ca.object_id, ca.name, ca.value #>> '{}') "
         "  ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, ca.confidence, "

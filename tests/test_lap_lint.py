@@ -287,6 +287,31 @@ async def test_lint_contradiction_excludes_a_healed_debounce_guess(actions: Acti
     out = await _fn(actions, "lint", {})
     con = _by_check(out, "contradiction")
     assert not any(f["subject"] in ("agent:debounced0001", "agent:healed0002") for f in con)
+
+
+async def test_lint_contradiction_excludes_is_handoff_retirement(actions: Actions) -> None:
+    """thread 6027 (Thoth's "504 contradictions are probably one bug" dispatch): is_handoff
+    joins the lifecycle family (`status`/`resolved_in`/`resolved_because`) already excluded
+    above — record_decision stamps 'true' at mint, `_retire_stale_handoffs` retires it by
+    asserting 'false' at the SAME fixed confidence later. Measured live: 295/295 real
+    findings had the 'false' winner strictly newer than the 'true' rival, zero reverse, zero
+    ties — a designed two-state lifecycle, not a live dispute. Prove the exclusion is narrow:
+    a genuine tie on some OTHER field for the same object still flags."""
+    t = "agent:teller"
+    d = await actions.create_or_find_object("Decision", "decision:handoff0001", t)
+    await actions.assert_property(d, "is_handoff", "true", "agent:ancestor", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(d, "is_handoff", "false", "agent:successor",
+                                  NOW + timedelta(minutes=5), 0.9, evidence_class="self_declared")
+    # an unrelated field on the SAME object still flags if it genuinely ties
+    await actions.assert_property(d, "summary", "Reign A", "agent:ancestor", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(d, "summary", "Reign B", "agent:successor",
+                                  NOW + timedelta(minutes=1), 0.9, evidence_class="self_declared")
+    out = await _fn(actions, "lint", {})
+    con = _by_check(out, "contradiction")
+    assert not any(f["field"] == "is_handoff" for f in con)
+    assert any(f["field"] == "summary" and f["subject"] == "decision:handoff0001" for f in con)
     # a real tie on succeeded_by (neither source is a known debouncer, neither value empty)
     # still flags — the exclusion never widens into "succeeded_by is exempt"
     d = await actions.create_or_find_object("Agent", "agent:disputed0003", t)
