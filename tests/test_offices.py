@@ -17,6 +17,7 @@ from src.orchestrator.offices import (
     plan_pin_migration,
     revert_pin_write,
     self_heal_project_pin,
+    sweep_retired_office,
     write_pin_additions,
 )
 
@@ -883,3 +884,183 @@ async def test_self_heal_is_a_noop_when_project_already_declared(
     (office / ".osiris").write_text('project = "tony"\n')
     out = await self_heal_project_pin(actions.pool, "agent:already4", str(office))
     assert out == {"state": "n/a"}
+
+
+# ═══ sweep_retired_office — the missing disk half (Thoth's msg 6026/6035 lane).
+# DRY-RUN ONLY this pass: execute stays deliberately unwired until Thoth reviews real
+# dry-run output; the guard is registry_census read TWICE (now, and after a heal-interval
+# wait), never a single instant's read — wave6probe's own lesson. ═══
+
+def _sweep_agents_json(rows: list[dict]) -> object:
+    async def _f() -> list[dict]:
+        return rows
+    return _f
+
+
+async def _instant_sleep(_secs: float) -> None:
+    pass
+
+
+_LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
+
+
+async def test_sweep_refuses_execute_not_wired(actions: Actions, tmp_path: Path) -> None:
+    office = tmp_path / "someoffice"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="someoffice", dry_run=False, office_root=tmp_path,
+        sleep=_instant_sleep)
+    assert "not wired yet" in out["error"]
+
+
+async def test_sweep_refuses_no_office_directory(actions: Actions, tmp_path: Path) -> None:
+    out = await sweep_retired_office(
+        actions.pool, handle="nosuchoffice", office_root=tmp_path, sleep=_instant_sleep)
+    assert "nothing to sweep" in out["error"]
+
+
+async def test_sweep_would_delete_a_stranger_office_with_no_seat_row_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The climintworker1/inferredworker1 shape exactly: a real office directory, no
+    matching Seat object at any status — pure test-run filesystem debris."""
+    office = tmp_path / "climintworker1"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "cliproj1"\n')
+    (office / "CLAUDE.md").write_text("orders\n")
+    out = await sweep_retired_office(
+        actions.pool, handle="climintworker1", office_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "would-delete"
+    assert out["seat"] is None
+    assert out["dry_run"] is True
+    assert set(out["entries"]) == {".osiris", "CLAUDE.md"}
+
+
+async def test_sweep_would_delete_a_retired_seats_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat, retire_seat
+
+    seat = await ensure_seat(actions, house="sweephouse", handle="SweepRetired1",
+                             source="test")
+    await retire_seat(actions, seat["seat_id"], reason="role is over", actor="test")
+    office = tmp_path / "sweepretired1"
+    office.mkdir()
+    (office / "charter.md").write_text("charter\n")
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepRetired1", office_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "would-delete"
+    assert out["seat"] == seat["seat_id"]
+    assert out["seat_status"] == "retired"
+    assert out["entries"] == ["charter.md"]
+
+
+async def test_sweep_refuses_an_active_seats_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat
+
+    await ensure_seat(actions, house="sweephouse", handle="SweepActive1", source="test")
+    office = tmp_path / "sweepactive1"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepActive1", office_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert "status='active'" in out["error"]
+    assert out["seat_status"] == "active"
+
+
+async def test_sweep_refuses_ambiguous_multiple_seats_sharing_a_handle(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    for canon in ("seat:sweeptwin1", "seat:sweeptwin2"):
+        oid = await actions.create_or_find_object("Seat", canon, "test")
+        await actions.assert_property(oid, "handle", "SweepTwin", "test", now, 0.9,
+                                      evidence_class="self_declared")
+    office = tmp_path / "sweeptwin"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepTwin", office_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert "ambiguous" in out["error"]
+    assert len(out["seats"]) == 2
+
+
+async def test_sweep_refuses_a_retired_seat_with_a_stray_active_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="sweephouse", handle="SweepStray1",
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:sweepstray1",
+                      source="test")
+    # force the graph-should-never-have shape: retired, but the holds link never cleared
+    await actions.pool.execute(
+        "UPDATE objects SET status='retired' WHERE canonical=$1", seat["seat_id"])
+    office = tmp_path / "sweepstray1"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepStray1", office_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert "active holder" in out["error"]
+
+
+async def test_sweep_refuses_a_live_body_at_the_office_right_now(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "sweeplive1"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="sweeplive1", office_root=tmp_path,
+        agents_json=_sweep_agents_json(
+            [{"sessionId": "sweeplive-1111-2222-3333-444444444444", "pid": 555,
+              "cwd": str(office)}]),
+        read_exe=lambda pid: _LIVE_EXE, read_cwd=lambda pid: str(office),
+        sleep=_instant_sleep)
+    assert out["status"] == "refused-live-body"
+    assert "right now" in out["detail"]
+
+
+async def test_sweep_refuses_a_live_body_that_appears_after_the_heal_wait(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The exact wave6probe race: clean at the first read, a body is live by the second —
+    the daemon's own auto-respawn window. The guard must catch it on the SECOND read."""
+    office = tmp_path / "sweepheal1"
+    office.mkdir()
+    calls = {"n": 0}
+
+    async def _flaky_agents_json() -> list[dict]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return []
+        return [{"sessionId": "sweepheal-1111-2222-3333-444444444444", "pid": 666,
+                 "cwd": str(office)}]
+
+    out = await sweep_retired_office(
+        actions.pool, handle="sweepheal1", office_root=tmp_path,
+        agents_json=_flaky_agents_json,
+        read_exe=lambda pid: _LIVE_EXE, read_cwd=lambda pid: str(office),
+        sleep=_instant_sleep)
+    assert out["status"] == "refused-live-body-after-heal-wait"
+    assert "daemon-respawn race" in out["detail"]
+
+
+async def test_sweep_refuses_on_a_blind_census_never_reading_silence_as_empty(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "sweepblind1"
+    office.mkdir()
+
+    async def _raises() -> list[dict]:
+        raise TimeoutError("harness read timed out")
+
+    out = await sweep_retired_office(
+        actions.pool, handle="sweepblind1", office_root=tmp_path,
+        agents_json=_raises, sleep=_instant_sleep)
+    assert out["status"] == "refused-live-body"
+    assert "blind census" in out["detail"]
