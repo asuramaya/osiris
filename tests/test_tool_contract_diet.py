@@ -717,7 +717,17 @@ def _tool_chars(t: Any) -> int:
 # convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
-TOOL_CONTRACT_EXPECTED_COUNT = 144
+TOOL_CONTRACT_EXPECTED_COUNT = 146  # MEASURED against the merged tree, 2026-08-29.
+# 144 -> 146: Seshat's retryable_ambiguous_abstentions + retry_ambiguous_abstentions
+# (thread 6001, Wave 5's ambiguous-abstention retry door).
+# THE DRIVER CORRECTLY DECLINED THIS ONE AND SAID SO: "TOOL_CONTRACT_EXPECTED_COUNT
+# missing from one of ancestor/ours/theirs — not this collision's shape for this
+# constant." True and right — the constant did not EXIST in the merge base, because
+# the commit that created it is in this same wave. A driver cannot reconcile a
+# three-way delta on a value with only two sides. It declined by name instead of
+# guessing, which is the whole point of the try/except; the count was then measured
+# by hand, the same way the chars are. From the NEXT merge on it has an ancestor and
+# reconciles like its sibling.
 # 200,229 -> 202,302 (measured exact). 144 -> 146 tools (2026-08-28, Seshat, thread 6001,
 # Wave 5's ambiguous-abstention retry door): retryable_ambiguous_abstentions (READ-ONLY,
 # the sibling retryable_abstentions never covers — 2+-candidate abstentions reduced by
