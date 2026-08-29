@@ -14,6 +14,7 @@ rows, the transcripts with their re-addressing, the Seat object's anchor).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -803,3 +804,141 @@ async def establish_office(
                 f"{house} from the pin; transcripts moved are re-addressed so resume "
                 "works in place",
     }
+
+
+_SWEEP_HEAL_WAIT_SECS = 90  # wave6probe's own measured respawn window (~1 min, decision
+# 4ca39589/ruling 457d5e96) plus margin — the interval a supervised harness daemon needs to
+# silently re-resume a killed session onto a fresh pid; a clean read taken before this has
+# elapsed is not evidence of nothing, it is evidence of "not yet"
+
+
+async def _live_body_at_office(
+    pool: asyncpg.Pool, office: Path, *,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any] | None:
+    """One registry_census read, matched against `office` by EITHER cwd the census carries
+    (harness-reported `harness_cwd` or /proc-confirmed `proc_cwd` — a body can disagree with
+    itself mid-move, so both are checked) over `verified` (every /proc-confirmed live body,
+    matched-to-a-graph-row or not — `rowless` bodies are exactly the population house law
+    #178 warns never to treat as absent just because agent_mounts missed them). A blind
+    census (`blind: true`, the harness read itself failed) is NEVER read as "nothing live" —
+    it refuses the same as a real hit, one instant's silence is not proof of an empty room."""
+    from src.orchestrator.mounts import registry_census
+
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if census.get("blind"):
+        return {"blind": True}
+    office_str = str(office)
+    for body in census.get("verified", []):
+        body_dict: dict[str, Any] = body
+        for key in ("harness_cwd", "proc_cwd"):
+            cwd = body_dict.get(key)
+            if cwd and (cwd == office_str or str(cwd).startswith(office_str + "/")):
+                return body_dict
+    return None
+
+
+async def sweep_retired_office(
+    pool: asyncpg.Pool, *, handle: str, dry_run: bool = True, because: str | None = None,
+    office_root: Path | None = None, sleep: Any = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
+    """THE MISSING DISK HALF of seat cleanup (Thoth's msg 6026/6035 lane, wave6probe's own
+    finding): retire_seat/vacate_holder are graph-only by design — neither touches the
+    office directory establish_office scaffolded, so a retired seat's `~/.osiris/seats/
+    <handle>/` sits on disk forever, a complete-looking office belonging to nobody. This is
+    the deliberately SEPARATE verb that closes that gap — never folded into retire_seat
+    (every existing caller relies on its graph-only contract, and a seat can legitimately
+    be retired while its files are kept for archival/audit) or vacate_holder (that releases
+    a STILL-REUSABLE seat; deleting the office under something that may be relaunched into
+    the same directory would be actively wrong).
+
+    REFUSES, per directory, rather than guessing, on:
+    - no office directory at the resolved path — nothing to sweep;
+    - more than one Seat object shares this handle (any status) — ambiguous, never guesses
+      which one owns this directory;
+    - a matching Seat exists and is NOT retired (active/unknown status) — this verb only
+      ever touches a graph-retired seat's office, or an office with NO Seat row at all
+      (the climintworker1/inferredworker1 shape: pure test-run filesystem debris, never a
+      real seat, confirmed independently across 4+ prior generations);
+    - a matching Seat carries an active `holds` link despite its retired status — a shape
+      that should never exist and is not this verb's business to untangle;
+    - a live body's cwd resolves inside the office RIGHT NOW, per registry_census;
+    - a live body's cwd resolves inside the office after waiting `_SWEEP_HEAL_WAIT_SECS` —
+      wave6probe's own lesson (decision 4ca39589/ruling 457d5e96): a supervised harness
+      daemon can silently re-resume a killed session onto a fresh pid within about a
+      minute, so a single instant's clean read is not proof of an empty office. THE GUARD
+      IS TWO READS, NEVER ONE, exactly the discipline that build demanded.
+
+    `dry_run=True` (the only mode wired this pass, per Thoth's explicit instruction: no
+    execute path until he has seen real dry-run output) reports `would_delete` with every
+    entry under the office, never removes anything. `dry_run=False` is DELIBERATELY
+    UNIMPLEMENTED right now — refuses with its own reason rather than silently doing
+    nothing, so a caller can never mistake "not built yet" for "ran and did nothing"."""
+    if not dry_run:
+        return {"error": "sweep_retired_office's execute path is not wired yet — this pass "
+                         "is dry-run only (Thoth's ruling msg 6035): review the dry-run "
+                         "output first, the execute half is a separate, later ask"}
+    handle = (handle or "").strip()
+    if not handle:
+        return {"error": "a handle is required"}
+    root = office_root or _DEFAULT_OFFICE_ROOT
+    office = root / handle.lower()
+    if not office.is_dir():
+        return {"error": f"no office directory at {office} — nothing to sweep"}
+
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "ORDER BY o.created_at", handle)
+    if len(rows) > 1:
+        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r} — "
+                         "ambiguous, refuses rather than guessing which one owns this office",
+                "office": str(office), "seats": [r["canonical"] for r in rows]}
+    seat_id = rows[0]["canonical"] if rows else None
+    seat_status = rows[0]["status"] if rows else None
+    if seat_id is not None and seat_status != "retired":
+        return {"error": f"{handle} is a graph Seat ({seat_id}) with status={seat_status!r} "
+                         "— sweep_retired_office only touches a RETIRED seat's office, or "
+                         "an office with no matching Seat row at all",
+                "office": str(office), "seat": seat_id, "seat_status": seat_status}
+    if seat_id is not None:
+        holder = await pool.fetchval(
+            "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+            "WHERE l.to_id=$1 AND l.type='holds' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", rows[0]["id"])
+        if holder:
+            return {"error": f"{handle} is retired but carries an active holder ({holder}) "
+                             "— a shape that should never exist; refusing rather than "
+                             "resolving it silently",
+                    "office": str(office), "seat": seat_id}
+
+    first = await _live_body_at_office(
+        pool, office, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if first is not None:
+        detail = ("the harness registry read itself failed (blind census) — never read as "
+                  "'nothing live'" if first.get("blind") else
+                  f"a live body's cwd resolves inside this office right now (pid "
+                  f"{first.get('pid')})")
+        return {"status": "refused-live-body", "office": str(office), "seat": seat_id,
+                "detail": detail}
+    _sleep = sleep or asyncio.sleep
+    await _sleep(_SWEEP_HEAL_WAIT_SECS)
+    second = await _live_body_at_office(
+        pool, office, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if second is not None:
+        detail = ("the harness registry read itself failed on the heal-interval re-check "
+                  "(blind census) — never read as 'nothing live'" if second.get("blind") else
+                  f"clean at the first read, but a live body appeared after the "
+                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}) — "
+                  "exactly the daemon-respawn race wave6probe reproduced")
+        return {"status": "refused-live-body-after-heal-wait", "office": str(office),
+                "seat": seat_id, "detail": detail}
+
+    entries = sorted(str(p.relative_to(office)) for p in office.rglob("*"))
+    return {"status": "would-delete", "dry_run": True, "office": str(office),
+            "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
+            "entries": entries, **({"because": because.strip()} if because else {})}

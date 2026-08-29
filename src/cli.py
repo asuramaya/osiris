@@ -2612,7 +2612,7 @@ async def _infer_manager(
 async def cmd_mint_seat(
     handle: str, *, manager: str | None, project: str | None, house: str | None,
     model: str | None, actor: str, adopt: bool = False, force: bool = False,
-    pool: asyncpg.Pool | None = None,
+    pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
     """osiris mint-seat <handle> [--manager <seat>] [--project P] [--house H] [--model M]
     [--actor <who>] [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
@@ -2635,7 +2635,17 @@ async def cmd_mint_seat(
 
     Prints the SAME next_step guidance the receipt already carries (mint_seat's own
     occupancy-aware line — vacant: `osiris launch <handle>`; occupied/cold: nothing
-    needed) rather than a second, driftable copy of that advice."""
+    needed) rather than a second, driftable copy of that advice.
+
+    `office_root` is TEST-ONLY plumbing (no CLI flag exposes it — a real operator never
+    wants scaffolding anywhere but the standard `~/.osiris/seats/` location, so this
+    stays a keyword-only escape hatch): mint_seat/_scaffold_office already accept an
+    injectable office_root for exactly this, but this console door never threaded it
+    through — every unmocked test-level call scaffolded a REAL office under the
+    developer's real home directory while the DB side rolled back in a test transaction,
+    leaving a directory on disk with no matching Seat (climintworker1/inferredworker1,
+    Thoth's msg 3928/6026 — an office with no Seat, the exact inverse of #139's mint-door
+    catalog, manufactured by our own test suite on every real run)."""
     from src.actions.core import Actions
     from src.orchestrator.mintseat import mint_seat as _mint_seat
 
@@ -2666,6 +2676,8 @@ async def cmd_mint_seat(
             print(f"osiris mint-seat: inferred --manager={manager!r} — the only seat in "
                   f"house {ctx_house!r}; pass --manager explicitly to override")
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+        if office_root is not None:
+            kwargs["office_root"] = office_root
         out = await _mint_seat(Actions(pool), manager=manager, handle=handle, house=house,
                                project=project, actor=actor, adopt=adopt, force=force,
                                **kwargs)

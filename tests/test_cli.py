@@ -2833,7 +2833,9 @@ async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
 # --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
 # MCP tool infers `manager` from the caller's held seat, which a raw terminal has none of) ------
 
-async def test_cmd_mint_seat_mints_fresh_worker_and_reports(actions: Actions) -> None:
+async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
+    actions: Actions, tmp_path: Path,
+) -> None:
     import io
     from contextlib import redirect_stdout
 
@@ -2846,7 +2848,7 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(actions: Actions) ->
     with redirect_stdout(buf):
         out = await cmd_mint_seat(
             "CliMintWorker1", manager=manager["seat_id"], project="cliproj1", house=None,
-            model=None, actor="agent:climinter1", pool=actions.pool)
+            model=None, actor="agent:climinter1", pool=actions.pool, office_root=tmp_path)
     assert out == 0
     text = buf.getvalue()
     assert "minted CliMintWorker1" in text and "house=clihouse" in text
@@ -3049,7 +3051,7 @@ async def test_cmd_retention_refuses_an_unknown_table(actions: Actions) -> None:
 
 
 async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
-    actions: Actions,
+    actions: Actions, tmp_path: Path,
 ) -> None:
     """dispatch 3678: --manager omitted infers the ONE seat in the target --house."""
     import io
@@ -3064,7 +3066,7 @@ async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
     with redirect_stdout(buf):
         out = await cmd_mint_seat(
             "InferredWorker1", manager=None, project=None, house="soleseathouse",
-            model=None, actor="console", pool=actions.pool)
+            model=None, actor="console", pool=actions.pool, office_root=tmp_path)
     assert out == 0
     text = buf.getvalue()
     assert "inferred --manager='OnlySeatHere'" in text
