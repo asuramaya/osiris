@@ -172,6 +172,64 @@ def test_stage_a_never_fires_when_mail_blocks_the_stop(monkeypatch: Any) -> None
     assert [c["phase"] for c in calls] == ["deliverable"]  # never got to stage_a
 
 
+def test_pure_fyi_mail_never_blocks_the_stop(monkeypatch: Any) -> None:
+    """obligation 6ad2f400 (msg 6029): the stop-block is reserved for grade='ask' (+
+    ungraded) — an fyi that dispatch #151's own grammar already promises "never wakes
+    anyone" must not still interrupt a live turn. n=2, both counted in bands['fyi'] ->
+    blocking=0 -> stop proceeds to stage_a, same as a clean inbox."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        calls.append(data)
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 2, "senders": ["agent:x"], "window": 200000,
+                               "bands": {"ask": 0, "fyi": 2}}}
+        return {"result": "ok"}
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    rc = _cmd_stop({"session_id": "fyionly1", "cwd": "/x"})
+    assert rc == 0
+    assert [c["phase"] for c in calls] == ["deliverable", "stage_a"]  # never blocked
+
+
+def test_an_ask_still_blocks_alongside_a_non_blocking_fyi(monkeypatch: Any) -> None:
+    """A mixed inbox (1 ask, 1 fyi) still blocks — the ask carries the debt, the fyi
+    rides along in the message text but is never counted toward it."""
+    out = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 2, "senders": ["agent:x"], "window": None,
+                               "bands": {"ask": 1, "fyi": 1}}}
+        raise AssertionError("must not reach stage_a on a blocked stop")
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = _cmd_stop({"session_id": "mixedask1", "cwd": "/x"})
+    assert rc == 0
+    decision = json.loads(out[0])
+    assert decision["decision"] == "block"
+    assert "1 deliverable" in decision["reason"]  # blocking count excludes the fyi
+    assert "ask(s) something of you" in decision["reason"]
+
+
+def test_ungraded_mail_still_blocks_never_guessed_as_fyi(monkeypatch: Any) -> None:
+    """#151's own law: ungraded mail is never assumed to be fyi. n=1 with an empty bands
+    dict (ungraded, unscored) must still block — blocking = n - bands.get('fyi', 0) = 1."""
+    out = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 1, "senders": ["agent:y"], "window": None, "bands": {}}}
+        raise AssertionError("must not reach stage_a on a blocked stop")
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = _cmd_stop({"session_id": "ungraded1", "cwd": "/x"})
+    assert rc == 0
+    assert json.loads(out[0])["decision"] == "block"
+
+
 def test_stage_a_fires_on_a_clean_allowed_stop(monkeypatch: Any) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -669,6 +727,65 @@ def test_spawn_logs_the_diagnostic_only_with_an_agent_id(monkeypatch: Any) -> No
     assert not out
     osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-x"})
     assert "connected" in "".join(out)
+
+
+def _fake_stdout_print(out: list[str]) -> Any:
+    """Captures only STDOUT prints (the hookSpecificOutput JSON) — _log_post's own
+    diagnostic always targets file=sys.stderr and must not be conflated with it."""
+    def _p(s: str = "", **kw: Any) -> None:
+        if kw.get("file") is None:
+            out.append(s)
+    return _p
+
+
+def test_spawn_start_prints_the_fork_orientation_as_additional_context(
+    monkeypatch: Any,
+) -> None:
+    """obligation 706c27dc's second half (msg 6034): SubagentStart is NOT in Claude Code's
+    plain-stdout-as-context exception list, so a fork only ever sees this if it's shaped as
+    hookSpecificOutput.additionalContext JSON — the one place this client emits that shape."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:forkabcd", "of": "agent:parent",
+                                      "fork_orientation": "you are a FORK — Khnum XLII.15"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-forkabcd",
+                                 "agent_type": "fork", "hook_event_name": "SubagentStart"})
+    assert rc == 0
+    payload = json.loads(out[0])
+    assert payload["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+    assert "you are a FORK" in payload["hookSpecificOutput"]["additionalContext"]
+
+
+def test_spawn_stop_never_prints_orientation(monkeypatch: Any) -> None:
+    """Stop has nothing left to orient — even if the server echoed a fork_orientation, the
+    Stop phase must never print it (it would be a stray, unexplained stdout line)."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:forkabcd", "of": "agent:parent",
+                                      "fork_orientation": "you are a FORK"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-forkabcd",
+                                 "agent_type": "fork", "hook_event_name": "SubagentStop"})
+    assert rc == 0
+    assert out == []
+
+
+def test_spawn_start_with_no_orientation_prints_nothing(monkeypatch: Any) -> None:
+    """An ordinary (non-fork) subagent's start carries no fork_orientation — silent, as
+    before this fix."""
+    monkeypatch.setattr(
+        osiris_hook, "_post",
+        lambda url, data, timeout=3: {"spawn": "agent:plainxyz", "of": "agent:parent"})
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
+    rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-plainxyz",
+                                 "agent_type": "general-purpose",
+                                 "hook_event_name": "SubagentStart"})
+    assert rc == 0
+    assert out == []
 
 
 # --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------

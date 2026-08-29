@@ -174,6 +174,43 @@ async def test_a_dm_reaches_only_its_addressee_and_reply_routes_back(actions: Ac
     assert ans.get("dm") is True and ans["thread"] == dm["id"]
 
 
+async def test_read_inbox_discloses_a_sidechain_senders_own_fork_identity(
+    actions: Actions,
+) -> None:
+    """obligation 706c27dc (msg 6029): the mail layer's only is_sidechain read site used to
+    check the ADDRESSEE (mcp_server.py's send()) and never the SENDER — a fork DMing in its
+    parent's voice with the parent's own inherited context read as a bare unfamiliar id,
+    indistinguishable from impersonation to a reader who hadn't independently caught it.
+    Disclosure, not prohibition: read_inbox now surfaces the SENDER's own is_sidechain +
+    patronym so a reader sees "a fork of Khnum XLII" instead of a bare agent:<hash>."""
+    p = actions.pool
+    from datetime import UTC, datetime
+
+    fork_id = "agent:forkabcd1234"
+    obj = await actions.create_or_find_object("Agent", fork_id, fork_id)
+    await actions.assert_property(obj, "is_sidechain", "true", fork_id, datetime.now(UTC),
+                                  1.0, evidence_class="self_declared")
+    await actions.assert_property(obj, "patronym", "Khnum XLII.15", fork_id,
+                                  datetime.now(UTC), 1.0, evidence_class="self_declared")
+    await send_message(p, from_agent=fork_id, from_project="handlingtheloop",
+                       to_agent="agent:reader", body="found the leak in the pool wrapper")
+    (m,) = await read_inbox(p, "handlingtheloop", reader_agent="agent:reader")
+    assert m["from_sidechain"] is True
+    assert m["from_patronym"] == "Khnum XLII.15"
+
+
+async def test_read_inbox_never_flags_an_ordinary_sender(actions: Actions) -> None:
+    """The common case: an ordinary (non-fork) sender carries no is_sidechain assertion at
+    all — read_inbox must not invent a flag for it."""
+    p = actions.pool
+    await _seed(p, "handlingtheloop")
+    await send_message(p, from_agent="agent:ux", from_project="handlingtheloop",
+                       to_agent="agent:reader", body="plain DM, nothing forked about it")
+    (m,) = await read_inbox(p, "handlingtheloop", reader_agent="agent:reader")
+    assert "from_sidechain" not in m
+    assert "from_patronym" not in m
+
+
 async def test_peek_neither_leases_nor_settles(actions: Actions) -> None:
     p = actions.pool
     await _seed(p, "b")

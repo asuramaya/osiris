@@ -356,22 +356,35 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     n = result.get("n", 0)
     window_hint = result.get("window")
 
-    # If mail waits, block. THE JSON DECISION PROTOCOL, NOT EXIT CODE 1 (found in the
-    # retirement's own parity proof, dispatch 5599): Claude Code's Stop/SubagentStop hooks
-    # ONLY block on exit code 2 — exit 1 is a non-blocking error, the stop proceeds anyway,
-    # silently. The proven, live osiris_stophook.py never used exit codes for this at all;
-    # it prints {"decision": "block", "reason": ...} to stdout and exits 0. The stub this
-    # replaces would never have blocked a single stop in production. Message text and the
-    # bands/senders/project shape are ported verbatim from that script's own `main()`.
-    if n > 0:
+    # If BLOCKING mail waits, block. THE JSON DECISION PROTOCOL, NOT EXIT CODE 1 (found in
+    # the retirement's own parity proof, dispatch 5599): Claude Code's Stop/SubagentStop
+    # hooks ONLY block on exit code 2 — exit 1 is a non-blocking error, the stop proceeds
+    # anyway, silently. The proven, live osiris_stophook.py never used exit codes for this
+    # at all; it prints {"decision": "block", "reason": ...} to stdout and exits 0. The stub
+    # this replaces would never have blocked a single stop in production. Message text and
+    # the bands/senders/project shape are ported verbatim from that script's own `main()`.
+    #
+    # THE STOP-BLOCK IS RESERVED FOR grade='ask' (+ UNGRADED) (obligation 6ad2f400, msg
+    # 6029, Thoth LXXXVIII): dispatch #151's own grammar already says "an fyi never wakes
+    # anyone, it settles at each reader's own next turn" — the send half honours that, but
+    # this gate used to fold ask/fyi/ungraded into one undifferentiated `n > 0`, so an fyi
+    # that explicitly promises not to interrupt still blocked Stop anyway (Soundwave XV's
+    # complaint, msg 5996: a context switch out of a live measurement, four times in a day).
+    # `blocking` subtracts ONLY the counted fyi band — ungraded mail is never guessed as fyi
+    # and keeps blocking (#151's own law: ungraded mail is never assumed). fyi mail is not
+    # consumed here — it stays unread and still surfaces via inbox()/orient() at the reader's
+    # own next turn; this gate only decides whether Stop itself is interrupted.
+    bands = result.get("bands") or {}
+    blocking = n - int(bands.get("fyi", 0))
+    if blocking > 0:
         senders = result.get("senders") or []
         who = f" (from {', '.join(senders[:4])})" if senders else ""
-        bands = result.get("bands") or {}
         graded = []
         if bands.get("ask"):
             graded.append(f"{bands['ask']} ask(s) something of you")
         if bands.get("fyi"):
-            graded.append(f"{bands['fyi']} fyi (an ack settles)")
+            graded.append(f"{bands['fyi']} fyi, not blocking (an ack settles at your own "
+                          "next turn)")
         rest = n - sum(bands.values())
         if graded and rest:
             graded.append(f"{rest} ungraded")
@@ -379,9 +392,9 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         project_display = result.get("project") or "an unresolved project"
         print(json.dumps({
             "decision": "block",
-            "reason": (f"Osiris: {n} deliverable message(s) for {project_display}{who}{shape} "
-                       "— call inbox(), act on what carries new work, SETTLE each handled "
-                       "message (reply with send(reply_to=<id>) or ack with "
+            "reason": (f"Osiris: {blocking} deliverable message(s) for {project_display}"
+                       f"{who}{shape} — call inbox(), act on what carries new work, SETTLE "
+                       "each handled message (reply with send(reply_to=<id>) or ack with "
                        "inbox(ack=[ids])), then finish. If a message needs nothing, ack it."),
         }))
         return 0
@@ -741,11 +754,12 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     agent_id = str(hook.get("agent_id") or "")
     if not agent_id:
         return 0
+    is_start = hook.get("hook_event_name") != "SubagentStop"
     body: dict[str, Any] = {
         "session_id": str(hook.get("session_id") or ""),
         "agent_id": agent_id,
         "agent_type": str(hook.get("agent_type") or ""),
-        "phase": "stop" if hook.get("hook_event_name") == "SubagentStop" else "start",
+        "phase": "start" if is_start else "stop",
     }
     tp = str(hook.get("agent_transcript_path") or "")
     if tp:
@@ -753,6 +767,17 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     url = _URLS["spawn"]
     resp = _post(url, body, timeout=_TIMEOUTS["spawn"])
     _log_post("osiris_hook.spawn", url, resp)
+    # TELL THE FORK, AT SPAWN (obligation 706c27dc's second half, msg 6034): SubagentStart is
+    # NOT in Claude Code's plain-stdout-as-context exception list (that's SessionStart/
+    # UserPromptSubmit/UserPromptExpansion/PostModelSwitch only) — a fork only ever sees this
+    # if it's shaped as the documented hookSpecificOutput.additionalContext JSON, so this is
+    # the one place in the whole client that emits that shape rather than plain text.
+    if is_start and resp is not None:
+        out = resp.get("result") if isinstance(resp.get("result"), dict) else resp
+        ctx = out.get("fork_orientation") if isinstance(out, dict) else None
+        if ctx:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "SubagentStart", "additionalContext": ctx}}))
     return 0
 
 
