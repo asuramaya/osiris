@@ -2777,10 +2777,35 @@ async def launch_seat(
     return out
 
 
-async def _real_kill_pid(pid: int) -> None:
-    """SIGTERM, the real default — a graceful ask, not SIGKILL: a live turn gets the chance
-    to unwind (flush a partial write, let the harness mark the session cleanly ended)
-    rather than vanishing mid-syscall. Injectable so no test ever touches a real process."""
+async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
+    """PREFER THE HARNESS'S OWN `claude stop <id>` — live-reproduced, Wave 6 (thread 6002,
+    Thoth's follow-up dispatch): a raw SIGTERM to the inner process of a `--bg`-substrate
+    body (the DEFAULT launch lane, `osiris_launch_substrate="harness"`) gets SILENTLY
+    RESPAWNED by the harness's own background-agent daemon within about a minute — the
+    daemon reads an unexpected process exit as a crash to heal, re-resuming the SAME named
+    window onto a fresh pid, not as a stop request. `stop_seat` reported `status="stopped"`
+    while the body kept coming back — the exact false-clean reading the operator's own
+    standing instruction on spawn/stop hygiene warns against ("a stop verb that reports
+    success while leaving a body is strictly worse than no stop verb"). `claude stop <id>`
+    is the daemon-aware verb ("Its conversation is kept... `claude --resume` works once it
+    is stopped" — the harness's own `stop|kill` help text) and does NOT trigger that
+    auto-heal; `job_dir_key` (registry_census's own field, identical to `claude agents
+    --json`'s own `id`) is already resolved by every caller of this function, so no new
+    lookup is needed to use it.
+
+    FALLS BACK to a raw SIGTERM only when no harness-tracked id exists at all — the PTY-
+    broker fallback lane (`osiris_launch_substrate="pty"`), which the harness's own daemon
+    never sees and so cannot auto-heal; a graceful ask there, not SIGKILL, exactly as
+    before. Also falls back if `claude stop` itself exits non-zero (an unknown id, a dark
+    daemon) — better an ordinary SIGTERM than silence.
+
+    Injectable so no test ever touches a real process or spawns a real subprocess."""
+    if job_dir_key:
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "stop", job_dir_key,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        if await proc.wait() == 0:
+            return
     import signal
     os.kill(pid, signal.SIGTERM)
 
@@ -2872,12 +2897,13 @@ async def stop_seat(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
     pid = match.get("pid") if match else None
+    job_dir_key = match.get("job_dir_key") if match else None
     if not isinstance(pid, int):
         return {"status": "no-live-body", "seat": target_seat, "holder": holder,
                 "detail": f"{holder} carries no harness/proc-confirmed live body right "
                           "now — nothing to signal (already dead, or never really live)"}
     try:
-        await kill(pid)
+        await kill(pid, job_dir_key)
     except ProcessLookupError:
         return {"status": "no-live-body", "seat": target_seat, "holder": holder, "pid": pid,
                 "detail": "the process was already gone by the time the signal landed"}
@@ -2896,9 +2922,10 @@ async def stop_seat(
                                         "operator" if caller == _OPERATOR_CALLER
                                         else "manager"),
             **({"reason": reason} if reason else {}),
-            "detail": f"SIGTERM sent to {holder}'s live body (pid {pid}) — reachability "
-                      "afterward is governed entirely by the SAME occupancy authority "
-                      "launch()/wake() already consult; no separate release step exists"}
+            "detail": f"stop signal sent to {holder}'s live body (pid {pid}) — "
+                      "reachability afterward is governed entirely by the SAME occupancy "
+                      "authority launch()/wake() already consult; no separate release "
+                      "step exists"}
 
 
 async def _transcript_activity(

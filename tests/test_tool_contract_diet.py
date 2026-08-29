@@ -696,7 +696,13 @@ def _tool_chars(t: Any) -> int:
 # first (the full rationale — why this is a missing verb and not a live-safeguard
 # defect, the cross-source supersede trap — lives in capture.py's own module comment,
 # not duplicated here); the remaining growth is the new capability itself, not prose.
-TOOL_CONTRACT_CEILING_CHARS = 200229
+TOOL_CONTRACT_CEILING_CHARS = 200308
+# 200,229 -> 200,308 (measured exact). Tool count unchanged (2026-08-29, Sekhmet, thread
+# 6002, Wave 6 half 2): `stop`'s own docstring corrected — it claimed "SIGTERMs a LIVE
+# body's OS process", no longer true after the live-reproduced fix (a raw SIGTERM to a
+# --bg-substrate body gets silently respawned by the harness's own daemon; `stop_seat`
+# now prefers the harness's own `claude stop <id>` and falls back to SIGTERM only when
+# no harness-tracked id exists). The growth is a corrected fact, not added prose.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

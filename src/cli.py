@@ -2935,8 +2935,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                "`claude --bg` — for an incident or a build with no --bg")
 
     p_stop = sub.add_parser("stop", description=_d(
-        "END a live body — `osiris launch`'s inverse. SIGTERMs the seat's own process and "
-        "nothing more: not a pause, no promised thaw-where-you-left-off (ruling b3ccd3f6). "
+        "END a live body — `osiris launch`'s inverse. Stops the seat's own process (the "
+        "harness's own `claude stop <id>` when the body is harness-tracked, else a plain "
+        "SIGTERM) and nothing more: not a pause, no promised thaw-where-you-left-off "
+        "(ruling b3ccd3f6). "
         "Reachability afterward is governed by the SAME occupancy authority launch/wake "
         "already read, so a later launch just works — there is no 'unstop' to remember. "
         "`no-live-body` exits 0: nothing running there is a SUCCESS for a teardown"),
