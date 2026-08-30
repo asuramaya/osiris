@@ -889,6 +889,32 @@ async def sweep_retired_office(
         return {"error": "a handle is required"}
     root = office_root or _DEFAULT_OFFICE_ROOT
     office = root / handle.lower()
+    # CONTAINMENT, AND IT IS THE ONE GUARD THIS VERB WAS MISSING (Thoth LXXXIX, wave 8
+    # merge review). Every other refusal below interrogates THE SEAT — is it retired, is
+    # it ambiguous, does it hold, is a body live in it. Not one of them interrogates THE
+    # PATH, and `handle` is a caller-supplied string that goes straight into a `/` join:
+    # handle='../../code/osiris/docs' resolves clean out of the office root, matches no
+    # Seat row, carries no holder, has no live body inside it — so it sails past all five
+    # seat guards and reaches shutil.rmtree with a real source directory in hand. Verified
+    # by hand before this line existed. It was harmless while dry_run was the only wired
+    # mode and became an arbitrary-directory delete the instant the execute path landed:
+    # A GUARD THAT CHECKS THE SUBJECT IS NOT A GUARD ON THE OBJECT.
+    #
+    # The invariant is the one establish_office itself scaffolds — an office is a DIRECT
+    # CHILD of the office root, never a descendant, never a sibling reached by traversal.
+    # Compared after resolve() on both sides so symlinks and .. are collapsed first.
+    #
+    # The three other `root / handle.lower()` sites in this module (correct_office_pin,
+    # establish_office_for_seat, establish_office) are NOT patched here and that is
+    # deliberate, not an oversight: each takes its handle from the GRAPH (held_seat /
+    # seat_facts), never from a caller argument, and each mkdirs rather than deletes. If a
+    # handle ever becomes caller-supplied at one of those, it needs this same check.
+    resolved_root = root.resolve()
+    if office.resolve().parent != resolved_root:
+        return {"error": f"handle {handle!r} does not name an office directly under "
+                         f"{resolved_root} — it resolves to {office.resolve()}, outside "
+                         "the office root. Refusing: this verb deletes, and a handle is "
+                         "a seat's name, never a path"}
     if not office.is_dir():
         return {"error": f"no office directory at {office} — nothing to sweep"}
 

@@ -1118,3 +1118,81 @@ async def test_sweep_refuses_on_a_blind_census_never_reading_silence_as_empty(
         agents_json=_raises, sleep=_instant_sleep)
     assert out["status"] == "refused-live-body"
     assert "blind census" in out["detail"]
+
+
+# ═══ Path containment. Every guard above interrogates THE SEAT; this one interrogates THE
+# PATH, and it is the guard the execute path shipped without (Thoth LXXXIX, wave 8 merge
+# review). `handle` is caller-supplied and lands in a `/` join, so a traversal names a real
+# directory outside the office root that matches no Seat, holds no holder and hosts no live
+# body — clearing all five seat guards on its way to shutil.rmtree. ═══
+
+async def test_sweep_refuses_a_handle_that_traverses_out_of_the_office_root(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The traversal must be refused BEFORE any seat lookup, and the outside directory must
+    survive intact. Built so it would really have been deleted without the containment
+    check: no Seat row, no holder, no live body — every other guard passes."""
+    root = tmp_path / "seats"
+    root.mkdir()
+    outside = tmp_path / "notanoffice"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("real work that is not an office\n")
+
+    out = await sweep_retired_office(
+        actions.pool, handle="../notanoffice", dry_run=False, because="traversal attempt",
+        office_root=root, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+
+    assert "does not name an office directly under" in out["error"]
+    assert outside.is_dir()
+    assert (outside / "precious.txt").read_text() == "real work that is not an office\n"
+
+
+async def test_sweep_refuses_a_traversal_in_dry_run_too(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Dry-run must refuse on the SAME line, not report would-delete over someone else's
+    directory — the two modes stay trustworthy only while dry-run predicts execute exactly."""
+    root = tmp_path / "seats"
+    root.mkdir()
+    outside = tmp_path / "notanoffice"
+    outside.mkdir()
+
+    out = await sweep_retired_office(
+        actions.pool, handle="../notanoffice", office_root=root,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+
+    assert "does not name an office directly under" in out["error"]
+    assert "status" not in out
+
+
+async def test_sweep_refuses_a_nested_handle_even_inside_the_root(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """An office is a DIRECT child of the root. A nested path stays inside the root and is
+    still not an office — containment alone would admit it, so the check is on the parent."""
+    root = tmp_path / "seats"
+    (root / "realoffice" / "subdir").mkdir(parents=True)
+
+    out = await sweep_retired_office(
+        actions.pool, handle="realoffice/subdir", dry_run=False, because="nested attempt",
+        office_root=root, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+
+    assert "does not name an office directly under" in out["error"]
+    assert (root / "realoffice" / "subdir").is_dir()
+
+
+async def test_sweep_still_accepts_an_ordinary_handle(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The negative control: containment must not have broken the real path."""
+    root = tmp_path / "seats"
+    office = root / "plainoffice1"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "p"\n')
+
+    out = await sweep_retired_office(
+        actions.pool, handle="plainoffice1", office_root=root,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+
+    assert out["status"] == "would-delete"
+    assert out["entries"] == [".osiris"]
