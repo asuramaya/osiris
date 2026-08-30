@@ -1328,6 +1328,40 @@ async def _link_once(
         await actions.create_link(frm, to, ltype, src, when, _CONF, evidence_class=_EC)
 
 
+async def _flag_works_in_alongside_prior(
+    actions: Actions, agent_oid: uuid.UUID, new_proj_oid: uuid.UUID, new_proj_label: str,
+    src: str, now: datetime,
+) -> None:
+    """Obligation 45032b23 (thread 6048/6069, decision 0222fd37 — the shape proposed
+    there, built here): register_agent's own works_in write is add-only — `_link_once`
+    never invalidates a PRIOR edge to a DIFFERENT project, so a session that legitimately
+    changes project across separate mounts accumulates live works_in edges forever.
+    Measured RARE before this was built (3 of 14 fleet-wide duplicate-works_in
+    specimens, flat trend over 5 weeks, zero covered by a declared multi-project
+    charter) — not common enough, and with no evidence source able to tell "changed
+    project" from "works two projects" (#103/#141's law), to justify auto-invalidating
+    on write. This is the additive alternative: SURFACE the moment it happens, never
+    resolve it — a durable property naming both sides, for graph_lint (or a future
+    reader) to grow a mechanical signal from, never a pick made here.
+
+    Caller-gated to fire ONLY the instant a genuinely NEW works_in edge is about to be
+    created (an ordinary re-mount that finds its edge already live never reaches this),
+    so it lands once per (agent, new project) pair, not once per mount."""
+    prior = await actions.pool.fetch(
+        "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' AND l.to_id != $2 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())",
+        agent_oid, new_proj_oid)
+    if not prior:
+        return
+    await actions.assert_property(
+        agent_oid, "works_in_added_alongside_prior",
+        {"new_project": new_proj_label,
+         "prior_projects": sorted({r["canonical"].removeprefix("repo:") for r in prior}),
+         "detected_at": now.isoformat()},
+        src, now, _CONF, evidence_class=_EC)
+
+
 async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     """Follow winning `succeeded_by` pointers to the newest ACTIVE generation. A session-keyed
     resolve always lands on the BASE id (the transcript knows nothing of minting); the lineage
@@ -3193,6 +3227,12 @@ async def register_agent(
                 do = EvidenceClass.DERIVED
                 await actions.assert_property(proj, "name", identity.project, src, now,
                                               confidence_for(do), evidence_class=do.value)
+            already_works_in = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+                "LIMIT 1", a, proj)
+            if not already_works_in:
+                await _flag_works_in_alongside_prior(
+                    actions, a, proj, identity.project, src, now)
             await _link_once(actions, a, proj, "works_in", src, now)
     if identity.cwd:  # the repo path — lets the trigger-hook resolve a project → where to wake
         await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
