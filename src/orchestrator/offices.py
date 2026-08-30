@@ -871,15 +871,19 @@ async def sweep_retired_office(
       minute, so a single instant's clean read is not proof of an empty office. THE GUARD
       IS TWO READS, NEVER ONE, exactly the discipline that build demanded.
 
-    `dry_run=True` (the only mode wired this pass, per Thoth's explicit instruction: no
-    execute path until he has seen real dry-run output) reports `would_delete` with every
-    entry under the office, never removes anything. `dry_run=False` is DELIBERATELY
-    UNIMPLEMENTED right now — refuses with its own reason rather than silently doing
-    nothing, so a caller can never mistake "not built yet" for "ran and did nothing"."""
-    if not dry_run:
-        return {"error": "sweep_retired_office's execute path is not wired yet — this pass "
-                         "is dry-run only (Thoth's ruling msg 6035): review the dry-run "
-                         "output first, the execute half is a separate, later ask"}
+    `dry_run=True` (the default) reports `would-delete` with every entry under the office,
+    never removes anything. `dry_run=False` is the OPERATOR'S OWN CALL (his words, msg
+    6049: "all holds on me approved, take care of them") — requires `because`, runs the
+    EXACT SAME per-directory guard (no re-derivation, no separate execute-only code path
+    that could drift from what the dry-run actually checked), and on a clean pass removes
+    the office with `shutil.rmtree` before returning `status: "deleted"` with the entries
+    that were actually removed. Every refusal above applies identically in execute mode —
+    a directory that refuses is left untouched, exactly as it would be under dry-run,
+    which is what makes the two modes trustworthy: dry-run predicts precisely what execute
+    does, never an approximation of it."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "because is required to execute — a filesystem delete is not "
+                         "self-justifying the way a dry-run report is"}
     handle = (handle or "").strip()
     if not handle:
         return {"error": "a handle is required"}
@@ -939,6 +943,12 @@ async def sweep_retired_office(
                 "seat": seat_id, "detail": detail}
 
     entries = sorted(str(p.relative_to(office)) for p in office.rglob("*"))
-    return {"status": "would-delete", "dry_run": True, "office": str(office),
+    if dry_run:
+        return {"status": "would-delete", "dry_run": True, "office": str(office),
+                "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
+                "entries": entries, **({"because": because.strip()} if because else {})}
+    import shutil
+    shutil.rmtree(office)
+    return {"status": "deleted", "dry_run": False, "office": str(office),
             "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
-            "entries": entries, **({"because": because.strip()} if because else {})}
+            "entries": entries, "because": (because or "").strip()}

@@ -904,13 +904,67 @@ async def _instant_sleep(_secs: float) -> None:
 _LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
 
 
-async def test_sweep_refuses_execute_not_wired(actions: Actions, tmp_path: Path) -> None:
+async def test_sweep_execute_refuses_without_because(actions: Actions, tmp_path: Path) -> None:
     office = tmp_path / "someoffice"
     office.mkdir()
     out = await sweep_retired_office(
         actions.pool, handle="someoffice", dry_run=False, office_root=tmp_path,
         sleep=_instant_sleep)
-    assert "not wired yet" in out["error"]
+    assert "because is required" in out["error"]
+    assert office.is_dir()  # refused before ever touching the filesystem
+
+
+async def test_sweep_execute_deletes_a_stranger_office_with_no_seat_row_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    office = tmp_path / "climintworker1"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "cliproj1"\n')
+    (office / "CLAUDE.md").write_text("orders\n")
+    out = await sweep_retired_office(
+        actions.pool, handle="climintworker1", dry_run=False, because="test cleanup",
+        office_root=tmp_path, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "deleted"
+    assert out["dry_run"] is False
+    assert out["seat"] is None
+    assert set(out["entries"]) == {".osiris", "CLAUDE.md"}
+    assert not office.exists()
+
+
+async def test_sweep_execute_deletes_a_retired_seats_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat, retire_seat
+
+    seat = await ensure_seat(actions, house="sweephouse", handle="SweepExec1",
+                             source="test")
+    await retire_seat(actions, seat["seat_id"], reason="role is over", actor="test")
+    office = tmp_path / "sweepexec1"
+    office.mkdir()
+    (office / "charter.md").write_text("charter\n")
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepExec1", dry_run=False, because="test cleanup",
+        office_root=tmp_path, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "deleted"
+    assert out["seat"] == seat["seat_id"]
+    assert not office.exists()
+
+
+async def test_sweep_execute_leaves_an_active_seats_office_untouched(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The guard is IDENTICAL in execute mode — a refusal deletes nothing, exactly as
+    dry-run would have predicted."""
+    from src.orchestrator.seats import ensure_seat
+
+    await ensure_seat(actions, house="sweephouse", handle="SweepExecActive1", source="test")
+    office = tmp_path / "sweepexecactive1"
+    office.mkdir()
+    out = await sweep_retired_office(
+        actions.pool, handle="SweepExecActive1", dry_run=False, because="test cleanup",
+        office_root=tmp_path, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert "status='active'" in out["error"]
+    assert office.is_dir()
 
 
 async def test_sweep_refuses_no_office_directory(actions: Actions, tmp_path: Path) -> None:
