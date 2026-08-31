@@ -1624,7 +1624,28 @@ async def bind_holder(
     valid_until (never deleted, history walkable), one active link remains. The shared tail
     of the two deliberate binding acts: the attach ceremony (token-gated, spawner-driven)
     and a `claim_name` (guard-gated, the live mind's own act). Callers run their refusals
-    FIRST; this only writes."""
+    FIRST; this only writes.
+
+    NOW SYMMETRIC ON BOTH SIDES OF `holds` (guard-symmetry inventory, decision efd97c13,
+    thread 6068/6088): this always invalidated a SEAT's own prior holders before binding a
+    new one, but never checked the AGENT's own other active `holds` edges elsewhere — an
+    agent could accumulate more than one live seat with nothing to catch or prevent it,
+    the same add-only shape `works_in_added_alongside_prior` (agents.py, decision d1635578)
+    found and fixed for the sibling works_in relation. UNLIKE works_in, a DIFFERENT
+    disposition applies here, not the same one copied over: works_in stayed additive-only
+    because no evidence source can tell "changed project" from "works two projects" (a
+    declared multi-project charter is a real, sanctioned state) — auto-invalidating there
+    would be guessing exactly where #103/#141's law forbids it. `holds` has no such
+    ambiguity: a Seat IS a specific identity (ruling 921eabcf's own "ONE SEAT, ONE LIVE
+    LINEAGE HEAD" already establishes seat-holding as exclusive on the seat's own side; a
+    visitor spawn is explicitly excluded from ever resolving as a holder at all, per
+    binding_of_handle/seat_holder_ineligible's own spawned_by check) and no decision, spec,
+    or charter concept anywhere in this codebase names a legitimate reason for one agent to
+    hold two seats at once — so this widens the SAME already-trusted invalidate_link
+    mechanism already used two lines below for the seat side, rather than adding a new
+    additive-flag mechanism. Measured population before this fix: zero agents currently
+    held more than one active seat (fleet-wide, not sampled) — this closes the gap before
+    an incident, the cheap time to close it."""
     now = datetime.now(UTC)
     src = source or agent_id
     seat_oid = await actions.create_or_find_object("Seat", seat_id, src)
@@ -1635,6 +1656,12 @@ async def bind_holder(
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_oid, agent_id)]
     for old in prior:
         await actions.invalidate_link(old, seat_oid, "holds", src, now)
+    other_seats = [r["to_id"] for r in await actions.pool.fetch(
+        "SELECT DISTINCT l.to_id FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='holds' AND t.canonical <> $2 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_oid, seat_id)]
+    for other in other_seats:
+        await actions.invalidate_link(agent_oid, other, "holds", src, now)
     exists = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='holds' "
         "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", agent_oid, seat_oid)
