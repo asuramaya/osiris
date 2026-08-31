@@ -7764,9 +7764,12 @@ async def settle(
         # resolve_project's own seated-override, applied at mount time) — never raw cwd, so
         # this check does NOT share standing_orders_touched's #128 exposure. Confirmed by reading
         # the actual override code, not assumed from the shared "cwd bug" framing.
+        # CHARTER-AWARE (thread 992c0121, Soundwave XVI's specimen): `seat` was already
+        # resolved above for the standing-orders cwd fix — pass-through, not a second
+        # held_seat lookup, matching settle_boxes' own seat_id convention just above.
         identity_coherence = await filed_under_check(
             pool, agent_id=ident.agent_id, mounted_at=mounted["mounted_at"],
-            project=ident.project)
+            project=ident.project, seat_id=seat["seat_id"] if seat else None)
         # PHASE 1b (decision cb38d922): same report-only discipline, computed AFTER the
         # dispatch above so it reflects any edges THIS call itself just wired. AUDITED
         # (Thoth DM 3076 defect 3): depends only on agent_id/mounted_at, no cwd or project
@@ -7836,13 +7839,29 @@ async def settle(
     }
     if identity_coherence is not None:
         out["identity_coherence"] = identity_coherence
-        if not identity_coherence["coherent"]:
-            out["note"] += (
-                f" — LOUD, NEVER BLOCKING: this session is filed under "
-                f"{identity_coherence['filed_under']!r} but its own writes went to "
-                f"{identity_coherence['writes_went_to']!r}; a successor mounting under "
-                f"{identity_coherence['filed_under']!r} will not see them (John XVI's shape)"
-            )
+        # THE VERDICT AND THE DISCLOSURE ARE TWO SEPARATE SENTENCES (thread 992c0121):
+        # `coherent` may now read true for a seat whose CHARTER declares this exact
+        # multi-repo spread — but a successor mounting under `filed_under` alone still
+        # will not see writes filed under the other repo(s), chartered or not. Keyed off
+        # `spans_multiple`, never `coherent`, so a charter-aware pass never silently
+        # swallows a disclosure that stays true regardless of the verdict.
+        if identity_coherence.get("spans_multiple"):
+            if identity_coherence["coherent"]:
+                out["note"] += (
+                    f" — informational: filed under {identity_coherence['filed_under']!r}, "
+                    f"writes spanned {len(identity_coherence['writes_went_to'])} of this "
+                    f"seat's own chartered repos {identity_coherence['writes_went_to']!r} "
+                    "— coherent, but a successor mounting under "
+                    f"{identity_coherence['filed_under']!r} alone will not see the writes "
+                    "filed under the other repo(s)"
+                )
+            else:
+                out["note"] += (
+                    f" — LOUD, NEVER BLOCKING: this session is filed under "
+                    f"{identity_coherence['filed_under']!r} but its own writes went to "
+                    f"{identity_coherence['writes_went_to']!r}; a successor mounting under "
+                    f"{identity_coherence['filed_under']!r} will not see them (John XVI's shape)"
+                )
     if closure_coverage is not None:
         out["closure_coverage"] = closure_coverage
     return out
