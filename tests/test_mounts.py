@@ -178,7 +178,7 @@ async def test_reattach_resolves_project_from_the_seat_when_cwd_yields_none(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     agent = await actions.create_or_find_object("Agent", "agent:ffff6666", "test")
     await actions.assert_property(agent, "project", "seats", "test", datetime.now(UTC), 0.9,
@@ -707,13 +707,12 @@ async def test_mount_prefers_a_real_declared_office_over_a_bare_container_recoll
     outright — `cwd` is left untouched, and the receipt says so rather than asserting a
     correction that didn't happen."""
     from src import mcp_server as srv
-    from src.orchestrator import offices as offices_mod
 
     office = tmp_path / "seats" / "thoth"
     office.mkdir(parents=True)
     (office / ".osiris").write_text('project = "osiris"\n')
     container = tmp_path / "seats"
-    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", container)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(container))
 
     job_dir = str(tmp_path / "jobs" / "recollect02")
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:recollect02",
@@ -745,11 +744,10 @@ async def test_mount_confesses_honestly_when_neither_side_is_a_real_office(
     confident wrong answer is worse than an honest 'could not resolve' (60bc15db applied to
     location)."""
     from src import mcp_server as srv
-    from src.orchestrator import offices as offices_mod
 
     container = tmp_path / "seats"
     container.mkdir(parents=True)
-    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", container)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(container))
     ghost = tmp_path / "seats" / "nowhere-real"  # never created
 
     job_dir = str(tmp_path / "jobs" / "recollect03")
@@ -1418,11 +1416,10 @@ async def test_mount_never_refuses_a_session_from_the_bare_root(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    # offices._DEFAULT_OFFICE_ROOT, not agents.py's own imported name: resolve_identity now
-    # calls the shared is_bare_office_root() (offices.py) instead of duplicating the same
-    # path-equality check (the 38c71544 dedup, ruling 719ed5b1) — patch the module that owns
-    # the comparison.
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    # OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam, wave 9, msg
+    # 6089): resolve_identity calls the shared is_bare_office_root() (offices.py) instead
+    # of duplicating the same path-equality check (the 38c71544 dedup, ruling 719ed5b1).
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     saved_pool = srv._pool
     srv._pool = actions.pool
@@ -1461,7 +1458,7 @@ async def test_mount_from_bare_root_writes_the_seated_house_to_the_registry(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     seat = await ensure_seat(actions, house="osiris", handle="Barerootseat", source="test")
     assert seat.get("error") is None
@@ -1512,7 +1509,7 @@ async def test_mount_from_bare_root_first_ever_mount_of_a_seated_agent(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     seat = await ensure_seat(actions, house="osiris", handle="Freshbareseat", source="test")
     assert seat.get("error") is None
@@ -1546,7 +1543,7 @@ async def test_mount_resolves_project_from_the_seat_not_cwd_when_seated(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     agent = await actions.create_or_find_object("Agent", "agent:ffff7777", "test")
     await actions.assert_property(agent, "project", "seats", "test", datetime.now(UTC), 0.9,
@@ -1585,7 +1582,7 @@ async def test_mount_resolves_an_anchored_seat_s_own_house_not_its_manager_s(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.agents._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     manager = await ensure_seat(actions, house="osiris", handle="Manager1", source="test")
     worker = await ensure_seat(actions, house="hector-vector", handle="Worker1",

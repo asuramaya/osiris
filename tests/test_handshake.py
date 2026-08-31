@@ -92,7 +92,7 @@ async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
     the 60bc15db shape."""
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     seat = await ensure_seat(actions, house="osiris", handle="Barewhisper", source="test")
     assert seat.get("error") is None

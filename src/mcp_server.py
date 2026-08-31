@@ -7730,13 +7730,13 @@ async def settle(
         # hook's own bare-Connection call site — that call site inherits this SAME exposure
         # and is NOT fixed by this change; named explicitly in this commit's own report, not
         # silently left for someone to rediscover).
-        from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+        from src.orchestrator.offices import _default_office_root
         from src.orchestrator.seats import held_seat
 
         charter_cwd = ident.cwd
         seat = await held_seat(pool, ident.agent_id)
         if seat and seat.get("handle"):
-            charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
+            charter_cwd = str(_default_office_root() / seat["handle"].lower())
         boxes = await settle_boxes(pool, agent_id=ident.agent_id,
                                    mounted_at=mounted["mounted_at"], cwd=charter_cwd,
                                    seat_id=seat["seat_id"] if seat else None)

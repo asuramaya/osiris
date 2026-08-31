@@ -26,9 +26,8 @@ async def _mounted(actions: Actions, agent_id: str, *, project: str = "stopslop"
 async def test_walk_in_named_the_whole_ceremony(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.orchestrator import offices
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     await _mounted(actions, "agent:ooblek001")
 
     out = await walk_in_named(
@@ -56,9 +55,8 @@ async def test_walk_in_named_refuses_a_blank_handle(actions: Actions) -> None:
 async def test_walk_in_named_wants_office_false_skips_the_office(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.orchestrator import offices
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     await _mounted(actions, "agent:visitor01")
 
     out = await walk_in_named(
@@ -77,9 +75,8 @@ async def test_walk_in_named_skips_an_already_claimed_name(
     """Re-running (the Ooblek shape: two compactions deep, name already claimed from an
     earlier turn) never re-claims — it reports the skip honestly and still runs the office
     half fresh if asked."""
-    from src.orchestrator import offices
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     await _mounted(actions, "agent:already01")
     await claim_name(actions, "agent:already01", "Already", source="test")
 
@@ -112,9 +109,8 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
 ) -> None:
     """A name already live-held by someone else refuses at claim_name, and walk_in_named
     stops there — never proceeds to establish_office under a name that never landed."""
-    from src.orchestrator import offices
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     await _mounted(actions, "agent:holder0001")
     from datetime import UTC, datetime
 
@@ -177,10 +173,9 @@ async def test_mcp_walk_in_skips_mount_for_an_already_mounted_caller(
     """The Ooblek shape exactly: already mounted, project already correct, no name yet.
     walk_in must SKIP the mount step honestly rather than re-run or refuse."""
     import src.mcp_server as srv
-    from src.orchestrator import offices
     from src.orchestrator.agents import AgentIdentity
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     ctx = _Ctx()
     saved_pool = srv._pool
     srv._pool = actions.pool

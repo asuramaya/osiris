@@ -323,16 +323,16 @@ def test_resolve_identity_never_invents_a_project_from_the_bare_office_root(
     inventing it — a location-independent identity finds its project through its SEAT
     instead (mount()'s seat-first resolution), not by guessing from where it's sitting.
 
-    Patches `offices._DEFAULT_OFFICE_ROOT`: resolve_identity now calls the shared
-    `is_bare_office_root()` (offices.py) instead of a private duplicate of the same
-    path-equality check (the 38c71544 dedup, ruling 719ed5b1) — the module that OWNS the
-    comparison is the one whose global must move for the test to see it."""
+    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam, wave 9,
+    msg 6089): resolve_identity calls the shared `is_bare_office_root()` (offices.py)
+    instead of a private duplicate of the same path-equality check (the 38c71544 dedup,
+    ruling 719ed5b1) — the env var, not a per-module monkeypatch, is what every caller's
+    own copy of the default now reads."""
     from src.orchestrator import agents as agents_mod
-    from src.orchestrator import offices as offices_mod
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     ident = agents_mod.resolve_identity(cwd=str(fake_root))
     assert ident.project is None

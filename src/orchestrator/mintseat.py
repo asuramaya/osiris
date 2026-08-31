@@ -50,7 +50,7 @@ from typing import Any
 from src.actions.core import Actions
 from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
 from src.orchestrator.charter import charter_of
-from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _DEFAULT_OFFICE_ROOT
+from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _default_office_root
 from src.orchestrator.seats import (
     _OPERATOR_ACTORS,
     bind_seat_tree,
@@ -260,7 +260,7 @@ async def mint_seat(
                          "mint_seat never mints or adopts a case entity as a worker"}
 
     now = datetime.now(UTC)
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office_path = root / handle.lower()
     existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
     if existing_seat_id is not None:
@@ -433,7 +433,7 @@ async def found_seat(
         return {"error": f"{handle!r} names a Person record ({person}), not a seat — "
                          "found_seat never mints or adopts a case entity as a worker"}
 
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office_path = root / handle.lower()
     project_name = project or handle
     # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,

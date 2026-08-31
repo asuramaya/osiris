@@ -736,11 +736,10 @@ async def test_write_model_pin_creates_and_is_idempotent(tmp_path: Path,
     preserving `project`, and writes NOTHING on a second call with the same value — the
     idempotency `_link_once`/set_charter's own callers all rely on, applied to a filesystem
     write instead of a graph one."""
-    from src.orchestrator import agents as agents_mod
     from src.orchestrator.agents import write_model_pin
 
     office_root = tmp_path / "offices"
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
     pin = office_root / "freshseat" / ".osiris"
 
     wrote = await write_model_pin("FreshSeat", "claude-sonnet-5")
@@ -762,11 +761,10 @@ async def test_write_model_pin_refuses_a_value_that_would_corrupt_the_toml(
     """Defensive floor, never a validated allowlist (model ids change; this file has no
     business hard-coding them) — but a value containing a quote or newline would corrupt
     the TOML it's embedded in, so those are refused outright rather than trusted."""
-    from src.orchestrator import agents as agents_mod
     from src.orchestrator.agents import write_model_pin
 
     office_root = tmp_path / "offices"
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
 
     assert await write_model_pin("Injecto", 'claude"; evil = "yes') is False
     assert await write_model_pin("Injecto", "claude-sonnet-5\nmalicious = true") is False
@@ -1004,15 +1002,14 @@ def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(
     office container has no pin and no single project of its own — project stays None AND
     project_pin_missing stays False, so no wave-2 banner ever fires there.
 
-    Patches `offices._DEFAULT_OFFICE_ROOT` (not agents.py's own imported name): resolve_identity
-    now calls the shared `is_bare_office_root()` (offices.py) instead of a private duplicate of
-    the same path-equality check (the 38c71544 dedup, ruling 719ed5b1's pin-schema build) — the
-    module that OWNS the comparison is the one whose global must move for the test to see it."""
-    from src.orchestrator import offices as offices_mod
+    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam, wave 9, msg
+    6089) rather than patching either module's own imported name: resolve_identity calls
+    the shared `is_bare_office_root()` (offices.py) instead of a private duplicate of the
+    same path-equality check (the 38c71544 dedup, ruling 719ed5b1's pin-schema build)."""
 
     seats_root = tmp_path / "seats"
     seats_root.mkdir()
-    monkeypatch.setattr(offices_mod, "_DEFAULT_OFFICE_ROOT", seats_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(seats_root))
     ident = resolve_identity(cwd=str(seats_root), job_dir="/j/jobs/bareroot1")
     assert ident.project is None
     assert ident.project_pin_missing is False
@@ -1129,12 +1126,11 @@ async def test_a_deliberate_swap_writes_the_seats_osiris_pin(
     CACHE of the decision instead of a hand-edited, permanently-stale competing claim.
     Existing `project` in the pin must survive untouched — this writes model, never invents
     a project the seat never declared."""
-    from src.orchestrator import agents as agents_mod
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
 
     office_root = tmp_path / "offices"
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
 
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
@@ -1178,12 +1174,11 @@ async def test_a_deliberate_swap_writes_the_office_pin_even_when_mounted_from_a_
     test proves it empirically with a cwd that is deliberately NOT office-shaped, so the two
     together cover both mount contexts named in the ask rather than assuming the code path
     is cwd-independent from reading it alone."""
-    from src.orchestrator import agents as agents_mod
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
 
     office_root = tmp_path / "offices"
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
 
     worktree_cwd = "/home/x/code/osiris/.claude/worktrees/some-branch"
     proj = tmp_path / "-home-x-code-osiris--claude-worktrees-some-branch"
@@ -1222,12 +1217,11 @@ async def test_an_unexplained_swap_never_touches_the_pin_file(
     mount path every seat traverses): a harness rug-pull (no /model on the record) must
     never touch the pin file, exactly as it must never overwrite the graph's intended_model
     (the sibling test above it). No pin, before or after — the fallback writes nothing."""
-    from src.orchestrator import agents as agents_mod
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
 
     office_root = tmp_path / "offices"
-    monkeypatch.setattr(agents_mod, "_DEFAULT_OFFICE_ROOT", office_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
 
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()

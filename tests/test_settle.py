@@ -1831,7 +1831,7 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     from src.orchestrator.mounts import save_mount
     from src.orchestrator.seats import bind_holder
 
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     container = tmp_path / "seats"
     container.mkdir()
     real_office = container / "thoth"

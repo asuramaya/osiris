@@ -179,8 +179,8 @@ async def test_lift_propagates_claim_name_refusals(actions: Actions, tmp_path: P
 # AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the test
 # DB, call the tool FUNCTION directly (never the MCP transport). lift() exposes no
 # office_root param (a live caller never gets to redirect where an office lands) — the
-# happy-path test monkeypatches offices._DEFAULT_OFFICE_ROOT instead, exactly mint_seat's
-# own technique for the same problem.
+# happy-path test sets OSIRIS_OFFICE_ROOT instead (offices._default_office_root()'s own
+# env seam, wave 9, msg 6089), exactly mint_seat's own technique for the same problem.
 
 class _Ctx:
     class request_context:  # noqa: N801
@@ -209,10 +209,9 @@ async def test_mcp_lift_the_happy_path_through_the_tool_layer(
     off to the real lift(), which really writes the office (redirected to a scratch dir,
     since the tool exposes no office_root override)."""
     import src.mcp_server as srv
-    from src.orchestrator import offices
     from src.orchestrator.agents import AgentIdentity
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     cwd = str(tmp_path / "clusterfuck")
     Path(cwd).mkdir()
     await _rogue(actions, "agent:rogue0009", cwd)

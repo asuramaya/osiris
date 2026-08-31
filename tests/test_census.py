@@ -63,7 +63,7 @@ def test_the_bare_office_root_is_dropped_never_a_phantom_project(
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     real_office = fake_root / "someseat"
     real_office.mkdir()

@@ -41,7 +41,7 @@ from src.ingest.sessions import (
     locate_transcript_by_cwd,
     model_of_transcript,
 )
-from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT, is_bare_office_root
+from src.orchestrator.offices import _default_office_root, is_bare_office_root
 from src.orchestrator.swaps import classify_swap, swap_marker
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -1059,7 +1059,7 @@ async def write_model_pin(seat_handle: str, model: str) -> bool:
     `.osiris`'s `model =` key was read at launch and hand-edited only. Runs on a thread —
     `_stamp_alive`'s own convention for filesystem I/O inside an async miner/handler."""
     import asyncio
-    office = _DEFAULT_OFFICE_ROOT / seat_handle.lower()
+    office = _default_office_root() / seat_handle.lower()
     return await asyncio.to_thread(_write_model_pin_sync, office, model)
 
 
