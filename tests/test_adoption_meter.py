@@ -18,7 +18,17 @@ from src.orchestrator.adoption_meter import (
     render_adoption_line,
 )
 
-NOW = datetime(2026, 8, 27, tzinfo=UTC)
+# LIVE, NOT FROZEN (corrected 2026-08-31, thread 1ef3a6e1). This was
+# `datetime(2026, 8, 27, tzinfo=UTC)` — a fixed instant — while every eligibility gate in
+# adoption_meter.py compares against the DATABASE's own now(). So the fixture aged
+# backwards from a frozen August 27 while the code measured against real time, and every
+# `born_days_ago` in this file silently meant something older with each day that passed.
+# It went RED on 2026-08-31 with no code change at all: a decision declared 2 days old was
+# 6 days old by the gate's reckoning, and the UTC week rollover tipped it over the line.
+# THE TEST WAS DRIFTING, NOT THE CODE. A fixture clock that does not advance with the
+# clock the subject reads is a detector with a duty cycle — it fired one day in seven and
+# would have gone quiet again by Tuesday on its own.
+NOW = datetime.now(UTC)
 
 
 async def _backdate_object(actions: Actions, obj_id: object, created_at: datetime) -> None:

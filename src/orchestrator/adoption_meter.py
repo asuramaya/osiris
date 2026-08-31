@@ -110,7 +110,17 @@ async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
         -- changing on every re-query (more links can still land within its own window),
         -- which is exactly the "live snapshot of an ever-growing present" hazard this
         -- metric was built to avoid.
-        HAVING cohort_week + interval '30 days' <= now()
+        --
+        -- MEASURED FROM THE COHORT'S YOUNGEST MEMBER, NOT ITS WEEK START (corrected
+        -- 2026-08-31, thread 1ef3a6e1). This read `cohort_week + interval '30 days'`,
+        -- which is the week's OPENING instant — so an object born on the Sunday of that
+        -- week was declared 30-day-eligible at 24 DAYS OLD, and its links_at_30d was
+        -- still moving. That is precisely the hazard the comment above says the gate
+        -- exists to prevent: the gate as written admitted the very cohorts whose numbers
+        -- had not finished changing. max(created_at) is the stated invariant exactly —
+        -- no member is younger than its own full window — rather than the week-start
+        -- approximation, and it needs no separate "+7 for the week to complete" fudge.
+        HAVING max(created_at) + interval '30 days' <= now()
         ORDER BY type, cohort_week DESC
     """, list(SCOPED_TYPES))
 
@@ -175,7 +185,7 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
             FROM objects WHERE type = ANY($1) AND status='active'
         ),
         flagged AS (
-            SELECT s.id, s.type, s.cohort_week,
+            SELECT s.id, s.type, s.cohort_week, s.created_at,
                 NOT EXISTS (
                     SELECT 1 FROM links l
                     WHERE (l.from_id = s.id OR l.to_id = s.id)
@@ -187,7 +197,15 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
             count(*) FILTER (WHERE born_orphan) AS n_orphan
         FROM flagged
         GROUP BY type, cohort_week
-        HAVING cohort_week + interval '7 days' <= now()
+        -- MEASURED FROM THE COHORT'S YOUNGEST MEMBER, NOT ITS WEEK START (corrected
+        -- 2026-08-31, thread 1ef3a6e1). This read `cohort_week + interval '7 days'`,
+        -- the week's OPENING instant, while this function's own docstring promises "a
+        -- week is not reported until every member of it has actually had its own full
+        -- 7-day window." Those differ by up to six days: an object born on the Sunday of
+        -- a week became eligible at ONE DAY OLD, its born_orphan flag still able to flip.
+        -- THE DOCSTRING WAS RIGHT AND THE SQL WAS WRONG. max(created_at) states the
+        -- documented invariant exactly.
+        HAVING max(created_at) + interval '7 days' <= now()
         ORDER BY type, cohort_week DESC
     """, list(SCOPED_TYPES))
 
