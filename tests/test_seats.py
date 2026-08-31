@@ -252,6 +252,57 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
     assert newest is not None and newest["seat_id"] == other_seat["seat_id"]  # -v outranks -i
 
 
+async def test_bind_holder_invalidates_the_agents_own_other_active_holds(
+    actions: Actions,
+) -> None:
+    """Guard-symmetry inventory (decision efd97c13, thread 6068/6088): bind_holder always
+    invalidated a SEAT's prior holders before binding a new one; now it also invalidates
+    the AGENT's own other active `holds` edges elsewhere — a Seat is a specific identity
+    (no charter-like concept sanctions one agent holding two), unlike works_in's
+    additive-only fix, which stayed additive because a declared multi-project charter is a
+    real, legitimate multi-value state that `holds` has no counterpart for."""
+    seat_a = await ensure_seat(actions, house="osiris", handle="Bastet", source="test")
+    seat_b = await ensure_seat(actions, house="osiris", handle="Bastet2", source="test")
+    await actions.create_or_find_object("Agent", "agent:dual00001", "test")
+
+    await bind_holder(actions, seat_id=seat_a["seat_id"], agent_id="agent:dual00001")
+    assert await _active_holds(actions, "agent:dual00001", seat_a["seat_id"])
+
+    await bind_holder(actions, seat_id=seat_b["seat_id"], agent_id="agent:dual00001")
+
+    assert await _active_holds(actions, "agent:dual00001", seat_b["seat_id"])
+    assert not await _active_holds(actions, "agent:dual00001", seat_a["seat_id"])
+    # ...and seat_a's own healed link is still there, never deleted
+    healed = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical='agent:dual00001' AND t.canonical=$1 AND l.type='holds' "
+        "AND l.valid_until IS NOT NULL", seat_a["seat_id"])
+    assert healed == 1
+
+
+async def test_bind_holder_rebinding_the_same_seat_is_a_no_op_on_other_seats(
+    actions: Actions,
+) -> None:
+    """The new agent-side invalidation must not fire on an ordinary re-bind (the same
+    agent, the same seat, called twice — e.g. a repeat claim_name) — only on a GENUINELY
+    different seat, mirroring the seat-side `f.canonical <> $2` exclusion already there."""
+    seat = await ensure_seat(actions, house="osiris", handle="Sobek", source="test")
+    await actions.create_or_find_object("Agent", "agent:same0001", "test")
+
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:same0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:same0001")
+
+    assert await _active_holds(actions, "agent:same0001", seat["seat_id"])
+    # exactly one link row, never healed — a same-seat rebind touched nothing
+    rows = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical='agent:same0001' AND t.canonical=$1 AND l.type='holds'",
+        seat["seat_id"])
+    assert rows == 1
+
+
 SID = "af00c0de-0000-4000-8000-000000000000"
 
 
