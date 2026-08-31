@@ -2037,6 +2037,80 @@ async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancest
 # head — mint_heir minted a fresh edge for the heir but never invalidated the
 # ancestor's) ═══
 
+# ═══ works_in_added_alongside_prior (obligation 45032b23, thread 6048/6069, decision
+# 0222fd37): register_agent's own works_in write is add-only — `_link_once` never
+# invalidates a PRIOR edge to a DIFFERENT project, so a session that legitimately
+# changes project across separate mounts accumulates live works_in edges forever.
+# Measured rare (3 of 14 fleet-wide duplicate-works_in specimens, flat trend, zero
+# covered by a declared multi-project charter) — not common enough, and with no
+# evidence source able to distinguish "changed project" from "works two projects", to
+# justify auto-invalidating on write. This is the additive alternative: SURFACE the
+# moment it happens, never resolve it. ═══
+
+
+async def test_register_agent_flags_a_new_project_landing_alongside_a_prior_live_one(
+    actions: Actions,
+) -> None:
+    ident_a = resolve_identity(cwd="/w/alongside-a", session="sess-along", model="claude-fable-5")
+    a = await register_agent(actions, ident_a, actor="analyst:operator")
+    ident_b = resolve_identity(cwd="/w/alongside-b", session="sess-along", model="claude-fable-5")
+    a2 = await register_agent(actions, ident_b, actor="analyst:operator")
+    assert a2 == a  # same session -> same Agent, exactly the accumulation shape
+
+    flag = await actions.pool.fetchval(
+        "SELECT value FROM current_assertions WHERE object_id=$1 "
+        "AND name='works_in_added_alongside_prior'", a)
+    assert flag["new_project"] == "alongside-b"
+    assert flag["prior_projects"] == ["alongside-a"]
+    assert "detected_at" in flag
+
+    # additive, never a deletion (Constitution 3): BOTH works_in edges stay live
+    live_projects = await actions.pool.fetch(
+        "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", a)
+    assert {r["canonical"] for r in live_projects} == {"repo:alongside-a", "repo:alongside-b"}
+
+
+async def test_register_agent_never_flags_a_first_mount(actions: Actions) -> None:
+    ident = resolve_identity(cwd="/w/first-only", session="sess-first", model="claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    flag = await actions.pool.fetchval(
+        "SELECT value FROM current_assertions WHERE object_id=$1 "
+        "AND name='works_in_added_alongside_prior'", a)
+    assert flag is None
+
+
+async def test_register_agent_never_reflags_a_repeat_mount_of_the_same_project(
+    actions: Actions,
+) -> None:
+    """The flag fires once per (agent, new project) pair, not once per mount — a repeat
+    mount of a project the agent already has finds its edge already live and never
+    reaches the flag at all."""
+    ident = resolve_identity(cwd="/w/repeat-one", session="sess-repeat", model="claude-fable-5")
+    await register_agent(actions, ident, actor="analyst:operator")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 "
+        "AND name='works_in_added_alongside_prior'", a)
+    assert n == 0
+
+
+async def test_register_agent_never_reflags_returning_to_an_already_known_project(
+    actions: Actions,
+) -> None:
+    """A -> B flags once (B lands alongside A). B -> A again must NOT flag a second time
+    — A is already a live edge on this agent, so re-landing on it is not a NEW edge."""
+    ident_a = resolve_identity(cwd="/w/return-a", session="sess-return", model="claude-fable-5")
+    ident_b = resolve_identity(cwd="/w/return-b", session="sess-return", model="claude-fable-5")
+    a = await register_agent(actions, ident_a, actor="analyst:operator")
+    await register_agent(actions, ident_b, actor="analyst:operator")
+    await register_agent(actions, ident_a, actor="analyst:operator")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 "
+        "AND name='works_in_added_alongside_prior'", a)
+    assert n == 1
+
 
 async def test_mint_heir_moves_the_ancestors_works_in_and_governs_edges_to_the_heir(
     actions: Actions,
