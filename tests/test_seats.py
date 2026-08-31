@@ -1384,10 +1384,9 @@ async def test_roster_pin_is_unknown_office_with_no_anchor_cwd_and_no_convention
     the conventional path (`~/.osiris/seats/<handle>/`, faked here so the test never
     touches the real filesystem) ALSO finds nothing — so the honest state is
     `unknown-office`, never the old `no-office`."""
-    from src.orchestrator import offices
     from src.orchestrator.seats import roster
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     seat = await ensure_seat(actions, house="osiris", handle="Rpin4", source="test")
 
     row = next(r for r in (await roster(actions.pool))["seats"]
@@ -1406,7 +1405,6 @@ async def test_roster_pin_probes_the_conventional_office_when_no_anchor_cwd_is_r
     it, to Imhotep's plan_pin_migration undercount. The probe finds it; `anchor_cwd` stays
     honestly null (the graph never recorded it) while `probed_anchor_cwd` shows what
     convention found."""
-    from src.orchestrator import offices
     from src.orchestrator.seats import roster
 
     fake_root = tmp_path / "seats"
@@ -1414,7 +1412,7 @@ async def test_roster_pin_probes_the_conventional_office_when_no_anchor_cwd_is_r
     office = fake_root / "rpin5"
     office.mkdir()
     (office / ".osiris").write_text('project = "kast"\n')
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
     seat = await ensure_seat(actions, house="osiris", handle="Rpin5", source="test")
 
     row = next(r for r in (await roster(actions.pool))["seats"]
@@ -1627,10 +1625,9 @@ async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> 
 async def test_roster_pin_triage_bucket_none_when_nothing_declared(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.orchestrator import offices
     from src.orchestrator.seats import roster
 
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     seat = await ensure_seat(actions, house="osiris", handle="Rtri1", source="test")
 
     row = next(r for r in (await roster(actions.pool))["seats"]
@@ -1999,12 +1996,11 @@ async def test_live_cwd_graph_only_at_the_bare_office_root(
     correctly REFUSES to resolve anything at the bare seats container
     (resolved_today=None), while the graph still carries a belief there from before the
     fix — exactly what should stay visible, not silently absent."""
-    from src.orchestrator import offices
     from src.orchestrator.seats import live_cwd_ledger
 
     fake_root = tmp_path / "seats"
     fake_root.mkdir()
-    monkeypatch.setattr(offices, "_DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
     await _agent_works_in(actions, "agent:ledgerbareroot1", "seats")
     await save_mount(actions.pool, job_dir="/jobs/ledgerbareroot1",
                      agent_id="agent:ledgerbareroot1", project="seats",
@@ -2508,7 +2504,7 @@ async def test_resolve_project_an_unseated_agent_at_the_bare_office_root_refuses
 
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", fake_root)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
     await actions.create_or_find_object("Agent", "agent:rp3aaaa0", "test")
 
     assert await resolve_project(actions.pool, "agent:rp3aaaa0", str(fake_root)) is None
@@ -3453,7 +3449,7 @@ async def test_correct_pin_value_mcp_wrapper_targets_the_callers_own_office(
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
 
-    monkeypatch.setattr("src.orchestrator.offices._DEFAULT_OFFICE_ROOT", tmp_path)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path))
 
     class _Ctx:
         class request_context:  # noqa: N801

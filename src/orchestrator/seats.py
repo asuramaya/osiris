@@ -696,7 +696,7 @@ async def roster(
     a bare, uninformative `no-match` until this existed."""
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
-    from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+    from src.orchestrator.offices import _default_office_root
 
     bucket_map = await _triage_bucket_map(pool)
     seat_rows = await pool.fetch(
@@ -728,7 +728,7 @@ async def roster(
         # function knows to check found one, not that no office exists anywhere.
         probed_anchor = None
         if anchor is None and facts["handle"]:
-            candidate = str(_DEFAULT_OFFICE_ROOT / facts["handle"].lower())
+            candidate = str(_default_office_root() / facts["handle"].lower())
             if _dir_exists(candidate):
                 probed_anchor = candidate
         effective_anchor = anchor or probed_anchor

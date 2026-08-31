@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,33 @@ import asyncpg
 from src.actions.core import Actions
 from src.orchestrator.mounts import rebind_seat
 
-_DEFAULT_OFFICE_ROOT = Path.home() / ".osiris" / "seats"
+_OFFICE_ROOT_ENV = "OSIRIS_OFFICE_ROOT"
+
+
+def _default_office_root() -> Path:
+    """THE OFFICE-SCAFFOLDING ROOT, RE-READ ON EVERY CALL — never frozen at import time
+    (Thoth's wave 9 lane, msg 6089): a bare module-level constant is captured once, by
+    whichever call site imported it first, and stays that value for the life of the
+    process — a test-only monkeypatch of one module's own attribute never reaches a
+    SIBLING module that did `from offices import _DEFAULT_OFFICE_ROOT` at its own
+    top level (mintseat.py, agents.py both did exactly this) and is holding its own
+    separate, already-frozen copy of the same name.
+
+    Reading `OSIRIS_OFFICE_ROOT` fresh here instead closes that gap for every caller in
+    this tree, present or future, without each one remembering to thread `office_root`
+    through by hand: tests/conftest.py sets this env var once, before any test runs, and
+    every scaffold/sweep call in the whole process — no matter which module resolved it,
+    no matter whether that call site passed its own explicit `office_root` (which still
+    takes precedence; this is only the FALLBACK) — lands in the same throwaway directory
+    instead of the real `~/.osiris/seats/` (the climintworker1/inferredworker1 shape,
+    decision 5d97b750/f642a1e6: two real office directories scaffolded onto the real disk
+    by unmocked test runs, the second one recreated DURING a live authorised deletion).
+
+    Unset (the real launch path — cli.py, mcp_server.py, a live agent's own mount — never
+    sets this) falls through to the real seats root, exactly as before; establish_office's
+    production write is untouched."""
+    override = os.environ.get(_OFFICE_ROOT_ENV)
+    return Path(override) if override else Path.home() / ".osiris" / "seats"
 
 
 def is_bare_office_root(cwd: str | Path | None) -> bool:
@@ -39,7 +66,7 @@ def is_bare_office_root(cwd: str | Path | None) -> bool:
     test_resolve_identity_never_invents_a_project_from_the_bare_office_root. A seated agent's
     project resolving to its seat's HOUSE instead of its handle is the DB-backed resolver's
     job (seats.resolve_project), not this pure, cwd-only guard's."""
-    return cwd is not None and Path(cwd) == _DEFAULT_OFFICE_ROOT
+    return cwd is not None and Path(cwd) == _default_office_root()
 
 
 _WORKTREE_MARKER = "/.claude/worktrees/"
@@ -337,7 +364,7 @@ async def correct_own_pin_value(
     trust exercise. This composes `correct_pin_value` with `held_seat` (the SAME lookup
     `correct_house` uses) so a caller names only WHAT to correct, never WHERE: the seat's own
     office, resolved off its `handle`, exactly like `establish_office`/`write_model_pin`
-    already do (`_DEFAULT_OFFICE_ROOT / handle.lower()`) — never `identity.cwd`, which can be
+    already do (`_default_office_root() / handle.lower()`) — never `identity.cwd`, which can be
     a shared root other seats climb to (#146's lesson), and never a directory-basename guess
     (13af22fc's phantom `repo:seats` defect came from exactly that shape).
 
@@ -351,7 +378,7 @@ async def correct_own_pin_value(
     if bound is None:
         return {"error": f"{agent_id} holds no seat — correcting a pin is a seat's own act, "
                          "never done on another's behalf"}
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office = root / bound["handle"].lower()
     result = correct_pin_value(str(office), key, value, reason=reason)
     if not result.get("error"):
@@ -574,7 +601,7 @@ async def _establish_pure_seat_office(
     house = facts["house"]
     if not house:
         return {"error": f"{seat_id} has no derivable house — nothing to pin at an office"}
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     seat_line = f" — durable identity `{seat_id}`."
@@ -724,7 +751,7 @@ async def establish_office(
                          f"{confirmed_fresh['last_seen'].isoformat()}) — moving a live "
                          "seat splits its running session's history between two homes. "
                          "Close its tab first, then establish; it wakes up in the office"}
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     bound = await held_seat(actions.pool, agent_id)
@@ -887,7 +914,7 @@ async def sweep_retired_office(
     handle = (handle or "").strip()
     if not handle:
         return {"error": "a handle is required"}
-    root = office_root or _DEFAULT_OFFICE_ROOT
+    root = office_root or _default_office_root()
     office = root / handle.lower()
     # CONTAINMENT, AND IT IS THE ONE GUARD THIS VERB WAS MISSING (Thoth LXXXIX, wave 8
     # merge review). Every other refusal below interrogates THE SEAT — is it retired, is

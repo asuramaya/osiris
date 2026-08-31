@@ -4,9 +4,12 @@ import contextlib
 import contextvars
 import http.server
 import os
+import shutil
 import sys
+import tempfile
 import threading
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -292,6 +295,20 @@ def _install_tool_contract_ceiling_merge_driver() -> None:
 # this box (a PID is unique to the OS process that holds it, controller or worker alike,
 # no coordination needed). Only applied when the caller hasn't already passed --basetemp
 # themselves (CI or a human override always wins).
+# THE OFFICE-ROOT SEAT-BELT (wave 9, Thoth's msg 6089): every one of offices.py's
+# scaffold/sweep functions defaults to OSIRIS_OFFICE_ROOT when a caller passes no
+# office_root of its own (offices._default_office_root(), re-read fresh on every call —
+# never a module-level constant a monkeypatch could miss). Set here, once, before ANY
+# test module imports the src package, so a NEW test that simply forgets office_root
+# still lands in a throwaway directory instead of the real ~/.osiris/seats/ — the
+# climintworker1/inferredworker1 shape (decision 5d97b750/f642a1e6), closed for every
+# CURRENT and FUTURE test in this tree at once, rather than one call site at a time.
+# PID-keyed (mirrors basetemp just above) so concurrent pytest invocations on this same
+# box — another worktree's own run — never share, or race over, one directory.
+_TEST_OFFICE_ROOT = Path(tempfile.mkdtemp(prefix=f"osiris-test-seats-{os.getpid()}-"))
+os.environ["OSIRIS_OFFICE_ROOT"] = str(_TEST_OFFICE_ROOT)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     if config.option.basetemp is None:
         config.option.basetemp = f"/tmp/pt-{os.getpid()}"
@@ -317,6 +334,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     pg = _CONTAINER.pop("pg", None)
     if pg is not None:
         pg.stop()
+    shutil.rmtree(_TEST_OFFICE_ROOT, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

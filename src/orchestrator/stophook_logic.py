@@ -75,7 +75,7 @@ async def compute_stop_offload(
     function's docstring for the full rationale (the seat-office cwd resolution, the
     shared `settle_boxes` delegation)."""
     from src.orchestrator.mounts import find_session_row
-    from src.orchestrator.offices import _DEFAULT_OFFICE_ROOT
+    from src.orchestrator.offices import _default_office_root
     from src.orchestrator.seats import held_seat
     from src.orchestrator.settle import settle_boxes
 
@@ -85,7 +85,7 @@ async def compute_stop_offload(
     charter_cwd = cwd
     seat = await held_seat(conn, str(row["agent_id"]))
     if seat and seat.get("handle"):
-        charter_cwd = str(_DEFAULT_OFFICE_ROOT / seat["handle"].lower())
+        charter_cwd = str(_default_office_root() / seat["handle"].lower())
     return await settle_boxes(conn, agent_id=str(row["agent_id"]),
                               mounted_at=row["mounted_at"], cwd=charter_cwd,
                               seat_id=seat["seat_id"] if seat else None)

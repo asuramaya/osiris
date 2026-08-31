@@ -3137,15 +3137,14 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """cmd_new has no office_root passthrough (matching cmd_mint_seat's own shape) — the
-    real default lives in mintseat._DEFAULT_OFFICE_ROOT, patched here so this test never
-    writes into the operator's actual ~/.osiris/seats/."""
+    real default is offices._default_office_root(), redirected here via OSIRIS_OFFICE_ROOT
+    (wave 9, msg 6089) so this test never writes into the operator's actual
+    ~/.osiris/seats/."""
     import io
     from contextlib import redirect_stdout
 
-    from src.orchestrator import mintseat as mintseat_module
-
     workspace = tmp_path / "henry-ws"
-    monkeypatch.setattr(mintseat_module, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
     buf = io.StringIO()
     with redirect_stdout(buf):

@@ -475,7 +475,6 @@ async def test_mcp_mint_seat_the_caller_is_always_the_manager(
     'Seshat' with NO manager param at all — the tool resolves the manager from the
     connection's own identity, exactly the semantics Thoth's amendment asked for."""
     import src.mcp_server as srv
-    from src.orchestrator import mintseat
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.seats import bind_holder
 
@@ -484,7 +483,7 @@ async def test_mcp_mint_seat_the_caller_is_always_the_manager(
                       source="operator")
     # office_root is not a tool param — point the shared default at a scratch dir for
     # the duration of this one test
-    monkeypatch.setattr(mintseat, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
     ctx = _Ctx()
     saved_pool = srv._pool
@@ -515,7 +514,6 @@ async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
     copied to every new generation (mint_heir's own seat-inheritance step) — the tool
     must fall back to it, the same way mount's own seat display already does."""
     import src.mcp_server as srv
-    from src.orchestrator import mintseat
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.seats import bind_holder
 
@@ -528,7 +526,7 @@ async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
     heir = await actions.create_or_find_object("Agent", "agent:th0th0001-xiv", "operator")
     await actions.assert_property(heir, "handle", "Thoth", "operator", NOW, 0.9,
                                   evidence_class="self_declared")
-    monkeypatch.setattr(mintseat, "_DEFAULT_OFFICE_ROOT", tmp_path / "seats")
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
     ctx = _Ctx()
     saved_pool = srv._pool
