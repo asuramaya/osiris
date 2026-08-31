@@ -228,7 +228,7 @@ async def test_filed_under_check_coherent_when_writes_match_filed_under_project(
     out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
                                   project="matchproj")
     assert out == {"filed_under": "matchproj", "writes_went_to": ["matchproj"],
-                   "coherent": True}
+                   "coherent": True, "spans_multiple": False}
 
 
 async def test_filed_under_check_flags_a_mismatch_without_erroring(actions: Actions) -> None:
@@ -242,7 +242,7 @@ async def test_filed_under_check_flags_a_mismatch_without_erroring(actions: Acti
     out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
                                   project="redmonth")
     assert out == {"filed_under": "redmonth", "writes_went_to": ["ballgem"],
-                   "coherent": False}
+                   "coherent": False, "spans_multiple": False}
 
 
 async def test_filed_under_check_names_every_distinct_project_written_to(
@@ -257,6 +257,7 @@ async def test_filed_under_check_names_every_distinct_project_written_to(
     assert out is not None
     assert out["writes_went_to"] == ["projA", "projB"]
     assert out["coherent"] is False  # projB alone breaks coherence
+    assert out["spans_multiple"] is True
 
 
 async def test_filed_under_check_normalizes_a_folded_filed_under_label(
@@ -280,7 +281,76 @@ async def test_filed_under_check_normalizes_a_folded_filed_under_label(
     out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
                                   project="RAMstein")
     assert out == {"filed_under": "ramstein", "writes_went_to": ["ramstein"],
-                   "coherent": True}
+                   "coherent": True, "spans_multiple": False}
+
+
+async def test_filed_under_check_coherent_when_multi_repo_spread_matches_the_charter(
+    actions: Actions,
+) -> None:
+    """Thread 992c0121, Soundwave XVI's specimen: a seat CHARTERED for two repos writes to
+    both from one experiment — a DECLARED arrangement, not drift. Verdict flips to
+    coherent; the seat's own charter rides along in the receipt so the behavior stays
+    observable rather than a silent scope change (same discipline decision 275d5d7ac2f8's
+    charter-aware readers already keep)."""
+    from src.orchestrator.charter import set_charter
+
+    agent = "agent:fu07"
+    seat_id = "seat:se77le07"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Seat", seat_id, "session")
+    await record_decision(actions, "fu07's kernel ruling", repo="projK", source=agent)
+    await open_thread(actions, "fu07's runtime obligation", repo="projR", source=agent)
+    await set_charter(actions, seat_id, ["projK", "projR"], actor="session")
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="projK", seat_id=seat_id)
+    assert out is not None
+    assert out["coherent"] is True
+    assert out["spans_multiple"] is True
+    assert out["writes_went_to"] == ["projK", "projR"]
+    assert out["charter_repos"] == ["projK", "projR"]
+
+
+async def test_filed_under_check_stays_incoherent_when_spread_exceeds_the_charter(
+    actions: Actions,
+) -> None:
+    """Ruling 0222fd37 (unintended dual-project DRIFT, surfaced not resolved) stays
+    UNTOUCHED — only a spread FULLY covered by the charter changes verdict. A seat
+    chartered for just ONE of the two repos it wrote to still reads coherent:false,
+    exactly as before this build, with no charter_repos key at all (the exceeding case
+    looks identical to the pre-charter-aware receipt)."""
+    from src.orchestrator.charter import set_charter
+
+    agent = "agent:fu08"
+    seat_id = "seat:se77le08"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Seat", seat_id, "session")
+    await record_decision(actions, "fu08's chartered-repo ruling", repo="projC", source=agent)
+    await open_thread(actions, "fu08's drift into an unchartered repo", repo="projD",
+                      source=agent)
+    await set_charter(actions, seat_id, ["projC"], actor="session")
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="projC", seat_id=seat_id)
+    assert out is not None
+    assert out["coherent"] is False
+    assert out["spans_multiple"] is True
+    assert "charter_repos" not in out
+
+
+async def test_filed_under_check_stays_incoherent_without_a_seat_id(actions: Actions) -> None:
+    """No seat_id, no charter lookup — the exact prior behavior for a caller that cannot
+    resolve one (an unmounted/unseated session)."""
+    agent = "agent:fu09"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu09's first ruling", repo="projE", source=agent)
+    await open_thread(actions, "fu09's second ruling", repo="projF", source=agent)
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="projE")
+    assert out is not None
+    assert out["coherent"] is False
+    assert out["spans_multiple"] is True
+    assert "charter_repos" not in out
 
 
 # ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
@@ -2179,7 +2249,7 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
     # about is still visible and still marks `coherent: False`
     assert out["identity_coherence"] == {
         "filed_under": "redmonth", "writes_went_to": ["ballgem", "redmonth"],
-        "coherent": False}
+        "coherent": False, "spans_multiple": True}
     assert "John XVI" in out["note"]
 
 
@@ -2217,3 +2287,67 @@ async def test_settle_tool_omits_identity_coherence_when_nothing_written(
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     assert "identity_coherence" not in out
+
+
+async def test_settle_tool_reads_coherent_for_a_charter_declared_multi_repo_spread(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 992c0121, Soundwave XVI's specimen, at the settle() tool's own surface: a
+    seat CHARTERED for two repos writes to both — coherent, per filed_under_check's own
+    charter-aware verdict — but the successor-blindness sentence STILL fires (Soundwave's
+    own insistence): a successor mounting under `filed_under` alone genuinely will not see
+    the other repo's writes, chartered or not. Fix the verdict, keep the disclosure."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    agent = "agent:settleic4"
+    seat = await ensure_seat(actions, house="chartertest", handle="ChartTest1",
+                             source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent, source="test")
+    await record_decision(actions, "settleic4's kernel-side ruling (pre-existing project)",
+                          repo="chartertest", source="agent:seed")
+    await open_thread(actions, "settleic4's runtime-side ruling (pre-existing project)",
+                      repo="chartrepo2", source="agent:seed")
+    await set_charter(actions, seat["seat_id"], ["chartertest", "chartrepo2"], actor="test")
+
+    job_dir = str(tmp_path / "jobs" / "settleic4"[:8])  # find_session_row matches job_dir's
+    # basename against session[:8] exactly (no trailing chars) — see the two sibling tests
+    # above for the same convention.
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="chartertest",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+    (tmp_path / "charter.md").write_text("# notes\n")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="settleic4", project="chartertest", model=None,
+        cwd=str(tmp_path))
+    try:
+        out = await srv.settle(
+            decisions=[{"summary": "settleic4's kernel ruling this session",
+                       "repo": "chartertest"}],
+            threads_open=[{"summary": "settleic4's runtime ruling this session",
+                          "repo": "chartrepo2"}],
+            ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["complete"] is True, out
+    assert out["identity_coherence"] == {
+        "filed_under": "chartertest", "writes_went_to": ["chartertest", "chartrepo2"],
+        "coherent": True, "spans_multiple": True,
+        "charter_repos": ["chartertest", "chartrepo2"]}
+    assert "coherent" in out["note"] and "John XVI" not in out["note"]
+    assert "successor mounting under" in out["note"]

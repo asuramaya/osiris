@@ -128,6 +128,7 @@ async def settle_boxes(
 
 async def filed_under_check(
     conn_or_pool: _Fetchable, *, agent_id: str, mounted_at: datetime, project: str | None,
+    seat_id: str | None = None,
 ) -> dict[str, Any] | None:
     """SETTLE VERIFIES WHAT YOU WROTE, NEVER WHO CAN READ IT (Thoth's Lane 4 finding,
     2026-07-31): John XVI settled complete:true — every box green — while his own writes
@@ -152,6 +153,30 @@ async def filed_under_check(
     is `in_repo` of; a write with NO `in_repo` link at all (an unfiled thread, Alfred V's
     own shape) is invisible to this specific check by construction — it names WHERE writes
     went, not whether every write went somewhere.
+
+    THE CHARTER, CONSULTED BEFORE CALLING A DECLARED ARRANGEMENT INCOHERENT (thread
+    992c0121, Soundwave XVI's own specimen, msg 6090/6091: a seat chartered for TWO repos
+    — decepticons + chronohorn, decision b4ccbe03 — necessarily writes to both from a
+    single experiment, and used to read `coherent:false` about its own normal operating
+    mode every time). When `seat_id` is given and `went_to` spans more than one project,
+    the seat's own ACTIVE `governs` set is checked FIRST — inlined here rather than
+    imported from charter.py's own `charter_of` (typed against `asyncpg.Pool` alone; this
+    module keeps serving both a Pool and a bare Connection, same reason `seat_chartered`
+    below inlines the identical query shape). `went_to` fully contained in that charter
+    reads `coherent: true`, `charter_repos` names the set it was checked against — a
+    DECLARED arrangement, not drift. Exceeding the charter (or no charter at all) keeps
+    the exact prior behavior: `coherent: false`.
+
+    THE SUCCESSOR-BLINDNESS DISCLOSURE SURVIVES EITHER VERDICT, ON PURPOSE — Soundwave's
+    own insistence, not a suppression request: a successor mounting under `filed_under`
+    genuinely will not see writes filed under the OTHER project(s) in `went_to`, whether
+    or not the charter declares the split intentional. `spans_multiple` is true whenever
+    `len(went_to) > 1`, independent of `coherent` — this function's caller decides how to
+    word the disclosure for each case, but must never gate it on `coherent` alone (that
+    was the exact bug: a charter-aware `coherent:true` must not silently swallow a true,
+    useful warning). Ruling 0222fd37 (unintended dual-project DRIFT, surfaced not
+    resolved) is UNTOUCHED — only the CHARTERED case changes verdict; an uncharted spread
+    still reads `coherent: false` exactly as before.
 
     NORMALIZES `project` THROUGH merged_into (decision 6b4d185e, thread aa6b52af — open
     since before tonight, naming this exact gap): `went_to` reads off LIVE `in_repo`
@@ -193,7 +218,25 @@ async def filed_under_check(
     if not went_to:
         return None
     mismatched = [p for p in went_to if p != project]
-    return {"filed_under": project, "writes_went_to": went_to, "coherent": not mismatched}
+    result: dict[str, Any] = {
+        "filed_under": project, "writes_went_to": went_to, "coherent": not mismatched,
+        "spans_multiple": len(went_to) > 1,
+    }
+    if mismatched and seat_id:
+        try:
+            charter_rows = await conn_or_pool.fetch(
+                "SELECT p.canonical AS repo FROM links l "
+                "JOIN objects s ON s.id=l.from_id AND s.type='Seat' AND s.canonical=$1 "
+                "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+                "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now())",
+                seat_id)
+        except Exception:  # noqa: BLE001 — fail open, same law as every box above
+            charter_rows = []
+        charter = sorted({str(r["repo"]).removeprefix("repo:") for r in charter_rows})
+        if charter and set(went_to).issubset(charter):
+            result["coherent"] = True
+            result["charter_repos"] = charter
+    return result
 
 
 async def closure_edge_coverage(
