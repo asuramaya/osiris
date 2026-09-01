@@ -1127,8 +1127,10 @@ async def test_fleet_live_agents_degrades_honestly_on_a_pool_failure() -> None:
                 raise ConnectionError("pool gone")
             return _raise
 
-    rows = await _fn_fleet_live_agents(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    assert rows == [{"agent": "fleet data unavailable", "project": "-", "model": "-"}]
+    out = await _fn_fleet_live_agents(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    # {"error": ...} (kind="data"), never a fake row indistinguishable from real data
+    # (thread 02e0ab9c/6190)
+    assert out == {"error": "fleet data unavailable"}
 
 
 async def test_fleet_pulse_line_returns_the_same_string_orient_shows(actions: Actions) -> None:
@@ -1138,6 +1140,23 @@ async def test_fleet_pulse_line_returns_the_same_string_orient_shows(actions: Ac
     expected = await fleet_pulse(actions.pool)
     line = await _fn_fleet_pulse_line(actions.pool, None, {})
     assert line == expected
+
+
+async def test_fleet_pulse_line_degrades_to_a_distinguishable_error_on_a_pool_failure() -> None:
+    """The success case is a bare string; a same-typed failure string would be identical
+    by shape (thread 02e0ab9c/6190) — the failure must be a DIFFERENT type, not just
+    different wording, so a programmatic reader can tell them apart without parsing text."""
+    from src.orchestrator.compositions import _fn_fleet_pulse_line
+
+    class _BrokenPool:
+        def __getattr__(self, name: str) -> object:
+            async def _raise(*args: object, **kwargs: object) -> None:
+                raise ConnectionError("pool gone")
+            return _raise
+
+    out = await _fn_fleet_pulse_line(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert out == {"error": "fleet pulse unavailable"}
+    assert not isinstance(out, str)
 
 
 async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
@@ -1196,7 +1215,9 @@ async def test_fleet_live_degrades_honestly_on_a_pool_failure() -> None:
             return _raise
 
     out = await _fn_fleet_live(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    assert out == {"pulse": "fleet data unavailable"}
+    # the WHOLE dict becomes {"error": ...} — roster/unreconciled/wake_ledger are equally
+    # unavailable, never left implying only "pulse" failed (thread 02e0ab9c/6190)
+    assert out == {"error": "fleet data unavailable"}
 
 
 async def test_fleet_live_flattens_doors_to_readable_prose_not_a_repr(
@@ -1312,8 +1333,8 @@ async def test_mail_overview_degrades_honestly_on_a_pool_failure() -> None:
                 raise ConnectionError("pool gone")
             return _raise
 
-    rows = await _fn_mail_overview(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    assert rows == [{"box": "mail data unavailable", "msgs": "-", "unsettled": "-"}]
+    out = await _fn_mail_overview(_BrokenPool(), None, {})  # type: ignore[arg-type]
+    assert out == {"error": "mail data unavailable"}
 
 
 async def test_mail_threads_function_lists_one_boxs_threads_via_args_box(
@@ -1352,8 +1373,8 @@ async def test_mail_threads_degrades_honestly_on_a_pool_failure() -> None:
                 raise ConnectionError("pool gone")
             return _raise
 
-    rows = await _fn_mail_threads(_BrokenPool(), None, {"box": "neo"})  # type: ignore[arg-type]
-    assert rows == [{"thread": "mail data unavailable", "between": "-", "msgs": "-"}]
+    out = await _fn_mail_threads(_BrokenPool(), None, {"box": "neo"})  # type: ignore[arg-type]
+    assert out == {"error": "mail data unavailable"}
 
 
 async def test_mail_composition_end_to_end(actions: Actions) -> None:
@@ -1413,7 +1434,7 @@ async def test_overhead_degrades_honestly_on_a_pool_failure() -> None:
             return _raise
 
     data = await _fn_overhead(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    assert data == {"totals": "overhead data unavailable"}
+    assert data == {"error": "overhead data unavailable"}
 
 
 async def test_overhead_composition_end_to_end(actions: Actions) -> None:
@@ -1449,7 +1470,7 @@ async def test_desk_overview_degrades_honestly_on_a_pool_failure() -> None:
             return _raise
 
     data = await _fn_desk_overview(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    assert data == {"owed": "desk data unavailable"}
+    assert data == {"error": "desk data unavailable"}
 
 
 async def test_desk_project_function_lists_one_projects_asks_via_args_project(
@@ -1553,8 +1574,8 @@ async def test_desk_project_degrades_honestly_on_a_pool_failure() -> None:
                 raise ConnectionError("pool gone")
             return _raise
 
-    rows = await _fn_desk_project(_BrokenPool(), None, {"project": "neo"})  # type: ignore[arg-type]
-    assert rows == [{"debt": "desk data unavailable", "kind": "-"}]
+    out = await _fn_desk_project(_BrokenPool(), None, {"project": "neo"})  # type: ignore[arg-type]
+    assert out == {"error": "desk data unavailable"}
 
 
 async def test_desk_composition_end_to_end(actions: Actions) -> None:

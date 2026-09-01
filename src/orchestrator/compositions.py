@@ -2837,15 +2837,26 @@ async def _fn_fleet_live_agents(
     default 'osiris' — this graph's own control surface) — never the full roster the plain
     "fleet" composition already renders unranked. A flat list[dict] (task #60's own
     reclassification hands this to the generic table for free — no Composition op, no view
-    type, nothing in osiris.js)."""
+    type, nothing in osiris.js).
+
+    A FAILED READ RETURNS `{"error": ...}`, NEVER A FAKE ROW (thread 02e0ab9c/6190, the
+    composition contract's own missing channel): a `list[dict]` return here is kind="rows"
+    at `_eval`'s own function-op reclassification (task #60), the SAME shape as real data —
+    a sentinel row embedded in it (the old `[{"agent": "...unavailable", ...}]`) was
+    structurally identical to a genuine agent named that. A bare `{"error": ...}` dict
+    falls through to kind="data" instead — the SAME distinguishable shape every ordinary
+    MCP tool already uses on failure, not a second vocabulary — and osiris.js's renderData
+    still shows it as a legible chip, just no longer indistinguishable from a real row to a
+    programmatic reader of run_composition's own JSON."""
     from src.api.chrome import fleet_data
 
     project = str(args.get("project") or "osiris")
     try:
         data = await fleet_data(pool)
     except Exception:  # noqa: BLE001 — a fleet read that fails is UNAVAILABLE, never a
-        # silent empty table (msg 1894 point 4, degrade-honestly, renderer-independent)
-        return [{"agent": "fleet data unavailable", "project": "-", "model": "-"}]
+        # silent empty table (msg 1894 point 4, degrade-honestly, renderer-independent) —
+        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+        return {"error": "fleet data unavailable"}
     live = [m for m in data["mounts"]
             if m.get("live") and m.get("seated") and m.get("project") == project]
     return [{"agent": m.get("seat") or m.get("agent_id") or "?",
@@ -2865,8 +2876,10 @@ async def _fn_fleet_pulse_line(
 
     try:
         return await fleet_pulse(pool)
-    except Exception:  # noqa: BLE001 — see _fn_fleet_live_agents: unavailable, not silent
-        return "fleet pulse unavailable"
+    except Exception:  # noqa: BLE001 — see _fn_fleet_live_agents: unavailable, not silent —
+        # {"error": ...} (a dict) is distinguishable from the success string by TYPE alone,
+        # not merely by re-reading the failure string's own wording (thread 02e0ab9c/6190)
+        return {"error": "fleet pulse unavailable"}
 
 
 def _fleet_age(secs: float | None) -> str:
@@ -2959,8 +2972,11 @@ async def _fn_fleet_live(
     try:
         data = await fleet_data(pool, wake_budget=get_settings().osiris_wake_hourly_budget)
     except Exception:  # noqa: BLE001 — see fleet_live_agents: unavailable, never a silent
-        # empty table (msg 1894 point 4, degrade-honestly, renderer-independent)
-        return {"pulse": "fleet data unavailable"}
+        # empty table (msg 1894 point 4, degrade-honestly, renderer-independent) — "error"
+        # replaces the WHOLE dict rather than hiding in "pulse" (thread 02e0ab9c/6190):
+        # every other key (roster/unreconciled/wake_ledger) is equally unavailable here,
+        # so a partial dict claiming only "pulse" failed would itself be a lie
+        return {"error": "fleet data unavailable"}
     mounts = data["mounts"]
     named = [m for m in mounts if m.get("seat")]
     anon = [m for m in mounts if not m.get("seat")]
@@ -3020,8 +3036,9 @@ async def _fn_mail_overview(
     try:
         groups = await mail_overview(pool)
     except Exception:  # noqa: BLE001 — a mail read that fails is UNAVAILABLE, never a
-        # silent empty table (the same degrade-honestly law fleet_live_agents follows)
-        return [{"box": "mail data unavailable", "msgs": "-", "unsettled": "-"}]
+        # silent empty table (the same degrade-honestly law fleet_live_agents follows) —
+        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+        return {"error": "mail data unavailable"}
     rows: list[dict[str, Any]] = []
     for g in groups:
         room = g.get("room")
@@ -3055,8 +3072,9 @@ async def _fn_mail_threads(
                            "'@agent:...'/'@seat:...')", "between": "-", "msgs": "-"}]
     try:
         threads = await mail_threads(pool, box)
-    except Exception:  # noqa: BLE001 — see _fn_mail_overview: unavailable, not silent
-        return [{"thread": "mail data unavailable", "between": "-", "msgs": "-"}]
+    except Exception:  # noqa: BLE001 — see _fn_mail_overview: unavailable, not silent —
+        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+        return {"error": "mail data unavailable"}
     return [{"thread": t["thread"], "between": ", ".join(t["between"]),
              "msgs": len(t["msgs"]), "unsettled": t["unsettled"],
              "latest": t["msgs"][-1]["body"][:160] if t["msgs"] else ""} for t in threads]
@@ -3089,8 +3107,10 @@ async def _fn_overhead(
     try:
         data = await TranscriptStore(pool).overhead_fleet(top=20)
     except Exception:  # noqa: BLE001 — a read that fails is UNAVAILABLE, never a silent
-        # empty section (the same degrade-honestly law fleet_live_agents follows)
-        return {"totals": "overhead data unavailable"}
+        # empty section (the same degrade-honestly law fleet_live_agents follows) — "error"
+        # replaces the WHOLE dict rather than hiding in "totals" (thread 02e0ab9c/6190):
+        # top_sessions/telemetry are equally unavailable when this read itself failed
+        return {"error": "overhead data unavailable"}
     top_sessions = [
         {"session": s["anchor_sid"], "project": s.get("project") or "?",
          "total_tokens": s["total_tokens"], "bytes": s["bytes"],
@@ -3102,11 +3122,16 @@ async def _fn_overhead(
     out: dict[str, Any] = {"totals": data["totals"], "top_sessions": top_sessions}
     try:
         telemetry = await TelemetryStore(pool).summary()
-    except Exception:  # noqa: BLE001 — see above: unavailable, not silent
-        out["telemetry"] = "retained-telemetry data unavailable"
+    except Exception:  # noqa: BLE001 — see above: unavailable, not silent — a PARTIAL
+        # failure (totals/top_sessions above are fine), so this nests {"error": ...} on
+        # just this sub-field rather than discarding real data the way the outer except
+        # does (thread 02e0ab9c/6190)
+        out["telemetry"] = {"error": "retained-telemetry data unavailable"}
     else:
         out["telemetry"] = (
             telemetry if telemetry is not None
+            # a confirmed, genuinely-empty store — NOT the same claim as "error" above,
+            # and left as a plain string on purpose: this is a checked fact, not a gap
             else "nothing retained yet — the store hasn't eaten a telemetry file")
     return out
 
@@ -3131,8 +3156,10 @@ async def _fn_desk_overview(
     try:
         desk = await read_desk(pool)
     except Exception:  # noqa: BLE001 — a desk read that fails is UNAVAILABLE, never a
-        # silent empty roster (the same degrade-honestly law fleet_live_agents follows)
-        return {"owed": "desk data unavailable"}
+        # silent empty roster (the same degrade-honestly law fleet_live_agents follows) —
+        # "error" replaces the WHOLE dict rather than hiding in "owed" (thread 02e0ab9c/
+        # 6190): letters/by_project are equally unavailable when this read itself failed
+        return {"error": "desk data unavailable"}
     projects = [
         {"project": p["project"], "debts": len(p.get("debts") or []),
          "asks": len(p.get("asks") or []), "critical": bool(p.get("critical")),
@@ -3191,8 +3218,9 @@ async def _fn_desk_project(
         return [{"debt": "no project given — pass args.project", "kind": "-"}]
     try:
         desk = await read_desk(pool)
-    except Exception:  # noqa: BLE001 — see desk_overview: unavailable, not silent
-        return [{"debt": "desk data unavailable", "kind": "-"}]
+    except Exception:  # noqa: BLE001 — see desk_overview: unavailable, not silent —
+        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+        return {"error": "desk data unavailable"}
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     if p is None:
         return [{"debt": f"nothing owed to {project} — cleared, or never was", "kind": "-"}]
