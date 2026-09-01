@@ -390,6 +390,9 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(
     # OPERATOR'S REAL HOME — that is where ~/.osiris/wake-receipts/wake-7.json came from, and a
     # priced test envelope there would bill phantom dollars into llm_usage via meter_receipts.
     monkeypatch.setattr(trigger, "RECEIPTS", tmp_path / "receipts")
+    # this test's own concern is env/cmd construction, not the existence backstop (decision
+    # 27259e4d) — that guard gets its own dedicated test below.
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/tmp/x/jobs/wake-7")
     assert (tmp_path / "receipts" / "wake-7.json").exists()  # the rehearsal's receipt stayed home
     # by POSITION only where position is load-bearing: `claude -p` leads, and the PROMPT is last
@@ -399,6 +402,41 @@ async def test_spawn_claude_injects_claude_job_dir_into_child_env(
     assert captured["args"][-1] == "wake up"
     assert captured["env"]["CLAUDE_JOB_DIR"] == "/tmp/x/jobs/wake-7"
     assert "PATH" in captured["env"]  # inherited the parent environment, not a bare dict
+
+
+async def test_spawn_claude_refuses_a_nonexistent_repo_without_raising(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE BACKSTOP (decision 27259e4d, thread bc11a2d3, the operator's real `osiris launch
+    marquee` crash): `repo` used to reach create_subprocess_exec's `cwd=` with no existence
+    check at all — a raw, uncaught FileNotFoundError out of a fire-and-forget wake. Same
+    degrade-don't-die discipline the unwritable-receipt path just above already follows:
+    refuses as a logged no-op, subprocess never even attempted."""
+    from src.orchestrator import trigger
+
+    async def _unreachable(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("create_subprocess_exec must never be reached — the "
+                             "existence backstop refuses first")
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _unreachable)
+    ghost = str(tmp_path / "never-created")
+    await trigger._spawn_claude(ghost, "wake up", job_dir="/tmp/x/jobs/wake-ghost")
+    # fire-and-forget: no exception escapes, no subprocess spawned (proven by _unreachable)
+
+
+async def test_spawn_claude_bg_refuses_a_nonexistent_repo_without_raising(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Same backstop as `_spawn_claude`'s own (decision 27259e4d, thread bc11a2d3)."""
+    from src.orchestrator import trigger
+
+    async def _unreachable(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("create_subprocess_exec must never be reached — the "
+                             "existence backstop refuses first")
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _unreachable)
+    ghost = str(tmp_path / "never-created-bg")
+    await trigger._spawn_claude_bg(ghost, name="ghost")
 
 
 async def test_spawn_claude_authorizes_the_graph_hands(monkeypatch: Any) -> None:
@@ -418,6 +456,7 @@ async def test_spawn_claude_authorizes_the_graph_hands(monkeypatch: Any) -> None
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude("/repo/demo", "wake up", allowed_tools="mcp__osiris")
     assert ("--allowedTools", "mcp__osiris") in _pairs(captured["args"])
     # empty/None = the old behavior: rely on the repo's stored approvals, no flag at all
@@ -458,6 +497,7 @@ async def test_the_wake_KEEPS_ITS_RECEIPT(monkeypatch: Any, tmp_path: Path) -> N
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
     monkeypatch.setattr(trigger, "RECEIPTS", tmp_path / "receipts")
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude("/repo/demo", "wake up", job_dir="/home/x/.claude/jobs/abcd1234")
 
     assert ("--output-format", "json") in _pairs(captured["args"]), "the CLI was not asked to price"
@@ -4797,6 +4837,7 @@ async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) 
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude_bg(
         "/home/asuramaya/.osiris/seats/nefer", name="[OS] Nefer",
         model="claude-sonnet-5", prompt="mount and claim_name")
@@ -4827,6 +4868,7 @@ async def test_spawn_claude_bg_starts_its_own_process_group(monkeypatch: Any) ->
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude_bg("/repo/demo")
     assert captured["kwargs"].get("start_new_session") is True
 
@@ -4847,6 +4889,7 @@ async def test_spawn_claude_bg_never_leaks_the_spawners_own_anchor(monkeypatch: 
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     monkeypatch.setenv("CLAUDE_JOB_DIR", "/tmp/jobs/spawner-own-anchor")
     await trigger._spawn_claude_bg("/repo/demo")
     assert "CLAUDE_JOB_DIR" not in captured["env"]
@@ -4869,6 +4912,7 @@ async def test_spawn_claude_bg_omits_the_prompt_argument_when_none_given(
         return _Proc()
 
     monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
     await trigger._spawn_claude_bg("/repo/demo", name="bare")
     assert captured["args"] == ("claude", "--bg", "-n", "bare")
 
