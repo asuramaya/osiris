@@ -3398,13 +3398,26 @@ _UNHEDGED_ASSERTION = re.compile(
     r"the check (only|never)|is (not )?the (cause|blocker|gap|hole)|"
     r"never (reads|checks|touches)|only (reads|checks|ever)|untested|"
     r"no (regression )?test)\b")
+# FRESH-VERIFICATION IS A HEDGE TOO (thread 0ae050d8/msg 6222, Thoth's own calibration
+# read on his first night of live traffic): three of his four specimens were his OWN
+# self-corrections — "I grepped and found FOUR live callers, not zero" — each still fired,
+# because the original vocabulary only recognized hedging BY UNCERTAINTY (i think/might/
+# haven't checked), never hedging BY FRESH RE-CHECK (i grepped/i checked and found X). The
+# nag's own design note already says "if you re-read the thing you're describing THIS
+# turn, say so" — a caller who names the exact re-check they just performed IS doing that;
+# the vocabulary just didn't recognize the shape. Checked empirically against all four of
+# Thoth's live specimens (msg 6216/6217 thread) before shipping: the confirmed true
+# positive (6217, praising Seshat's own find, no re-check language of Thoth's own) still
+# fires; all three self-correction messages (6218/6219/6221, each containing "I grepped")
+# stop firing.
 _HEDGE = re.compile(
     r"(?i)\b(i think|i believe|might|may not|maybe|probably|possibly|"
     r"not (fully |100% )?(sure|certain|confirmed|verified)|"
     r"haven'?t (checked|verified|confirmed|read|re-?read)|"
     r"worth (checking|verifying|a (second|closer) look)|"
     r"reproduce (it )?yourself|double-?check|unverified|assuming|"
-    r"as far as i (know|can tell)|uncertain|caveat)\b")
+    r"as far as i (know|can tell)|uncertain|caveat|"
+    r"i (just )?(went and )?(grepped|checked|re-?ran|re-?checked))\b")
 
 
 def unhedged_assertion_smell(text: str) -> bool:
