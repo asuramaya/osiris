@@ -416,7 +416,16 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              ("Organization", "Person", "Decision", "Thread", "Agent")),
     LinkType("decided_in", "Decision was stated in this commit (the 'why', sourced).",
              ("Decision",), ("Commit",)),
-    LinkType("supersedes", "This decision overrides/replaces an earlier one.",
+    LinkType("supersedes", "DEAD — never instantiated as a link, 0 rows ever (measured, "
+             "decision 5dea28e5). Declared at birth (2026-06-30) alongside decided_in/"
+             "grounded_by, then the actual verb shipped 11 days later (e7fb7b1, ruling "
+             "dd04d7dd) as a PROPERTY PAIR instead — `supersedes`/`superseded_by` on the "
+             "Decision objects themselves, chosen for its event-sourced re-assert-'' "
+             "unwind ('no link-retraction primitive needed'). This declaration was never "
+             "updated after that pivot. 168 live corrections exist; none of them are here. "
+             "Read record_decision(supersedes=...)'s own docstring for the real mechanism, "
+             "the same way `narrows`/`rediscovers` already point a reader away from this "
+             "entry rather than toward it.",
              ("Decision",), ("Decision",)),
     LinkType("grounded_by", "Decision is grounded by this design reference (the canon).",
              ("Decision",), ("Reference",)),
