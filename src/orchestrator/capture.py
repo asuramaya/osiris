@@ -1184,6 +1184,7 @@ _REQUIRED_LINK_KIND_TABLE = {"repo": "in_repo", "grounds": "grounded_by", "resol
 async def _enforce_required_links(
     a: Actions, obj_id: uuid.UUID, type_name: str, *, kinds_in_scope: tuple[str, ...],
     unlinked_because: str | None, source: str, observed: datetime,
+    unlinked_because_kind: str | None = None,
 ) -> None:
     """Called at the END of a mint's own atomic block, still INSIDE it — a raise here
     triggers the caller's real `conn.transaction()` rollback (Actions.atomic's own
@@ -1196,6 +1197,20 @@ async def _enforce_required_links(
     outright. Otherwise, satisfied ONLY by a SELF_DECLARED-graded link already visible on
     this connection (this call's own writes above included, via the same transaction) —
     a DIRECT_OBSERVATION/DERIVED-graded link (e.g. Seshat's mount-defaulted repo=) never
+
+    `unlinked_because_kind` (thread 20b06fbb — the structural fix Thoth XC's dispatch
+    asked for, not a better prose match): a SEPARATE, non-prose property asserted
+    alongside `unlinked_because` in the SAME transaction, `"extension_link_pending"` when
+    the caller already knows this write's only requested connectivity is an extension-
+    link param (obsoletes=/confirms=/.../cites=) pending mint after this transaction, else
+    `"standalone"`. This is the actual discriminator `adoption_meter._hatch_counts` reads
+    now — never a re-parse of `unlinked_because`'s own prose text against a reason
+    constant whose wording keeps growing a new param name. The caller (record_decision's
+    MCP wrapper) already computes this exact boolean at the moment it decides whether to
+    substitute `_EXTENSION_LINK_PENDING_REASON` for the prose — passed straight through,
+    never re-derived here from the string. Defaults to `"standalone"` when omitted (every
+    other caller of this function — open_thread has no extension-link params of its own
+    to be pending on).
     counts, per Thoth's explicit instruction (msg 5790/5797)."""
     # ONE bound connection for this WHOLE call, catalog read included — a.pool.
     # object_type/fetchval would acquire a DIFFERENT connection from the SAME pool while
@@ -1232,6 +1247,9 @@ async def _enforce_required_links(
                 # later never retroactively silences a gap that was already confessed.
                 await a.assert_property(obj_id, "unlinked_because", unlinked_because,
                                         source, observed, _CONF, evidence_class=_EC)
+                await a.assert_property(obj_id, "unlinked_because_kind",
+                                        unlinked_because_kind or "standalone", source,
+                                        observed, _CONF, evidence_class=_EC)
             return  # unenforced for this type (the common case in this pass), or
                     # nothing this door can even attest to — not this call's problem
         # REAL LINKS CHECKED FIRST, the hatch only as a fallback (Thoth's condition 2,
@@ -1249,6 +1267,9 @@ async def _enforce_required_links(
     if unlinked_because:
         await a.assert_property(obj_id, "unlinked_because", unlinked_because, source,
                                 observed, _CONF, evidence_class=_EC)
+        await a.assert_property(obj_id, "unlinked_because_kind",
+                                unlinked_because_kind or "standalone", source, observed,
+                                _CONF, evidence_class=_EC)
         return
     raise ValueError(
         f"{type_name} refused: none of its required link kinds ({', '.join(required)}) "
@@ -1266,6 +1287,7 @@ async def record_decision(
     implements: uuid.UUID | None = None, confirms: list[uuid.UUID] | None = None,
     rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
     narrows: list[uuid.UUID] | None = None, cites: list[uuid.UUID] | None = None,
+    unlinked_because_kind: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
 
@@ -1327,6 +1349,12 @@ async def record_decision(
     counts), the write REFUSES unless this is given. When given, it is recorded as a
     fact on the object in the SAME transaction and the write proceeds — this is the
     metric the whole arc is measured by, so name a real reason, not a placeholder.
+    `unlinked_because_kind` (thread 20b06fbb) is the non-prose companion — pass
+    `"extension_link_pending"` when this write's only requested connectivity is an
+    extension-link param (obsoletes=/confirms=/.../cites=) pending mint after this
+    transaction, else omit it. `adoption_meter._hatch_counts` reads THIS, never a
+    re-parse of `unlinked_because`'s own text — a prose match silently drifts every
+    time this constant's wording grows a new param name, this field cannot.
 
     `grounds` cites the Reference objects the decision rests on — `grounded_by` edges
     minted AT BIRTH, so the citation carries the decider's grade instead of being
@@ -1544,7 +1572,8 @@ async def record_decision(
                                               and target_source == source))
         await _enforce_required_links(
             a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
-            unlinked_because=unlinked_because, source=source, observed=observed)
+            unlinked_because=unlinked_because, source=source, observed=observed,
+            unlinked_because_kind=unlinked_because_kind)
     return d
 
 

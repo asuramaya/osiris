@@ -223,6 +223,12 @@ async def test_record_decision_extension_link_only_write_gets_a_distinct_machine
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='unlinked_because'", uuid.UUID(child["id"]))
     assert recorded == _EXTENSION_LINK_PENDING_REASON
+    # thread 20b06fbb: the STRUCTURAL companion lands in the SAME transaction — this is
+    # what adoption_meter._hatch_counts reads now, never a re-parse of the prose above.
+    kind = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='unlinked_because_kind'", uuid.UUID(child["id"]))
+    assert kind == "extension_link_pending"
 
 
 async def test_record_decision_extension_link_present_but_gate_already_satisfied_skips_hatch(

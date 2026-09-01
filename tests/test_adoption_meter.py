@@ -269,6 +269,52 @@ async def test_hatch_counts_a_real_assertion_and_splits_against_the_live_constan
     assert meter["hatch"]["split"] == {"extension_link_pending": 1, "standalone_other": 1}
 
 
+async def test_hatch_split_reads_the_structural_kind_field_not_the_live_prose(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """thread 20b06fbb: a row carrying `unlinked_because_kind` classifies from THAT field
+    alone — even when its `unlinked_because` prose matches NEITHER the live
+    `_EXTENSION_LINK_PENDING_REASON` constant NOR any legacy wording, proving the split no
+    longer depends on prose at all once the structural field is present."""
+    import src.mcp_server as srv
+
+    obj = await actions.create_or_find_object("Decision", "decision:structural1", "test")
+    await actions.assert_property(
+        obj, "unlinked_because", "some future wording nobody has written yet", "test",
+        NOW, 0.9, evidence_class="self_declared")
+    await actions.assert_property(
+        obj, "unlinked_because_kind", "extension_link_pending", "test", NOW, 0.9,
+        evidence_class="self_declared")
+    monkeypatch.setattr(srv, "_EXTENSION_LINK_PENDING_REASON",
+                        "a wording that matches nothing above", raising=False)
+
+    meter = await adoption_meter(actions.pool)
+    assert meter["hatch"]["split"] == {"extension_link_pending": 1, "standalone_other": 0}
+
+
+async def test_hatch_split_falls_back_to_the_closed_legacy_set_for_pre_fix_rows(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row written BEFORE thread 20b06fbb carries no `unlinked_because_kind` at all —
+    it must still classify correctly via `_LEGACY_EXTENSION_REASON_STRINGS`, the closed,
+    git-verified enumeration, with no backfill and no live-constant match needed."""
+    import src.mcp_server as srv
+    from src.orchestrator.adoption_meter import _LEGACY_EXTENSION_REASON_STRINGS
+
+    legacy_wording = next(iter(_LEGACY_EXTENSION_REASON_STRINGS))
+    obj = await actions.create_or_find_object("Decision", "decision:legacy1", "test")
+    await actions.assert_property(
+        obj, "unlinked_because", legacy_wording, "test", NOW, 0.9,
+        evidence_class="self_declared")
+    # the LIVE constant has moved on since this row was written — proving the fallback
+    # does not depend on it matching today's wording.
+    monkeypatch.setattr(srv, "_EXTENSION_LINK_PENDING_REASON",
+                        "today's completely different wording", raising=False)
+
+    meter = await adoption_meter(actions.pool)
+    assert meter["hatch"]["split"] == {"extension_link_pending": 1, "standalone_other": 0}
+
+
 async def test_render_adoption_line_names_the_headline_cohort(actions: Actions) -> None:
     assert HEADLINE_TYPE == "Decision"
     await _aged_decision(
