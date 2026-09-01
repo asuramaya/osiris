@@ -235,24 +235,41 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
     return out
 
 
+_LEGACY_EXTENSION_REASON_STRINGS = frozenset({
+    # Every wording `_EXTENSION_LINK_PENDING_REASON` (src/mcp_server.py) is KNOWN to have
+    # held before `unlinked_because_kind` existed as a structural discriminator (thread
+    # 20b06fbb) — found via `git log --all --oneline -G "rediscovers=" -- src/mcp_server.py`
+    # (b7fee6c/57c9a0b/6fb6ba5 each edited this line as narrows=/cites= joined the param
+    # list) and confirmed against the live graph 2026-09-01 (decision 755fabe1). CLOSED: a
+    # row written from this point on always carries unlinked_because_kind structurally, so
+    # this set never needs a new entry for a future wording change.
+    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
+    "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
+    "implements=/rediscovers=/bears_on=, which mint after this transaction and cannot "
+    "satisfy the gate at its own commit point",
+    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
+    "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
+    "implements=/rediscovers=/bears_on=/narrows=, which mint after this transaction and "
+    "cannot satisfy the gate at its own commit point",
+})
+
+
 _HATCH_CAVEAT = (
     "a 0 here is NOT proof the gate is broken (Imhotep msg 5828): the gate only fires on "
     "types that declare required_link_kinds, and none do yet — Khnum's content pass for "
     "that is separate and has not landed. ALL-TIME CUMULATIVE, NEVER A WINDOW OR A RATE "
-    "(Lane C, obligation/thread from Thoth XC msg 6143): unlinked_because is asserted "
-    "once per object at write time and never retracted, so total/split only ever grow — "
-    "two readings taken weeks apart are not a before/after comparison of the SAME thing, "
-    "they are two cumulative totals at different elapsed times. THE SPLIT IS ALSO EXACT-"
-    "STRING SENSITIVE: `pending` below matches `_EXTENSION_LINK_PENDING_REASON`'s CURRENT "
-    "wording only — that constant's own enumerated param list has changed at least three "
-    "times as narrows=/cites= etc. were added (b7fee6c/57c9a0b/6fb6ba5), so an object "
-    "written under an OLDER wording no longer exact-matches and silently counts as "
-    "standalone_other today, even though nothing about that object changed. Measured live "
-    "2026-09-01: 18 rows are genuinely extension-link-pending by MEANING (3 match the "
-    "current string exactly; 15 carry one of two older wordings) but only 3 render as "
-    "`extension=` in the deploy line — the other 15 render as `standalone=`, inflating it "
-    "by the same 15. Do not compare this deploy's split against a prior deploy's, or "
-    "against #189's own close-time snapshot, without re-deriving both from by_reason_raw"
+    "(Lane C, Thoth XC msg 6143): unlinked_because is asserted once per object at write "
+    "time and never retracted, so total/split only ever grow — two readings taken weeks "
+    "apart are not a before/after comparison of the SAME thing, they are two cumulative "
+    "totals at different elapsed times. THE EXACT-STRING CLASSIFICATION BUG IS FIXED "
+    "(thread 20b06fbb, Thoth XC msg 6159): the split now reads a separate, non-prose "
+    "`unlinked_because_kind` property asserted at write time — never a re-parse of "
+    "`unlinked_because`'s own text, which drifted three times as this reason constant's "
+    "enumerated param list grew (b7fee6c/57c9a0b/6fb6ba5) and silently miscounted 15 "
+    "historical rows as standalone. Rows written before this fix carry no "
+    "`unlinked_because_kind` at all and fall back to `_LEGACY_EXTENSION_REASON_STRINGS`, "
+    "a closed, git-verified enumeration of every wording the constant is known to have "
+    "held — so historical rows read correctly at query time too, no backfill needed"
 )
 
 
@@ -277,20 +294,42 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     an older-worded write silently reclassifies as standalone the moment that constant's
     wording moves, with no change to the underlying object. This function's own numbers
     are correct census, unchanged by this finding; only the LABEL was wrong. Fixing the
-    exact-match itself (e.g. a stable sub-string/prefix match instead of full equality) is
-    a deliberate, separate build, not folded in here."""
+    exact-match itself: FIXED (thread 20b06fbb) — the split now reads `unlinked_because_
+    kind`, a SEPARATE non-prose property `capture._enforce_required_links` asserts
+    alongside `unlinked_because` in the same transaction (record_decision's MCP wrapper
+    passes the exact boolean it already computes, never a later re-derivation from text).
+    A row written BEFORE this fix carries no `unlinked_because_kind` at all — `_LEGACY_
+    EXTENSION_REASON_STRINGS` is the closed, frozen enumeration of every wording
+    `_EXTENSION_LINK_PENDING_REASON` is KNOWN to have ever held (found by reading git
+    history, not guessed), so those rows still classify correctly at query time, no
+    backfill/repair-verb needed — satisfying Thoth XC's own condition (msg 6159): "if the
+    fix makes historical rows read correctly by re-evaluating at query time, good." This
+    list is CLOSED going forward too: every future write gets `unlinked_because_kind`
+    structurally, so the constant's own prose is never load-bearing for classification
+    again and this frozenset needs no further entries."""
     rows = await pool.fetch(
-        "SELECT (a.value #>> '{}') AS reason, count(*) AS n FROM current_assertions a "
-        "WHERE a.name = 'unlinked_because' GROUP BY reason ORDER BY n DESC")
-    by_reason_raw = {r["reason"]: r["n"] for r in rows}
-    total = sum(by_reason_raw.values())
+        "SELECT ub.object_id, (ub.value #>> '{}') AS reason, "
+        "(k.value #>> '{}') AS kind "
+        "FROM current_assertions ub "
+        "LEFT JOIN current_assertions k "
+        "  ON k.object_id = ub.object_id AND k.name = 'unlinked_because_kind' "
+        "WHERE ub.name = 'unlinked_because'")
+    by_reason_raw: dict[str, int] = {}
+    for r in rows:
+        by_reason_raw[r["reason"]] = by_reason_raw.get(r["reason"], 0) + 1
+    total = len(rows)
 
     try:
         from src.mcp_server import _EXTENSION_LINK_PENDING_REASON
     except (ImportError, AttributeError):
         split = None
     else:
-        pending = by_reason_raw.get(_EXTENSION_LINK_PENDING_REASON, 0)
+        pending = sum(
+            1 for r in rows
+            if (r["kind"] == "extension_link_pending")
+            or (r["kind"] is None
+                and (r["reason"] == _EXTENSION_LINK_PENDING_REASON
+                     or r["reason"] in _LEGACY_EXTENSION_REASON_STRINGS)))
         split = {"extension_link_pending": pending, "standalone_other": total - pending}
 
     return {

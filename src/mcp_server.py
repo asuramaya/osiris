@@ -6246,9 +6246,16 @@ async def record_decision(
     # the atomic-scope check (repo/grounds/resolves) actually fails — a caller who also
     # gave repo=/grounds=/resolves= that satisfy the gate never sees this value land.
     effective_unlinked_because = unlinked_because
-    if effective_unlinked_because is None and any(
+    # THE STRUCTURAL DISCRIMINATOR (thread 20b06fbb): this exact boolean is the ONLY
+    # place fleet-wide that ever decides "this write's gap is extension-link-pending, not
+    # standalone" — passed straight to capture.record_decision as unlinked_because_kind,
+    # never re-derived later by matching _EXTENSION_LINK_PENDING_REASON's own prose (which
+    # drifts every time this tuple grows a new param name; adoption_meter._hatch_counts
+    # used to do exactly that and silently misclassified three wordings' worth of history).
+    is_extension_pending = effective_unlinked_because is None and any(
         [obsoletes, confirms, refutes, implements, rediscovers, bears_on]
-    ):
+    )
+    if is_extension_pending:
         effective_unlinked_because = _EXTENSION_LINK_PENDING_REASON
     # RECEIPT-HONESTY PRE-CHECK (obligation ce12d2ef): these six now mint INSIDE
     # record_decision's own atomic transaction (7ea187b9's shape (a)), so the wrapper
@@ -6297,6 +6304,8 @@ async def record_decision(
             implements=impl_id, confirms=confirm_ids or None,
             rediscovers=rediscover_ids or None, bears_on=bears_on_ids or None,
             narrows=narrow_ids or None, cites=cite_ids or None,
+            unlinked_because_kind=("extension_link_pending" if is_extension_pending
+                                   else None),
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
