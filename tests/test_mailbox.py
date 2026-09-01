@@ -385,6 +385,65 @@ async def test_send_tool_echoes_seat_and_lineage_head_and_honors_require_seat(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_send_nags_on_an_unhedged_assertion_but_never_gates_the_send(
+        actions: Actions) -> None:
+    """The dispatch version of measurement_smell (thread 02e0ab9c, Thoth XC's own three
+    specimens as the acceptance test, msg 6189): a flat, unhedged claim about code/system
+    behavior gets an advisory `assertion_nag` on the receipt, never a refusal — the
+    message sends either way, same discipline record_decision's protocol_nag already
+    uses. A genuine hedge, or a plain status report, gets no nag at all."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    held = "agent:c0ffee04"
+    a = await actions.create_or_find_object("Agent", held, held)
+    await actions.assert_property(a, "project", "bytebye", held,
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9)
+    await claim_name(actions, held, "Nagtarget", source=held)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:nagger1", session="nagger1", project="nag-land", model=None, cwd=None)
+    try:
+        # Thoth's own three specimens (msg 6189), verbatim — all three must fire
+        for i, body in enumerate((
+            "the Thread-kind widening excludes Decisions, as-is it would NOT have "
+            "caught the specimen",
+            "a genuinely fresh database is what CI has and local doesn't",
+            "obsoletes is the untested hole, mirror tests/test_capture.py:5478",
+        )):
+            out = await srv.send(f"{body} #{i}", to_agent=held, ctx=ctx)
+            assert "assertion_nag" in out, body
+
+        # a genuine hedge does not nag
+        hedged = await srv.send(
+            "I verified only the denominator, reproduce it yourself", to_agent=held, ctx=ctx)
+        assert "assertion_nag" not in hedged
+
+        # a plain status report does not nag
+        status = await srv.send(
+            "Merged, deployed, main is 087e51d, 4110 tests passed", to_agent=held, ctx=ctx)
+        assert "assertion_nag" not in status
+
+        # never a gate — a nagged message still sends and is readable
+        nagged = await srv.send(
+            "the check only ever reads the newest edge", to_agent=held, ctx=ctx)
+        assert "assertion_nag" in nagged
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM fleet_messages WHERE id=$1", nagged["sent"]) == 1
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_send_mcp_wrapper_surfaces_the_redirect_and_reads_listener_off_the_head(
     actions: Actions,
 ) -> None:
