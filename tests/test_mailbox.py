@@ -444,6 +444,59 @@ async def test_send_nags_on_an_unhedged_assertion_but_never_gates_the_send(
         srv._agents.pop(srv._conn_key(ctx), None)
 
 
+async def test_send_recognizes_a_fresh_recheck_as_a_hedge(actions: Actions) -> None:
+    """FRESH-VERIFICATION IS A HEDGE TOO (thread 0ae050d8/msg 6222): the nag's own live
+    traffic surfaced a real calibration gap — Thoth's OWN self-corrections (real specimens,
+    msg 6218/6219/6221, paraphrased here) kept firing even though each one names the exact
+    re-check it just performed ("I grepped and found FOUR live callers, not zero"). The
+    design note already promises this clears the nag ("if you re-read the thing you're
+    describing THIS turn, say so") — the vocabulary just didn't recognize the shape until
+    now. The confirmed TRUE positive from the same night (msg 6217, no re-check language
+    of the sender's own) must still fire."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    held = "agent:c0ffee05"
+    a = await actions.create_or_find_object("Agent", held, held)
+    await actions.assert_property(a, "project", "bytebye", held,
+                                  __import__("datetime").datetime.now(
+                                      __import__("datetime").UTC), 0.9)
+    await claim_name(actions, held, "Recheckedtarget", source=held)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:nagger2", session="nagger2", project="nag-land", model=None, cwd=None)
+    try:
+        # msg 6218-shaped: names the exact re-check just performed — must NOT nag
+        rechecked = await srv.send(
+            "so I went and grepped. settle.py:288 is what produces the closure_coverage "
+            "line every /settle prints.", to_agent=held, ctx=ctx)
+        assert "assertion_nag" not in rechecked
+
+        # msg 6219-shaped: same re-check, different phrasing — must NOT nag
+        rechecked2 = await srv.send(
+            "I grepped after the nag fired on me — the primitive would have cost us a "
+            "rebuild if I had not caught it.", to_agent=held, ctx=ctx)
+        assert "assertion_nag" not in rechecked2
+
+        # the confirmed TRUE positive shape survives: no re-check language of the
+        # sender's own, still an unhedged behavioral claim
+        still_fires = await srv.send(
+            "the property pair was chosen BY DESIGN, no link-retraction primitive needed",
+            to_agent=held, ctx=ctx)
+        assert "assertion_nag" in still_fires
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_send_mcp_wrapper_surfaces_the_redirect_and_reads_listener_off_the_head(
     actions: Actions,
 ) -> None:
