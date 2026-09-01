@@ -23,6 +23,40 @@ from src.manager.pty_broker import FRAME_TYPE_INPUT, FRAME_TYPE_OUTPUT, pack_fra
 requires_pty = pytest.mark.skipif(
     not hasattr(os, "openpty"), reason="os.openpty() is unavailable on this platform")
 
+
+@pytest.fixture(autouse=True)
+async def _seed_catalog_for_raw_pool_tests(pg_dsn: str) -> None:
+    """THE ALONE-VS-SUITE DEFECT (thread 7bde8729): every raw-pool test in this file builds
+    its own `Actions(await create_pool(pg_dsn))` directly rather than depending on
+    conftest.py's shared `actions` fixture — the ONLY thing that seeds the ontology catalog
+    (Type rows for Seat/Agent/..., schema.py's own declared list) on a worker's first use.
+    Measured, not assumed (census over every test file that builds its own pool at all —
+    grep for `create_pool(` across tests/: exactly three, this one plus test_live_db_guard.py
+    and test_db_pool.py, both confirmed to pass standalone since neither ever calls
+    check_object_type at all): this file is the ONLY specimen, so the narrow fix here is
+    correctly scoped, not a guess ahead of an unmeasured population.
+
+    Run this file ALONE (no other test's `actions` fixture having run first in this
+    worker), 3 of 27 tests genuinely failed with `UnknownTypeError: undeclared object type
+    'Seat'` (two directly, one one layer down — the daemon's own `_op_pty_spawn` raising
+    inside `_handle_client`, surfacing to its test as a JSONDecodeError on the empty
+    response) — exactly the shape scripts/gate_hook.py's selective gate is exposed to: any
+    worker whose changed files select ONLY test_manager.py, with nothing else in the fanout
+    that happens to touch `actions` first, gets refused at commit for a defect that isn't
+    theirs. Seeded here instead — same cheap existence check the `actions` fixture itself
+    uses, so after the real first run this is one fast indexed read, not a re-seed — so this
+    file's own correctness never depends on collection order with the rest of the suite."""
+    from src.actions.core import Actions
+    from src.db.pool import create_pool
+    from src.ontology.catalog import is_known_object_type, seed_catalog
+
+    pool = await create_pool(pg_dsn)
+    try:
+        if not await is_known_object_type(pool, "Organization"):
+            await seed_catalog(Actions(pool))
+    finally:
+        await pool.close()
+
 # --- the fake ProcessRunner: the one seam both the daemon and LocalProvider share ---
 
 
