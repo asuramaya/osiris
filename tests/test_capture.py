@@ -4737,6 +4737,22 @@ async def test_record_decision_confirms_witnesses_and_refutes_converts(
             "we no longer believe swap srv._pool is optional", kind="decision",
             refutes=pid, ctx=ctx)
         assert pid[:8] in refute_out["refuted_practice"]
+        # THE INTEGRATION-LEVEL GAP (fold-family coverage audit, decision pending, thread
+        # 6160): the receipt-string check above would still pass even if the actual write
+        # silently stopped happening — refute_practice's own unit test (line ~4582) already
+        # proves the FUNCTION lands refuted_by correctly, but nothing previously proved the
+        # WRAPPER's call path actually reaches it. Read back through the real graph, same
+        # discipline implements/confirms/rediscovers already use two lines above.
+        refuted_by = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='refuted_by' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            uuid.UUID(pid))
+        assert refuted_by == refute_out["id"]
+        superstition_minted = await actions.pool.fetchval(
+            "SELECT 1 FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+            "WHERE o.type='Superstition' AND a.name='killed_by' AND a.value #>> '{}' = $1",
+            refute_out["id"])
+        assert superstition_minted == 1
 
         bad_refute = await rd_tool("refuting nothing", kind="decision",
                                    refutes="totally-unknown-practice-xyz", ctx=ctx)
@@ -4977,7 +4993,16 @@ async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
             "a fresh measurement that speaks to the stale row without settling it",
             kind="decision", bears_on=[str(stale_row)[:8]], ctx=ctx)
         assert out["bears_on"][0]["id"] == str(stale_row)[:8]
+        # `new_link` above is a PRE-write existence check (computed before record_decision
+        # is even called, same discipline every extension link's own "was_new" receipt
+        # flag uses) — it would read True even if the actual mint silently never happened.
+        # Read back the real edge (fold-family coverage audit, thread 6160): the same gap
+        # shape narrows/rediscovers/implements/confirms already close two tests away.
         assert out["bears_on"][0]["new_link"] is True
+        edge = await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+            uuid.UUID(out["id"]), stale_row)
+        assert edge == 1
         resolution = out["bears_on_resolution"][0]
         assert resolution["matched"] == "true"
         assert resolution["summary"] == "THE ROW BEARS_ON WILL CITE, MCP-LEVEL"
