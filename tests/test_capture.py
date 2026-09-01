@@ -1183,6 +1183,32 @@ async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Ac
     assert empty is not None and "blind_spots" not in empty
 
 
+async def test_project_briefing_carries_the_honest_topology_count(actions: Actions) -> None:
+    """THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): orient()'s per-project briefing
+    (`_project_briefing`) now carries `open_threads_honest_total` — closure_buckets' own
+    `open_both` count — ADDITIVE alongside the existing open_threads/open_threads_more
+    wall, which stays property-status-based on purpose (still lists a `disagree` row so a
+    mind can see it). A thread closed by a decision and then reopened by a DIFFERENT
+    source's later 'open' write still shows on the wall (property says open) but must NOT
+    count toward the honest total, and its own disagreement note must fire."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:honestbrief", "session")
+    await actions.assert_property(proj, "name", "honestbrief", "session", datetime.now(UTC), 0.9)
+    await open_thread(actions, "genuinely open", repo="honestbrief")
+    disagree_t = await open_thread(actions, "closed then reopened by another source",
+                                   repo="honestbrief")
+    await record_decision(actions, "settles it", repo="honestbrief", resolves=str(disagree_t))
+    later = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(disagree_t, "status", "open", "agent:other", later, 0.9)
+
+    briefing = await _project_briefing(actions.pool, "honestbrief")
+    assert briefing is not None
+    wall_summaries = {r["summary"] for r in briefing["open_threads"]}
+    assert wall_summaries == {"genuinely open", "closed then reopened by another source"}
+    assert briefing["open_threads_honest_total"] == 1
+    assert "1 of 2" in briefing["open_threads_honest_note"]
+    assert "1 thread(s) carry a closure edge" in briefing["open_threads_disagreement"]
+
+
 async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) -> None:
     """Thread 022bd24a: `because` was becoming a completion essay because there was nowhere
     to put 'what actually got built'. The artifact pointer is that place — always kept as

@@ -8,7 +8,11 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread, record_decision, resolve_thread
-from src.orchestrator.thread_closure import enumerate_threads, thread_closure_status
+from src.orchestrator.thread_closure import (
+    closure_buckets,
+    enumerate_threads,
+    thread_closure_status,
+)
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -238,6 +242,53 @@ async def test_two_strong_edges_still_report_strong(actions: Actions) -> None:
     assert types == {"answers", "resolved_by"}
     closers = {e["closer_id"] for e in row["closure_edges"]}
     assert closers == {decision_id, commit_decision}
+
+
+async def test_closure_buckets_sorts_one_thread_into_each_of_the_five(actions: Actions) -> None:
+    """closure_buckets (thread 0ae050d8, Thoth DM 6243: the cheap half of _fn_closure_
+    health's own five-way split, shared so orient()/get_thread_list() never re-derive a
+    second counting mechanism, #139) — one thread engineered into each bucket, asserting
+    the SAME mutually-exclusive-by-construction classification _fn_closure_health's own
+    docstring specifies, with none of its per-thread artifact-resolution enrichment."""
+    await _repo(actions, "tc9")
+
+    open_both_tid = await open_thread(actions, "genuinely open", repo="tc9", source="agent:me")
+
+    closed_tid = await open_thread(actions, "closed cleanly", repo="tc9", source="agent:me")
+    await record_decision(actions, "settles the clean one", repo="tc9", resolves=str(closed_tid))
+
+    disagree_tid = await open_thread(actions, "closed then re-touched open", repo="tc9",
+                                     source="agent:me")
+    await record_decision(actions, "settles it then gets reopened", repo="tc9",
+                          resolves=str(disagree_tid))
+    later = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(disagree_tid, "status", "open", "agent:other", later, 0.9)
+
+    edgeless_tid = await open_thread(actions, "closed before the fix existed", repo="tc9",
+                                     source="agent:me")
+    later2 = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(edgeless_tid, "status", "resolved", "session-miner", later2,
+                                  0.9, evidence_class="derived")
+
+    retracted_tid = await open_thread(actions, "retracted, not open or resolved", repo="tc9",
+                                      source="agent:me")
+    later3 = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(retracted_tid, "status", "retracted", "agent:me", later3, 0.9)
+
+    proj = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:tc9'")
+    buckets = await closure_buckets(actions.pool, repo=proj)
+
+    assert buckets["total"] == 5
+    assert [r["thread_id"] for r in buckets["open_both"]] == [open_both_tid]
+    assert [r["thread_id"] for r in buckets["closed_by_topology"]] == [closed_tid]
+    assert [r["thread_id"] for r in buckets["disagree"]] == [disagree_tid]
+    assert [r["thread_id"] for r in buckets["resolved_edgeless"]] == [edgeless_tid]
+    assert [r["thread_id"] for r in buckets["retracted_or_no_status"]] == [retracted_tid]
+    # no edgeless-artifact enrichment fields on these rows — that stays _fn_closure_health's
+    # own, deliberately richer, deliberately not-hot-path job
+    assert set(buckets["resolved_edgeless"][0].keys()) == {
+        "thread_id", "closed_by_topology", "strength", "closure_edges",
+        "property_status", "topology_property_disagreement"}
 
 
 async def test_enumerate_threads_single_page_no_projection(actions: Actions) -> None:

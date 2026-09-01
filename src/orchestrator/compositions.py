@@ -3653,7 +3653,7 @@ async def _fn_closure_health(
     from instead of duplicating. Read-only, no writes, same as every other rung-2 Function
     here."""
     from src.orchestrator.capture import _find_artifact
-    from src.orchestrator.thread_closure import thread_closure_status
+    from src.orchestrator.thread_closure import closure_buckets
 
     repo = subject
     if repo is None and args.get("repo"):
@@ -3671,24 +3671,12 @@ async def _fn_closure_health(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
             "ORDER BY confidence DESC, observed_at DESC LIMIT 1", repo) or str(repo)
 
-    rows = await thread_closure_status(pool, repo=repo)
-    retracted_or_no_status: list[dict[str, Any]] = []
-    disagree: list[dict[str, Any]] = []
-    closed_by_topology: list[dict[str, Any]] = []
-    resolved_edgeless: list[dict[str, Any]] = []
-    open_both: list[dict[str, Any]] = []
-    for r in rows:
-        ps = r["property_status"]
-        if ps not in ("open", "resolved"):
-            retracted_or_no_status.append(r)
-        elif r["closed_by_topology"] and ps == "open":
-            disagree.append(r)
-        elif r["closed_by_topology"]:
-            closed_by_topology.append(r)
-        elif ps == "resolved":
-            resolved_edgeless.append(r)
-        else:
-            open_both.append(r)
+    buckets = await closure_buckets(pool, repo=repo)
+    retracted_or_no_status = buckets["retracted_or_no_status"]
+    disagree = buckets["disagree"]
+    closed_by_topology = buckets["closed_by_topology"]
+    resolved_edgeless = buckets["resolved_edgeless"]
+    open_both = buckets["open_both"]
 
     edgeless_ids = [r["thread_id"] for r in resolved_edgeless]
     artifact_rows = await pool.fetch(
@@ -3724,7 +3712,7 @@ async def _fn_closure_health(
 
     return {
         "repo": repo_label,
-        "total": len(rows),
+        "total": buckets["total"],
         "retracted_or_no_status": len(retracted_or_no_status),
         "disagree": [str(r["thread_id"])[:8] for r in disagree],
         "closed_by_topology": {
