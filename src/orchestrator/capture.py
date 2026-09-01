@@ -3357,6 +3357,43 @@ def measurement_smell(text: str) -> bool:
     return bool(_MEASUREMENT.search(text))
 
 
+# THE DISPATCH VERSION (thread 02e0ab9c — Thoth's own three specimens, msg 6189, as the
+# acceptance test): measurement_smell's own vocabulary does NOT transfer to send()'s
+# traffic — checked empirically, none of the three flat, wrong premises trip a single
+# word in _MEASUREMENT. Dispatch prose fails a DIFFERENT way: not "claims a measurement
+# with no protocol", but "asserts a mechanism/behavior fact with no hedge acknowledging
+# it might be wrong". A citation alone does not save it — specimen 3 named tests/
+# test_capture.py:5478 by exact line and was still wrong, because the citation was never
+# re-read for what it actually proved (decision d4bf0288). Deliberately narrow, same law
+# _MEASUREMENT's own comment states: a nag that fires on every dispatch teaches everyone
+# to ignore it — verified against seven plausible false-positive shapes (a genuine hedge,
+# three plain status reports, an authorization citation) before this shipped, none fire.
+_UNHEDGED_ASSERTION = re.compile(
+    r"(?i)\b(excludes|includes|by design|as-is|is what|is the same|"
+    r"would (not )?have|reads (live|before|after)|runs (before|after)|"
+    r"the check (only|never)|is (not )?the (cause|blocker|gap|hole)|"
+    r"never (reads|checks|touches)|only (reads|checks|ever)|untested|"
+    r"no (regression )?test)\b")
+_HEDGE = re.compile(
+    r"(?i)\b(i think|i believe|might|may not|maybe|probably|possibly|"
+    r"not (fully |100% )?(sure|certain|confirmed|verified)|"
+    r"haven'?t (checked|verified|confirmed|read|re-?read)|"
+    r"worth (checking|verifying|a (second|closer) look)|"
+    r"reproduce (it )?yourself|double-?check|unverified|assuming|"
+    r"as far as i (know|can tell)|uncertain|caveat)\b")
+
+
+def unhedged_assertion_smell(text: str) -> bool:
+    """Does dispatch TEXT read like a flat, uncited-in-spirit claim about code/system
+    behavior with no hedge acknowledging it might be wrong? measurement_smell's own
+    sibling, built for send() rather than record_decision — same shape (a lexical
+    detector, never a self-report: the sender's own confidence is exactly what produced
+    all three specimens this was built against), different vocabulary, because the
+    failure it targets is different. Used by send()'s wrapper to NAG, never gate, exactly
+    as measurement_smell already does — the message sends either way."""
+    return bool(_UNHEDGED_ASSERTION.search(text)) and not _HEDGE.search(text)
+
+
 async def divergent_leans(pool: asyncpg.Pool) -> dict[str, str]:
     """Tensions where two minds' CURRENT leans disagree — keyed by the tension's canonical,
     valued with the confession line the lens must speak (task #53, from the tension-vs-

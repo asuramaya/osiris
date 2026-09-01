@@ -4035,6 +4035,19 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                             # bonus; the send already committed and the sender's own
                             # receipt above already carries the hits regardless
             pass
+    # THE UNHEDGED-ASSERTION NAG (thread 02e0ab9c, Thoth XC's own three specimens as the
+    # acceptance test — msg 6189): measurement_smell's own sibling, mirroring its exact
+    # shape (advice on the receipt, never a gate — the message sends either way) but
+    # aimed at dispatch prose instead of decision text. The reader is the SENDER, this
+    # same turn, before anyone downstream ever sees the message — no new storage, no new
+    # consumer, the same design that let this ship without the read-lens work.
+    if capture.unhedged_assertion_smell(body):
+        out["assertion_nag"] = (
+            "this reads like a flat claim about code/system behavior with no hedge "
+            "acknowledging it might be wrong — if you re-read the thing you're "
+            "describing THIS turn, say so; a citation alone doesn't clear this (it still "
+            "fires on a cited claim if the citation itself wasn't re-checked for what it "
+            "actually proves)")
     return out
 
 
