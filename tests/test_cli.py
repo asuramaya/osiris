@@ -469,14 +469,26 @@ async def test_cmd_launch_harness_spawns_and_confirms(
             return []
         return [{"name": "[OS] freshbg", "cwd": cwd, "sessionId": "sess-fresh"}]
 
-    out = await cmd_launch("freshbg", model="claude-sonnet-5", pool=actions.pool,
-                           spawn=_spawn, agents_json=_agents_json)
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_launch("freshbg", model="claude-sonnet-5", pool=actions.pool,
+                               spawn=_spawn, agents_json=_agents_json)
     assert out == 0
     assert len(spawn_calls) == 1
     assert spawn_calls[0]["repo"] == str(office)
     assert spawn_calls[0]["model"] == "claude-sonnet-5"
     assert f'mount(cwd="{office}"' in spawn_calls[0]["prompt"]
     assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
+    # GATE KNOBS ONLY WHEN THE GATE ACTUALLY RAN (thread bc11a2d3/msg 6262): this is a
+    # brand-new seat with NO holder at all — "not resumed" here is the correct, quiet,
+    # happy-path outcome, not a real gate refusal. Tuning parameters (min_tail_bytes,
+    # ceiling) belong on the branch that actually consulted them.
+    out_text = buf.getvalue()
+    assert "not resumed" in out_text
+    assert "min_tail_bytes" not in out_text and "ceiling=" not in out_text
 
 
 async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
@@ -2936,7 +2948,12 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     assert "minted CliMintWorker1" in text and "house=clihouse" in text
     assert "office:" in text
     assert f"manager: {manager['seat_id']} (linked)" in text
-    assert "occupancy: vacant" in text and "launch(target='CliMintWorker1')" in text
+    # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/msg 6262 — this assertion used to
+    # PROVE the bug, not catch it: a terminal caller was handed `launch(target=...)`,
+    # syntax that cannot run in a shell. next_step_cli is the terminal-appropriate twin.
+    assert "occupancy: vacant" in text
+    assert "launch(target=" not in text
+    assert "osiris launch CliMintWorker1" in text
 
     from src.orchestrator.seats import seat_facts, seats_by_handle
 
@@ -3241,6 +3258,95 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     assert "next: osiris launch Henry" in text
     assert workspace.is_dir()
     assert (workspace / ".osiris").read_text() == 'project = "Henry"\n'
+
+
+async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE OPERATOR'S REAL SPECIMEN (thread bc11a2d3/msg 6262): `mkdir cdking && cd
+    cdking && osiris new Chad` silently created ~/code/chad — cdking was left an
+    orphan. No path given, standing somewhere that isn't $HOME and isn't the default
+    target: confess BEFORE anything writes, name both paths, give the exact remedy.
+    Does NOT switch the default to cwd (deriving-by-convention is the trap the earlier
+    anchor_cwd bug came from) — cwd_ws below still ends up empty."""
+    import io
+    from contextlib import redirect_stderr
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    cwd_ws = tmp_path / "cdking"
+    cwd_ws.mkdir()
+    monkeypatch.setattr(Path, "cwd", staticmethod(lambda: cwd_ws))
+    default_workspace = Path.home() / "code" / "chad"
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_new("Chad", None, project=None, model=None,
+                            actor="console", pool=actions.pool)
+    assert out == 0  # the confession is advisory, never a refusal
+    err = buf.getvalue()
+    assert str(cwd_ws) in err
+    assert str(default_workspace) in err
+    assert "osiris new Chad ." in err
+    assert list(cwd_ws.iterdir()) == []  # cwd itself was never touched
+
+
+async def test_cmd_new_stays_silent_when_a_path_is_given(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The confession only fires when DEFAULTING — a caller who names a path explicitly
+    (even one that differs from cwd) made a deliberate choice, nothing to confess."""
+    import io
+    from contextlib import redirect_stderr
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    workspace = tmp_path / "named-ws"
+    monkeypatch.setattr(Path, "cwd", staticmethod(lambda: tmp_path / "elsewhere"))
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_new("Named", str(workspace), project=None, model=None,
+                            actor="console", pool=actions.pool)
+    assert out == 0
+    assert buf.getvalue() == ""
+
+
+async def test_cmd_new_notes_the_case_drift_when_handle_capitalization_differs(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE OPERATOR'S THIRD DEFECT (msg 6262): he typed 'Chad', got project 'Chad' but
+    paths 'chad' — case-insensitive resolution is correct, the silence about it is not.
+    Say plainly which spelling is canonical, only when they actually differ."""
+    import io
+    from contextlib import redirect_stdout
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    workspace = tmp_path / "chad-ws"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_new("Chad", str(workspace), project=None, model=None,
+                            actor="console", pool=actions.pool)
+    assert out == 0
+    text = buf.getvalue()
+    assert "note: paths use the lowercase form ('chad')" in text
+    assert "keeps your capitalization ('Chad')" in text
+
+
+async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    workspace = tmp_path / "flatname-ws"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_new("flatname", str(workspace), project=None, model=None,
+                            actor="console", pool=actions.pool)
+    assert out == 0
+    assert "note: paths use the lowercase form" not in buf.getvalue()
 
 
 async def test_cli_parser_accepts_bootstrap(actions: Actions) -> None:

@@ -810,9 +810,16 @@ async def _cmd_launch_harness(
                   "20e4feb6).", file=sys.stderr)
         return 0
 
-    print(f"osiris launch: {handle!r} not resumed — {_collapse_resume_log(resume_log)} (gate: "
-          f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
-          f"{st.osiris_resume_ceiling_bytes}b)")
+    # GATE KNOBS ONLY WHEN THE GATE ACTUALLY RAN (thread bc11a2d3/msg 6262: a brand-new
+    # seat with no holder at all never reaches the real gate — resume_log is just the
+    # placeholder ["no seat holder on record"] — so printing min_tail_bytes/ceiling there
+    # is tuning detail for a check that never happened, at the quietest, most correct
+    # moment in the whole flow). `holder` truthy means _lineage_resume_candidate's own
+    # gate genuinely ran against real data.
+    gate_note = (f" (gate: min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
+                 f"{st.osiris_resume_ceiling_bytes}b)") if holder else ""
+    print(f"osiris launch: {handle!r} not resumed — "
+          f"{_collapse_resume_log(resume_log)}{gate_note}")
 
     from src.ingest.sessions import dormant_history_confession, dormant_history_note
 
@@ -2658,9 +2665,10 @@ async def cmd_mint_seat(
     standing up a brand-new seat had no door but a hand-rolled `python -c` heredoc against
     the live DB — precisely what ruling 45b074bf bans.
 
-    Prints the SAME next_step guidance the receipt already carries (mint_seat's own
-    occupancy-aware line — vacant: `osiris launch <handle>`; occupied/cold: nothing
-    needed) rather than a second, driftable copy of that advice.
+    Prints mint_seat's own occupancy-aware `next_step_cli` (vacant: `osiris launch
+    <handle>`; occupied/cold: nothing needed) rather than a second, driftable copy of
+    that advice — the terminal-appropriate twin of `next_step`, which stays MCP-native
+    call syntax for the `mint_seat` tool's own agent callers (thread bc11a2d3/msg 6262).
 
     `office_root` is TEST-ONLY plumbing (no CLI flag exposes it — a real operator never
     wants scaffolding anywhere but the standard `~/.osiris/seats/` location, so this
@@ -2721,7 +2729,7 @@ async def cmd_mint_seat(
     print(f"model: {out['intended_model']}"
           + (" (stamped)" if out.get("intended_model_stamped") else ""))
     print(f"manager: {out['manager_seat_id']} ({out['managed_by']})")
-    print(f"occupancy: {out['occupancy']} — {out['next_step']}")
+    print(f"occupancy: {out['occupancy']} — {out['next_step_cli']}")
     return 0
 
 
@@ -2752,6 +2760,20 @@ async def cmd_new(
     needs remembering either."""
     from src.actions.core import Actions
     from src.orchestrator.mintseat import found_seat as _found_seat
+
+    # THE CONFESSION, BEFORE ANYTHING IS WRITTEN (thread bc11a2d3/msg 6262, the operator's
+    # real transcript: `mkdir cdking && cd cdking && osiris new Chad` silently created
+    # ~/code/chad instead — cdking is now an orphan). Never silently switches the default
+    # to cwd (deriving-by-convention is the exact trap the earlier anchor_cwd bug came
+    # from) — only names both paths and the exact remedy, so the operator decides.
+    if path is None:
+        cwd = Path.cwd()
+        default_workspace = Path.home() / "code" / handle.lower()
+        if cwd != Path.home() and cwd != default_workspace:
+            print(f"osiris new: standing in {cwd}, but no path given — this creates "
+                  f"{default_workspace} instead (osiris never assumes your cwd is the "
+                  f"workspace). To use where you are: osiris new {handle} .",
+                  file=sys.stderr)
 
     owns_pool = pool is None
     if pool is None:
@@ -2787,6 +2809,14 @@ async def cmd_new(
     if office:
         print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
+    # THE CASE NOTE (thread bc11a2d3/msg 6262): resolution is case-insensitive by design
+    # — this is not a bug — but a caller who typed 'Chad' and sees 'chad' in every path
+    # with nothing saying so reads it as unpredictable. Say plainly which is which,
+    # only when they actually differ.
+    if out["handle"] != out["handle"].lower():
+        print(f"note: paths use the lowercase form ({out['handle'].lower()!r}); the "
+              f"handle itself keeps your capitalization ({out['handle']!r}) — both name "
+              "the same seat")
     print(f"model: {out['intended_model']}"
           + (" (stamped)" if out.get("intended_model_stamped") else ""))
     print(f"occupancy: {out['occupancy']} — {out['next_step']}")
@@ -3249,12 +3279,14 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="mint a distinct seat past a near-miss handle refusal")
 
     p_new = sub.add_parser(
-        "new", description=_d(
-            "Found a SELF-MANAGED seat: no manager, ever. One act: create/verify a code "
-            "workspace directory + its own .osiris pin, mint the seat, scaffold its "
-            "identity office at the standard ~/.osiris/seats/<handle>/ location, and "
-            "bind its tree to the workspace. Does not charter the seat over a "
-            "project — it charters itself, live, on its own first turn."),
+        "new", description=(
+            _d("Create a new independent seat and its workspace, in one command.") + "\n\n" +
+            _d("You get: a directory to work in (~/code/<handle> unless you name one), "
+               "a seat that owns it, and an identity office at "
+               "~/.osiris/seats/<handle>/. Then `osiris launch <handle>` gives it a "
+               "body.") + "\n\n" +
+            _d("Use `new` for a seat that answers to nobody. Use `mint-seat` for a "
+               "worker in a house you already run.")),
         epilog="example, converging on ~/code/henry:\n"
             "    osiris new henry\n"
             "example, naming the workspace explicitly:\n"

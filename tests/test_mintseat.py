@@ -560,6 +560,13 @@ async def test_g_fresh_mint_receipt_reads_vacant(actions: Actions, tmp_path: Pat
     assert out["occupancy"] == "vacant"
     assert out["holder"] is None
     assert "furniture" in out["next_step"]
+    # TWO AUDIENCES (thread bc11a2d3/msg 6262): next_step stays MCP-native call syntax
+    # for the mint_seat TOOL's own agent callers; next_step_cli is the terminal twin
+    # cmd_mint_seat (the CLI) actually prints.
+    assert "launch(target='Vajra')" in out["next_step"]
+    assert "furniture" in out["next_step_cli"]
+    assert "launch(target=" not in out["next_step_cli"]
+    assert "osiris launch Vajra" in out["next_step_cli"]
 
 
 async def test_g_adopting_a_live_seat_refuses(
@@ -653,6 +660,12 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
         "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now())",
         out["seat_id"])
     assert no_manager is None
+    # NO MCP-SYNTAX LEAK (thread bc11a2d3/msg 6262): found_seat has no MCP tool of its
+    # own — every caller of this next_step is a human at a terminal via cmd_new, so
+    # there is no legitimate audience for `launch(target=...)` here at all, unlike
+    # mint_seat's own (which keeps it, for the mint_seat TOOL's own agent callers).
+    assert "launch(target=" not in out["next_step"]
+    assert "osiris launch Henry" in out["next_step"]
 
 
 async def test_found_seat_defaults_project_to_handle_and_path_to_home_code(

@@ -358,10 +358,25 @@ async def mint_seat(
     # house owes its caller (Ra's day this would have saved: minting told him nothing
     # about VACANT vs OCCUPIED, so he found out only by asking again later).
     occ = await seat_occupancy(actions.pool, worker_seat_id)
+    # TWO AUDIENCES, TWO VERBS (thread bc11a2d3/msg 6262, the operator's own real
+    # transcript: this exact `launch(target=...)` clause, printed one line above the
+    # CORRECT `osiris launch <handle>`, is not runnable in a terminal). This receipt has
+    # two real callers — an MCP-tool-calling agent (mint_seat itself, for whom
+    # `launch(target=...)` is the actual callable syntax) and the CLI's own
+    # `cmd_mint_seat` (a human at a terminal, for whom it never was). One string cannot
+    # be correct for both, so this is two strings, not a rewording: `next_step` keeps its
+    # MCP-native form unchanged; `next_step_cli` is the terminal-appropriate twin.
     next_step = {
         "vacant": "no session has ever attached — furniture until a body sits in it; "
                  f"launch(target={handle!r}) to body it, or start a session in the "
                  "office and have it claim_name itself",
+        "occupied": "already live — no next step, someone's home",
+        "cold": "held, but nobody's live right now — its holder resumes on its own "
+               "next mount; no outside hand needed",
+    }[occ["state"]]
+    next_step_cli = {
+        "vacant": "no session has ever attached — furniture until a body sits in it; run "
+                 f"`osiris launch {handle}` to body it",
         "occupied": "already live — no next step, someone's home",
         "cold": "held, but nobody's live right now — its holder resumes on its own "
                "next mount; no outside hand needed",
@@ -385,6 +400,7 @@ async def mint_seat(
         "managed_by": "linked" if linked_now else "already linked",
         "charter": repos or _CHARTER_UNDECLARED,
         "occupancy": occ["state"], "holder": occ["holder"], "next_step": next_step,
+        "next_step_cli": next_step_cli,
     }
 
 
@@ -495,9 +511,13 @@ async def found_seat(
         stamped_model = True
 
     occ = await seat_occupancy(actions.pool, worker_seat_id)
+    # CLI-ONLY, NO MCP CALLER (unlike mint_seat's own twin above): found_seat is never
+    # exposed as an MCP tool, so this text only ever reaches a human terminal via
+    # cmd_new — no `launch(target=...)` MCP-syntax clause belongs here at all (thread
+    # bc11a2d3/msg 6262: it was copy-pasted from mint_seat's own, wrong audience).
     next_step = {
-        "vacant": f"no session has ever attached — furniture until a body sits in it; "
-                 f"launch(target={handle!r}) to body it",
+        "vacant": "no session has ever attached — furniture until a body sits in it; run "
+                 f"`osiris launch {handle}` to body it",
         "occupied": "already live — no next step, someone's home",
         "cold": "held, but nobody's live right now — its holder resumes on its own next "
                "mount; no outside hand needed",
