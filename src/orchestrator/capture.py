@@ -1173,11 +1173,14 @@ async def link_repo(
 
 # THE DECLARE-OR-REFUSE GATE (task #189, ruling 5ac06206, decision 7ea187b9 — shape (b)):
 # only the link KINDS a door can know about at its OWN atomic commit point are legal here.
-# repo=/grounds=/resolves= mint inside record_decision's own `actions.atomic()` block;
-# obsoletes=/confirms=/refutes=/implements=/rediscovers=/bears_on= mint AFTER it returns
-# (mcp_server.py layer, non-atomic) and are deliberately NOT in this table — see decision
-# 7ea187b9 for the residual gap that leaves. open_thread only ever has "repo" in scope: its
-# own `resolves=` closes a DIFFERENT, pre-existing thread, after its atomic block.
+# repo=/grounds=/resolves= mint inside record_decision's own `actions.atomic()` block.
+# obsoletes=/confirms=/refutes=/implements=/rediscovers=/bears_on=/narrows=/cites= ALSO now
+# mint inside that same block (obligation ce12d2ef folded six; thread 7e8cb735 folded the
+# last two, refutes/obsoletes) — but none of the eight ever joined `kinds_in_scope` below:
+# folding WHERE a link mints changed the crash-window guarantee, not this gate's own scope,
+# which record_decision's wrapper never widened when the first six landed either. open_
+# thread only ever has "repo" in scope: its own `resolves=` closes a DIFFERENT, pre-existing
+# thread, after its atomic block.
 _REQUIRED_LINK_KIND_TABLE = {"repo": "in_repo", "grounds": "grounded_by", "resolves": "answers"}
 
 
@@ -1287,6 +1290,7 @@ async def record_decision(
     implements: uuid.UUID | None = None, confirms: list[uuid.UUID] | None = None,
     rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
     narrows: list[uuid.UUID] | None = None, cites: list[uuid.UUID] | None = None,
+    refute_id: uuid.UUID | None = None, obsoletes: list[str] | None = None,
     unlinked_because_kind: str | None = None,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
@@ -1325,12 +1329,22 @@ async def record_decision(
     (`origin="declared"`) for a caller who names the target on purpose without the
     qualifier-word convention. `self_referential` computed the same way `_mint_prose_
     citations` already does: the target's own asserted source, compared to this call's.
-    `refutes`/`obsoletes` are DELIBERATELY NOT folded here, unlike their six siblings
-    above — found live, not reasoned: refute_practice mutates the target Practice and
-    mints a live Superstition BEFORE commit, and the wrapper's own prior-art search
-    (runs AFTER this returns) would then see that already-changed state, silently
-    altering what it finds (a real regression a test caught before it shipped). They
-    stay separate, non-atomic calls, same partial-commit debt as before this fold.
+    `refute_id`/`obsoletes` (thread 7e8cb735, closing the partial-commit debt this
+    docstring used to name as still open): a resolved Practice UUID and the list of
+    workaround statements this decision kills, folded into THIS SAME atomic block —
+    the object, its `refuted_by` stamp, and every dead Superstition either all land or
+    none do. The regression the earlier fold-attempt caught (the wrapper's "this
+    OVERTURNS Practice X" message going silent, or worse, misreading the freshly-
+    converted Superstition as a live workaround being REVIVED) was in the search-based
+    CLASSIFICATION downstream, not in this write itself — the wrapper (mcp_server.py)
+    now decides the overturning flag directly from `refute_id`, never from whether its
+    own prior-art search still finds the Practice unrefuted, and excludes both
+    `refute_id`'s and every `obsoletes` entry's own about-to-exist Superstition from
+    that search by canonical lookup so neither can self-collide as a false "reviving a
+    dead workaround" hit against the very call that is killing it. `refute_id` is the
+    caller's OWN pre-resolved id (same UUID/canonical/short-id-only strictness as
+    `implements`, resolved by the wrapper before this call — a refutation that cannot
+    name its target has refused before reaching here, same as before this fold).
 
     `repo_evidence_class` grades the `in_repo` link ONLY, never the decision itself: a
     caller who TYPED `repo=` is testifying to it (default, SELF_DECLARED — unchanged).
@@ -1535,26 +1549,19 @@ async def record_decision(
             await a.assert_property(thread_id, "resolved_because",
                                     f"answered by decision {str(d)[:8]}: {summary[:200]}",
                                     source, observed, _CONF, evidence_class=_EC)
-        # obligation ce12d2ef: FOUR of the six extension-link params, minted in THIS
-        # SAME transaction as the object itself — pure link mints, no side-object
-        # creation, no property write on anything ELSE this call's own search step
-        # reads. Each mint_* helper below takes a generic Actions and never opens its
-        # own atomic() block, so passing `a` (this transaction's own bound Actions)
-        # participates correctly, no nested-transaction conflict — verified by reading
-        # each one before relying on it here.
-        #
-        # `refutes`/`obsoletes` deliberately EXCLUDED from this fold, found live, not
-        # reasoned: refute_practice sets `refuted_by` on the target Practice and mints
-        # a new Superstition BEFORE this transaction commits; the wrapper's own prior-
-        # art search (mcp_server.py, runs AFTER record_decision returns) would then see
-        # the Practice already flagged and the fresh Superstition already live,
-        # changing what it finds — test_record_decision_flags_overturning_when_
-        # refutes_names_the_matched_practice caught this exact regression (the
-        # "contradict" polarity flag stopped firing) before it shipped. Folding these
-        # two needs the search step reordered too, a bigger change than this pass —
-        # left as their own non-atomic calls, same partial-commit debt they always
-        # carried, now named precisely rather than lumped in with the four that are
-        # actually safe to fold today.
+        # obligation ce12d2ef + thread 7e8cb735: all EIGHT extension-link params now
+        # mint in THIS SAME transaction as the object itself — pure link/property
+        # mints, no side-object creation that anything ELSE this call's own search
+        # step reads for the first six; `refute_id`/`obsoletes` DO create side objects
+        # (a converted-or-fresh Superstition each) but the downstream classification
+        # that used to depend on search timing has moved to a direct refute_id check
+        # in the wrapper (see this function's own docstring) — the atomicity fix and
+        # the classification fix are separable, and only the classification one was
+        # ever the actual regression risk. Each mint_*/kill_superstition helper below
+        # takes a generic Actions and never opens its own atomic() block, so passing
+        # `a` (this transaction's own bound Actions) participates correctly, no
+        # nested-transaction conflict — verified by reading each one before relying on
+        # it here.
         if implements is not None:
             await mint_implements(a, d, implements, source)
         for pid in confirms or []:
@@ -1570,6 +1577,23 @@ async def record_decision(
             await mint_cites(a, d, cid, source, origin="declared",
                              self_referential=(target_source is not None
                                               and target_source == source))
+        if refute_id is not None:
+            # THE POLARITY FLIP, folded (see refute_practice, now this block's own
+            # inline twin — kept identical, just sharing `a`/`d`/`observed` instead of
+            # opening its own atomic() and receiving killed_by from outside): the
+            # Practice stays ACTIVE, flagged, never retired.
+            refuted_statement = await a.pool.fetchval(
+                "SELECT val.value #>> '{}' FROM current_assertions val "
+                "WHERE val.object_id=$1 AND val.name='statement' "
+                "ORDER BY val.confidence DESC, val.observed_at DESC LIMIT 1", refute_id)
+            await a.assert_property(refute_id, "refuted_by", str(d), source, observed,
+                                    _CONF, evidence_class=_EC)
+            await kill_superstition(a, refuted_statement or str(refute_id),
+                                    killed_by=str(d), repo=repo, source=source)
+        for statement in obsoletes or []:
+            if statement and statement.strip():
+                await kill_superstition(a, statement, killed_by=str(d), repo=repo,
+                                        source=source)
         await _enforce_required_links(
             a, d, "Decision", kinds_in_scope=("repo", "grounds", "resolves"),
             unlinked_because=unlinked_because, source=source, observed=observed,

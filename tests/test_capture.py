@@ -5632,9 +5632,57 @@ async def test_record_decision_flags_overturning_when_refutes_names_the_matched_
         assert out["prior_art_polarity"] == "contradict"
         assert "OVERTURNS" in out["prior_art_flag"]
         assert "refuted_practice" in out
+        # PIECE 2, GRAPH-VERIFIED (thread 7e8cb735: :5478's own model asserted a PRE-WRITE
+        # receipt value, never re-checked against what actually landed) — read the Practice's
+        # own refuted_by property back, not the wrapper's echo of it.
+        refuted_by = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='refuted_by' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+            uuid.UUID(practice["id"]))
+        assert refuted_by == out["id"]
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
+
+
+async def test_record_decision_obsoletes_kills_a_superstition_verified_against_the_graph(
+    actions: Actions,
+) -> None:
+    """SECOND GAP Thoth named (thread 7e8cb735): the obsoletes/kill_superstition path had
+    no test that read the Superstition object back — `superstitions_killed` is just an
+    echo of the caller's own input strings, provable even if the write never landed.
+    Assert the graph, not the receipt."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.orchestrator import capture
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:obskill1", session="obskill1", project="obs-kill-land",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rd_tool(
+            "retries now back off exponentially", kind="decision",
+            obsoletes=["ALWAYS RETRY IMMEDIATELY THREE TIMES"], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+    sid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Superstition' AND canonical=$1",
+        capture._canon("superstition", "always retry immediately three times"))
+    assert sid is not None
+    killed_by = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='killed_by' ORDER BY confidence DESC, observed_at DESC LIMIT 1", sid)
+    assert killed_by == out["id"]
 
 
 async def test_practices_composition_filters_by_surface_and_shows_confirmed_count(
