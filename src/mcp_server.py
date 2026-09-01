@@ -6317,6 +6317,7 @@ async def record_decision(
             implements=impl_id, confirms=confirm_ids or None,
             rediscovers=rediscover_ids or None, bears_on=bears_on_ids or None,
             narrows=narrow_ids or None, cites=cite_ids or None,
+            refute_id=refute_id, obsoletes=obsoletes,
             unlinked_because_kind=("extension_link_pending" if is_extension_pending
                                    else None),
         )
@@ -6397,69 +6398,98 @@ async def record_decision(
     # naming-v3/a882b334 with zero friction). `_surface_prior_art` (fail-open, 15s bound)
     # is the shared write/read-time engine — record_practice and send()'s dispatch-time
     # hop (obligation a6198075) both run the identical search, not a second matcher.
+    # refute_id's target Practice's Superstition is looked up here for the RECEIPT only
+    # (below), not to exclude it from this search. A same-call self-collision (the
+    # freshly-converted Superstition scoring as this SAME call's own prior-art hit, since
+    # refute_practice's write now lands inside the atomic block above, before this search
+    # runs) was the obvious worry — checked, not assumed: `strong` requires `via` in
+    # ("id", "both"), and embed_backfill (semantics.py) computes the semantic half of the
+    # fused match as a SEPARATE, async pass, never synchronously at write time — a same-
+    # transaction object scores `via='lexical'` at best here (confirmed live), never
+    # strong. No exclusion needed for a scenario this structurally can't reach.
+    refute_superstition_id: uuid.UUID | None = None
+    if refute_id is not None:
+        refuted_statement = await pool.fetchval(
+            "SELECT val.value #>> '{}' FROM current_assertions val "
+            "WHERE val.object_id=$1 AND val.name='statement' "
+            "ORDER BY val.confidence DESC, val.observed_at DESC LIMIT 1", refute_id)
+        if refuted_statement and refuted_statement.strip():
+            skey = " ".join(refuted_statement.split()).lower()
+            refute_superstition_id = await pool.fetchval(
+                "SELECT id FROM objects WHERE type='Superstition' AND canonical=$1",
+                capture._canon("superstition", skey))
     prior = await _surface_prior_art(
         pool, f"{summary} {rationale or ''}",
         exclude={d} | ({old} if old else set()), repo=repo, actor=actor)
     strong = capture.prior_art_is_strong(prior)
     if prior:
         out["prior_art"] = prior
-        if strong:
-            top = prior[0]
-            top_kind = top.get("type") or "Decision"
-            if top_kind == "Practice":
-                # PRACTICE v2 layer 1 (Thoth LXII's DM 1785): a Practice hit is no longer
-                # always treated as a re-derivation — an explicit refutes= targeting this
-                # SAME practice means the caller already named it a reversal (handled by
-                # the refute_practice conversion below); otherwise a lexical reversal
-                # fingerprint (practice_contradiction_cues) distinguishes an unlabeled
-                # CONTRADICTION from a plain, uncited RE-DERIVATION.
-                overturning = refute_id is not None and str(refute_id)[:8] == top["id"]
-                cues = capture.practice_contradiction_cues(f"{summary} {rationale or ''}")
-                if overturning:
-                    out["prior_art_flag"] = (
-                        f"this OVERTURNS standing Practice {top['id']} — handled below via "
-                        "refutes= (converts it to a dead Superstition, flagged not retired)")
-                    out["prior_art_polarity"] = "contradict"
-                elif cues:
-                    out["prior_art_flag"] = (
-                        f"this may CONTRADICT standing Practice {top['id']} rather than cite "
-                        f"it — reversal language found ({', '.join(cues)}); if you mean to "
-                        f"overturn it, say so explicitly (refutes=['{top['id']}']), or "
-                        "acknowledge it (ack_prior_art=True) if this wording is coincidental")
-                    out["prior_art_polarity"] = "contradict"
-                else:
-                    out["prior_art_flag"] = (
-                        f"this looks like a re-derivation of standing Practice {top['id']} — "
-                        f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
-                        "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
-                    out["prior_art_polarity"] = "rederive"
-            elif top_kind == "Superstition":
+    if refute_id is not None:
+        # THE STRUCTURAL DISCRIMINATOR, DECOUPLED FROM SEARCH TIMING (thread 7e8cb735,
+        # piece 2): refute_id was already resolved and validated against a real Practice
+        # earlier in this call (or the call errored out before reaching here) — the
+        # caller's intent to overturn THAT practice is a fact this wrapper already holds,
+        # not something that needs re-discovering from whatever the search above happens
+        # to surface. Folding refute_practice's write into the atomic block above means
+        # this same search now runs AFTER the Practice is already flagged `refuted_by`
+        # (filtered out of `prior` entirely by prior_art_from_hits' own refuted-hit
+        # check) — so the old "was the top hit this same Practice" test would silently
+        # stop firing, exactly the regression the prior fold-attempt's own test caught.
+        out["prior_art_flag"] = (
+            f"this OVERTURNS standing Practice {str(refute_id)[:8]} — handled below via "
+            "refutes= (converts it to a dead Superstition, flagged not retired)")
+        out["prior_art_polarity"] = "contradict"
+    elif strong:
+        top = prior[0]
+        top_kind = top.get("type") or "Decision"
+        if top_kind == "Practice":
+            # PRACTICE v2 layer 1 (Thoth LXII's DM 1785): a lexical reversal fingerprint
+            # (practice_contradiction_cues) distinguishes an unlabeled CONTRADICTION
+            # from a plain, uncited RE-DERIVATION when the caller gave no refutes= at
+            # all (the refutes= case is handled unconditionally above, before this
+            # branch is ever reached).
+            cues = capture.practice_contradiction_cues(f"{summary} {rationale or ''}")
+            if cues:
                 out["prior_art_flag"] = (
-                    f"a dead Superstition ({top['id']}) already covers this ground — check "
-                    "you're not reviving a workaround its own fix already killed "
-                    "(acknowledge with ack_prior_art=True if this is intentional/unrelated)")
-            elif top_kind == "Thread":
-                # THE MEASURER'S MOMENT (898840dc/e123b9fa): the nudge fires unprompted,
-                # inheriting THE THAW's own proven behavior rather than being a new
-                # detector — see UNIFIED_PRIOR_ART_KINDS' own comment. Deliberately never
-                # suggests resolves= here: this decision merely SPOKE TO the row in
-                # passing (that's how it surfaced as prior art at all); whether it also
-                # SETTLES the row is the caller's own judgment to make, not this flag's
-                # to presume.
-                out["prior_art_flag"] = (
-                    f"this appears to speak to open thread {top['id']} — pass "
-                    f"bears_on=['{top['id']}'] to link it without closing it (bears_on "
-                    "cites, it never resolves — use resolves=[...] instead if this ruling "
-                    "actually SETTLES the row), or acknowledge it (ack_prior_art=True) if "
-                    "coincidental")
-                out["prior_art_polarity"] = "bears_on"
+                    f"this may CONTRADICT standing Practice {top['id']} rather than cite "
+                    f"it — reversal language found ({', '.join(cues)}); if you mean to "
+                    f"overturn it, say so explicitly (refutes=['{top['id']}']), or "
+                    "acknowledge it (ack_prior_art=True) if this wording is coincidental")
+                out["prior_art_polarity"] = "contradict"
             else:
                 out["prior_art_flag"] = (
-                    f"a standing ruling ({top['id']}) covers this ground — supersede it "
-                    "explicitly (supersedes=...), cite it (grounds=...), name this as what "
-                    "it executes (implements=...), name this as an independent "
-                    "rediscovery of it (rediscovers=[...]) if you reached the same "
-                    "conclusion on your own, or acknowledge it (ack_prior_art=True)")
+                    f"this looks like a re-derivation of standing Practice {top['id']} — "
+                    f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
+                    "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
+                out["prior_art_polarity"] = "rederive"
+        elif top_kind == "Superstition":
+            out["prior_art_flag"] = (
+                f"a dead Superstition ({top['id']}) already covers this ground — check "
+                "you're not reviving a workaround its own fix already killed "
+                "(acknowledge with ack_prior_art=True if this is intentional/unrelated)")
+        elif top_kind == "Thread":
+            # THE MEASURER'S MOMENT (898840dc/e123b9fa): the nudge fires unprompted,
+            # inheriting THE THAW's own proven behavior rather than being a new
+            # detector — see UNIFIED_PRIOR_ART_KINDS' own comment. Deliberately never
+            # suggests resolves= here: this decision merely SPOKE TO the row in
+            # passing (that's how it surfaced as prior art at all); whether it also
+            # SETTLES the row is the caller's own judgment to make, not this flag's
+            # to presume.
+            out["prior_art_flag"] = (
+                f"this appears to speak to open thread {top['id']} — pass "
+                f"bears_on=['{top['id']}'] to link it without closing it (bears_on "
+                "cites, it never resolves — use resolves=[...] instead if this ruling "
+                "actually SETTLES the row), or acknowledge it (ack_prior_art=True) if "
+                "coincidental")
+            out["prior_art_polarity"] = "bears_on"
+        else:
+            out["prior_art_flag"] = (
+                f"a standing ruling ({top['id']}) covers this ground — supersede it "
+                "explicitly (supersedes=...), cite it (grounds=...), name this as what "
+                "it executes (implements=...), name this as an independent "
+                "rediscovery of it (rediscovers=[...]) if you reached the same "
+                "conclusion on your own, or acknowledge it (ack_prior_art=True)")
+    if prior:
         # INSTRUMENT IT (THE THAW piece 6): every strong hit is a MEASURED re-derivation
         # event, logged regardless of whether the caller acts on it — the population,
         # aggregated over time, IS the fleet's re-derivation ratchet metric.
@@ -6523,26 +6553,22 @@ async def record_decision(
                         for cid in cite_ids]
     if cite_receipt:
         out["cites_resolution"] = cite_receipt
-    # `refutes`/`obsoletes` stay NON-ATOMIC, called here AFTER record_decision's own
-    # transaction commits — same partial-commit debt as before, deliberately not folded
-    # in with their four siblings above (see record_decision's own docstring): folding
-    # them changes what the prior-art search just above sees, a real regression a test
-    # caught before it shipped, not a hypothetical.
+    # RECEIPTS ONLY BELOW, same discipline as the six siblings above (thread 7e8cb735):
+    # refute_id's `refuted_by` stamp and every obsoletes= Superstition already MINTED
+    # inside capture.record_decision's own atomic transaction — nothing here writes,
+    # each block reads back what committed.
     if refute_id is not None:
-        converted = await capture.refute_practice(
-            Actions(pool), str(refute_id), killed_by=str(d), repo=repo, source=actor)
-        if converted:
+        refuted_by = await pool.fetchval(
+            "SELECT val.value #>> '{}' FROM current_assertions val "
+            "WHERE val.object_id=$1 AND val.name='refuted_by' "
+            "ORDER BY val.confidence DESC, val.observed_at DESC LIMIT 1", refute_id)
+        if refuted_by == str(d):
             out["refuted_practice"] = (
-                f"{str(converted['practice'])[:8]} converted to Superstition "
-                f"{str(converted['superstition'])[:8]} — the Practice stays active, flagged")
+                f"{str(refute_id)[:8]} converted to Superstition "
+                f"{(str(refute_superstition_id)[:8] + ' ') if refute_superstition_id else ''}"
+                "— the Practice stays active, flagged")
     if obsoletes:
-        killed = []
-        for statement in obsoletes:
-            if statement and statement.strip():
-                await capture.kill_superstition(
-                    Actions(pool), statement, killed_by=str(d), repo=repo,
-                    source=await _actor_for(ctx, subagent_id, subagent_type))
-                killed.append(statement.strip())
+        killed = [s.strip() for s in obsoletes if s and s.strip()]
         if killed:
             out["superstitions_killed"] = killed
             out["superstitions_note"] = (
