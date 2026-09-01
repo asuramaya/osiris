@@ -50,6 +50,53 @@ async def test_resolve_thread_with_artifact_mints_a_strong_resolved_by_edge(
     assert row["topology_property_disagreement"] is False
 
 
+async def test_record_decision_bears_on_never_counts_as_a_closure_edge(
+    actions: Actions,
+) -> None:
+    """The mint_bears_on conflation fix (0055, Thoth DM 6230/6234, decision 36cbec2f): a
+    bears_on citation mints the identical `answers` link type resolves= uses, but never
+    writes `status` — so it must NOT satisfy the view's same-source status='resolved'
+    corroboration check. Measured live: 9 of closure_health's 10 repo=osiris disagree rows
+    were exactly this specimen, including one Thoth minted on her own coordinator thread."""
+    await _repo(actions, "tc3b")
+    tid = await open_thread(actions, "cited but not closed", repo="tc3b", source="agent:me")
+    await record_decision(
+        actions, "a passing finding that merely speaks to it", repo="tc3b", bears_on=[tid])
+
+    rows = await thread_closure_status(actions.pool, thread_ids=[tid])
+    row = rows[0]
+    assert row["closed_by_topology"] is False   # no corroborated closure edge
+    assert row["closure_edges"] == []
+    assert row["property_status"] == "open"      # untouched — bears_on never writes status
+    assert row["topology_property_disagreement"] is False  # no false signal left to flag
+
+
+async def test_bears_on_and_resolves_on_the_same_thread_still_reports_the_real_edge(
+    actions: Actions,
+) -> None:
+    """A thread can be cited in passing AND later genuinely closed — the bears_on edge
+    stays uncorroborated and invisible to the view, the resolves= edge still counts.
+    Distinct sources on purpose: the corroboration check is scoped to (object, source_id),
+    which is exactly the real specimens measured tonight — a coordinator's own bears_on
+    citation and a different mind's later resolves= call are never the same source."""
+    await _repo(actions, "tc3c")
+    tid = await open_thread(actions, "cited then actually closed", repo="tc3c",
+                            source="agent:me")
+    await record_decision(actions, "a passing mention", repo="tc3c", bears_on=[tid],
+                          source="agent:citer")
+    decision_id = await record_decision(
+        actions, "the ruling that actually settles it", repo="tc3c", resolves=str(tid),
+        source="agent:closer")
+
+    rows = await thread_closure_status(actions.pool, thread_ids=[tid])
+    row = rows[0]
+    assert row["closed_by_topology"] is True
+    assert row["strength"] == "strong"
+    assert len(row["closure_edges"]) == 1  # the bears_on edge stays out, not double-counted
+    assert row["closure_edges"][0]["closer_id"] == decision_id
+    assert row["property_status"] == "resolved"
+
+
 async def test_record_decision_resolves_mints_a_strong_answers_edge(actions: Actions) -> None:
     await _repo(actions, "tc3")
     tid = await open_thread(actions, "closed by a ruling", repo="tc3", source="agent:me")

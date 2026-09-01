@@ -71,6 +71,29 @@ required NO code change to add the weak tier — the `strength` ranking below al
 a 'weak' entry, put there when the view could not yet produce one; extending the view was
 the whole one-line-UNION-ALL-arm point of building it this way.
 
+`answers` STOPPED MEANING ONLY "resolves= closed this" THE DAY `mint_bears_on` SHIPPED (0055,
+Thoth DM 6230/6234, decision 36cbec2f): that verb mints the identical `answers` edge for a
+citation that deliberately never closes anything (its own docstring: "this function touches
+only the `links` table, never `status`"). Measured live: 9 of closure_health's 10 repo=osiris
+`disagree` rows on one night were exactly this — a real edge, a correct property, and a view
+that could not tell a citation from a closure. 0055's view now requires a SAME-SOURCE
+status='resolved' write to exist anywhere in that thread's history before counting an
+`answers` edge as closure evidence at all — true retroactively for every genuine resolves=
+closure ever minted (same transaction, same source, no exceptions), false for every
+bears_on-only citation, no backfill and no new link property required. A caller of this
+module never sees the difference; a bears_on-only `answers` edge simply no longer appears in
+`thread_closure_edges` at all, so `closed_by_topology` reads False for it — the same honest
+"no closure edge found" state as any other untouched thread.
+
+ONE NAMED IMPRECISION, not fixed because it never produces a wrong verdict: the check is
+scoped to (thread, source_id), not to the specific closing act — if the SAME source_id both
+bears_on's and later resolves= the SAME thread, the earlier bears_on edge is corroborated
+too (the status write it borrows really did land, just from a sibling decision, not itself).
+`closed_by_topology`/`property_status` agreement stays correct either way (the thread
+genuinely is resolved by then); only `closure_edges`' list is imprecise about which specific
+edge did the closing. Every specimen measured tonight had DISTINCT source_ids on its
+bears_on and resolves= acts, so this coincidence did not occur in the wild.
+
 CALLERS TO MOVE (Phase 2b, not this piece — named so the switch-over is cheap and obvious,
 per Thoth's explicit ask; grep `name='status'` + `type='Thread'` to re-verify this list
 against a later HEAD before acting on it):
