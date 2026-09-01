@@ -674,6 +674,13 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
     out_text = buf.getvalue()
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
+    # THE HONEST MESSAGE (Thoth's msg 6260, the operator's real "marquee was not
+    # launched into the claude agents list" complaint): no defensive "a harness fact,
+    # not a bug" framing — state the consequence and the two real next steps.
+    assert "a harness fact, not a bug" not in out_text
+    assert "gone from `claude agents --json` for good" in out_text
+    assert "send it mail, it wakes on the next dispatch" in out_text
+    assert f"claude -p --resume {_RESUME_SID}" in out_text
 
 
 async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
@@ -870,11 +877,21 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
 ) -> None:
     """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation) — a seat naming a
     tree_cwd the harness never actually created is refused, cleanly, before anything spawns,
-    exactly matching launch_seat's own refusal shape."""
+    exactly matching launch_seat's own refusal shape.
+
+    ALSO PROVES THE COPY-PASTE FIX (Thoth's msg 6256, call (b) — the same verb-naming
+    treatment as anchor_cwd's own refusal): the message must print the actual
+    `bind_seat_tree(seat_id=..., tree_cwd=..., because=...)` call with the real seat_id
+    filled in, not a generic "osiris expects the harness to have created it" dead end."""
+    import io
+    from contextlib import redirect_stderr
+
     from src.orchestrator.seats import bind_seat_tree
 
+    office = tmp_path / "office"
+    office.mkdir()
     seat = await ensure_seat(actions, house="osiris", handle="clinotree",
-                             anchor_cwd=str(tmp_path / "office"), source="test")
+                             anchor_cwd=str(office), source="test")
     ghost_tree = str(tmp_path / "never-created")
     bind = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=ghost_tree,
                                 actor="operator", because="test: CLI refusal proof")
@@ -883,9 +900,15 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
     async def _unreachable(*a: Any, **k: Any) -> Any:
         raise AssertionError("should never be called — the tree check refuses first")
 
-    out = await cmd_launch("clinotree", model=None, pool=actions.pool,
-                           spawn=_unreachable, agents_json=_unreachable)
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("clinotree", model=None, pool=actions.pool,
+                               spawn=_unreachable, agents_json=_unreachable)
     assert out == 1
+    err = buf.getvalue()
+    assert "tree_cwd" in err
+    assert f"bind_seat_tree(seat_id={seat['seat_id']!r}" in err
+    assert "tree_cwd=" in err and "because=" in err
 
 
 async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_disk(
@@ -897,7 +920,16 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     tree_cwd binding (the marquee shape exactly) falls back to office as launch_cwd, so a
     stale/wrong anchor must refuse cleanly here too, before anything spawns — and the
     message must name `anchor_cwd`, not `tree_cwd`, so the operator can tell which field
-    disagrees."""
+    disagrees.
+
+    ALSO PROVES THE COPY-PASTE FIX (Thoth's msg 6256, #97's stranger's test): the operator
+    literally went looking in ~/.osiris/seats/marquee/.osiris for the anchor and it was not
+    there — the anchor is a graph assertion, not a pin field. The message must say that AND
+    print the actual `rebind_seat(seat=..., new_cwd=...)` call with the real handle filled
+    in, not a generic "repoint it" with no verb to do so."""
+    import io
+    from contextlib import redirect_stderr
+
     seat = await ensure_seat(actions, house="osiris", handle="clighostanchor",
                              anchor_cwd=str(tmp_path / "never-created-either"),
                              source="test")
@@ -906,9 +938,16 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     async def _unreachable(*a: Any, **k: Any) -> Any:
         raise AssertionError("should never be called — the anchor check refuses first")
 
-    out = await cmd_launch("clighostanchor", model=None, pool=actions.pool,
-                           spawn=_unreachable, agents_json=_unreachable)
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("clighostanchor", model=None, pool=actions.pool,
+                               spawn=_unreachable, agents_json=_unreachable)
     assert out == 1
+    err = buf.getvalue()
+    assert "anchor_cwd" in err
+    assert "GRAPH assertion" in err
+    assert "rebind_seat(seat='clighostanchor'" in err
+    assert "new_cwd=" in err
 
 
 async def test_cmd_launch_harness_spawns_into_tree_cwd_not_office(

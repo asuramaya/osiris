@@ -700,8 +700,11 @@ async def _cmd_launch_harness(
     # side should make — this only refuses loudly and names which field disagrees.
     if not _tree_exists(office):
         print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
-              "exist on disk — repoint the seat's anchor or create the directory before "
-              "launch; osiris never provisions one itself.", file=sys.stderr)
+              "exist on disk — repoint it or create the directory before launch; osiris "
+              "never provisions one itself. The anchor is a GRAPH assertion (not a "
+              f".osiris pin file) — fix it with: rebind_seat(seat={handle!r}, "
+              "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
+              f"{office!r} at that exact path.", file=sys.stderr)
         return 1
     launch_cwd = office
     if tree_cwd:
@@ -709,7 +712,10 @@ async def _cmd_launch_harness(
             print(f"osiris launch: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
                   "exist on disk — osiris expects the harness (or a human, via "
                   "EnterWorktree) to have created it before launch; it never provisions "
-                  "one itself.", file=sys.stderr)
+                  "one itself. Fix it with: bind_seat_tree(seat_id="
+                  f"{facts['seat_id']!r}, tree_cwd='<the real directory>', because='...') "
+                  "via the osiris MCP tools, or by creating it at that exact path.",
+                  file=sys.stderr)
             return 1
         launch_cwd = tree_cwd
 
@@ -791,9 +797,12 @@ async def _cmd_launch_harness(
                            or None)
         print(f"osiris launch: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
               f"walked {len(resume_log)} generation(s) back to find it "
-              f"({_collapse_resume_log(resume_log)}); it runs the brief and exits; `claude "
-              "agents --json` shows it only WHILE it runs, never after (a harness fact, not a bug: "
-              "a further mail wake continues it, exactly like any other dormant addressee).")
+              f"({_collapse_resume_log(resume_log)}). It runs the brief and exits, then is "
+              "gone from `claude agents --json` for good — that registry only ever lists "
+              "`claude --bg --name` windows, never a `-p --resume` body; osiris cannot "
+              "change that. To reach it again: send it mail, it wakes on the next "
+              f"dispatch; or run `claude -p --resume {resumed_session_id}` by hand to "
+              "watch a turn live yourself.")
         stamped_model = facts.get("intended_model")
         if stamped_model and resolved_model != stamped_model:
             print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
@@ -2930,15 +2939,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_attach = sub.add_parser("attach", description=_d("attach to a live seat's PTY session"),
                               epilog="example: osiris attach Khnum")
-    p_attach.add_argument("handle")
+    p_attach.add_argument("handle", help="the seat's handle to attach to")
 
     p_smoke = sub.add_parser(
         "smoke", description=_d("the same deploy-time liveness probe the fleet runs"),
         epilog="example: osiris smoke\nexample: osiris smoke --chaos")
     p_smoke.add_argument(
         "--chaos", action="store_true",
-        help="crash replay (Thoth msg 5338): kill osiris-mcp/osiris-worker hard, fire a "
-             "concurrent session-end storm, restart, then assert the #178 invariants hold "
+        help="crash replay: kill osiris-mcp/osiris-worker hard, fire a concurrent "
+             "session-end storm, restart, then assert system invariants still hold "
              "under a real crash, never just a graceful restart")
 
     sub.add_parser("boot-status", description=_d(
@@ -2952,12 +2961,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
-    p_launch = sub.add_parser("launch", description=_d("body a seat: spawn its claude process via "
-                                          "`claude --bg` (task #72) so it lands in the "
-                                          "operator's own `claude agents` list"),
+    p_launch = sub.add_parser("launch", description=_d(
+        "body a seat, one of two ways, decided automatically (never a flag — see the "
+        "printed receipt for which one ran): a fresh, persistent `claude --bg` process "
+        "(shows up in `claude agents`) when there is nothing to continue, or a ONE-SHOT "
+        "`-p --resume` turn (runs the brief and exits — never in `claude agents`, reached "
+        "again by sending it mail) when the seat's last session is still resumable"),
                               epilog="example: osiris launch Khnum")
-    p_launch.add_argument("handle")
-    p_launch.add_argument("--model", default=None)
+    p_launch.add_argument("handle", help="the seat's handle to launch a body for")
+    p_launch.add_argument("--model", default=None,
+                          help="the model to launch with — defaults to the seat's own "
+                               "recorded intended_model, else the fleet's wake default")
     p_launch.add_argument("--debug", action="store_true",
                           help="use the osiris PTY-broker lane instead of the default "
                                "`claude --bg` — for an incident or a build with no --bg")
@@ -2965,8 +2979,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_stop = sub.add_parser("stop", description=_d(
         "END a live body — `osiris launch`'s inverse. Stops the seat's own process (the "
         "harness's own `claude stop <id>` when the body is harness-tracked, else a plain "
-        "SIGTERM) and nothing more: not a pause, no promised thaw-where-you-left-off "
-        "(ruling b3ccd3f6). "
+        "SIGTERM) and nothing more: not a pause, no promised thaw-where-you-left-off. "
         "Reachability afterward is governed by the SAME occupancy authority launch/wake "
         "already read, so a later launch just works — there is no 'unstop' to remember. "
         "`no-live-body` exits 0: nothing running there is a SUCCESS for a teardown"),
@@ -2985,7 +2998,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "the fleet roster, grouped by project — the same "
                                          "fleet() the MCP tool answers, called over the wire"),
                              epilog="example: osiris fleet\nexample: osiris fleet --full")
-    p_fleet.add_argument("--full", action="store_true")
+    p_fleet.add_argument("--full", action="store_true",
+                         help="expand every historical (retired) session too, not just the "
+                              "live ones — the whole roster, not the collapsed count")
     p_fleet.add_argument("--json", action="store_true", dest="as_json",
                          help="machine-readable: one compact JSON line, for a script or an agent")
 
@@ -3073,7 +3088,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retention = sub.add_parser(
         "retention", description=_d("Prune outbox/audit_log rows past their retention "
             "window — dry run by default (counts only, writes nothing); pass --execute "
-            "to delete, in batches. Thread e6fd3772 piece 1."),
+            "to delete, in batches."),
         epilog="example, count only:\n"
             "    osiris retention outbox\n"
             "example, then delete:\n"
@@ -3174,7 +3189,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
             "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
-            "soul_lines alone (task #51 piece 2) — the same SoulStore.rematerialize_to_"
+            "soul_lines alone — the same SoulStore.rematerialize_to_"
             "disk the MCP tool wraps. Verifies the hash chain while collecting; a break "
             "is reported and NOTHING is written, never a silent partial file. Refuses "
             "to overwrite a transcript modified more recently than the store's last "
@@ -3235,8 +3250,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_new = sub.add_parser(
         "new", description=_d(
-            "Found a SELF-MANAGED seat: no manager, ever (Ooblek's own real shape, "
-            "read off its dossier, never a flag). One act: create/verify a code "
+            "Found a SELF-MANAGED seat: no manager, ever. One act: create/verify a code "
             "workspace directory + its own .osiris pin, mint the seat, scaffold its "
             "identity office at the standard ~/.osiris/seats/<handle>/ location, and "
             "bind its tree to the workspace. Does not charter the seat over a "
