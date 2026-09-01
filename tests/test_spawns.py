@@ -140,21 +140,41 @@ async def test_register_spawn_stop_reads_the_childs_own_model(
 @pytest.mark.xfail(
     reason="CI-ONLY, CAUSE UNKNOWN — obligation 7bde8729's sibling, NOT a known-broken "
            "feature. Fails ONLY on GitHub Actions, deterministically, every run; NEVER "
-           "reproduced locally across four attempts by two agents (alone, whole-file -n4, "
-           "full suite -n4 3879-passed, and after clearing the spawn skip-cache at setup). "
-           "The failure is always `assert None == 'code-reviewer'` on the agent_type line "
-           "while the actor assertion ABOVE it passes — i.e. the id resolves but "
-           "register_spawn's property write is absent. TWO HYPOTHESES RAISED AND BOTH "
-           "REFUTED BY EXPERIMENT: (1) Khnum's `_spawns_seen` module-global surviving the "
-           "per-test DB reset (decision 102c4035) — the setup-clear fixture above closed "
-           "that branch by construction and CI failed IDENTICALLY at 6ec8d78; (2) a "
-           "differing CI pytest invocation — ci.yml runs `uv run pytest -q` against the "
-           "same `addopts = -n 4`, so the command is not the variable. "
+           "reproduced locally across NINE attempts by three agents now (alone, whole-file "
+           "-n4, full suite -n4 3879/4110-passed, after clearing the spawn skip-cache at "
+           "setup, and — thread 6122's own addition — 15x whole-file plus 2x full-suite "
+           "runs under `taskset -c 0,1`/`-c 0` deliberate CPU starvation, matching or "
+           "exceeding ci.yml's own ubuntu-latest 4-vCPU/-n4 ratio). The failure is always "
+           "`assert None == 'code-reviewer'` on the agent_type line while the actor "
+           "assertion ABOVE it passes. THREE HYPOTHESES RAISED, ALL REFUTED BY EXPERIMENT: "
+           "(1) Khnum's `_spawns_seen` module-global surviving the per-test DB reset "
+           "(decision 102c4035) — the setup-clear fixture above closed that branch by "
+           "construction and CI failed IDENTICALLY at 6ec8d78; (2) a differing CI pytest "
+           "invocation — ci.yml runs the same `uv run pytest -q` / `-n 4`; (3) 'a genuinely "
+           "fresh database is what CI has and a local run does not' (thread 6122's own "
+           "framing at dispatch) — FALSE: conftest.py provisions a fresh testcontainers "
+           "Postgres 16 per pytest SESSION locally too (tests/conftest.py:304), and CI's "
+           "own ci.yml uses the identical testcontainers mechanism, not a services: "
+           "container — 'fresh vs warm DB' is not a real difference between the two "
+           "environments and should stop being treated as the discriminator. "
+           "STILL UNKNOWN, NOT YET EVEN NARROWED: CI's ubuntu-latest runner is 4-vCPU "
+           "against the same `-n 4`, so the local under-provisioned stress runs above are "
+           "not even a faithful resource-pressure match — genuinely UNPROVISIONED to test. "
+           "The likeliest remaining candidate is xdist's own dynamic (non-deterministic) "
+           "load-balancing occasionally co-locating this test in the same worker process, "
+           "in the same run, as some OTHER test this file's own autouse fixture cannot "
+           "reach — never confirmed, only unexcluded. "
+           "DIAGNOSTIC INSTRUMENTATION ADDED (thread 6122) below, unconditional, not "
+           "gated on failure: prints the spawn skip-cache's exact contents, the worker id, "
+           "the pid, and the live `srv._pool`/`actions.pool` identity right before the "
+           "vulnerable read — so the NEXT CI red run's own captured stdout, not another "
+           "guess, names the actual state. "
            "strict=False DELIBERATELY: if the real cause is fixed elsewhere this must go "
            "green without failing the suite, and we do not yet know enough to assert it "
-           "always fails. THIS MAY BE A REAL FRESH-DATABASE BUG, not test noise — that is "
-           "exactly why the row stays open rather than the test being deleted. Do not "
-           "remove this marker without re-running CI and reading the result.",
+           "always fails. THIS MAY STILL BE A REAL BUG, not test noise — that is exactly "
+           "why the row stays open rather than the test being deleted or re-muted with "
+           "only a better comment. Do not remove this marker without reading a NEXT CI "
+           "failure's diagnostic print, or without a real repro either way.",
     strict=False,
 )
 async def test_actor_for_attributes_the_stamped_child_never_the_seat(
@@ -162,14 +182,28 @@ async def test_actor_for_attributes_the_stamped_child_never_the_seat(
 ) -> None:
     """The write waist: a hook-stamped call lands on the CHILD; an unstamped call falls
     through to the normal (mounted / session) resolution."""
+    import os
+
     from src import mcp_server as srv
 
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
         actor = await srv._actor_for(None, "agent-kid00003", "code-reviewer")
+        agent_type = await _prop(actions, actor, "agent_type")
+        # UNCONDITIONAL diagnostic (thread 6122) — printed every run, pass or fail, so the
+        # captured stdout of the NEXT CI failure carries the actual state rather than
+        # requiring a tenth guess. Cheap: one query already done, three cheap reads.
+        print(
+            f"[thread-6122-diagnostic] pid={os.getpid()} "
+            f"xdist_worker={os.environ.get('PYTEST_XDIST_WORKER')!r} "
+            f"actor={actor!r} agent_type={agent_type!r} "
+            f"spawns_seen={dict(srv._spawns_seen)!r} "
+            f"srv_pool_id={id(srv._pool)} actions_pool_id={id(actions.pool)} "
+            f"same_pool={srv._pool is actions.pool}"
+        )
         assert actor == "agent:kid00003"
-        assert await _prop(actions, actor, "agent_type") == "code-reviewer"
+        assert agent_type == "code-reviewer"
         assert await srv._actor_for(None, None) == "session"  # unstamped → normal path
         # the write tools carry the stamp end to end
         out = await srv.record_decision("spawn-made ruling", kind="choice",
