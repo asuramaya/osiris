@@ -674,6 +674,13 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
     out_text = buf.getvalue()
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
+    # THE HONEST MESSAGE (Thoth's msg 6260, the operator's real "marquee was not
+    # launched into the claude agents list" complaint): no defensive "a harness fact,
+    # not a bug" framing — state the consequence and the two real next steps.
+    assert "a harness fact, not a bug" not in out_text
+    assert "gone from `claude agents --json` for good" in out_text
+    assert "send it mail, it wakes on the next dispatch" in out_text
+    assert f"claude -p --resume {_RESUME_SID}" in out_text
 
 
 async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(

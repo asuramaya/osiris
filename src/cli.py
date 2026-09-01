@@ -797,9 +797,12 @@ async def _cmd_launch_harness(
                            or None)
         print(f"osiris launch: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
               f"walked {len(resume_log)} generation(s) back to find it "
-              f"({_collapse_resume_log(resume_log)}); it runs the brief and exits; `claude "
-              "agents --json` shows it only WHILE it runs, never after (a harness fact, not a bug: "
-              "a further mail wake continues it, exactly like any other dormant addressee).")
+              f"({_collapse_resume_log(resume_log)}). It runs the brief and exits, then is "
+              "gone from `claude agents --json` for good — that registry only ever lists "
+              "`claude --bg --name` windows, never a `-p --resume` body; osiris cannot "
+              "change that. To reach it again: send it mail, it wakes on the next "
+              f"dispatch; or run `claude -p --resume {resumed_session_id}` by hand to "
+              "watch a turn live yourself.")
         stamped_model = facts.get("intended_model")
         if stamped_model and resolved_model != stamped_model:
             print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
@@ -2958,9 +2961,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
-    p_launch = sub.add_parser("launch", description=_d("body a seat: spawn its claude process via "
-                                          "`claude --bg` so it lands in the "
-                                          "operator's own `claude agents` list"),
+    p_launch = sub.add_parser("launch", description=_d(
+        "body a seat, one of two ways, decided automatically (never a flag — see the "
+        "printed receipt for which one ran): a fresh, persistent `claude --bg` process "
+        "(shows up in `claude agents`) when there is nothing to continue, or a ONE-SHOT "
+        "`-p --resume` turn (runs the brief and exits — never in `claude agents`, reached "
+        "again by sending it mail) when the seat's last session is still resumable"),
                               epilog="example: osiris launch Khnum")
     p_launch.add_argument("handle", help="the seat's handle to launch a body for")
     p_launch.add_argument("--model", default=None,
