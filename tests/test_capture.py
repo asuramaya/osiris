@@ -1291,6 +1291,43 @@ async def test_resolve_thread_mints_only_resolved_by_when_artifact_resolves(
         "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", t) is None
 
 
+async def test_resolve_thread_artifact_resolves_a_type_prefixed_short_id(
+    actions: Actions,
+) -> None:
+    """PREFIX vs NO-PREFIX (decision 20644a3e, thread 0ae050d8): a caller who types the
+    exact "type:short-id" shape a receipt just showed them ("decision:3d504086" — 8 hex
+    chars, "decision:"-prefixed) used to fail _find_artifact's short-id regex (the letters
+    in "decision:" break a hex-only fullmatch at the 4th character) and silently fall back
+    to the weak closed_by edge; a bare short id with no prefix always worked. This is the
+    live specimen Thoth's own dispatch (msg 6209) and Sekhmet's root-cause (20644a3e) both
+    named — assert the strong resolved_by witness lands for the prefixed form too."""
+    t = await open_thread(actions, "a thread closed with a type-prefixed short id")
+    d = await record_decision(actions, "the type-prefix closer target", kind="decision")
+    await resolve_thread(actions, str(t), artifact=f"decision:{str(d)[:8]}",
+                         source="agent:closer-prefix")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t) == d
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", t) is None
+
+
+async def test_resolve_thread_artifact_refuses_an_unrecognized_prefix(
+    actions: Actions,
+) -> None:
+    """decision 20644a3e's own open question, decided here: an UNRECOGNIZED "type:" prefix
+    ("banana:<hex>") must still refuse rather than silently strip and match on the tail —
+    accepting it would risk a coincidental hex-collision with an unrelated object, the same
+    risk class the whole resolver ladder refuses elsewhere in this module."""
+    t = await open_thread(actions, "a thread closed with an unrecognized prefix")
+    d = await record_decision(actions, "not the target — must not be matched", kind="decision")
+    await resolve_thread(actions, str(t), artifact=f"banana:{str(d)[:8]}",
+                         source="agent:closer-banana")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t) is None
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) is not None
+
+
 async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
     actions: Actions,
 ) -> None:

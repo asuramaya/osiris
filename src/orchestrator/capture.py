@@ -2696,6 +2696,35 @@ async def reclassify_thread(
     return tid
 
 
+# The artifact resolver's own closer-type allowlist (Decision, Commit, Thread, Tension,
+# Practice — see _find_artifact's docstring for why each is/isn't here), lowercased and
+# colon-suffixed once so both the short-id and commit-hash branches strip the SAME
+# recognized set the same way — never a second, drifting copy of this list.
+_ARTIFACT_TYPE_PREFIXES = tuple(
+    f"{t.lower()}:" for t in ("decision", "commit", "thread", "tension", "practice"))
+
+
+def _strip_recognized_artifact_prefix(lowered: str) -> str:
+    """Strip a "type:" prefix from an already-lowercased artifact pointer, but ONLY when
+    it names one of _find_artifact's own closer types (decision 20644a3e, thread 0ae050d8:
+    a caller who copies a receipt's exact "type:short-id" shape — a very plausible thing
+    to type, since receipts constantly show the real 12-hex canonical in that exact shape
+    — got refused by every branch below, because "decision:" contains non-hex letters that
+    break a hex-only fullmatch at the 4th character. Mirrors the ONE technique _resolve_ref
+    already uses one function away (its own `canon_prefix`/`hex_part` split) rather than
+    inventing a second copy — #139, one-shape-one-guard).
+
+    An UNRECOGNIZED prefix ("banana:3d504086") is deliberately left UNSTRIPPED — it still
+    fails the hex fullmatch below and this function still refuses, exactly as before this
+    fix: silently accepting an unknown prefix's tail as if it were the whole pointer would
+    risk a coincidental hex-collision with an unrelated object, worse than the plain
+    refusal a caller already gets today for a pointer this resolver doesn't recognize."""
+    for prefix in _ARTIFACT_TYPE_PREFIXES:
+        if lowered.startswith(prefix):
+            return lowered[len(prefix):]
+    return lowered
+
+
 async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     """Resolve an artifact pointer to the graph object it names: an exact canonical
     ('commit:abc123def456', 'decision:…', 'thread:…'), an object UUID or 8-char short id
@@ -2711,22 +2740,32 @@ async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     match nothing, ever; and even if it matched, an Agent is not what CLOSED a thread
     (`closed_by` already exists for that shape). None for free-form pointers (a file:line,
     a path) — the resolved_artifact property alone carries those; a pointer that matches
-    nothing must never block the close."""
+    nothing must never block the close.
+
+    PREFIX vs NO-PREFIX (decision 20644a3e, thread 0ae050d8 — Sekhmet's root-cause,
+    corrected from an earlier, too-broad "short id vs full UUID" framing): a caller who
+    types the SHORT form of a canonical-shaped citation ("decision:3d504086", 8 hex chars,
+    "type:"-prefixed) used to fail every branch below and silently fall back to the weak
+    closed_by edge — a bare id with no prefix ("3d504086") always worked. Both the short-
+    id and commit-hash branches now strip a RECOGNIZED type prefix (see
+    `_strip_recognized_artifact_prefix`) before their own hex fullmatch; an unrecognized
+    prefix is left alone and still refuses, same as before this fix."""
     a = artifact.strip()
     oid = await pool.fetchval("SELECT id FROM objects WHERE canonical=$1", a)
     if oid is not None:
         return uuid.UUID(str(oid))  # exact canonical — any precisely-named type may close
-    if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", a.lower()):
+    hex_part = _strip_recognized_artifact_prefix(a.lower())
+    if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", hex_part):
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE id::text LIKE $1 || '%' "
             "AND type IN ('Decision', 'Commit', 'Thread', 'Tension', 'Practice') LIMIT 2",
-            a.lower()[:8])
+            hex_part[:8])
         if len(rows) == 1:  # ambiguity → property-only, never a guessed edge
             return uuid.UUID(str(rows[0]["id"]))
-    if re.fullmatch(r"[0-9a-f]{7,40}", a.lower()):
+    if re.fullmatch(r"[0-9a-f]{7,40}", hex_part):
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE type='Commit' "
-            "AND canonical LIKE 'commit:' || $1 || '%' LIMIT 2", a.lower())
+            "AND canonical LIKE 'commit:' || $1 || '%' LIMIT 2", hex_part)
         if len(rows) == 1:
             return uuid.UUID(str(rows[0]["id"]))
     return None
