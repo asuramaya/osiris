@@ -238,7 +238,21 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
 _HATCH_CAVEAT = (
     "a 0 here is NOT proof the gate is broken (Imhotep msg 5828): the gate only fires on "
     "types that declare required_link_kinds, and none do yet — Khnum's content pass for "
-    "that is separate and has not landed"
+    "that is separate and has not landed. ALL-TIME CUMULATIVE, NEVER A WINDOW OR A RATE "
+    "(Lane C, obligation/thread from Thoth XC msg 6143): unlinked_because is asserted "
+    "once per object at write time and never retracted, so total/split only ever grow — "
+    "two readings taken weeks apart are not a before/after comparison of the SAME thing, "
+    "they are two cumulative totals at different elapsed times. THE SPLIT IS ALSO EXACT-"
+    "STRING SENSITIVE: `pending` below matches `_EXTENSION_LINK_PENDING_REASON`'s CURRENT "
+    "wording only — that constant's own enumerated param list has changed at least three "
+    "times as narrows=/cites= etc. were added (b7fee6c/57c9a0b/6fb6ba5), so an object "
+    "written under an OLDER wording no longer exact-matches and silently counts as "
+    "standalone_other today, even though nothing about that object changed. Measured live "
+    "2026-09-01: 18 rows are genuinely extension-link-pending by MEANING (3 match the "
+    "current string exactly; 15 carry one of two older wordings) but only 3 render as "
+    "`extension=` in the deploy line — the other 15 render as `standalone=`, inflating it "
+    "by the same 15. Do not compare this deploy's split against a prior deploy's, or "
+    "against #189's own close-time snapshot, without re-deriving both from by_reason_raw"
 )
 
 
@@ -254,7 +268,17 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     The `try` is NOT dead now that the gate has merged (main 45b42cd): it is the guard
     for a build where that constant has been renamed or removed out from under this
     reader, and `split=None` then degrades to raw per-value counts rather than
-    silently reporting a zero that would read as "the gate refuses nothing"."""
+    silently reporting a zero that would read as "the gate refuses nothing".
+
+    NEITHER COUNT IS A RATE OR A WINDOW (Lane C, Thoth XC msg 6143 — see `_HATCH_CAVEAT`
+    for the full finding): `current_assertions` here is every `unlinked_because` ever
+    written, all-time, monotonically growing, and the extension/standalone split is
+    additionally sensitive to `_EXTENSION_LINK_PENDING_REASON`'s own CURRENT exact text —
+    an older-worded write silently reclassifies as standalone the moment that constant's
+    wording moves, with no change to the underlying object. This function's own numbers
+    are correct census, unchanged by this finding; only the LABEL was wrong. Fixing the
+    exact-match itself (e.g. a stable sub-string/prefix match instead of full equality) is
+    a deliberate, separate build, not folded in here."""
     rows = await pool.fetch(
         "SELECT (a.value #>> '{}') AS reason, count(*) AS n FROM current_assertions a "
         "WHERE a.name = 'unlinked_because' GROUP BY reason ORDER BY n DESC")
@@ -304,9 +328,14 @@ def render_adoption_line(meter: dict[str, Any]) -> str:
     headline = meter["cohorts"].get(HEADLINE_TYPE)
     ob_headline = meter.get("orphan_birth_rate", {}).get(HEADLINE_TYPE)
     hatch = meter["hatch"]
+    # ALL-TIME CUMULATIVE, NEVER A WINDOW (Lane C, Thoth XC msg 6143 — a number printed on
+    # every deploy with no window WILL be misread as a per-deploy or per-period figure;
+    # see `_HATCH_CAVEAT` for the full finding, including the exact-string classification
+    # fragility this label does not attempt to fix).
     if hatch["split"] is not None:
         hatch_str = (f"extension={hatch['split']['extension_link_pending']} "
-                     f"standalone={hatch['split']['standalone_other']}")
+                     f"standalone={hatch['split']['standalone_other']} (all-time total, "
+                     f"not a window — do not diff against a prior deploy's line)")
     else:
         hatch_str = f"{hatch['total']} total (unsplit — reason constant not on this build)"
     if headline is None:

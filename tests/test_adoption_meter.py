@@ -218,6 +218,23 @@ def test_render_orphan_birth_degrades_honestly_when_the_key_is_entirely_absent()
     assert "no 7d-aged cohort yet" in line
 
 
+def test_render_names_the_hatch_split_as_all_time_not_a_window(
+) -> None:
+    """Lane C (Thoth XC msg 6143): a number printed on every deploy with no window WILL
+    be misread as a per-deploy or per-period figure — it happened live, one deploy after
+    the split first shipped. The terse line now says so inline, not just in the fuller
+    dict's own `note`."""
+    line = render_adoption_line({
+        "cohorts": {}, "orphan_birth_rate": {},
+        "hatch": {"total": 55, "by_reason_raw": {}, "note": "",
+                 "split": {"extension_link_pending": 3, "standalone_other": 52}},
+    })
+    assert "\n" not in line
+    assert "extension=3 standalone=52" in line
+    assert "all-time total" in line
+    assert "not a window" in line
+
+
 async def test_hatch_reads_a_real_zero_when_nothing_has_hatched(actions: Actions) -> None:
     """No `unlinked_because` assertions exist anywhere in a fresh test DB — the real
     fail-honest path, never a fabricated schema-missing flag."""
