@@ -687,6 +687,22 @@ async def _cmd_launch_harness(
         return 1
     office = facts["anchor_cwd"]
     tree_cwd = facts["tree_cwd"]
+    # THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN (decision 27259e4d, thread bc11a2d3):
+    # tree_cwd got an existence check and a named refusal below; office/anchor_cwd got
+    # neither, so a stale or wrong anchor (pin drift, a renamed directory) flowed straight
+    # into create_subprocess_exec(cwd=...) as a raw, uncaught FileNotFoundError. Checked
+    # UNCONDITIONALLY, not just in the tree_cwd-absent fallback branch below: office is
+    # ALSO the identity `_bg_boot_prompt` hands the spawned session for its own mount(cwd=)
+    # call, regardless of which path becomes the subprocess's actual OS cwd — a bad anchor
+    # is a real problem even when tree_cwd happens to save this call's own subprocess spawn.
+    # NEVER derived-by-convention or silently repointed (Thoth's own instruction): which of
+    # anchor_cwd/the on-disk path is the truth is an operator decision, not a guess either
+    # side should make — this only refuses loudly and names which field disagrees.
+    if not _tree_exists(office):
+        print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
+              "exist on disk — repoint the seat's anchor or create the directory before "
+              "launch; osiris never provisions one itself.", file=sys.stderr)
+        return 1
     launch_cwd = office
     if tree_cwd:
         if not _tree_exists(tree_cwd):

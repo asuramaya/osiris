@@ -3070,7 +3070,22 @@ async def _spawn_claude(
     (thread 9f2ddb44). MINT lane: a fresh process with a synthesized CLAUDE_JOB_DIR — the
     durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget.
     `allowed_tools` (thread ba73c0c8): headless -p cannot answer permission prompts — the
-    spawner pre-authorizes the graph tools, or the wake is born with its hands tied."""
+    spawner pre-authorizes the graph tools, or the wake is born with its hands tied.
+
+    THE BACKSTOP (decision 27259e4d, thread bc11a2d3): `repo` becomes `cwd=` on the
+    subprocess call below with no existence check of its own — `osiris launch`'s own CLI
+    caller now refuses loudly, by name, before ever reaching this function, but every OTHER
+    caller (a daemon wake, a triage trigger) resolves its own `repo` and has no such
+    pre-check. Same fire-and-forget discipline the receipt-open failure just above already
+    follows: a bad `repo` here degrades to a logged no-op, never a raised, uncaught
+    FileNotFoundError out of create_subprocess_exec — this function's own callers already
+    assume it never raises for a wake attempt, same as they assume a full disk or an
+    unwritable receipt directory doesn't crash them either."""
+    if not _tree_exists(repo):
+        _log.error("trigger: _spawn_claude refused — repo=%r does not exist on disk, "
+                   "no subprocess spawned (job_dir=%s, resume_session=%s)",
+                   repo, job_dir, resume_session)
+        return
     env = os.environ.copy()
     # the spawner's own anchor must never leak into a child: an inherited CLAUDE_JOB_DIR
     # hands the wake the SPAWNER'S identity (the anchor-collision class, 2294e95d) — a
@@ -3252,7 +3267,15 @@ async def _spawn_claude_bg(
     already alive when this code deploys was started without it and stays in the shared
     group until it naturally cycles. A future group-based kill must check for this rather
     than assume it; a kill verb that silently behaves differently for old and new bodies
-    is worse than one that refuses cleanly on the old ones."""
+    is worse than one that refuses cleanly on the old ones.
+
+    SAME BACKSTOP AS `_spawn_claude` (decision 27259e4d, thread bc11a2d3): `repo` reaches
+    create_subprocess_exec's `cwd=` with no existence check of its own; refused here as a
+    logged no-op, never a raised, uncaught FileNotFoundError."""
+    if not _tree_exists(repo):
+        _log.error("trigger: _spawn_claude_bg refused — repo=%r does not exist on disk, "
+                   "no subprocess spawned (name=%s)", repo, name)
+        return
     env = os.environ.copy()
     # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
     # the child (the anchor-collision class, 2294e95d) — inert for --bg today (env vars

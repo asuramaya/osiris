@@ -396,10 +396,12 @@ async def test_cmd_launch_harness_unknown_handle_is_honest(actions: Actions) -> 
 
 
 async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
-    actions: Actions,
+    actions: Actions, tmp_path: Path,
 ) -> None:
+    office = tmp_path / "already-live-bg"
+    office.mkdir()
     await ensure_seat(actions, house="osiris", handle="already-live-bg",
-                      anchor_cwd="/home/x/.osiris/seats/already-live-bg", source="test")
+                      anchor_cwd=str(office), source="test")
 
     async def _spawn(*a: Any, **k: Any) -> None:
         raise AssertionError("should never be called — a live body already holds this seat")
@@ -413,7 +415,7 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
 
 
 async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cannot_see(
-    actions: Actions,
+    actions: Actions, tmp_path: Path,
 ) -> None:
     """Task #148's contested seam 4, the CLI's own copy of the same shared bug: `claude
     agents --json` is invisible to a resumed (`-p --resume`) body by construction, so an
@@ -423,11 +425,13 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
     differently-shaped guard on the same class."""
     from src.orchestrator.mounts import save_mount
 
+    office = tmp_path / "resumed-cli"
+    office.mkdir()
     await ensure_seat(actions, house="osiris", handle="resumed-cli",
-                      anchor_cwd="/home/x/.osiris/seats/resumed-cli", source="test")
+                      anchor_cwd=str(office), source="test")
     await save_mount(actions.pool, job_dir="/tmp/jobs/resumed-cli-job",
                      agent_id="agent:resumed-cli-body", project="p",
-                     cwd="/home/x/.osiris/seats/resumed-cli", model=None, session_key=None)
+                     cwd=str(office), model=None, session_key=None)
 
     async def _spawn(*a: Any, **k: Any) -> None:
         raise AssertionError("should never be called — a resumed body already holds this "
@@ -441,12 +445,16 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
     assert out == 0
 
 
-async def test_cmd_launch_harness_spawns_and_confirms(actions: Actions) -> None:
+async def test_cmd_launch_harness_spawns_and_confirms(
+    actions: Actions, tmp_path: Path,
+) -> None:
     """The full honest path: no live body yet, `claude --bg` fires with the mount+claim_name
     boot prompt, then a bounded poll confirms the body shows up in `claude agents --json` —
     the fake resolves on the FIRST poll iteration, so this needs no real sleep-bound wait."""
+    office = tmp_path / "freshbg"
+    office.mkdir()
     await ensure_seat(actions, house="osiris", handle="freshbg",
-                      anchor_cwd="/home/x/.osiris/seats/freshbg", source="test")
+                      anchor_cwd=str(office), source="test")
 
     spawn_calls: list[dict[str, Any]] = []
     poll_count = 0
@@ -465,14 +473,14 @@ async def test_cmd_launch_harness_spawns_and_confirms(actions: Actions) -> None:
                            spawn=_spawn, agents_json=_agents_json)
     assert out == 0
     assert len(spawn_calls) == 1
-    assert spawn_calls[0]["repo"] == "/home/x/.osiris/seats/freshbg"
+    assert spawn_calls[0]["repo"] == str(office)
     assert spawn_calls[0]["model"] == "claude-sonnet-5"
-    assert 'mount(cwd="/home/x/.osiris/seats/freshbg"' in spawn_calls[0]["prompt"]
+    assert f'mount(cwd="{office}"' in spawn_calls[0]["prompt"]
     assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
 
 
 async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
-    actions: Actions, monkeypatch: Any,
+    actions: Actions, monkeypatch: Any, tmp_path: Path,
 ) -> None:
     """Thread fc69b9b4: a substantial transcript already sitting at the target office is
     named — not silently spawned into — before `claude --bg` fires. Disclosure only: the
@@ -482,14 +490,16 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
 
     from src.cli import _cmd_launch_harness
 
+    office = tmp_path / "ooblek-cli"
+    office.mkdir()
     await ensure_seat(actions, house="osiris", handle="ooblek-cli",
-                      anchor_cwd="/home/x/.osiris/seats/ooblek-cli", source="test")
+                      anchor_cwd=str(office), source="test")
 
     fake_info = {"path": "/whatever/b5f04f84.jsonl", "size_bytes": 20_300_000,
                  "last_touched": "2026-08-02T17:57:18+00:00"}
     monkeypatch.setattr(
         "src.ingest.sessions.dormant_history_confession",
-        lambda cwd, **k: fake_info if cwd == "/home/x/.osiris/seats/ooblek-cli" else None,
+        lambda cwd, **k: fake_info if cwd == str(office) else None,
     )
 
     async def _spawn(*a: Any, **k: Any) -> None:
@@ -519,7 +529,7 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
 
 
 async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
-    actions: Actions,
+    actions: Actions, tmp_path: Path,
 ) -> None:
     """The bounded-poll honesty law (same discipline as `_await_launch_confirmation` and
     `_wait_for_smoke`): a body that never shows up in `claude agents --json` gets a plain
@@ -527,8 +537,10 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     indefinite wait."""
     from src.cli import _cmd_launch_harness
 
+    office = tmp_path / "neverup"
+    office.mkdir()
     await ensure_seat(actions, house="osiris", handle="neverup",
-                      anchor_cwd="/home/x/.osiris/seats/neverup", source="test")
+                      anchor_cwd=str(office), source="test")
 
     async def _spawn(*a: Any, **k: Any) -> None:
         return None
@@ -596,6 +608,10 @@ async def _resumable_seat(
     old = _time.time() - 3600
     os.utime(t, (old, old))
 
+    # THE ONE-SIDED GUARD FAMILY fix (decision 27259e4d, thread bc11a2d3): osiris launch
+    # now requires a seat's own anchor_cwd to exist on disk — this helper already has real
+    # filesystem access (the transcript above), so it makes the real thing.
+    Path(anchor_cwd).mkdir(parents=True, exist_ok=True)
     seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
                              source="test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent_id)
@@ -766,6 +782,8 @@ async def _resumable_seat_no_signed_testimony(
     old = _time.time() - 3600
     os.utime(t, (old, old))
 
+    # same fix as _resumable_seat's own (decision 27259e4d, thread bc11a2d3)
+    Path(anchor_cwd).mkdir(parents=True, exist_ok=True)
     seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
                              source="test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent_id)
@@ -801,8 +819,10 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
     old = _time.time() - 3600
     os.utime(t, (old, old))
 
+    office = tmp_path / "clihopback-office"
+    office.mkdir()
     seat = await ensure_seat(actions, house="osiris", handle="clihopback",
-                             anchor_cwd="/tmp/clihopback-office", source="test")
+                             anchor_cwd=str(office), source="test")
     pred = await actions.create_or_find_object("Agent", "agent:clihopback01", "test")
     now = datetime(2026, 8, 18, tzinfo=UTC)
     await actions.assert_property(pred, "seat_generation", "1", "test", now, 0.9,
@@ -864,6 +884,29 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
         raise AssertionError("should never be called — the tree check refuses first")
 
     out = await cmd_launch("clinotree", model=None, pool=actions.pool,
+                           spawn=_unreachable, agents_json=_unreachable)
+    assert out == 1
+
+
+async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_disk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN (decision 27259e4d, thread bc11a2d3): the
+    operator's real specimen — `osiris launch marquee` died with a raw FileNotFoundError
+    because tree_cwd got an existence check and anchor_cwd/office never did. A seat with NO
+    tree_cwd binding (the marquee shape exactly) falls back to office as launch_cwd, so a
+    stale/wrong anchor must refuse cleanly here too, before anything spawns — and the
+    message must name `anchor_cwd`, not `tree_cwd`, so the operator can tell which field
+    disagrees."""
+    seat = await ensure_seat(actions, house="osiris", handle="clighostanchor",
+                             anchor_cwd=str(tmp_path / "never-created-either"),
+                             source="test")
+    assert seat.get("error") is None
+
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the anchor check refuses first")
+
+    out = await cmd_launch("clighostanchor", model=None, pool=actions.pool,
                            spawn=_unreachable, agents_json=_unreachable)
     assert out == 1
 
