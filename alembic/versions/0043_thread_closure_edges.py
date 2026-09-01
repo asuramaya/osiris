@@ -29,6 +29,11 @@ TWO EDGE TYPES COUNT TODAY, both STRONG (artifact- or ruling-backed):
     cb38d922 measured. A thread closed this way but with no artifact= gets NO row here.
   - `answers` (Decision -> Thread): record_decision(resolves=...) mints this in the same
     transaction as the status='resolved' write — always present for that closure path.
+    STALE AS OF 0055 (Thoth DM 6230/6234, decision 36cbec2f): this stopped being true the
+    day `mint_bears_on` shipped a second, non-closing producer of the identical `answers`
+    edge — a claim describing a world that no longer exists is exactly the shape that hid
+    two doors in #48, so it is left here uncorrected on purpose and pointed at 0055, which
+    carries the real story and the fix, rather than silently rewritten.
 
 A THIRD, WEAKER edge type is coming out of Khnum's Phase 1a work (an agent-level edge for
 the artifact-less resolve_thread case) and is NOT wired in here — its exact type name and
