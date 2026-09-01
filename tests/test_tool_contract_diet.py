@@ -746,6 +746,16 @@ TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on mea
 # overclaim, so the merged tree came in 17 chars UNDER the standing ceiling. Left alone that
 # is 17 chars of headroom nobody measured and the next raise would silently spend it — which
 # is how a ratchet stops ratcheting. Lowered to the real number instead.
+# 202,871 -> 203,332 (measured exact). Tool count unchanged (2026-09-01, Imhotep, obligation
+# 8f59b64f/95a0feb3, Thoth XC's dispatch): open_thread's docstring gained two new receipt
+# fields a caller genuinely needs to know exist — `dedup_scope` (names what the twin check
+# actually covered, so `deduped: "false"` stops reading as "nothing similar exists anywhere"
+# when it only ever meant "no twin among this project's own open Threads") and `prior_art`/
+# `prior_art_flag` (open_thread was the one write verb of three — record_decision, send,
+# open_thread — with no semantic prior-art check at all; #86's own borrowing went one way,
+# never back). Trimmed once under the category rule before raising (removed the two
+# obligation-id citations, which a caller has no use for at call time).
+TOOL_CONTRACT_CEILING_CHARS = 203332
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -6708,7 +6708,12 @@ async def open_thread(
     near-duplicate of it: a near-hit on that project's own open threads returns the EXISTING
     id (`deduped: "true"`) instead of minting a twin — conservative on purpose, so a
     genuinely new thread is never swallowed. This is how a session hands off its loose ends
-    instead of losing them (or doubling them).
+    instead of losing them (or doubling them). `dedup_scope` names what the twin check
+    covered (this project's own OPEN Threads) — `deduped: "false"` means "no twin there,"
+    never "nothing similar exists anywhere." A genuinely new thread also gets `prior_art` —
+    the same search record_decision/send already run, surfacing a standing Decision/
+    Practice/Superstition/open obligation Thread that may cover this ground; `prior_art_flag`
+    fires on a strong hit. Surfacing only, never a refusal.
     `unlinked_because` (task #189) — declare-or-refuse's hatch, same shape as
     record_decision's own parameter of this name.
     `kind='obligation'` marks a DUTY minted by an action ('kernel changed → daemons need
@@ -6761,7 +6766,9 @@ async def open_thread(
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
         out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
-                               "deduped": "true"}
+                               "deduped": "true",
+                               "dedup_scope": "a near-exact twin among this project's own "
+                                              "OPEN Threads (find_near_duplicate_open_thread)"}
         # THE WRITE-BOUNDARY HONESTY RULE (decision beb046cfbdf9/42176e16): a dedup hit
         # returns here, before kind/arc/etc. are ever applied — 17 threads once got a
         # clean-looking receipt while nothing landed (Sekhmet, decision d310fee2).
@@ -6835,7 +6842,36 @@ async def open_thread(
     else:
         arc_receipt = arc or capture._ARC_UNSORTED
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false",
+          "dedup_scope": "checked only this project's own OPEN Threads for a near-exact "
+                         "twin (find_near_duplicate_open_thread) — not standing Decisions, "
+                         "Practices, or resolved Threads; see prior_art below for those",
           "arc": arc_receipt}
+    # PRIOR-ART SURFACING (obligation 8f59b64f, Thoth XC/msg 6120 — open_thread was the one
+    # write verb of the three (record_decision, send, open_thread) with no semantic prior-
+    # art check at all: #86's own borrowing went one way, open_thread's twin-check ported TO
+    # record_decision, never back). Same shared engine both those doors already call
+    # (_surface_prior_art, fail-open/15s-bound) — surfacing only, never a refusal, and no
+    # ack_prior_art/polarity machinery: open_thread has no confirms=/refutes=/rediscovers=
+    # of its own to route an acknowledgement through, unlike record_decision. Deliberately
+    # scoped to the MINT path only (never the dedup-hit early return above, and never
+    # settle()'s own threads_open batch loop, which calls capture.open_thread directly and
+    # was already outside this wrapper's dedup check too) — a caller who already matched an
+    # existing open Thread doesn't need a second search to be told something related exists.
+    prior = await _surface_prior_art(pool, summary, repo=repo, actor=actor)
+    if prior:
+        out["prior_art"] = prior
+        if capture.prior_art_is_strong(prior):
+            top = prior[0]
+            if top.get("type") == "Thread":
+                out["prior_art_flag"] = (
+                    f"this appears to speak to open thread {top['id']} — if this new one "
+                    f"is meant to close it, pass resolves=['{top['id']}'] next time; "
+                    "otherwise just worth reading before this stands as a separate duty")
+            else:
+                out["prior_art_flag"] = (
+                    f"a standing {(top.get('type') or 'Decision').lower()} ({top['id']}) "
+                    "may already cover this ground — read it before this stands as a new "
+                    "finding")
     if repo_defaulted:
         out["repo_defaulted"] = {
             "to": repo,

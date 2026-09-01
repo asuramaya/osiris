@@ -325,6 +325,107 @@ async def test_mcp_open_thread_receipt_names_the_out_of_scope_arc_honestly(
     assert stored is None
 
 
+async def test_mcp_open_thread_surfaces_prior_art_on_a_standing_decision(
+    actions: Actions,
+) -> None:
+    """obligation 8f59b64f (Thoth XC, msg 6120): open_thread was the one write verb of the
+    three (record_decision, send, open_thread) with no semantic prior-art check at all.
+    Embeds the earlier Decision's own short id in the new thread's summary — the
+    deterministic "id token embedded in a longer query" door, cross-door-corroborated by
+    construction, unlike relying on semantic rank alone (which may not be configured in
+    this test environment)."""
+    from src import mcp_server as srv
+    from src.mcp_server import record_decision as rd_tool
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        d = await rd_tool(
+            "PRIOR-ART ACCEPTANCE ROW: a standing ruling about a rare fnord-shaped defect",
+            kind="ruling", repo="priorartproj")
+        out = await srv.open_thread(
+            f"rediscovering the fnord-shaped defect already ruled on in {d['id']}",
+            repo="priorartproj")
+        assert "prior_art" in out
+        assert any(h["type"] == "Decision" and h["id"] == d["id"][:8] for h in out["prior_art"])
+        assert "prior_art_flag" in out
+        assert "standing decision" in out["prior_art_flag"]
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
+    actions: Actions,
+) -> None:
+    """A strong hit against an open Thread (not a Decision) gets its own wording —
+    open_thread has no confirms=/refutes= of record_decision's own kind, only `resolves`,
+    so the flag names that lever specifically rather than reusing record_decision's own
+    ack_prior_art/bears_on machinery it has no way to route through."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        older = await srv.open_thread(
+            "PRIOR-ART THREAD ROW: a rare zorble-shaped defect awaiting a fix",
+            repo="priorartproj2")
+        out = await srv.open_thread(
+            f"picking up the zorble-shaped defect from thread {older['id']}",
+            repo="priorartproj2")
+        assert out["deduped"] == "false"  # distinct text, not a near-exact twin
+        assert "prior_art" in out
+        assert any(h["type"] == "Thread" and h["id"] == older["id"][:8]
+                  for h in out["prior_art"])
+        assert "prior_art_flag" in out
+        assert "resolves=" in out["prior_art_flag"]
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mcp_open_thread_dedup_scope_names_what_was_actually_checked(
+    actions: Actions,
+) -> None:
+    """obligation 95a0feb3 (Soundwave via Thoth msg 6109/6120): `deduped: "false"` read as
+    "checked, nothing similar exists" when it only ever meant "no twin among this
+    project's own OPEN Threads" — dedup_scope now says so plainly on both branches."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        fresh = await srv.open_thread(
+            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj")
+        assert fresh["deduped"] == "false"
+        assert "dedup_scope" in fresh
+        assert "twin" in fresh["dedup_scope"]
+        twin = await srv.open_thread(
+            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj")
+        assert twin["deduped"] == "true"
+        assert "dedup_scope" in twin
+    finally:
+        srv._pool = saved_pool
+
+
+async def test_mcp_open_thread_no_prior_art_flag_when_nothing_matches_strongly(
+    actions: Actions,
+) -> None:
+    """The common case: nothing STANDS for this ground yet. search() over a large, live
+    corpus rarely returns literally zero hits (same reality record_decision's own tests
+    accept, e.g. the sibling test asserting only `prior_art_flag not in out`), so the
+    honest assertion is no STRONG flag — never that the field is bare-empty."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "a wholly unrelated qwxzplk-shaped placeholder row with no prior art",
+            repo="dedupscopeproj2")
+        assert "prior_art_flag" not in out
+    finally:
+        srv._pool = saved_pool
+
+
 async def test_mcp_reclassify_thread_receipt_names_the_out_of_scope_arc_honestly(
     actions: Actions,
 ) -> None:
