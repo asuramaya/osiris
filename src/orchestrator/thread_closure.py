@@ -200,6 +200,49 @@ async def thread_closure_status(
     return out
 
 
+async def closure_buckets(pool: asyncpg.Pool, *, repo: uuid.UUID | None = None) -> dict[str, Any]:
+    """The CHEAP HALF of compositions._fn_closure_health's five-way split — the same
+    mutually-exclusive, exhaustive classification over `thread_closure_status`'s own rows
+    (see that Function's own docstring for the full rationale on each bucket), with NONE of
+    `resolved_edgeless`'s per-thread artifact-resolution enrichment. That enrichment is an
+    N+1 `_find_artifact` call per edgeless-resolved thread — real cost for a mind auditing
+    the backlog, wrong cost for a caller on a HOT PATH (orient(), get_thread_list()) that
+    only needs the headline count (thread 0ae050d8, Thoth DM 6243: "a coordinator asks the
+    graph what is open and gets a flat count... roughly 4x the real one").
+
+    Returns raw row LISTS per bucket (`retracted_or_no_status`, `disagree`,
+    `closed_by_topology`, `resolved_edgeless`, `open_both`), plus `total` — a caller wanting
+    only counts takes `len(...)`; `_fn_closure_health` (compositions.py) composes this exact
+    function for its own cheap half rather than re-deriving the split a third time (#139,
+    one-shape-one-guard), then does its own richer enrichment on `resolved_edgeless` alone."""
+    rows = await thread_closure_status(pool, repo=repo)
+    retracted_or_no_status: list[dict[str, Any]] = []
+    disagree: list[dict[str, Any]] = []
+    closed_by_topology: list[dict[str, Any]] = []
+    resolved_edgeless: list[dict[str, Any]] = []
+    open_both: list[dict[str, Any]] = []
+    for r in rows:
+        ps = r["property_status"]
+        if ps not in ("open", "resolved"):
+            retracted_or_no_status.append(r)
+        elif r["closed_by_topology"] and ps == "open":
+            disagree.append(r)
+        elif r["closed_by_topology"]:
+            closed_by_topology.append(r)
+        elif ps == "resolved":
+            resolved_edgeless.append(r)
+        else:
+            open_both.append(r)
+    return {
+        "total": len(rows),
+        "retracted_or_no_status": retracted_or_no_status,
+        "disagree": disagree,
+        "closed_by_topology": closed_by_topology,
+        "resolved_edgeless": resolved_edgeless,
+        "open_both": open_both,
+    }
+
+
 async def enumerate_threads(
     pool: asyncpg.Pool, *, repo: uuid.UUID | None = None,
     limit: int = 500, after: uuid.UUID | None = None,

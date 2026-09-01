@@ -8,8 +8,10 @@ checked at all.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, resolve_thread
+from src.orchestrator.capture import open_thread, record_decision, resolve_thread
 
 
 async def test_get_thread_list_excludes_a_resolved_thread(actions: Actions) -> None:
@@ -104,3 +106,32 @@ async def test_get_thread_list_kind_and_owner_filters_still_compose(
         srv._pool = saved_pool
     assert out["total"] == 1
     assert out["threads"][0]["summary"] == "an obligation for thoth"
+
+
+async def test_get_thread_list_honest_total_excludes_a_disagreement(actions: Actions) -> None:
+    """THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): `total` counts by the `status`
+    PROPERTY alone — a thread closed by a decision (resolves=) and then reopened by a
+    DIFFERENT source's later 'open' write still reads property_status='open' and inflates
+    `total`, even though a real closure edge already covers it (the `disagree` bucket).
+    `honest_total` — closure_buckets' `open_both` count — must exclude it; `total` (its
+    existing, unchanged contract) still includes it."""
+    from src import mcp_server as srv
+
+    open_t = await open_thread(actions, "genuinely open", repo="honestproj")
+    disagree_t = await open_thread(actions, "closed then reopened by another source",
+                                   repo="honestproj")
+    await record_decision(actions, "settles it", repo="honestproj", resolves=str(disagree_t))
+    later = datetime.now(UTC) + timedelta(seconds=1)
+    await actions.assert_property(disagree_t, "status", "open", "agent:other", later, 0.9)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_thread_list("honestproj")
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert ids == {str(open_t)[:8], str(disagree_t)[:8]}
+    assert out["total"] == 2
+    assert out["honest_total"] == 1
+    assert "1 more carry a closure edge" in out["honest_total_note"]

@@ -2699,6 +2699,33 @@ async def _project_briefing(
             f"showing {len(shown)} of {len(shown) + more} open threads (obligations first; "
             "within a kind, yours-to-act before others' claims before waiting-on-the-human, "
             f"then recency); {more} more not shown")
+    # THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): `len(shown)+more` above counts by
+    # the `status` PROPERTY alone — a thread a decision already closed (resolves=/
+    # resolve_thread) but whose OWN 'open' assertion never got superseded, or one flagged
+    # `disagree` (a closure edge exists yet property_status still says 'open'), still counts
+    # as open there. closure_buckets composes thread_closure_status's own topology read —
+    # the SAME already-built, already-corroborated mechanism _fn_closure_health's
+    # `closure_health` composition uses, not a second counting mechanism (#139) — and its
+    # `open_both` bucket is the one genuinely, unambiguously open count. ADDITIVE, never
+    # replacing open_threads_more/open_threads_note above: those still drive the wall's own
+    # LISTING (individual rows a mind should look at, property-based on purpose — a stale
+    # `disagree` row is exactly the kind of thing worth a mind's eyes), this is only the
+    # headline NUMBER a coordinator's scheduling math should actually use. Cheap: no per-
+    # thread artifact-resolution enrichment (that N+1 stays inside closure_health's own,
+    # deliberately richer, deliberately not-hot-path call).
+    from src.orchestrator.thread_closure import closure_buckets
+    cb = await closure_buckets(pool, repo=proj)
+    out["open_threads_honest_total"] = len(cb["open_both"])
+    out["open_threads_honest_note"] = (
+        f"{len(cb['open_both'])} of {cb['total']} threads in this project are genuinely "
+        "open by TOPOLOGY (no closure edge, status='open') — the count above counts by the "
+        "status property alone and can run well above this; run_composition('closure_health', "
+        "subject=<this project>) for the full breakdown")
+    if cb["disagree"]:  # rare — a closure edge exists yet the property still says 'open'
+        out["open_threads_disagreement"] = (
+            f"{len(cb['disagree'])} thread(s) carry a closure edge AND status='open' — a "
+            "real conflict, never auto-resolved; run_composition('closure_health', "
+            "subject=<this project>) to see which")
     if echoes:
         out["unread_echoes"] = {
             "count": len(echoes),
@@ -2875,6 +2902,31 @@ async def get_thread_list(
     result: dict[str, Any] = {"project": project}
     if charter_repos:
         result["charter_repos"] = charter_repos
+    # THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243), same additive law as orient()'s own
+    # open_threads_honest_total: `total` above counts by the `status` PROPERTY (unchanged —
+    # an existing field's meaning never changes silently, #139's sibling law for contracts).
+    # `honest_total` is a NEW, separate field — summed over `project_ids` (a chartered seat's
+    # own small repo set, never fleet-wide) via closure_buckets, the same shared mechanism
+    # orient() and closure_health both already use, not a second counting path. `kind`/`owner`
+    # filters do NOT narrow this count (thread_closure_status has no such filters of its own,
+    # and the honest count is meant to answer "how much is REALLY open", not "how much of
+    # this filtered slice" — a caller filtering by kind/owner still gets the whole-project
+    # honest denominator, named plainly so it isn't misread as scoped to the filter).
+    from src.orchestrator.thread_closure import closure_buckets
+    honest_total = 0
+    honest_disagree = 0
+    for pid in project_ids:
+        cb = await closure_buckets(pool, repo=pid)
+        honest_total += len(cb["open_both"])
+        honest_disagree += len(cb["disagree"])
+    result["honest_total"] = honest_total
+    result["honest_total_note"] = (
+        f"{honest_total} threads are genuinely open by TOPOLOGY across this project's own "
+        "charter scope (no closure edge, status='open') — `total` above counts by the status "
+        "property alone and is not filter-scoped the same way; run_composition("
+        "'closure_health') for the full breakdown"
+        + (f"; {honest_disagree} more carry a closure edge AND status='open' — a real "
+           "conflict, never auto-resolved" if honest_disagree else ""))
     if limit == 0:
         return {**result, "threads": [], "total": total, "more": total}
     rows = await pool.fetch(
