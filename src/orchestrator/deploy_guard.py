@@ -243,6 +243,29 @@ def _is_ancestor(repo_root: Path, older: str, newer: str) -> bool | None:
     return None
 
 
+def _merge_parents(repo_root: Path, sha: str) -> list[str] | None:
+    """A commit's own parent shas, oldest-recorded-first (`git log -1 --format=%P`) — None
+    only on a git failure (fail open, same law as `_is_ancestor`), never mistaken for
+    'confirmed zero parents'. THE STRONGEST POSSIBLE PROOF a merge claim is genuine (Thoth
+    XC, thread 9b6b5269): a commit's parent list is written into its own sha at creation —
+    unlike a branch ref (which moves, gets reused, gets deleted) it cannot be rewritten
+    after the fact without changing the sha itself. A subject claiming 'merge X' on a
+    commit with FEWER than two parents structurally never merged anything — the fd3a703
+    shape, confirmed by the commit's own DAG rather than by comparing it against a branch
+    name that may since have moved on."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "log", "-1", "--format=%P", sha],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    line = proc.stdout.strip()
+    return line.split() if line else []
+
+
 async def check_diverged_since_last_deploy(
     pool: asyncpg.Pool, *, repo_root: Path | None = None,
 ) -> str | None:
@@ -529,7 +552,16 @@ async def local_ref_hygiene(repo_root: Path) -> str:
     return f"ref hygiene: {stray_note}; {counts_note}"
 
 
-_MERGE_SUBJECT_BRANCH = re.compile(r"^merge\s+([^\s:]+)(?:\s+\(([0-9a-f]{7,40})\))?")
+_MERGE_SUBJECT_BRANCH = re.compile(
+    r"^merge\s+([^\s:]+)(?:\s+\(([0-9a-f]{7,40})\))?", re.IGNORECASE)
+# CASE-INSENSITIVE since 2026-09-01 (Thoth XC, thread 9b6b5269, decision b86e65ed): this
+# house's OWN commit-subject convention drifted from "merge <branch>" to "Merge <branch>"
+# sometime before that date — a fresh sample that day found the 9 MOST RECENT merges
+# capital-M, the other 50 in the trailing window lowercase. Every capital-M merge since the
+# drift went unverified by this check, silently, because the lowercase-only literal simply
+# never matched — see merge_claim_hygiene's own docstring for why the no-match branch was
+# ALSO wrong (it read the miss as "nothing to verify" rather than "could not parse").
+#
 # group 1 stops at whitespace OR a directly-attached colon ("merge foo: did the thing") —
 # both shapes appear in this house's own log. group 2, OPTIONAL, is the parenthetical
 # commit sha this house's own convention cites right after the branch name in the majority
@@ -539,7 +571,8 @@ _MERGE_SUBJECT_BRANCH = re.compile(r"^merge\s+([^\s:]+)(?:\s+\(([0-9a-f]{7,40})\
 # the OLDER merge commit false-flags it as unverified the moment the branch moves on to a
 # second round of work, even though the historical merge was completely genuine (the cited
 # sha from that merge IS an ancestor). The cited sha, when present, is TIME-STABLE proof a
-# branch's own current tip can never be — preferred over the branch-tip check below.
+# branch's own current tip can never be — preferred over the branch-tip check below, which
+# `_verify_one_merge_claim` now also strengthens directly for the case no sha was cited.
 
 
 def _resolve_imported_src_root() -> Path:
@@ -596,18 +629,43 @@ async def venv_import_hygiene(repo_root: Path) -> str:
 async def _verify_one_merge_claim(
     repo_root: Path, sha: str, branch: str, cited: str | None = None,
 ) -> str:
-    """One commit's own claim, checked in isolation — the ranged walk's per-commit check
-    (the HEAD-only fallback below keeps its own inline version so its exact wording stays
-    byte-for-byte unchanged from before this fix). Three outcomes, never a fourth: VERIFIED
-    (an actual ancestor of `sha`), UNVERIFIABLE (the named branch no longer exists locally
-    — the common, innocent case: a merged feature branch gets deleted afterward — or the
-    ancestry check itself couldn't complete), or FAILED (proven NOT an ancestor, the exact
-    shape of fd3a703's own specimen: named, never merged).
+    """One commit's own claim, checked in isolation — shared by BOTH the ranged walk and
+    the HEAD-only fallback below (unified 2026-09-01, Thoth XC: the two legs used to carry
+    separate inline copies specifically so an earlier fix's wording stayed byte-for-byte
+    unchanged; a second, SUBSTANTIVE change to the verification logic itself is exactly the
+    case that copy was always going to have to be kept in sync by hand, so it stops being
+    two copies here). Three outcomes, never a fourth: VERIFIED, UNVERIFIABLE (the named
+    branch no longer exists locally, or a check couldn't complete), or FAILED.
 
-    `cited` (the subject's own parenthetical sha, when present) is checked FIRST and
-    preferred over the branch's current tip — the branch-reuse specimen this docstring's
-    own module comment names: a branch's tip is not time-stable, the cited sha is. Falls
-    through to the branch-tip check only when no sha was cited in the subject."""
+    STRUCTURAL PROOF FIRST (thread 9b6b5269's own upgrade, decision b86e65ed): a commit's
+    PARENT LIST cannot be rewritten after the fact without changing its own sha — unlike a
+    branch ref, which moves, gets reused, or gets deleted. Fewer than two parents means the
+    subject claims a merge that never structurally happened at all: FAILED outright, the
+    fd3a703 shape confirmed by the DAG itself, needing no branch or cited sha to prove.
+
+    `cited` (the subject's own parenthetical sha, when present) is checked next, preferred
+    over the branch's current tip — the branch-reuse specimen the module's own comment
+    names: a branch's tip is not time-stable, the cited sha is.
+
+    THE BRANCH-TIP CHECK, TWO DIRECTIONS KEPT BOTH (Thoth's own ruling: "if (c) turns out
+    to have a case the branch-tip check covers and it does not, name it and keep both — do
+    not silently drop a check"). OLD direction — is the branch's CURRENT tip an ancestor of
+    `sha`? — holds when the branch was never touched again after merging, but false-
+    positives the moment it was reused for further work (seshat-b98eb0b-casualty-sweep,
+    2026-09-01: a live branch simply kept moving forward after a completely genuine merge).
+    NEW direction — is `sha`'s own SECOND PARENT (the immutable thing this merge actually
+    incorporated) an ancestor of the branch's current tip? — holds whether or not the
+    branch was reused afterward, but would miss the rarer case of a branch WOUND BACKWARD
+    to an earlier point that is still validly an ancestor of the merge (the old direction's
+    own strength). VERIFIED if EITHER direction confirms; FAILED only when BOTH definitively
+    disagree — a genuine mismatch in every direction there is."""
+    parents = await asyncio.to_thread(_merge_parents, repo_root, sha)
+    if parents is not None and len(parents) < 2:
+        return (f"{sha[:8]} ⚠ subject claims a merge of {branch!r} but this commit has "
+                f"only {len(parents)} parent(s) — not a real merge, the fd3a703 shape "
+                "confirmed structurally (needs no branch or cited sha to prove)")
+    second_parent = parents[1] if parents else None
+
     if cited:
         proof = await asyncio.to_thread(_is_ancestor, repo_root, cited, sha)
         if proof is True:
@@ -622,24 +680,55 @@ async def _verify_one_merge_claim(
         subprocess.run, ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
         cwd=repo_root, capture_output=True, text=True, timeout=5, check=False)
     if exists.returncode != 0:
+        if second_parent is not None:
+            return (f"{sha[:8]} names {branch!r} (branch no longer exists locally) — the "
+                    f"merge itself is structurally real (2 parents, incorporated "
+                    f"{second_parent[:8]}); the NAME can't be confirmed without the branch "
+                    "or a cited sha, but this is not the fd3a703 shape either — "
+                    "unverifiable, not assumed false")
         return (f"{sha[:8]} names {branch!r} but that branch no longer exists locally — "
                 "unverifiable, not assumed false")
-    proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, sha)
-    if proof is None:
-        return f"{sha[:8]} names {branch!r} — ancestry check inconclusive, unknown, not assumed"
-    if proof:
-        return f"{sha[:8]} {branch!r} verified — an actual ancestor"
-    return f"{sha[:8]} ⚠ names {branch!r} but it is NOT an ancestor"
+    old_proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, sha)
+    new_proof = (await asyncio.to_thread(_is_ancestor, repo_root, second_parent, branch)
+                if second_parent is not None else None)
+    if old_proof is True or new_proof is True:
+        if old_proof is True:
+            basis = "an ancestor of the merge"
+        else:
+            assert second_parent is not None  # new_proof is only ever True when it was set
+            basis = f"a descendant of what this merge actually incorporated ({second_parent[:8]})"
+        return f"{sha[:8]} {branch!r} verified — its current tip is {basis}"
+    if old_proof is False and new_proof is False:
+        assert second_parent is not None  # new_proof is only ever False when it was set
+        return (f"{sha[:8]} ⚠ names {branch!r} but its current tip is neither an ancestor "
+                f"of the merge nor a descendant of what it actually incorporated "
+                f"({second_parent[:8]}) — a genuine mismatch")
+    if old_proof is False and new_proof is None:
+        return f"{sha[:8]} ⚠ names {branch!r} but it is NOT an ancestor"
+    return f"{sha[:8]} names {branch!r} — ancestry check inconclusive, unknown, not assumed"
 
 
 async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> str:
     """THE UNVERIFIED CLAIM (Sekhmet's specimen, msg 5201, thread #175/#180): commit fd3a703's
     own subject line read "merge sekhmet-launch-resume-fix + ratchet ..." — but
     `sekhmet-launch-resume-fix`'s tip was never actually an ancestor of fd3a703; the merge
-    claimed a branch it never contained. This house's merge commits follow one convention
-    consistently (sampled 20 recent: every single one) — the subject starts `merge
-    <branch-name>` — so the claim is MECHANICALLY CHECKABLE: `git merge-base --is-ancestor
-    <branch> HEAD` is either true or it isn't, no prose-reading required.
+    claimed a branch it never contained. This house's merge commits follow one convention —
+    the subject starts `merge <branch-name>` (case varies, see below) — so the claim is
+    MECHANICALLY CHECKABLE: `git merge-base --is-ancestor <branch> HEAD` is either true or
+    it isn't, no prose-reading required.
+
+    RESAMPLED 2026-09-01 (Thoth XC, thread 9b6b5269, decision b86e65ed — DATED, unlike the
+    frozen sample this replaces, which read "sampled 20 recent: every single one" and
+    stayed load-bearing for weeks after the convention it described had already drifted):
+    59 of the 60 most recent merge commits begin `merge`/`Merge ` case-insensitively; the
+    one exception is a raw git-generated "Merge commit '<sha>' into <branch>" message, not
+    this house's own convention at all. THE CASE ITSELF DRIFTED — lowercase for the older
+    majority, capital-M for the 9 most recent at sampling time — which is exactly why
+    `_MERGE_SUBJECT_BRANCH` is case-insensitive now: every capital-M merge before this fix
+    silently matched nothing, and the no-match branches below used to read that silence as
+    "nothing to verify" rather than "could not parse" (retro-verified clean: 8 of those 9
+    check out as genuine merges, 1 is the non-convention exception above — zero real
+    mis-claims went through the blind window).
 
     THE LEDGER-WALK GAP (obligation 8752024d, found by 1c85ed3's own deploy, 2026-08-18):
     checking only HEAD's own subject blinds this check whenever the standard "merge, raise
@@ -696,7 +785,11 @@ async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> s
                  if (m := _MERGE_SUBJECT_BRANCH.match(subj))]
         if not claims:
             return (f"merge claim: {len(commits)} commit(s) since last deploy "
-                    f"({since[:8]}..{head_sha[:8]}), none claim a merge — nothing to verify")
+                    f"({since[:8]}..{head_sha[:8]}) — none matched the expected `merge "
+                    "<branch>` subject shape (CONFESSION, not a clean bill: this could be "
+                    "genuinely merge-free history, or a convention this parser can no "
+                    "longer recognize — the exact gap the case-sensitivity drift left open "
+                    "before 2026-09-01)")
         results = [await _verify_one_merge_claim(repo_root, sha, branch, cited)
                   for sha, branch, cited in claims]
         failed = [r for r in results if "⚠" in r]
@@ -708,27 +801,23 @@ async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> s
                 f"({since[:8]}..{head_sha[:8]}) — " + "; ".join(results))
 
     # No usable `since` (no prior deploy recorded, or the caller has no better answer):
-    # the original HEAD-only check.
+    # the original HEAD-only check — now sharing `_verify_one_merge_claim` with the ranged
+    # walk above (unified 2026-09-01) rather than carrying its own inline copy of the same
+    # ancestry/structural logic.
     subject = (await asyncio.to_thread(
         subprocess.run, ["git", "log", "-1", "--format=%s"], cwd=repo_root,
         capture_output=True, text=True, timeout=5, check=False)).stdout.strip()
     match = _MERGE_SUBJECT_BRANCH.match(subject)
     if not match:
-        return "merge claim: HEAD's subject doesn't name a branch, nothing to verify"
-    branch = match.group(1)
-    exists = await asyncio.to_thread(
-        subprocess.run, ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
-        cwd=repo_root, capture_output=True, text=True, timeout=5, check=False)
-    if exists.returncode != 0:
-        return (f"merge claim: HEAD names {branch!r} but that branch no longer exists locally "
-                "— unverifiable, not assumed false")
-    proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, head_sha)
-    if proof is None:
-        return f"merge claim: {branch!r} named, ancestry check inconclusive — unknown, not assumed"
-    if proof:
-        return f"merge claim: {branch!r} verified — an actual ancestor of HEAD"
-    return (f"merge claim: ⚠ HEAD's subject names {branch!r} but it is NOT an ancestor — "
-            "the exact shape of fd3a703's own specimen (named, never merged)")
+        return (f"merge claim: HEAD's subject ({subject[:80]!r}) did not match the expected "
+                "`merge <branch>` shape (CONFESSION, not a clean bill: this could be a "
+                "genuinely non-merge HEAD, or a convention this parser can no longer "
+                "recognize) — nothing checked")
+    branch, cited = match.group(1), match.group(2)
+    result = await _verify_one_merge_claim(repo_root, head_sha, branch, cited)
+    # every _verify_one_merge_claim return starts "{sha[:8]} " (8 hex chars, one space) —
+    # HEAD's own report names it plainly instead, its own warning symbol (if any) intact.
+    return "merge claim: HEAD " + result[9:]
 
 
 # ═══ THE LANDING AUDITOR (Thoth's dispatch msg 5339, thread 5256/5313) ═══

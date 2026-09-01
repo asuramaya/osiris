@@ -1128,22 +1128,25 @@ async def test_merge_claim_hygiene_verifies_a_real_merge(small_repo: Path) -> No
     _git(small_repo, "checkout", "-q", "-")
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
     note = await merge_claim_hygiene(small_repo)
-    assert note == "merge claim: 'feature-x' verified — an actual ancestor of HEAD"
+    assert note == ("merge claim: HEAD 'feature-x' verified — its current tip is an "
+                    "ancestor of the merge")
 
 
 async def test_merge_claim_hygiene_catches_a_false_claim(small_repo: Path) -> None:
     """Sekhmet's own specimen, reproduced exactly: a branch named in the subject that was
     never actually merged — fd3a703 claimed sekhmet-launch-resume-fix and never contained
-    it. A plain commit whose SUBJECT follows the convention but whose PARENT is not the
-    named branch's tip is indistinguishable from that incident by prose alone."""
+    it. A PLAIN commit (one parent) whose SUBJECT follows the convention is the STRONGER,
+    structural catch now (thread 9b6b5269): the parent count alone proves it never merged
+    anything, before any branch-tip comparison even runs."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-y")
     _commit(small_repo, "work nobody actually merged")
     _git(small_repo, "checkout", "-q", "-")
     _commit(small_repo, "merge feature-y: claims the merge, never happened")
     note = await merge_claim_hygiene(small_repo)
-    assert note == ("merge claim: ⚠ HEAD's subject names 'feature-y' but it is NOT an "
-                    "ancestor — the exact shape of fd3a703's own specimen (named, never merged)")
+    assert note == ("merge claim: HEAD ⚠ subject claims a merge of 'feature-y' but this "
+                    "commit has only 1 parent(s) — not a real merge, the fd3a703 shape "
+                    "confirmed structurally (needs no branch or cited sha to prove)")
 
 
 async def test_merge_claim_hygiene_nothing_to_verify_off_a_plain_commit(
@@ -1151,7 +1154,7 @@ async def test_merge_claim_hygiene_nothing_to_verify_off_a_plain_commit(
 ) -> None:
     _commit(small_repo, "just ordinary work, no merge claim in the subject")
     note = await merge_claim_hygiene(small_repo)
-    assert "nothing to verify" in note
+    assert "CONFESSION" in note and "did not match the expected" in note
 
 
 async def test_merge_claim_hygiene_unverifiable_when_the_named_branch_is_gone(
@@ -1200,7 +1203,7 @@ async def test_merge_claim_hygiene_catches_a_hidden_bad_merge_under_a_ratchet_co
     note = await merge_claim_hygiene(small_repo, since=root)
     assert "2 merge claim(s) since last deploy" in note
     assert "⚠ 1 FAILED" in note
-    assert "'feature-bad'" in note and "NOT an ancestor" in note
+    assert "'feature-bad'" in note and "only 1 parent(s)" in note
     assert root[:8] in note
 
 
@@ -1217,6 +1220,49 @@ async def test_merge_claim_hygiene_ranged_walk_all_clean(small_repo: Path) -> No
     assert "2 merge claim(s) since last deploy" in note
     assert "FAILED" not in note
     assert "'feature-a' verified" in note and "'feature-b' verified" in note
+
+
+async def test_merge_claim_hygiene_case_insensitive_capital_m_merge_verifies(
+    small_repo: Path,
+) -> None:
+    """Thread 9b6b5269, decision b86e65ed: this house's own convention drifted from
+    'merge <branch>' to 'Merge <branch>' — the lowercase-only literal silently matched
+    NOTHING on a capital-M subject, so every merge since the drift went unverified. A
+    capital-M merge must verify exactly like a lowercase one now."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "feature-cap")
+    _commit(small_repo, "the actual work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "Merge feature-cap: did the thing",
+        "feature-cap")
+    note = await merge_claim_hygiene(small_repo)
+    assert note == ("merge claim: HEAD 'feature-cap' verified — its current tip is an "
+                    "ancestor of the merge")
+
+
+async def test_merge_claim_hygiene_survives_the_branch_being_reused_after_a_real_merge(
+    small_repo: Path,
+) -> None:
+    """THE seshat-b98eb0b-casualty-sweep SPECIMEN, live, 2026-09-01 (thread 9b6b5269): a
+    completely genuine merge, no cited sha in its subject, and the branch simply kept
+    being worked on afterward — the OLD branch-tip-is-ancestor-of-merge direction false-
+    flags this the instant the branch moves on. The NEW direction (the merge's own second
+    parent is an ancestor of the branch's CURRENT tip) must verify it cleanly instead."""
+    _commit(small_repo, "root")
+    _git(small_repo, "checkout", "-q", "-b", "reused-live")
+    _commit(small_repo, "first round of work")
+    _git(small_repo, "checkout", "-q", "-")
+    _git(small_repo, "merge", "--no-ff", "-m", "merge reused-live: first landing",
+        "reused-live")
+    # the branch is reused for MORE work after being merged — no cited sha to fall back on.
+    _git(small_repo, "checkout", "-q", "reused-live")
+    _commit(small_repo, "second round, added after the merge already landed")
+    _git(small_repo, "checkout", "-q", "-")
+
+    note = await merge_claim_hygiene(small_repo)
+    assert "'reused-live' verified" in note
+    assert "descendant of what this merge actually incorporated" in note
+    assert "⚠" not in note
 
 
 async def test_merge_claim_hygiene_prefers_the_cited_sha_over_a_reused_branchs_moved_tip(
@@ -1273,8 +1319,7 @@ async def test_merge_claim_hygiene_ranged_walk_no_merges_in_range(small_repo: Pa
 
     note = await merge_claim_hygiene(small_repo, since=root)
     assert "2 commit(s) since last deploy" in note
-    assert "none claim a merge" in note
-    assert "nothing to verify" in note
+    assert "CONFESSION" in note and "matched the expected" in note
 
 
 async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
@@ -1290,7 +1335,8 @@ async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
 
     note = await merge_claim_hygiene(small_repo, since="0" * 40)
-    assert note == "merge claim: 'feature-x' verified — an actual ancestor of HEAD"
+    assert note == ("merge claim: HEAD 'feature-x' verified — its current tip is an "
+                    "ancestor of the merge")
 
 
 async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
@@ -1305,7 +1351,8 @@ async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-y: landed", "feature-y")
 
     note = await merge_claim_hygiene(small_repo, since=_head(small_repo))
-    assert note == "merge claim: 'feature-y' verified — an actual ancestor of HEAD"
+    assert note == ("merge claim: HEAD 'feature-y' verified — its current tip is an "
+                    "ancestor of the merge")
 
 
 # ── venv_import_hygiene (task #180 piece 2, decision 6fc0c082's own specimen) ───────────────
