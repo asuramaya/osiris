@@ -15,12 +15,15 @@ from src.orchestrator.offices import (
     correct_pin_value,
     establish_office,
     plan_pin_migration,
+    revert_own_pin_write,
     revert_pin_write,
     self_heal_project_pin,
     sweep_retired_office,
     sweep_seat_workspace,
     write_pin_additions,
 )
+
+NOW = datetime.now(UTC)
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
@@ -726,6 +729,154 @@ async def test_correct_own_pin_value_propagates_an_empty_reason_refusal(
         reason="  ", office_root=tmp_path)
     assert "silent overwrite" in out["error"]
     assert (office / ".osiris").read_text() == 'project = "tony"\n'  # nothing written
+
+
+# ═══ THE SECOND COPY (ruling b30e2b38, the Jesus/Godel live specimen): correct_own_pin_
+# value ALSO reaches the seat's own anchor_cwd pin, never a caller-supplied path. ═══
+
+async def test_correct_own_pin_value_also_corrects_the_anchor_copy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov5anchor", "CovAnchor", source="test")
+    office = tmp_path / "covanchor"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    anchor = tmp_path / "REPOS" / "Godel"
+    anchor.mkdir(parents=True)
+    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov5anchor", "project", "Godel",
+        reason="fold+rebind complete", office_root=tmp_path)
+    assert out["written"] is True
+    assert (office / ".osiris").read_text() == 'project = "Godel"\n'
+    assert out["anchor"]["corrected"] is True
+    assert (anchor / ".osiris").read_text() == 'project = "Godel"\n'
+
+
+async def test_correct_own_pin_value_skips_the_anchor_when_it_is_the_office_itself(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov6same", "CovSame", source="test")
+    office = tmp_path / "covsame"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(office), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov6same", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path)
+    assert out["written"] is True
+    assert "anchor" not in out
+
+
+async def test_correct_own_pin_value_skips_an_anchor_with_no_pin_of_its_own(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov7nopin", "CovNopin", source="test")
+    office = tmp_path / "covnopin"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    anchor = tmp_path / "bare-anchor"
+    anchor.mkdir()  # no .osiris here at all
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov7nopin", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path)
+    assert out["written"] is True
+    assert "anchor" not in out
+
+
+# ═══ revert_own_pin_write — the self-scoped door onto revert_pin_write (ruling b30e2b38:
+# a seat that followed the rules into a bad pin state had no sanctioned way back out). ═══
+
+async def test_revert_own_pin_write_restores_the_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:rov1self", "RovSelf", source="test")
+    office = tmp_path / "rovself"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    await correct_own_pin_value(
+        actions.pool, "agent:rov1self", "project", "wrong-value",
+        reason="x", office_root=tmp_path)
+    assert (office / ".osiris").read_text() == 'project = "wrong-value"\n'
+
+    out = await revert_own_pin_write(actions.pool, "agent:rov1self", office_root=tmp_path)
+    assert out["office"]["reverted"] is True
+    assert (office / ".osiris").read_text() == 'project = "tony"\n'
+
+
+async def test_revert_own_pin_write_refuses_a_caller_with_no_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    out = await revert_own_pin_write(actions.pool, "agent:rov2unseated", office_root=tmp_path)
+    assert "holds no seat" in out["error"]
+
+
+async def test_revert_own_pin_write_also_reverts_the_anchor_copy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:rov3anchor", "RovAnchor", source="test")
+    office = tmp_path / "rovanchor"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    anchor = tmp_path / "REPOS" / "Godel2"
+    anchor.mkdir(parents=True)
+    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+    await correct_own_pin_value(
+        actions.pool, "agent:rov3anchor", "project", "Godel",
+        reason="fold+rebind complete", office_root=tmp_path)
+
+    out = await revert_own_pin_write(actions.pool, "agent:rov3anchor", office_root=tmp_path)
+    assert out["office"]["reverted"] is True
+    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert out["anchor"]["reverted"] is True
+    assert (anchor / ".osiris").read_text() == 'project = "Jesus"\n'
+
+
+async def test_revert_own_pin_write_skips_anchor_with_no_backup(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The office was corrected while no anchor_cwd was on record at all — so the
+    correction never reached a second copy, and no backup exists there. A revert must
+    never invent one or error on its absence, even once an anchor_cwd shows up later."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:rov4noanchor", "RovNoanchor", source="test")
+    office = tmp_path / "rovnoanchor"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+    await correct_own_pin_value(
+        actions.pool, "agent:rov4noanchor", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path)  # no anchor_cwd on record yet — office only
+    anchor = tmp_path / "some-other-tree"
+    anchor.mkdir()
+    (anchor / ".osiris").write_text('project = "unrelated"\n')  # never corrected
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+
+    out = await revert_own_pin_write(actions.pool, "agent:rov4noanchor", office_root=tmp_path)
+    assert out["office"]["reverted"] is True
+    assert "anchor" not in out
+    assert (anchor / ".osiris").read_text() == 'project = "unrelated"\n'  # untouched
 
 
 async def test_correct_own_pin_value_propagates_a_missing_key_refusal(

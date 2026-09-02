@@ -7,7 +7,8 @@ Launch here, resume here — this path never moves again, whatever happens to th
 ## Who you are
 - Seat: **{handle}**, house **{house}**{seat_line}
 - The `.osiris` file beside this pins your house; your mail, attribution, and lineage
-  all key on it. Do not edit either file's `project` line.
+  all key on it. Never HAND-edit the `project` line — use `correct_pin_value` (ruling
+  b30e2b38: the tool obsoleted the old hand-edit ban; the ban never got retired).
 - Osiris knows this office as your anchor. `mount(cwd=<this dir>)`, then `orient()`.
 - Your cwd IS this office — whatever an older conversation of yours remembers. A resumed
   memory of a former home is stale the moment you read it here.
