@@ -292,6 +292,37 @@ async def test_idempotent_swap_repeats_without_reminting(actions: Actions) -> No
     assert row_model == OPUS, "the drifted row must be repaired, not left stale"
 
 
+async def test_live_succession_stamps_the_real_session_id_not_a_bg_seat_anchor(
+    actions: Actions,
+) -> None:
+    """The Marquee specimen (Thoth dispatch 6484/6515, decision f5d5473b's gen 12): a
+    `--bg`-launched seat's job_dir is the DURABLE PER-SEAT anchor (`jobs/seat-<hex>`,
+    unchanged across every generation), not a per-session directory — `_job_id(job_dir)`
+    dutifully extracts 'seat-<hex>' from it, which used to win over the heartbeat's own
+    already-validated real session id. Confirmed live: Marquee's graph carried
+    session='seat-bdbe031e' while her real transcript sat, findable, under her own
+    session id's own first 8 chars. The heir's own `session` property must be the real
+    session id, never the seat-anchor string, whatever the job_dir looks like."""
+    # the agent's own bare canonical shares the real session's sid8 by this house's own
+    # minting convention — find_session_row's lane 3 (self-evident derivation) is how the
+    # real Marquee mount actually resolved, since her job_dir (the durable seat anchor)
+    # never carried her session id at all.
+    seat_anchor_job_dir = "/home/t/.claude/jobs/seat-abc12345"
+    real_session_id = "226a2695-accf-4f18-b422-d4d028f4eb47"
+    await actions.create_or_find_object("Agent", "agent:226a2695", "test")
+    await save_mount(actions.pool, job_dir=seat_anchor_job_dir, agent_id="agent:226a2695",
+                     project="dtfb", cwd="/t", model=FABLE, session_key="sid:test")
+
+    out = await live_succession(actions, session_id=real_session_id, observed_model=OPUS)
+
+    heir = out["minted"]
+    session_prop = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='session'", heir)
+    assert session_prop == real_session_id[:8]
+    assert session_prop != "seat-abc12345"
+
+
 async def test_a_genuinely_new_target_still_mints_after_an_idempotent_repair(
     actions: Actions,
 ) -> None:

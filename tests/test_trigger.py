@@ -4850,6 +4850,34 @@ async def test_spawn_claude_bg_issues_the_documented_bg_flags(monkeypatch: Any) 
     assert captured["args"][-1] == "mount and claim_name"  # the trailing positional prompt
 
 
+async def test_spawn_claude_bg_issues_resume_before_the_other_flags(monkeypatch: Any) -> None:
+    """Thoth dispatch 6484/6515: `--resume <session-id>` genuinely continues a `--bg`
+    session under the SAME background id (verified live against harness 2.1.258, a real
+    disposable probe — see this function's own docstring) — #173's "silently ignores"
+    premise was true of an older harness and is false now. `osiris resume` rides this."""
+    from src.orchestrator import trigger
+
+    captured: dict[str, Any] = {}
+
+    class _Proc:
+        pid = 99
+
+    async def _fake_exec(*args: Any, **kwargs: Any) -> _Proc:
+        captured["args"] = args
+        return _Proc()
+
+    monkeypatch.setattr(trigger.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(trigger, "_tree_exists", lambda p: True)
+    await trigger._spawn_claude_bg(
+        "/home/asuramaya/code/jesus", name="[JE] Jesus", model="claude-sonnet-5",
+        prompt="a private DM is waiting", resume_session="b51dab8b-aa3c-4428-87a9")
+
+    pairs = _pairs(captured["args"])
+    assert ("--resume", "b51dab8b-aa3c-4428-87a9") in pairs
+    assert captured["args"][:2] == ("claude", "--bg")
+    assert not any(a == "--session-id" for a in captured["args"])
+
+
 async def test_spawn_claude_bg_starts_its_own_process_group(monkeypatch: Any) -> None:
     """#156 (Thoth's own ruling, independent of the kill verb — this is already a bug
     today): without its own session/group, a body's Bash-tool children share OSIRIS'S OWN

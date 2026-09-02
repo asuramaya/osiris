@@ -604,17 +604,17 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
 
 
 # ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, decision 536de12f; split into
-# its own verb by operator ruling 60c78788, 2026-09-01): mirrors launch_seat's own
-# already-proven resume branch exactly — _lineage_resume_candidate/_resume_guard/
-# resume_spawn, reused verbatim, never reimplemented (test_trigger.py's own identically-
-# shaped fixtures already exhaust the underlying gate logic — the guard, the compaction/
-# ceiling math, the lineage walk — so these tests only prove _cmd_resume_harness WIRES it
-# correctly, not re-derive it).
+# its own verb by operator ruling 60c78788, 2026-09-01; PERSISTENT since Thoth dispatch
+# 6484/6515): mirrors launch_seat's own already-proven resume branch exactly —
+# _lineage_resume_candidate/_resume_guard/resume_spawn, reused verbatim, never
+# reimplemented (test_trigger.py's own identically-shaped fixtures already exhaust the
+# underlying gate logic — the guard, the compaction/ceiling math, the lineage walk — so
+# these tests only prove _cmd_resume_harness WIRES it correctly, not re-derive it).
 #
-# VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json` (decision 536de12f,
-# confirming a829a15d, proven live twice, independently — a `-p --resume` body cannot
-# appear there even when it explicitly calls mount() mid-turn): a successful resume never
-# polls agents_json for it, so the fake below would raise if the code ever tried. ═══
+# VISIBILITY NOW RIDES `claude agents --json` TOO — decision 536de12f/a829a15d's "a
+# resumed body cannot appear there" was true of the old one-shot `-p --resume` lane and
+# is false of `--bg --resume` (verified live against harness 2.1.258, see
+# `_spawn_claude_bg`'s own docstring). ═══
 
 _RESUME_SID = "b5f04f84-0000-4000-8000-000000000000"
 
@@ -667,12 +667,12 @@ def _resume_settings(sense: Path, *, min_tail_bytes: int = 0) -> SimpleNamespace
 async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE PAYOFF, now cmd_resume's own (operator ruling 60c78788's verb split): a seat
-    whose holder left a resumable session is CONTINUED via resume_spawn's own `-p
-    --resume` lane — and never polled through `agents_json` for it either (that
-    registry cannot retain it, proven live; the fake below asserts it is never even
-    asked). `agents_json` is still consulted ONCE, for the shared pre-resume
-    already-live twin check both verbs use."""
+    """THE PAYOFF, now cmd_resume's own (operator ruling 60c78788's verb split, made
+    persistent by Thoth dispatch 6484/6515): a seat whose holder left a resumable
+    session is CONTINUED via resume_spawn's own `--bg --resume` lane. `agents_json` is
+    consulted ONCE, for the shared pre-resume already-live twin check both verbs use —
+    the resumed body's own post-resume visibility is `claude agents`'s job now, not
+    something this function polls for."""
     from src.cli import _cmd_resume_harness
 
     sense = await _resumable_seat(
@@ -707,14 +707,13 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
     out_text = buf.getvalue()
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
-    # THE HONEST MESSAGE (Thoth's msg 6260, the operator's real "marquee was not
-    # launched into the claude agents list" complaint): no defensive "a harness fact,
-    # not a bug" framing — state the consequence and the two real next steps. This
-    # text is now cmd_resume's own, unchanged word for word from before the split.
+    # THE HONEST MESSAGE, updated for the persistent lane (Thoth dispatch 6484/6515):
+    # no defensive "a harness fact, not a bug" framing, and no longer claims the
+    # resumed body is invisible to `claude agents` — it isn't, anymore.
     assert "a harness fact, not a bug" not in out_text
-    assert "gone from `claude agents --json` for good" in out_text
+    assert "idles after this turn rather than exiting" in out_text
     assert "send it mail, it wakes on the next dispatch" in out_text
-    assert f"claude -p --resume {_RESUME_SID}" in out_text
+    assert "claude attach" in out_text
 
 
 async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(

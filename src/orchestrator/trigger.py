@@ -3228,6 +3228,7 @@ def _bg_boot_prompt(*, office: str, anchor: str, handle: str) -> str:
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,
     prompt: str | None = None, allowed_tools: str | None = None,
+    resume_session: str | None = None,
 ) -> None:
     """`claude --bg` in `repo` — the harness's own documented background-session surface.
     SAME fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (B1's scar: an arq
@@ -3271,7 +3272,18 @@ async def _spawn_claude_bg(
 
     SAME BACKSTOP AS `_spawn_claude` (decision 27259e4d, thread bc11a2d3): `repo` reaches
     create_subprocess_exec's `cwd=` with no existence check of its own; refused here as a
-    logged no-op, never a raised, uncaught FileNotFoundError."""
+    logged no-op, never a raised, uncaught FileNotFoundError.
+
+    `resume_session` (Thoth dispatch 6484/6515, the operator's own "impossible to actually
+    resume agents" complaint): #173's premise — "claude --bg silently ignores --resume" —
+    was TRUE on the harness version it was measured against and is FALSE now, confirmed
+    live against the currently installed harness (2.1.258): `claude --bg --resume
+    <session-id> <prompt>` genuinely continues that session under the SAME background id,
+    writes to the SAME transcript, and reappears in `claude agents --json` afterward —
+    verified with a real disposable probe session before this code was written, not
+    inferred from `--help` text alone. `osiris resume` now rides this instead of the old
+    one-shot `-p --resume` lane, closing the exact gap Jesus's specimen showed: a resumed
+    session that ran its turn and then vanished from the operator's own roster."""
     if not _tree_exists(repo):
         _log.error("trigger: _spawn_claude_bg refused — repo=%r does not exist on disk, "
                    "no subprocess spawned (name=%s)", repo, name)
@@ -3282,6 +3294,8 @@ async def _spawn_claude_bg(
     # don't reach the claimed spare either way) but cheap and harmless to keep scrubbed.
     env.pop("CLAUDE_JOB_DIR", None)
     cmd = ["claude", "--bg"]
+    if resume_session:
+        cmd += ["--resume", resume_session]
     if name:
         cmd += ["-n", name]
     if model:

@@ -923,21 +923,24 @@ async def _cmd_resume_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
 ) -> int:
-    """ALWAYS THE ONE-SHOT `-p --resume` TURN (operator ruling 60c78788, thread bc11a2d3's
-    family): this is the resume branch `osiris launch` used to fall into automatically,
-    moved here VERBATIM — same `_lineage_resume_candidate` + `_resume_guard` +
+    """A PERSISTENT `--bg --resume` TURN (Thoth dispatch 6484/6515, superseding the old
+    one-shot `-p --resume` lane): same `_lineage_resume_candidate` + `_resume_guard` +
     `resume_spawn` primitives, same order, never a second implementation (#48's lesson).
     Refuses if there is no seat holder, no resumable session, or the gate declines it —
-    `osiris resume` never falls through to a fresh mint; that is `osiris launch`'s job
-    now, a deliberate, separate act.
+    `osiris resume` never falls through to a fresh mint; that is `osiris launch`'s job,
+    a deliberate, separate act (ruling 60c78788: the verb, not a flag, is the property —
+    launch always mints fresh, resume always continues; this only changes HOW resume
+    continues, never what it means to launch).
 
-    VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json`, ON PURPOSE
-    (decision 536de12f, confirming a829a15d): a resumed `-p --resume` body cannot appear
-    in that roster even when it explicitly calls mount() mid-turn — proven live, twice,
-    independently — that registry only ever lists sessions spawned with `--bg --name`,
-    unrelated to osiris's own bookkeeping by construction. The receipt says so plainly —
-    this was never a workaround for the missing verb split, it is the correct receipt
-    for this verb and stays word for word."""
+    VISIBILITY NOW RIDES `claude agents --json` TOO (the operator's own live complaint —
+    "these discrepancies make it impossible to actually resume agents" — fixed at the
+    root): decision 536de12f/a829a15d's "a resumed body cannot appear in claude agents"
+    was TRUE of the old `-p --resume` one-shot lane and is FALSE of `--bg --resume`,
+    confirmed live against the currently installed harness (2.1.258) with a real
+    disposable probe session, not inferred from --help text — see `_spawn_claude_bg`'s
+    own docstring for the exact verification. A resumed session now genuinely persists:
+    it idles after this turn rather than exiting, stays reachable by `claude attach`,
+    and is visible to the exact roster the operator was complaining could never see it."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.trigger import _DM_RESUME_PROMPT, _lineage_resume_candidate, _resume_guard
@@ -997,16 +1000,16 @@ async def _cmd_resume_harness(
         return 1
 
     resumed_session_id, resumed_repo = resume[0], resume[1]
-    await resume_spawn(resumed_repo, _DM_RESUME_PROMPT, resume_session=resumed_session_id,
-                       model=resolved_model, allowed_tools=st.osiris_wake_allowed_tools or None)
-    print(f"osiris resume: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
+    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    await resume_spawn(resumed_repo, prompt=_DM_RESUME_PROMPT,
+                       resume_session=resumed_session_id, name=name, model=resolved_model,
+                       allowed_tools=st.osiris_wake_allowed_tools or None)
+    print(f"osiris resume: resumed session {resumed_session_id[:8]} — "
           f"walked {len(resume_log)} generation(s) back to find it "
-          f"({_collapse_resume_log(resume_log)}). It runs the brief and exits, then is "
-          "gone from `claude agents --json` for good — that registry only ever lists "
-          "`claude --bg --name` windows, never a `-p --resume` body; osiris cannot "
-          "change that. To reach it again: send it mail, it wakes on the next "
-          f"dispatch; or run `claude -p --resume {resumed_session_id}` by hand to "
-          "watch a turn live yourself.")
+          f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "
+          f"--resume`: it idles after this turn rather than exiting, and shows up in "
+          f"`claude agents` as {name!r}. To reach it again: send it mail, it wakes on "
+          f"the next dispatch; or `claude attach` the session yourself.")
     stamped_model = facts.get("intended_model")
     if stamped_model and resolved_model != stamped_model:
         print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
@@ -1020,15 +1023,16 @@ async def cmd_resume(
     wake_default: str | None = None, agents_json: AgentsJson | None = None,
     resume_spawn: ResumeSpawn | None = None, settings: Settings | None = None,
 ) -> int:
-    """Continue a seat's last session as a ONE-SHOT `-p --resume` turn (operator ruling
-    60c78788): runs the brief and exits — never in `claude agents`, reached again by
-    sending it mail. Never falls through to a fresh mint; that is `osiris launch`'s own,
-    separate job. `pool`/`agents_json`/`resume_spawn`/`settings` are all injectable
-    (mirrors `cmd_launch`'s own test seam) — production callers (main()) leave them at
-    their real defaults."""
-    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude
+    """Continue a seat's last session PERSISTENTLY via `claude --bg --resume` (Thoth
+    dispatch 6484/6515): idles after this turn rather than exiting, visible in `claude
+    agents`, reachable again by sending it mail OR by `claude attach`. Never falls
+    through to a fresh mint; that is `osiris launch`'s own, separate job (ruling
+    60c78788: the verb is the property). `pool`/`agents_json`/`resume_spawn`/`settings`
+    are all injectable (mirrors `cmd_launch`'s own test seam) — production callers
+    (main()) leave them at their real defaults."""
+    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
     agents_json = agents_json or _claude_agents_json
-    resume_spawn = resume_spawn or _spawn_claude
+    resume_spawn = resume_spawn or _spawn_claude_bg
 
     owns_pool = pool is None
     if pool is None:
