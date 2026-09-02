@@ -717,9 +717,12 @@ def _tool_chars(t: Any) -> int:
 # convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
-TOOL_CONTRACT_EXPECTED_COUNT = 147  # MEASURED against the merged tree, 2026-08-29.
+TOOL_CONTRACT_EXPECTED_COUNT = 148  # MEASURED against the merged tree, 2026-08-29.
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
+# 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
+# door onto offices.revert_pin_write — existed, tested, unreached until a seat that
+# followed the rules into a bad pin state had no sanctioned way back out.
 # 144 -> 146: Seshat's retryable_ambiguous_abstentions + retry_ambiguous_abstentions
 # (thread 6001, Wave 5's ambiguous-abstention retry door).
 # THE DRIVER CORRECTLY DECLINED THIS ONE AND SAID SO: "TOOL_CONTRACT_EXPECTED_COUNT
@@ -773,6 +776,12 @@ TOOL_CONTRACT_CEILING_CHARS = 204880
 # to know exists. Trimmed once under the category rule before raising (both new
 # docstring notes cut to one sentence each).
 TOOL_CONTRACT_CEILING_CHARS = 205497
+# 205,497 -> 206,209 (measured exact). Tool count 147 -> 148 (2026-09-02, Imhotep, ruling
+# b30e2b38): new tool revert_own_pin_write (see the count changelog above) plus a short
+# correct_pin_value docstring addendum for its own anchor-copy extension — a genuinely
+# new capability, not padding. Trimmed both new docstrings once under the category rule
+# before raising.
+TOOL_CONTRACT_CEILING_CHARS = 206209
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

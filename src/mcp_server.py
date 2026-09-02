@@ -4932,8 +4932,9 @@ async def correct_pin_value(key: str, value: str, reason: str,
     `held_seat`, never a path you supply), never another seat's. `reason` is required and
     non-empty — a correction with no stated reason is the silent overwrite this verb exists
     to prevent. Refuses on: no held seat; `key` not already declared (use write_pin_additions
-    for a genuinely missing one); invalid TOML; an empty reason. `revert_pin_write` is the
-    undo, same backup discipline."""
+    for a genuinely missing one); invalid TOML; an empty reason. Also corrects your ANCHOR
+    copy when one exists and differs (ruling b30e2b38), reported under `anchor`.
+    `revert_own_pin_write` is the self-scoped undo."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a pin correction is a seat's own act",
@@ -4941,6 +4942,22 @@ async def correct_pin_value(key: str, value: str, reason: str,
     pool = await _pool_get()
     from src.orchestrator.offices import correct_own_pin_value as _correct_own_pin_value
     return await _correct_own_pin_value(pool, ident.agent_id, key, value, reason=reason)
+
+
+@mcp.tool()
+async def revert_own_pin_write(ctx: Context | None = None) -> dict[str, Any]:
+    """Undo your seat's most recent pin correction/addition — the self-scoped door onto
+    `offices.revert_pin_write` (existed, tested, unreached until ruling b30e2b38). Resolved
+    off your own held seat, never a path you supply. Restores the `.osiris.bak` your most
+    recent real write took; refuses if none exists. Also reverts your ANCHOR copy under
+    `anchor` when a backup exists there too — silently skipped otherwise."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — reverting a pin is a seat's own act",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    from src.orchestrator.offices import revert_own_pin_write as _revert_own_pin_write
+    return await _revert_own_pin_write(pool, ident.agent_id)
 
 
 @mcp.tool()

@@ -371,7 +371,20 @@ async def correct_own_pin_value(
     Refuses on a caller holding no seat — a pin correction is a seat's own act, never
     performed on another's behalf and never inferred. `reason` stays required and non-empty;
     enforced by `correct_pin_value` itself, unchanged here. `office_root` exists only as a
-    test seam, same convention as `establish_office`."""
+    test seam, same convention as `establish_office`.
+
+    THE SECOND COPY (ruling b30e2b38, the Jesus/Godel live specimen): `rebind_seat` writes
+    its own courtesy `.osiris` at the seat's ANCHOR path — a second, independent pin copy
+    this function used to never reach, so a fully-correct transition (fold + rebind +
+    THIS call) still left the anchor copy reading the pre-transition project forever,
+    with no sanctioned door onto it at all. Still self-scoped, never a caller-supplied
+    path: the anchor is read fresh off the SAME held seat's own `anchor_cwd` property —
+    the seat's other self-owned location, not an arbitrary one. Corrected WHEN IT EXISTS,
+    DECLARES `key` ALREADY, AND DIFFERS FROM THE OFFICE PATH; skipped silently (never an
+    error) when it's the same directory as the office (no second copy to diverge) or has
+    no `.osiris` of its own yet. Reported separately under `anchor` so a caller can see
+    whether the second copy was touched, left alone, or doesn't apply — never folded into
+    the office result, which could otherwise mask a partial correction as a full one."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
@@ -383,6 +396,15 @@ async def correct_own_pin_value(
     result = correct_pin_value(str(office), key, value, reason=reason)
     if not result.get("error"):
         result["seat_id"] = bound["seat_id"]
+    anchor_cwd = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+    if anchor_cwd and Path(anchor_cwd) != office and \
+            (Path(anchor_cwd) / ".osiris").is_file():
+        anchor_result = correct_pin_value(anchor_cwd, key, value, reason=reason)
+        result["anchor"] = anchor_result if anchor_result.get("error") else {
+            "path": anchor_result["path"], "corrected": True}
     return result
 
 
@@ -402,6 +424,45 @@ def revert_pin_write(path: str) -> dict[str, Any]:
     elif p.exists():
         p.unlink()
     return {"reverted": True, "path": str(p), "from_backup": str(backup)}
+
+
+async def revert_own_pin_write(
+    pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
+) -> dict[str, Any]:
+    """THE SELF-SCOPED DOOR onto `revert_pin_write` (ruling b30e2b38): built the same day
+    its absence was found live — a seat that follows the rules into a bad pin state had
+    no sanctioned way back out. `revert_pin_write` (above) has existed, tested, since
+    write_pin_additions's own constraint 3; it simply had no MCP surface a seat could
+    reach on its own behalf, the same unreached-not-unbuilt shape this house kept hitting
+    tonight. Composes `held_seat`, identical resolution to `correct_own_pin_value` — a
+    caller names nothing but its own act, never a path.
+
+    BOTH COPIES, SYMMETRIC WITH `correct_own_pin_value`'s OWN EXTENSION: reverts the
+    office first, then the seat's own current `anchor_cwd` copy WHEN a backup exists
+    there too (silently skipped, never an error, when there isn't one to revert — the
+    anchor copy may never have been corrected at all, or may be the same directory as
+    the office). Each half's own receipt lands separately (`office`/`anchor`) so a
+    caller can see exactly which copy actually moved."""
+    from src.orchestrator.seats import held_seat
+
+    bound = await held_seat(pool, agent_id)
+    if bound is None:
+        return {"error": f"{agent_id} holds no seat — reverting a pin is a seat's own act, "
+                         "never done on another's behalf"}
+    root = office_root or _default_office_root()
+    office = root / bound["handle"].lower()
+    office_result = revert_pin_write(str(office))
+    out: dict[str, Any] = {"seat_id": bound["seat_id"], "office": office_result}
+    anchor_cwd = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+    if anchor_cwd and Path(anchor_cwd) != office and \
+            _pin_backup_path(Path(anchor_cwd) / ".osiris").is_file():
+        out["anchor"] = revert_pin_write(anchor_cwd)
+    if office_result.get("error"):
+        out["error"] = office_result["error"]
+    return out
 
 
 # THE PEER ADDENDUM (ruling d74492ee, spec e6636c7e — LEGIBILITY leg 2, seats.py): rendered
