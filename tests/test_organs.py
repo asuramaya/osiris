@@ -103,6 +103,29 @@ async def test_late_is_not_dead(actions) -> None:  # type: ignore[no-untyped-def
     assert health_banner(organs) is None        # stale does not cry wolf
 
 
+async def test_a_fast_cadence_job_survives_a_deploy_restart_under_the_floor(
+    actions: Actions,
+) -> None:
+    """drain_cascade/evaluate_watch run every=5s — 3x that is 15s, which a routine deploy
+    restart's cancel-and-resume cost (measured up to ~44s, 2026-09-01) blows past on its own.
+    `sick_after_secs` floors the DOWN threshold (never the 'stale' one — 1.5x cadence still
+    means late) so THIS job stays merely 'stale', never 'down', through that cost, while a
+    job genuinely dead past the floor still reads 'down' — the same rule surface.py's
+    `_sensing` now imports from here instead of hand-copying (Thoth msg 6327)."""
+    from src.orchestrator.monitor import _SICK_FLOOR_SECS
+
+    now = datetime.now(UTC)
+    await _stamp(actions.pool, "drain_cascade", every=5,
+                 last_ok=now - timedelta(seconds=_SICK_FLOOR_SECS - 5))
+    organs = await organ_health(actions.pool)
+    assert organs[0]["verdict"] == "stale" and not organs[0]["down"]
+
+    await _stamp(actions.pool, "drain_cascade", every=5,
+                 last_ok=now - timedelta(seconds=_SICK_FLOOR_SECS + 5))
+    organs = await organ_health(actions.pool)
+    assert organs[0]["verdict"] == "down" and organs[0]["down"]
+
+
 async def test_a_failure_does_not_erase_when_it_last_worked(actions) -> None:  # type: ignore[no-untyped-def]
     """'Down 4 minutes' and 'down ten hours' are different emergencies — a failure records the
     error WITHOUT clearing last_ok, or the reader cannot tell them apart."""

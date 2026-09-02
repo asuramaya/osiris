@@ -20,10 +20,8 @@ where the graph has never met the caller at all (the knock: mount first).
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -65,7 +63,7 @@ async def _glance(cwd: Path) -> list[str]:
         agent = row["agent_id"] if row else None
 
         from src.config.settings import get_settings
-        from src.orchestrator import vitals
+        from src.orchestrator import surface, vitals
         from src.orchestrator.ceiling import ceiling
         from src.orchestrator.mailbox import desk_briefs_from, unread_split
 
@@ -76,20 +74,9 @@ async def _glance(cwd: Path) -> list[str]:
         souls = await vitals.live_souls(conn)
         wakes = await vitals.wakes_hour(conn)
         ceil = await ceiling(conn, cap=get_settings().osiris_daily_usd)
-        jobs = await conn.fetch("SELECT key, cursor FROM watermarks WHERE key LIKE 'job:%'")
-        sick: list[str] = []
-        for j in jobs:
-            try:
-                blob = json.loads(j["cursor"] or "{}")
-            except ValueError:
-                continue
-            ok, every = blob.get("last_ok"), int(blob.get("every") or 600)
-            if not ok:
-                sick.append(j["key"][4:])
-                continue
-            age = (datetime.now(UTC) - datetime.fromisoformat(ok)).total_seconds()
-            if age > 3 * every:
-                sick.append(j["key"][4:])
+        # was a fourth hand-copy of the sick predicate (Thoth msg 6327) — this module's own
+        # docstring already claims "no count SQL of its own"; this line makes that true here too.
+        sick = await surface._sensing(conn)
 
         lines = [f"◈ {project} — osiris fleet glance"]
         if sick:
