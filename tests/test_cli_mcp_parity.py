@@ -129,6 +129,13 @@ CLI_ONLY_PARAMS = {
         "verbs above; the stop receipt renders for a human by default and as one compact "
         "JSON line under --json, for the teardown scripts this verb exists to serve "
         "(Thoth LXXXVII, 2026-08-28)",
+    ("correct-pin-value", "seat"): "the MCP tool correct_pin_value is SELF-scoped by "
+        "design (resolved off the mounted caller's own held_seat, msg 4761/obligation "
+        "114f7ac9 — it can only ever correct ITS OWN seat's pin). A terminal has no "
+        "mounted identity to be self about, so the console door (thread 6437) takes an "
+        "EXPLICIT target instead, resolved the same way rebind-seat's own console door "
+        "resolves its target (resolve_handle, falling back to a raw agent id that "
+        "genuinely exists) before calling the identical offices.correct_own_pin_value.",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.

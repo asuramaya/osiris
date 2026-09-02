@@ -2662,6 +2662,130 @@ async def cmd_amend_decision(
     return 0
 
 
+# --- rebind-seat / correct-pin-value (thread 6437, #199's parity lane) --------------------------
+#
+# THE JESUS/CHAD PATH, FROM A TERMINAL: a seat self-reconciling ran exactly
+# merge(dupe,into) -> rebind_seat(seat,new_cwd) -> correct_pin_value(key,value) through MCP
+# (msg 6374, thread 6369). merge/unmerge already had a console door; these two did not, so a
+# human doing the SAME reconciliation by hand — the whole point of a CLI, per the operator's
+# own "cli shared, mcp agent, slash for human" model — had no way to run it. Both below call
+# the SAME orchestrator function their MCP twin wraps (mounts.rebind_seat /
+# offices.correct_own_pin_value), no parallel implementation — #135's parity gate ruling
+# binds here exactly as it did for `osiris bootstrap`.
+
+
+async def cmd_rebind_seat(
+    seat_or_agent: str, new_cwd: str, *, actor: str, extract: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rebind-seat <seat> <new_cwd> --actor <who> — the console-script door
+    onto mounts.rebind_seat, the SAME function the rebind_seat MCP tool wraps (no duplicated
+    resolution: the claimed-name / raw-agent-id / unclaimed-seat-handle fallback chain, and
+    the extract=True seat-offices-move shape, are exactly rebind_seat's own, untouched here).
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: prints the full result dict
+    the MCP tool would also return, nothing dropped — the same discipline charter-for's own
+    CLI door established (thread 2474)."""
+    from src.actions.core import Actions
+    from src.orchestrator.mounts import rebind_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rebind-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rebind-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await rebind_seat(Actions(pool), seat_or_agent=seat_or_agent, new_cwd=new_cwd,
+                                actor=actor, extract=extract)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris rebind-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"rebound {seat_or_agent} -> {new_cwd}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_correct_pin_value(
+    handle_or_agent: str, key: str, value: str, reason: str, *,
+    pool: asyncpg.Pool | None = None, office_root: Path | None = None,
+) -> int:
+    """osiris correct-pin-value <seat> <key> <value> --because <reason> --actor <who> — the
+    console-script door onto offices.correct_own_pin_value, the SAME function the
+    correct_pin_value MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY:
+    the MCP tool is self-scoped by construction (`ident.agent_id`, the mounted caller — it can
+    only ever correct ITS OWN seat's pin). A terminal has no mounted identity to be self about,
+    so this door takes an EXPLICIT target instead — same shape rebind-seat's own console door
+    already uses (`seat_or_agent`, resolved the identical way: resolve_handle, falling back to
+    a raw agent id that genuinely exists). correct_own_pin_value itself is untouched — its own
+    held_seat resolution, its own refusal on a caller holding no seat, its own required-reason
+    and existing-key-only guards all still apply, now just to a NAMED seat rather than an
+    implicit one."""
+    from src.actions.core import Actions
+    from src.orchestrator.agents import resolve_handle
+    from src.orchestrator.offices import correct_own_pin_value
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:correct-pin-value")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris correct-pin-value: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        actions = Actions(pool)
+        agent_id = await resolve_handle(actions, handle_or_agent)
+        if agent_id is None:
+            exists = await pool.fetchval(
+                "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+                handle_or_agent)
+            agent_id = handle_or_agent if exists else None
+        if agent_id is None:
+            print(f"osiris correct-pin-value: refused — no such claimed seat or live agent: "
+                  f"{handle_or_agent!r}", file=sys.stderr)
+            return 1
+        out = await correct_own_pin_value(pool, agent_id, key, value, reason=reason,
+                                          office_root=office_root)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris correct-pin-value: refused — {out['error']}", file=sys.stderr)
+        return 1
+    if not out.get("written"):
+        print(f"already {value!r} — nothing written (old_value={out.get('old_value')!r})")
+        return 0
+    print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
+          f"{out['old_value']!r} -> {out['new_value']!r}")
+    print(f"  path: {out['path']}  backup: {out['backup']}")
+    return 0
+
+
 # --- mint-seat -----------------------------------------------------------------------------------
 
 def _context_house(house: str | None) -> str | None:
@@ -2999,7 +3123,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   see the fleet         fleet, roster, boot-status, smoke
   read the record       desk, show
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
-                        merge, unmerge, fold-project
+                        merge, unmerge, fold-project, rebind-seat, correct-pin-value
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
@@ -3290,6 +3414,39 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help=f"who is making this addendum — defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
+    p_rebind_seat = sub.add_parser(
+        "rebind-seat", description=_d(
+            "move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and "
+            "mail — the same orchestrator.mounts.rebind_seat the MCP tool wraps, exposed "
+            "as the console door a human runs this from (jesus/chad's own self-"
+            "reconciliation sequence, msg 6374)"),
+        epilog="example: osiris rebind-seat Jesus /home/user/code/godel")
+    p_rebind_seat.add_argument("seat", help="a claimed handle, a raw agent id, or an "
+                               "unclaimed seat's own handle/canonical")
+    p_rebind_seat.add_argument("new_cwd", help="the destination directory")
+    p_rebind_seat.add_argument("--extract", action="store_true",
+                               help="leave a SHARED cwd taking only this lineage's own "
+                                    "transcripts, rather than moving the whole project")
+    p_rebind_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this rebind — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_correct_pin = sub.add_parser(
+        "correct-pin-value", description=_d(
+            "correct an EXISTING key in a seat's own `.osiris` pin — the same "
+            "orchestrator.offices.correct_own_pin_value the MCP tool wraps, given an "
+            "explicit target instead of an implicit mounted one (a terminal has no "
+            "mounted identity to be self-scoped about)"),
+        epilog="example: osiris correct-pin-value Jesus project Godel "
+            "--because \"anchor moved, pin still named the old project\"")
+    p_correct_pin.add_argument("seat", help="a claimed handle or a raw agent id — the "
+                               "seat whose pin this corrects")
+    p_correct_pin.add_argument("key", help="the already-declared pin key to rewrite")
+    p_correct_pin.add_argument("value", help="the corrected value")
+    p_correct_pin.add_argument("--because", required=True, dest="reason",
+                               help="why this correction is being made — never optional, "
+                                    "same rule as the MCP tool")
+
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
             "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
@@ -3459,6 +3616,12 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_annotate_thread(args.ref, args.note, actor=args.actor))
     if args.command == "amend-decision":
         return asyncio.run(cmd_amend_decision(args.ref, args.addendum, actor=args.actor))
+    if args.command == "rebind-seat":
+        return asyncio.run(cmd_rebind_seat(args.seat, args.new_cwd, actor=args.actor,
+                                           extract=args.extract))
+    if args.command == "correct-pin-value":
+        return asyncio.run(cmd_correct_pin_value(args.seat, args.key, args.value,
+                                                  args.reason))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))
