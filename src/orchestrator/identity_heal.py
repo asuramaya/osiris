@@ -320,21 +320,20 @@ async def heal_seat_anchor(
     `target`; only when `dry_run=False` does the write actually happen. `because`, when
     given (the third-party sibling's own mandatory reason), rides into the audit trail the
     same way `reconcile_seat_identity`'s `reason` does."""
-    from src.orchestrator.offices import _default_office_root
+    from src.orchestrator.offices import seat_office_target
 
-    root = office_root or _default_office_root()
     seat_row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
         seat_id)
     if seat_row is None:
         return {"error": f"no active seat matches {seat_id!r}"}
+    target = await seat_office_target(actions.pool, seat_id, office_root=office_root)
+    if target is None:
+        return {"error": f"{seat_id} has no handle on record — cannot derive an office path"}
     handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         seat_row["id"])
-    if not handle:
-        return {"error": f"{seat_id} has no handle on record — cannot derive an office path"}
-    target = str(root / handle.lower())
     if not _office_dir_exists(target):
         return {"error": f"{target!r} does not exist on disk — this healer re-asserts "
                          "identity at an office that already exists; establish_office "

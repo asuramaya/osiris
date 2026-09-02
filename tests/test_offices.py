@@ -17,6 +17,7 @@ from src.orchestrator.offices import (
     plan_pin_migration,
     revert_own_pin_write,
     revert_pin_write,
+    seat_office_target,
     self_heal_project_pin,
     sweep_retired_office,
     sweep_seat_workspace,
@@ -51,6 +52,35 @@ async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None)
     (slug / "0ff1cee1-own-session.jsonl").write_text(f'{{"cwd": "{shared}"}}\n')
     (slug / "cafe0000-co-resident.jsonl").write_text(f'{{"cwd": "{shared}"}}\n')
     return agent
+
+
+# ═══ seat_office_target — THE ANCHOR INVARIANT'S OWN ADDRESS (ruling 23771416) ════════
+
+async def test_seat_office_target_derives_office_root_slash_handle(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="targethouse", handle="TargetSeat",
+                             source="console")
+    target = await seat_office_target(actions.pool, seat["seat_id"], office_root=tmp_path)
+    assert target == str(tmp_path / "targetseat")
+
+
+async def test_seat_office_target_returns_none_without_a_handle(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat_id = "seat:nohandletarget"
+    await actions.create_or_find_object("Seat", seat_id, "test")
+    target = await seat_office_target(actions.pool, seat_id, office_root=tmp_path)
+    assert target is None
+
+
+async def test_seat_office_target_returns_none_for_an_unknown_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    target = await seat_office_target(actions.pool, "seat:doesnotexist", office_root=tmp_path)
+    assert target is None
 
 
 async def test_establish_office_the_whole_ceremony(
