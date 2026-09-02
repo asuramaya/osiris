@@ -1313,17 +1313,31 @@ async def rebind_seat(
     projects_root: Path | None = None, claude_json: Path | None = None,
     extract: bool = False, force: bool = False, because: str | None = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+    office_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
-    — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
-    edge is touched here — this only re-points where a seat's rows live and re-pins the durable
-    label a moved folder would otherwise silently detach from.
+    """Move a seat's whole footprint — mount rows, harness metadata, the `.osiris` pin —
+    preserving identity, lineage, attribution, and mail (`dd47c1da` — the fold the operator
+    is blocked on). MINTS NOTHING: no new Agent, no handle or lineage edge is touched here.
+
+    THE ANCHOR INVARIANT (ruling 23771416, Thoth msg 6563): `anchor_cwd` is IDENTITY, always
+    `<office_root>/<handle>`, DERIVED — never a caller-supplied path. Relocating where a
+    seat's WORK happens is `bind_seat_tree`'s job (`tree_cwd`), not this verb's. Root-caused
+    live: Chad and Jesus each broke their own anchor by calling this verb ON THEMSELVES with
+    their own just-observed cwd (evidence_class=self_declared, source_id = each seat's own
+    live generation — not a daemon, not a stranger) at the exact millisecond their session's
+    cwd moved. The verb was the trap, not a misuse. So `new_cwd` OUTSIDE the office root
+    (`offices._default_office_root()`) moves everything this call still owns — mounts,
+    harness metadata, the pin — but the `anchor_cwd` assertion is SKIPPED, not written; the
+    receipt says so and names `bind_seat_tree` as the verb for a genuine tree move. A
+    `new_cwd` inside the office root (establish_office's own ceremony, always `str(office)`)
+    is unaffected — this is a no-op distinction for every existing correct caller.
 
     Since the operator's arbitrary-move directive (2026-07-15) this also carries the HARNESS
     half (`migrate_harness_metadata`): the transcripts directory and the ~/.claude.json
     project entry follow the move, so `mv` + `rebind_seat` together make a folder move a
-    complete non-event — graph, mail, attribution, resume, and the whisper's archaeology all
-    keep working from the new path.
+    complete non-event for mounts/harness/mail — graph, mail, attribution, resume, and the
+    whisper's archaeology all keep working from the new path, even when it lands outside the
+    office root and therefore never touches `anchor_cwd`.
 
     (a) resolve `seat_or_agent` — a claimed name (`resolve_handle`) or a raw agent id (the
         GRAVE RULE: an explicit id is intent, so a dead or unclaimed seat can still be moved).
@@ -1363,6 +1377,23 @@ async def rebind_seat(
     deliberate override. A cold or never-yet-claimed target is unaffected either way —
     this guard fires ONLY on genuine live occupancy, never on bare seat status."""
     seat_or_agent = (seat_or_agent or "").strip()
+    from src.orchestrator.offices import _default_office_root
+
+    root = office_root or _default_office_root()
+    try:
+        # PurePath only — no .resolve()/stat, this must not touch disk on an async hot path
+        # (ASYNC240). A pure string/segment comparison is exactly what the invariant needs:
+        # anchor_cwd's own correctness is about the DECLARED path, not a symlink-resolved one.
+        anchor_ok = Path(new_cwd) == root or root in Path(new_cwd).parents
+    except (OSError, ValueError):
+        anchor_ok = False
+    anchor_skip_note = (
+        None if anchor_ok else
+        f"anchor_cwd left untouched — {new_cwd!r} is outside the office root ({root}); "
+        "anchor_cwd is identity, always <office_root>/<handle>, never a caller-supplied "
+        "path (ruling 23771416). Mounts/harness metadata still moved to new_cwd below. "
+        "Use bind_seat_tree if this is a work-tree relocation, not an identity one."
+    )
     from src.orchestrator.agents import _generation, house_of, resolve_handle
     from src.orchestrator.seats import derive_house
 
@@ -1397,15 +1428,18 @@ async def rebind_seat(
         now = datetime.now(UTC)
         soid = await actions.create_or_find_object("Seat", direct_seat_id,
                                                    actor or direct_seat_id)
-        await actions.assert_singular_property(
-            soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now, _CONF,
-            evidence_class=_EC)
+        if anchor_ok:
+            await actions.assert_singular_property(
+                soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now, _CONF,
+                evidence_class=_EC)
+        note = (
+            f"{direct_seat_id}'s anchor moved to {new_cwd} — no claimed agent for "
+            "this seat, so only the seat's own record was written (nothing to "
+            "repoint in agent_mounts/harness for a lineage that never existed)"
+            if anchor_ok else anchor_skip_note)
         return {
             "seat": direct_seat_id, "project": label, "new_cwd": new_cwd,
-            "osiris_written": osiris_path,
-            "note": f"{direct_seat_id}'s anchor moved to {new_cwd} — no claimed agent for "
-                    "this seat, so only the seat's own record was written (nothing to "
-                    "repoint in agent_mounts/harness for a lineage that never existed)",
+            "osiris_written": osiris_path, "note": note,
         }
     label = await house_of(actions.pool, agent_id)
     if not label:
@@ -1487,7 +1521,7 @@ async def rebind_seat(
     from src.orchestrator.seats import held_seat
     bound = await held_seat(actions.pool, agent_id)
     seat_to_anchor = bound["seat_id"] if bound else direct_seat_id
-    if seat_to_anchor:
+    if seat_to_anchor and anchor_ok:
         soid = await actions.create_or_find_object("Seat", seat_to_anchor,
                                                    actor or agent_id)
         await actions.assert_singular_property(
@@ -1502,13 +1536,18 @@ async def rebind_seat(
         "mount_rows_updated": rows_updated, "osiris_written": osiris_path,
         "seat": seat_to_anchor,
         **({"seat_anchor_skipped": True} if not seat_to_anchor else {}),
+        **({"anchor_cwd_skipped": anchor_skip_note} if seat_to_anchor and not anchor_ok else {}),
         **({"old_cwd_evidence": old_cwd_evidence} if old_cwd_evidence else {}),
         **({"co_resident_rows_repointed": co_repointed} if co_repointed else {}),
         **({"harness": harness} if harness else {}),
-        "note": f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
-                "mail all key on the label, untouched by this move; the harness metadata "
-                "(transcripts, project state) moved with it"
-                + ("" if seat_to_anchor else " — NO SEAT ANCHORED: this agent holds no seat "
-                   "and seat_or_agent didn't name one directly either, so the graph still "
-                   "has no office on record for it"),
+        "note": (
+            f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
+            "mail all key on the label, untouched by this move; the harness metadata "
+            "(transcripts, project state) moved with it"
+            if anchor_ok else
+            f"{label}'s mount/harness footprint moved to {new_cwd}, but its anchor_cwd was "
+            "NOT touched — see anchor_cwd_skipped")
+            + ("" if seat_to_anchor else " — NO SEAT ANCHORED: this agent holds no seat "
+               "and seat_or_agent didn't name one directly either, so the graph still "
+               "has no office on record for it"),
     }

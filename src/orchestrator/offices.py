@@ -746,7 +746,8 @@ async def _establish_pure_seat_office(
         charter_file_state = "written"
     rebind = await rebind_seat(
         actions, seat_or_agent=seat_id, new_cwd=str(office), actor=actor,
-        projects_root=projects_root, claude_json=claude_json, extract=True)
+        projects_root=projects_root, claude_json=claude_json, extract=True,
+        office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
         "office_deed": "n/a — no claimed occupant yet to deed an office to",
@@ -912,7 +913,8 @@ async def establish_office(
         charter_file_state = "written"
     rebind = await rebind_seat(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
-        projects_root=projects_root, claude_json=claude_json, extract=True)
+        projects_root=projects_root, claude_json=claude_json, extract=True,
+        office_root=root)
     # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH — the
     # fourth door must survive the seat's death, and mount rows don't (SessionEnd
     # releases them; Ra's ended lineage held none, so every fresh launch at his own
