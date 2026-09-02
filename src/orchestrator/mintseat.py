@@ -155,11 +155,13 @@ async def _near_miss(pool: Any, handle: str) -> str | None:
 
 
 async def _scaffold_office(
-    actions: Actions, *, handle: str, house: str, project: str, intended_model: str,
+    actions: Actions, *, handle: str, house: str, project: str | None, intended_model: str,
     office_root: Path, seat_id: str, manager_seat_id: str | None,
 ) -> dict[str, Any]:
     """A worker's office — dir + `.osiris` (project AND model, assignment 3's own gap
-    for pre-existing seats closed at birth for a new one) + CLAUDE.md + charter.md + the
+    for pre-existing seats closed at birth for a new one; `project` falsy writes NO
+    `project =` line at all — genuinely unset, never a fabricated placeholder, see
+    found_seat's own docstring for the full law) + CLAUDE.md + charter.md + the
     osiris-tool permission grant (d0a815ad/86ead89e — the one human act launch() needs,
     spent here instead of at every future interactive walk-in), CLAUDE.md now compiled
     by THE BOOT COMPILER (thread 4951d818) rather than a frozen template string.
@@ -183,9 +185,13 @@ async def _scaffold_office(
     office.mkdir(parents=True, exist_ok=True)
     pin = office / ".osiris"
     pin_state = "left in place"
+    project_declared: bool | None = None
     if not pin.exists():
-        pin.write_text(f'project = "{project}"\nmodel = "{intended_model}"\n')
+        pin_text = f'project = "{project}"\n' if project else ""
+        pin_text += f'model = "{intended_model}"\n'
+        pin.write_text(pin_text)
         pin_state = "written"
+        project_declared = bool(project)
     orders = office / "CLAUDE.md"
     orders_state = "left in place"
     if not orders.exists():
@@ -220,6 +226,7 @@ async def _scaffold_office(
         grant.write_text(_PERMISSION_GRANT)
         grant_state = "written"
     return {"office": str(office), "osiris_pin": pin_state,
+            "osiris_pin_project_declared": project_declared,
             "standing_orders": orders_state, "charter_file": charter_state,
             "permission_grant": grant_state}
 
@@ -320,11 +327,23 @@ async def mint_seat(
     # ADOPTED seat scaffolds FILL-MISSING-ONLY (ruling 7cffda8f — an operator-made shell
     # with no pin/orders is a hollow adoption otherwise). Every write inside is its own
     # exists-guard, so running it here unconditionally is always safe.
+    #
+    # `project or worker_house` IS DELIBERATE, NOT found_seat's fabrication one door
+    # over (the operator's own "jesus"/"chad" defect, decision 24e0b761): a MANAGED
+    # worker with no explicit project inherits its MANAGER's own already-real, already-
+    # declared house — house(seat) IS the manager's own project by this house's own
+    # convention (derive_house's docstring: "Alfred's 'alfred', Thoth's 'osiris'"), never
+    # text invented from the WORKER's own brand-new handle. Only the FINAL tail changed:
+    # `or ""` used to write a literal empty-string `project = ""` when even worker_house
+    # was absent — an empty string is itself a fabricated placeholder (it reads as "no
+    # project, decided," not "not yet decided"), so that tail is now `or None`, letting
+    # `_scaffold_office` omit the line entirely and leaving the pin genuinely unset,
+    # exactly like found_seat's own fix.
     office_result: dict[str, Any] | None = None
     if existing_seat_id is not None or seat_minted:
         office_result = await _scaffold_office(
             actions, handle=handle, house=worker_house or "",
-            project=project or worker_house or "", intended_model=intended_model,
+            project=project or worker_house or None, intended_model=intended_model,
             office_root=root, seat_id=worker_seat_id, manager_seat_id=manager_seat_id)
 
     worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
@@ -424,9 +443,29 @@ async def found_seat(
     absent — osiris never assumes a git repo already exists there (a project needs none;
     resolution reads a `.osiris` pin or a bare folder name, never git — proven, not
     assumed: `~/.osiris/seats/ooblek` is not a repo and carries `project = "stopslop"`
-    fine). `project` defaults to `handle`. Neither `.osiris` pin (the workspace's own, and
-    the office's own) is ever overwritten if already present — fill-missing-only, the same
-    law every office write in this codebase holds.
+    fine). Neither `.osiris` pin (the workspace's own, and the office's own) is ever
+    overwritten if already present — fill-missing-only, the same law every office write
+    in this codebase holds.
+
+    `project`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
+    (the operator, live, 2026-09-02: "the thing cannot handle 'no project' — it falsely
+    creates a jesus project and a chad project when really they are working somewhere
+    else"; measured population: 8 confirmed/strong specimens fleet-wide, decision
+    24e0b761). NEITHER pin gets a `project =` line written when `project` is falsy —
+    this is THE EIGHTH MINT DOOR (Thoth's own naming): #139's inventory of six
+    graph-layer mint doors (bootstrap_project, ingest_files, _mint_or_find_repo,
+    _resolve_or_mint_project, register_swarm, register_spawn, plus create_project)
+    closed the class correctly FOR THAT LAYER — every one of those either derives from
+    real disk truth or requires deliberate, validated caller text. This function writes
+    PLAIN PIN FILES upstream of all of them, so none of those guards could ever see it.
+    An absent line is not silence: ruling df646654/fe8ec7ff already made "project unset"
+    a first-class, self-healing state at the PIN-READ layer (mount/orient tolerate it,
+    and self-heal a genuinely unset pin from the graph the moment governs+works_in+
+    anchor_cwd unambiguously agree) — that machinery could never engage while this door
+    kept writing a fabricated placeholder into a pin that would then never again read as
+    unset. Confirmed downstream-clean by reading, not assumed: neither establish_office
+    nor rebind_seat ever writes a project line into either pin, so this fix cannot be
+    silently undone by a later office ceremony.
 
     DOES NOT eagerly create a `governs` edge — inventing one on an unlaunched mind's
     behalf would be exactly the kind of fact this call has no standing to assert. The
@@ -451,7 +490,7 @@ async def found_seat(
 
     root = office_root or _default_office_root()
     office_path = root / handle.lower()
-    project_name = project or handle
+    project_name = (project or "").strip() or None
     # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,
     # flags that specific method inside an async def; a shell has already expanded a
     # literal `~` in `path` by the time argv reaches this call anyway — this only
@@ -490,7 +529,7 @@ async def found_seat(
     workspace_pin = workspace / ".osiris"
     workspace_pin_state = "left in place"
     if not workspace_pin.exists():
-        workspace_pin.write_text(f'project = "{project_name}"\n')
+        workspace_pin.write_text(f'project = "{project_name}"\n' if project_name else "")
         workspace_pin_state = "written"
 
     office_result = await _scaffold_office(

@@ -636,7 +636,10 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
 
     assert out["seat_minted"] is True
     assert out["handle"] == "Henry" and out["house"] == "Henry"
-    assert out["project"] == "Henry"
+    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
+    # chad project" — decision 24e0b761): no --project given, none invented from the
+    # handle. project stays genuinely None/unset.
+    assert out["project"] is None
     assert out["managed_by"] is None
     assert out["intended_model"] == "claude-sonnet-5"
 
@@ -648,7 +651,7 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
 
     assert workspace.is_dir()
     pin = (workspace / ".osiris").read_text()
-    assert 'project = "Henry"' in pin
+    assert "project" not in pin
 
     tree_cwd = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -668,15 +671,38 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
     assert "osiris launch Henry" in out["next_step"]
 
 
-async def test_found_seat_defaults_project_to_handle_and_path_to_home_code(
+async def test_found_seat_leaves_project_unset_and_defaults_path_to_home_code(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
     out = await found_seat(actions, handle="Aster", actor="console",
                            office_root=tmp_path / "seats")
-    assert out["project"] == "Aster"
+    # NO FABRICATION (decision 24e0b761): the path default is unrelated and unchanged;
+    # project stays unset because none was given — neither pin gets a project line.
+    assert out["project"] is None
     assert out["workspace"] == str(tmp_path / "fakehome" / "code" / "aster")
     assert Path(out["workspace"]).is_dir()
+    workspace_pin = Path(out["workspace"]) / ".osiris"
+    assert "project" not in workspace_pin.read_text()
+    office_pin = (tmp_path / "seats" / "aster" / ".osiris").read_text()
+    assert "project" not in office_pin
+    assert 'model = "claude-sonnet-5"' in office_pin
+
+
+async def test_found_seat_with_explicit_project_writes_it_to_both_pins(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    # THE UNCHANGED DIRECTION (Thoth's acceptance item 2): an explicit --project must
+    # still land exactly as before — the fabrication path is what's removed, not the
+    # deliberate one.
+    workspace = tmp_path / "workspace"
+    out = await found_seat(actions, handle="Bartow", path=str(workspace), project="dtfb",
+                           actor="console", office_root=tmp_path / "seats")
+    assert out["project"] == "dtfb"
+    workspace_pin = (workspace / ".osiris").read_text()
+    assert 'project = "dtfb"' in workspace_pin
+    office_pin = (tmp_path / "seats" / "bartow" / ".osiris").read_text()
+    assert 'project = "dtfb"' in office_pin
 
 
 async def test_found_seat_is_idempotent_on_a_second_call(
