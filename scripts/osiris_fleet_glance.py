@@ -130,8 +130,16 @@ def main() -> None:
     try:
         lines = asyncio.run(_glance(cwd))
     except Exception:  # noqa: BLE001 — the graph being down is information, not an error
-        lines = [f"◈ {cwd.name}", "graph unreachable — is osiris-pg up? (docker ps, "
-                 "systemctl --user status osiris-mcp)"]
+        # NAME WHAT FAILED, NOT WHAT YOU GUESS CAUSED IT. This used to lead with "is
+        # osiris-pg up? (docker ps…)" — which, on 2026-09-01, sent the operator after a
+        # container that had been up 27 hours while the real cause was an osiris-mcp
+        # restart invalidating his statusline's probe. A remedy that cannot distinguish
+        # two states and confidently prescribes one is worse than no remedy (#169).
+        # Order the checks nearest-first: the reader hits the likely one before the
+        # unlikely one, instead of starting at the bottom of the stack.
+        lines = [f"◈ {cwd.name}", "this read got no answer — the graph itself may be fine. "
+                 "Check in order: systemctl --user status osiris-mcp (a deploy restarts "
+                 "it), then docker ps for osiris-pg."]
     print("\n".join(lines))
 
 

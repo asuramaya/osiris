@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -122,9 +123,53 @@ def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool
     return hit
 
 _TIMEOUTS: dict[str, int] = {
-    "statusline": 1, "stop": 3, "whisper": 3, "session-end": 2,
+    "statusline": 3, "stop": 3, "whisper": 3, "session-end": 2,
     "precompact": 2, "spawn": 2, "anchor": 5, "stop_stage_a": 2,
 }
+
+# THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has to
+# be self-healing over restarts and such"). It was `1` — one second, ONE shot, no cache —
+# and `osiris deploy` restarts osiris-mcp on every merge, so every deploy painted every
+# live agent's bar with a false alarm that blamed the wrong subsystem. Measured before
+# changing it: /heartbeat answers in 70-100ms across 12 consecutive probes under a live
+# 15-agent fleet, so 3s is ~30x the observed cost, not a guess. The budget was never the
+# problem; the ABSENCE OF A SECOND CHANCE was.
+_STATUSLINE_RETRIES = 1          # one retry: a restart window is ~seconds, not minutes
+_STATUSLINE_CACHE_MAX_AGE = 600  # 10 min — past this, say so rather than render fiction
+
+
+def _statusline_cache_path(project: str) -> Path:
+    slug = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (project or "_"))[:64]
+    return Path.home() / ".osiris" / "statusline-cache" / f"{slug}.json"
+
+
+def _statusline_cache_read(project: str) -> tuple[dict[str, Any] | None, int]:
+    """Last good /heartbeat payload for this project, plus its age in seconds.
+
+    Returns (None, 0) when there is no readable cache — a caller must NEVER treat a
+    missing cache as zeroed counts (that would render a confident, wrong 'owe 0')."""
+    try:
+        raw = json.loads(_statusline_cache_path(project).read_text())
+        payload, ts = raw.get("payload"), float(raw.get("ts") or 0)
+        if not isinstance(payload, dict) or ts <= 0:
+            return None, 0
+        age = max(0, int(time.time() - ts))
+        return (payload, age) if age <= _STATUSLINE_CACHE_MAX_AGE else (None, age)
+    except (OSError, ValueError, TypeError):
+        return None, 0
+
+
+def _statusline_cache_write(project: str, payload: dict[str, Any]) -> None:
+    """Atomic (tmp + replace): 15 agents write this every 10s, and a torn read would put
+    a half-written line in front of the operator."""
+    path = _statusline_cache_path(project)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"ts": time.time(), "payload": payload}))
+        os.replace(tmp, path)
+    except OSError:
+        pass  # the chrome never breaks on a cache write
 
 
 def _post(url: str, data: dict[str, Any], *, timeout: int = 3) -> Any | None:
@@ -166,15 +211,50 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     window_size = int(window_size) if isinstance(window_size, (int, float)) else None
 
     resolved_intent = intent_hint
-    resp = _post(_URLS["statusline"], {
+    body = {
         "project_hint": project_hint or "", "session_id": session_id, "model_id": model_id,
         "model_raw": model_raw, "window_size": window_size, "intent_hint": intent_hint,
-    }, timeout=_TIMEOUTS["statusline"])
-    if resp is None or resp.get("error"):
-        project = project_hint or "?"
-        parts = [f"\u25c8 {project}", f"{_DIM}graph unreachable{_RESET}"]
-    else:
+    }
+    resp = None
+    for attempt in range(_STATUSLINE_RETRIES + 1):
+        resp = _post(_URLS["statusline"], body, timeout=_TIMEOUTS["statusline"])
+        if resp is not None and not resp.get("error"):
+            break
+        if attempt < _STATUSLINE_RETRIES:
+            time.sleep(0.2)  # a restarting server is usually back within one tick
+
+    # THREE STATES, NEVER COLLAPSED (the old osiris_statusline.py had this and the hook
+    # migration dropped it; the comment below used to record the loss as if it were a
+    # design choice). LIVE: fresh counts. STALE: the probe missed but we have a recent
+    # good answer \u2014 render it, marked, because last-known-good beats a false alarm.
+    # SILENT: no answer AND no usable cache \u2014 say only what is actually known, which is
+    # that the PROBE got nothing. It is NOT evidence the graph is down: Postgres was up
+    # the whole 27 hours the operator saw this, and pointing him at `docker ps` sent him
+    # after a container that never moved (the #169 shape \u2014 a remedy that cannot tell two
+    # states apart and confidently prescribes one).
+    stale_age, from_cache = 0, False
+    cache_key = project_hint or "_"
+    if resp is not None and not resp.get("error"):
         r = resp.get("result") or resp
+        if isinstance(r, dict):
+            # CACHE ONLY THE PROJECT-SCOPED COUNTS. resolved_seat_handle / resolved_intent
+            # are the CALLER's, not the project's, and this file is shared by every agent
+            # working the project — caching them let one seat's bar wear another's name
+            # (caught live in test: a probe from the osiris tree rendered `imhotep·osiris`
+            # off Imhotep's cached row). Dropping them is not a loss: the seat tag is a
+            # nicety, and wearing someone else's identity is the exact class of error the
+            # rest of tonight was spent undoing.
+            _statusline_cache_write(cache_key, {k: v for k, v in r.items()
+                                                if k not in ("resolved_seat_handle",
+                                                             "resolved_intent")})
+    else:
+        r, stale_age = _statusline_cache_read(cache_key)
+        from_cache = r is not None
+
+    if r is None:
+        project = project_hint or "?"
+        parts = [f"\u25c8 {project}", f"{_DIM}graph: no answer{_RESET}"]
+    else:
         desk, mail, dm, flight = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0), \
             r.get("flight", 0)
         live, wakes = r.get("souls", 0), r.get("wakes", 0)
@@ -212,10 +292,16 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             _link(mail_s, "conversations"),
             _link(f"fleet {live}\u25cf", "fleet"),
             _link(f"wakes {wakes}/h", "wakes"),
-            # NO "graph slow" SEGMENT: the old script's own retry-after-timeout-then-cache
-            # distinction doesn't exist here — this hook makes one direct HTTP POST with its
-            # own short timeout and no local cache at all, so there is no "answered, just
-            # late" state left to report separately from a plain miss.
+            # THE STALE MARKER, restoring the old script's answered-just-late distinction
+            # (this comment used to say that state "doesn't exist here" — it does again).
+            # Dim, last, and never silent: an operator reading counts is entitled to know
+            # they are a moment old, but a 12-second-old `owe 14` is worth incomparably
+            # more than a red bar that names the wrong subsystem.
+            # GATED ON `from_cache`, NOT ON THE AGE. A cache written under a second ago
+            # has stale_age == 0, and gating on the number made a cached bar render
+            # IDENTICAL to a live one — collapsing the two states this whole change
+            # exists to keep apart, in the very line meant to keep them apart.
+            *([f"{_DIM}⋯{stale_age}s ago{_RESET}"] if from_cache else []),
         ]
 
     vitals: list[str] = []
