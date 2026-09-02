@@ -504,6 +504,14 @@ _ROSTER_CAVEATS = (
     "be corrected to; `ambiguous:true` with `candidates` means it matches more than one "
     "object's name and picks none of them (#102's law, generalized). Absence of this field "
     "on a no-such-project pin means the value matches nothing at all — a genuinely dead pin.",
+    "pin_charter_agreement compares only pin.declared against chartered_repos, and inherits "
+    "every caveat above (not certified canonical, anchor_cwd-only, single snapshot). "
+    "'disagree' names a conflict for a mind to resolve (rebind_seat/correct_pin_value/"
+    "set_charter), it never picks which side is right (#102's law, same as triage_bucket "
+    "above) - a seat legitimately holding one pin while its charter covers several OTHER "
+    "repos too still reads 'agree' as long as the pin's own value is among them. 'n/a' means "
+    "there was nothing to compare (pin not declared, or no charter at all) - never conflate "
+    "with 'disagree'.",
 )
 
 
@@ -644,6 +652,16 @@ async def roster(
     #152, running in parallel). `office_exists` and `live_cwd` are separate, deliberately
     uncollapsed axes — see the caveats for exactly what each does and does not mean.
 
+    `pin_charter_agreement` (Thoth DM 6279/6287, decision 87457dc1) closes the gap that let
+    jesus/chad/marquee go unnoticed: this row already carried `pin.declared` and
+    `chartered_repos` and nothing compared them, so a mis-binding surfaced only when the
+    operator happened to say a sentence. `'agree'`/`'disagree'`/`'n/a'` — a MARK, never a
+    verdict (#102's law): a caller sees a conflict and resolves it with the existing repair
+    verbs (rebind_seat/correct_pin_value/set_charter), this function never picks a side.
+    `'n/a'`, not `'disagree'`, when there is nothing to compare — an unset pin is a valid
+    state (ruling fe8ec7ff/decision df646654), not a defect, and an uncharted seat has no
+    charter to disagree WITH.
+
     NO `anchor_cwd` RECORDED is not the same claim as no office (Alfred's third live-
     reproduced defect, thread 3806, msg 4066): 7 real, furnished seats read `no-office` with
     a null anchor before this, because that state was "confident about the world, derived
@@ -758,6 +776,24 @@ async def roster(
             live_cwd = await pool.fetchval(
                 "SELECT cwd FROM agent_mounts WHERE agent_id=$1 "
                 "ORDER BY last_seen DESC LIMIT 1", occ["holder"])
+        # PIN_CHARTER_AGREEMENT (Thoth DM 6279/6287, decision 87457dc1): the jesus/chad/
+        # marquee shape — a mechanism that works (this row already carries both
+        # `pin.declared` and `chartered_repos`) feeding a reader that never compared them,
+        # so a mis-binding surfaced only when the operator happened to notice and say a
+        # sentence. A MARK, never a verdict (#102's law): "agree"/"disagree" only, never
+        # "this one is right" — pin.declared is not certified canonical (this function's
+        # own long-standing caveat, unchanged), so a disagreement names a conflict for a
+        # mind to resolve with rebind_seat/correct_pin_value/set_charter, never auto-picked
+        # here. "n/a" (not "disagree") when there is nothing to compare: an unset/unreadable/
+        # unknown-office pin is a VALID STATE (ruling fe8ec7ff/decision df646654's own
+        # self-heal law), not a defect, and an uncharted seat has no charter to disagree
+        # WITH — both are silence, not conflict.
+        if pin_state != "declared" or not chartered:
+            pin_charter_agreement = "n/a"
+        elif pin.value in chartered:
+            pin_charter_agreement = "agree"
+        else:
+            pin_charter_agreement = "disagree"
         rows.append({
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
             "occupancy": occ["state"], "holder": occ["holder"],
@@ -765,6 +801,7 @@ async def roster(
             "probed_anchor_cwd": probed_anchor,
             "office_exists": _dir_exists(effective_anchor),
             "chartered_repos": chartered,
+            "pin_charter_agreement": pin_charter_agreement,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
                     "error": pin.error, "triage_bucket": triage_bucket,
                     **({"duplicate_siblings": duplicate_siblings}

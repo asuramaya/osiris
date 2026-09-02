@@ -1499,6 +1499,112 @@ async def test_roster_reports_chartered_repos_from_charter_of(actions: Actions) 
     assert row["chartered_repos"] == ["gestalt"]
 
 
+# --- pin_charter_agreement: the jesus/chad/marquee detector (Thoth DM 6279/6287) ---------
+
+async def test_roster_pin_charter_agreement_agree_when_pin_is_among_charter(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "godel")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "godel"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Ragree1", source="test",
+                             anchor_cwd=str(office))
+    await set_charter(actions, seat["seat_id"], ["godel"], actor="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin_charter_agreement"] == "agree"
+
+
+async def test_roster_pin_charter_agreement_disagrees_the_jesus_chad_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The live specimen (Thoth DM 6279): jesus's pin says 'Jesus', its real charter is
+    'godel'. A mechanism that already carries both facts in one row must mark them as
+    disagreeing rather than leave a reader to notice by eye."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "godel")
+    await _repo(actions, "jesus")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "jesus"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rdisagree1", source="test",
+                             anchor_cwd=str(office))
+    await set_charter(actions, seat["seat_id"], ["godel"], actor="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin_charter_agreement"] == "disagree"
+
+
+async def test_roster_pin_charter_agreement_na_when_pin_unset(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """An unset pin is a valid state (ruling fe8ec7ff), never a defect — must read 'n/a',
+    never 'disagree', even when a real charter exists to compare against."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "godel")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('model = "claude-fable-5"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rna1", source="test",
+                             anchor_cwd=str(office))
+    await set_charter(actions, seat["seat_id"], ["godel"], actor="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin_charter_agreement"] == "n/a"
+
+
+async def test_roster_pin_charter_agreement_na_when_uncharted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A declared pin with no charter at all has nothing to disagree WITH — 'n/a', not
+    'disagree'. An uncharted worker is an already-visible, ordinary state."""
+    from src.orchestrator.seats import roster
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "coldspot"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Rna2", source="test",
+                             anchor_cwd=str(office))
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin_charter_agreement"] == "n/a"
+
+
+async def test_roster_pin_charter_agreement_agrees_when_pin_is_one_of_several_charters(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat legitimately governing several repos while pinned to just one of them is
+    NOT a disagreement — the mark only fires when the pin's own value is absent from the
+    whole charter set, never merely because the charter has more than one entry."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "godel")
+    await _repo(actions, "osiris-console")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "godel"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Ragree2", source="test",
+                             anchor_cwd=str(office))
+    await set_charter(actions, seat["seat_id"], ["godel", "osiris-console"], actor="test")
+
+    row = next(r for r in (await roster(actions.pool))["seats"]
+              if r["seat"] == seat["seat_id"])
+    assert row["pin_charter_agreement"] == "agree"
+
+
 async def test_roster_live_cwd_only_populated_when_occupied(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
