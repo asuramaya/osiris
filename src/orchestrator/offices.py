@@ -356,7 +356,7 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
 
 async def correct_own_pin_value(
     pool: asyncpg.Pool, agent_id: str, key: str, value: str, *, reason: str,
-    office_root: Path | None = None,
+    office_root: Path | None = None, workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     """THE SELF-SCOPED DOOR onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
     function takes an arbitrary filesystem `path`, which is exactly the wrong shape for a
@@ -384,28 +384,60 @@ async def correct_own_pin_value(
     error) when it's the same directory as the office (no second copy to diverge) or has
     no `.osiris` of its own yet. Reported separately under `anchor` so a caller can see
     whether the second copy was touched, left alone, or doesn't apply — never folded into
-    the office result, which could otherwise mask a partial correction as a full one."""
+    the office result, which could otherwise mask a partial correction as a full one.
+
+    THE THIRD COPY (thread 6483/6504, Thoth's own scoping and ruling: the workspace is
+    real, deliberate infrastructure, not an undeclared scratch dir — decision 87457dc1,
+    the operator's own correction that jesus/chad are real seats mid-arc, not accidents):
+    `mint_seat`/`found_seat` scaffold a WORKSPACE alongside the office, its own directory,
+    its own `.osiris` pin (`sweep_seat_workspace`'s own docstring names the convention,
+    `Path.home() / "code" / handle.lower()`, `path=` overridden at mint time) — a location
+    this function still never reached even after the anchor extension above, live-verified
+    still stale at the moment this was written. SAME PATTERN, a third time, not a new
+    design: self-scoped (the convention path, never caller-supplied — `workspace_root` is
+    a test seam only, matching `sweep_seat_workspace`'s own), corrected ONLY when it
+    exists, already declares `key`, and differs from BOTH the office AND the (possibly
+    already-corrected) anchor path — never a double-write when a seat's anchor happens to
+    equal its workspace default. Reported under `workspace`, same shape as `anchor`. Best-
+    effort like `sweep_seat_workspace`'s own default: a seat minted with an explicit
+    custom `path=` is not covered by this guess, the same accepted gap that verb's own
+    docstring names — the existence+declares-key+differs guard means a wrong guess here
+    writes nothing, it simply finds no matching file to correct."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
         return {"error": f"{agent_id} holds no seat — correcting a pin is a seat's own act, "
                          "never done on another's behalf"}
+    handle = bound["handle"].lower()
     root = office_root or _default_office_root()
-    office = root / bound["handle"].lower()
+    office = root / handle
     result = correct_pin_value(str(office), key, value, reason=reason)
     if not result.get("error"):
         result["seat_id"] = bound["seat_id"]
+    touched = {_resolved(office)}
     anchor_cwd = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
-    if anchor_cwd and Path(anchor_cwd) != office and \
+    if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             (Path(anchor_cwd) / ".osiris").is_file():
         anchor_result = correct_pin_value(anchor_cwd, key, value, reason=reason)
         result["anchor"] = anchor_result if anchor_result.get("error") else {
             "path": anchor_result["path"], "corrected": True}
+        touched.add(_resolved(Path(anchor_cwd)))
+    workspace = (workspace_root or (Path.home() / "code")) / handle
+    if _resolved(workspace) not in touched and (workspace / ".osiris").is_file():
+        workspace_result = correct_pin_value(str(workspace), key, value, reason=reason)
+        result["workspace"] = workspace_result if workspace_result.get("error") else {
+            "path": workspace_result["path"], "corrected": True}
     return result
+
+
+def _resolved(p: Path) -> Path:
+    """Sync helper (ASYNC240, this codebase's own ruff gate) — `Path.resolve()` stays out
+    of correct_own_pin_value/revert_own_pin_write's own async bodies."""
+    return p.resolve()
 
 
 def revert_pin_write(path: str) -> dict[str, Any]:
@@ -428,6 +460,7 @@ def revert_pin_write(path: str) -> dict[str, Any]:
 
 async def revert_own_pin_write(
     pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     """THE SELF-SCOPED DOOR onto `revert_pin_write` (ruling b30e2b38): built the same day
     its absence was found live — a seat that follows the rules into a bad pin state had
@@ -437,29 +470,39 @@ async def revert_own_pin_write(
     tonight. Composes `held_seat`, identical resolution to `correct_own_pin_value` — a
     caller names nothing but its own act, never a path.
 
-    BOTH COPIES, SYMMETRIC WITH `correct_own_pin_value`'s OWN EXTENSION: reverts the
-    office first, then the seat's own current `anchor_cwd` copy WHEN a backup exists
-    there too (silently skipped, never an error, when there isn't one to revert — the
-    anchor copy may never have been corrected at all, or may be the same directory as
-    the office). Each half's own receipt lands separately (`office`/`anchor`) so a
-    caller can see exactly which copy actually moved."""
+    ALL THREE COPIES, SYMMETRIC WITH `correct_own_pin_value`'s OWN EXTENSION (thread
+    6483/6504's workspace-copy addendum included — a write with no matching undo would
+    break the "same backup discipline" promise that function's own docstring makes):
+    reverts the office first, then the seat's own current `anchor_cwd` copy, then the
+    `~/code/<handle>` workspace convention — each WHEN a backup exists there too
+    (silently skipped, never an error, when there isn't one to revert: that copy may
+    never have been corrected at all, or may be the same directory as one already
+    reverted). Each copy's own receipt lands separately (`office`/`anchor`/`workspace`)
+    so a caller can see exactly which copies actually moved."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
         return {"error": f"{agent_id} holds no seat — reverting a pin is a seat's own act, "
                          "never done on another's behalf"}
+    handle = bound["handle"].lower()
     root = office_root or _default_office_root()
-    office = root / bound["handle"].lower()
+    office = root / handle
     office_result = revert_pin_write(str(office))
     out: dict[str, Any] = {"seat_id": bound["seat_id"], "office": office_result}
+    touched = {_resolved(office)}
     anchor_cwd = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='anchor_cwd' WHERE o.canonical=$1 "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
-    if anchor_cwd and Path(anchor_cwd) != office and \
+    if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             _pin_backup_path(Path(anchor_cwd) / ".osiris").is_file():
         out["anchor"] = revert_pin_write(anchor_cwd)
+        touched.add(_resolved(Path(anchor_cwd)))
+    workspace = (workspace_root or (Path.home() / "code")) / handle
+    if _resolved(workspace) not in touched and \
+            _pin_backup_path(workspace / ".osiris").is_file():
+        out["workspace"] = revert_pin_write(str(workspace))
     if office_result.get("error"):
         out["error"] = office_result["error"]
     return out

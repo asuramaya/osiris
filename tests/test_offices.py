@@ -798,6 +798,106 @@ async def test_correct_own_pin_value_skips_an_anchor_with_no_pin_of_its_own(
     assert "anchor" not in out
 
 
+# ═══ the THIRD copy — the ~/code/<handle> workspace convention (thread 6483/6504,
+# decision 87457dc1: a real, mint-scaffolded location, not an undeclared scratch dir). ═══
+
+async def test_correct_own_pin_value_also_corrects_the_workspace_copy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov8work", "CovWork", source="test")
+    office = tmp_path / "office" / "covwork"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    workspace = tmp_path / "workspace" / "covwork"
+    workspace.mkdir(parents=True)
+    (workspace / ".osiris").write_text('project = "Jesus"\n')
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov8work", "project", "Godel", reason="third copy",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert out["written"] is True
+    assert (office / ".osiris").read_text() == 'project = "Godel"\n'
+    assert out["workspace"]["corrected"] is True
+    assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
+
+
+async def test_correct_own_pin_value_corrects_anchor_and_workspace_together(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """All three copies, genuinely distinct — the live jesus/chad shape once the anchor
+    fix alone (b30e2b38) is not enough because anchor_cwd points at the office itself."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov9three", "CovThree", source="test")
+    office = tmp_path / "office" / "covthree"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    anchor = tmp_path / "REPOS" / "Godel3"
+    anchor.mkdir(parents=True)
+    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    workspace = tmp_path / "workspace" / "covthree"
+    workspace.mkdir(parents=True)
+    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov9three", "project", "Godel", reason="all three",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert (office / ".osiris").read_text() == 'project = "Godel"\n'
+    assert out["anchor"]["corrected"] is True
+    assert (anchor / ".osiris").read_text() == 'project = "Godel"\n'
+    assert out["workspace"]["corrected"] is True
+    assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
+
+
+async def test_correct_own_pin_value_skips_the_workspace_when_it_equals_the_anchor(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Jesus's own live shape (msg 6374): anchor_cwd WAS rebound to the workspace
+    directory itself — the anchor branch already corrects it, so the workspace branch
+    must not double-write (and must not error) on the same file."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov10same", "Cov10same", source="test")
+    office = tmp_path / "office" / "cov10same"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    workspace = tmp_path / "workspace" / "cov10same"
+    workspace.mkdir(parents=True)
+    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(workspace), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov10same", "project", "Godel", reason="anchor==workspace",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert out["anchor"]["corrected"] is True
+    assert "workspace" not in out
+    assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'  # still fixed, once
+
+
+async def test_correct_own_pin_value_skips_a_workspace_with_no_pin_of_its_own(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov11noworkpin", "Cov11noworkpin", source="test")
+    office = tmp_path / "office" / "cov11noworkpin"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "tony"\n')
+    workspace = tmp_path / "workspace" / "cov11noworkpin"
+    workspace.mkdir(parents=True)  # no .osiris here at all
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov11noworkpin", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert out["written"] is True
+    assert "workspace" not in out
+
+
 # ═══ revert_own_pin_write — the self-scoped door onto revert_pin_write (ruling b30e2b38:
 # a seat that followed the rules into a bad pin state had no sanctioned way back out). ═══
 
@@ -877,6 +977,52 @@ async def test_revert_own_pin_write_skips_anchor_with_no_backup(
     assert out["office"]["reverted"] is True
     assert "anchor" not in out
     assert (anchor / ".osiris").read_text() == 'project = "unrelated"\n'  # untouched
+
+
+async def test_revert_own_pin_write_also_reverts_the_workspace_copy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:rov5work", "Rov5work", source="test")
+    office = tmp_path / "office" / "rov5work"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    workspace = tmp_path / "workspace" / "rov5work"
+    workspace.mkdir(parents=True)
+    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    await correct_own_pin_value(
+        actions.pool, "agent:rov5work", "project", "Godel", reason="third copy",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+
+    out = await revert_own_pin_write(
+        actions.pool, "agent:rov5work",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert out["office"]["reverted"] is True
+    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert out["workspace"]["reverted"] is True
+    assert (workspace / ".osiris").read_text() == 'project = "Jesus"\n'
+
+
+async def test_revert_own_pin_write_skips_workspace_with_no_backup(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:rov6noworkbak", "Rov6noworkbak", source="test")
+    office = tmp_path / "office" / "rov6noworkbak"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "tony"\n')
+    await correct_own_pin_value(
+        actions.pool, "agent:rov6noworkbak", "project", "cultural-infrastructure",
+        reason="x", office_root=tmp_path / "office",
+        workspace_root=tmp_path / "no-workspace-here")  # workspace dir never existed
+
+    out = await revert_own_pin_write(
+        actions.pool, "agent:rov6noworkbak",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "no-workspace-here")
+    assert out["office"]["reverted"] is True
+    assert "workspace" not in out
 
 
 async def test_correct_own_pin_value_propagates_a_missing_key_refusal(

@@ -19,6 +19,7 @@ committed)."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, NamedTuple
 
 OnSuccession = Callable[[str, str], Awaitable[str | None]]
@@ -40,16 +41,59 @@ class HeartbeatResult(NamedTuple):
     resolved_seat_handle: str | None
 
 
+def _seat_owns_cwd(cwd: str, *, handle: str, anchor_cwd: str | None) -> bool:
+    """Is `cwd` one of THIS seat's own mechanical pin copies — the office, the anchor_cwd
+    courtesy copy, or the `~/code/<handle>` scratch-workspace convention (Thoth's d8331496:
+    "THREE PIN COPIES AND NO WRITER REACHES ALL THREE") — rather than a genuinely separate
+    governed checkout? Containment, not exact match: `cwd` may be a subdirectory of any of
+    these roots and still be answered by that root's own `.osiris` (read_project_label's own
+    climb-to-repo-root behavior). The scratch-workspace root is best-effort, same convention
+    sweep_seat_workspace's own default leans on (mintseat.py's `workspace = Path.home() /
+    "code" / handle.lower()` when no custom `path=` was given at mint) — a seat minted with
+    an explicit custom path is not covered by this guess, same known gap that verb accepts.
+
+    Pure and cheap: no filesystem I/O beyond what Path.resolve() needs, no DB query — this
+    runs on every statusline paint (Thoth's own hard constraint)."""
+    from src.orchestrator.offices import _default_office_root
+
+    try:
+        target = Path(cwd).resolve()
+    except OSError:
+        return False
+    roots = [_default_office_root() / handle.lower(), Path.home() / "code" / handle.lower()]
+    if anchor_cwd:
+        roots.append(Path(anchor_cwd))
+    for root in roots:
+        try:
+            root = root.resolve()
+        except OSError:
+            continue
+        if target == root or root in target.parents:
+            return True
+    return False
+
+
 async def compute_heartbeat(
     conn: Any, *, project_hint: str, session_id: str, model_id: str = "", model_raw: str = "",
     window_size: int | None = None, intent_hint: str | None = None, lease_secs: int,
-    on_succession: OnSuccession | None = None,
+    on_succession: OnSuccession | None = None, cwd: str = "",
 ) -> HeartbeatResult:
     """Verbatim extraction of `_counts`'s own body (task #33's `find_session_row`, ruling
     a882b334's succession-owned model stamp, Thoth's msg 3949/3951 seat fallback, ruling
     e9ef7373's `surface.fetch` single authority) — see that function's own long-standing
     comments for the WHY of each step; only the connection source and the succession call
-    moved, nothing about the resolution order changed."""
+    moved, nothing about the resolution order changed.
+
+    `cwd` (added: thread 6483/6487/6492, Thoth's own dispatch and ruling) feeds the (A)/(B)
+    split his "mark, never pick a winner" prior was missing the discriminator for: at the
+    seat's OWN mechanical pin copies (case A — `_seat_owns_cwd` above), nobody ever
+    DECLARED the value there, mint wrote it once and no verb kept it synced, so a
+    divergence from the graph is fossil, not testimony — the graph wins outright. Anywhere
+    else (case B), a `.osiris` pin is a genuinely separate governed checkout speaking for
+    itself (577988ed) and keeps winning, unchanged. `model`'s file-wins precedent (ruling
+    1874ad35) does NOT transfer here: the pin is a genuine operator INPUT for `model` (a
+    deliberate /model swap); `project` is never operator-input the same way, so there is no
+    parallel input to protect."""
     from src.orchestrator.mounts import find_session_row
 
     agent = None
@@ -80,14 +124,21 @@ async def compute_heartbeat(
         seat = await held_seat(conn, agent)
         if seat:
             resolved_seat_handle = seat.get("handle")
-            if resolved_project is None:
-                resolved_project = seat.get("house")
-            if resolved_intent is None and seat.get("seat_id"):
+            anchor = None
+            if seat.get("seat_id"):
                 facts = await seat_facts(conn, seat["seat_id"])
                 anchor = facts.get("anchor_cwd")
-                if anchor:
+                if resolved_intent is None and anchor:
                     from src.orchestrator.agents import read_project_model
                     resolved_intent = read_project_model(anchor)
+            if resolved_project is None:
+                resolved_project = seat.get("house")
+            elif (cwd and resolved_seat_handle
+                  and _seat_owns_cwd(cwd, handle=resolved_seat_handle, anchor_cwd=anchor)):
+                # CASE (A): the pin answered from one of THIS seat's own mechanical
+                # copies — nobody ever declared it there, so a divergence from the
+                # graph is a fossil, not a second witness. Graph wins outright.
+                resolved_project = seat.get("house") or resolved_project
 
     from src.orchestrator import surface
 

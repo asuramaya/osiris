@@ -214,6 +214,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     body = {
         "project_hint": project_hint or "", "session_id": session_id, "model_id": model_id,
         "model_raw": model_raw, "window_size": window_size, "intent_hint": intent_hint,
+        "cwd": cwd,
     }
     resp = None
     for attempt in range(_STATUSLINE_RETRIES + 1):
