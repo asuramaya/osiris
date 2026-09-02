@@ -16,6 +16,7 @@ from src.orchestrator.projects import (
     correct_project_name,
     find_case_variant_projects,
     fold_project,
+    name_alias_duplicate_candidates,
     normalize_project_casing,
     reconcile_project_fold,
     remote_url_duplicate_candidates,
@@ -1747,6 +1748,179 @@ async def test_remote_url_automerge_skips_a_genuine_contradiction(
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/conflicted'")
     assert row["status"] == "active"
+
+
+# ═══ name_alias_duplicate_candidates — #108 piece 4 (Thoth dispatch 6547, addendum to
+# 118a98da): a SURVIVOR's own current `name` alias grounds a fold when the HUSK it names
+# carries no contradicting disk evidence. The dtfb/dealer-to-fb specimen that motivated
+# this was already status='merged' by the time it was measured — every test below is a
+# SYNTHETIC fixture, the same discipline the Crush timestamp lane used, since this fleet
+# has zero live targets for the clause today. ═══════════════════════════════════════════
+
+
+async def _name_alias(actions: Actions, oid, alias: str) -> None:
+    """A SECOND current `name` on an object — the survivor's own "I am also called X".
+    A DIFFERENT source than `_stub_project`'s own "test" (assert_property's supersession
+    is same-source-only — two names from the SAME source would collapse to one current
+    row, exactly the shape the real dtfb specimen does NOT have: its own two current
+    names come from 'disk-census'/'ingest_project:...' and 'agent:226a2695-ii', two
+    distinct sources, confirmed live before writing this fixture)."""
+    await actions.assert_property(oid, "name", alias, "test-alias-source", NOW, 0.9)
+
+
+async def test_name_alias_automerge_finds_a_clean_pair_and_defaults_to_dry_run(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:survivor1", "survivor1")
+    await _stub_project(actions, "repo:huskname1", "huskname1")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor1'")
+    await _name_alias(actions, survivor_id, "huskname1")
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["executed"] is False
+    assert len(out["candidates"]) == 1
+    c = out["candidates"][0]
+    assert c["dupe"] == "repo:huskname1" and c["into"] == "repo:survivor1"
+    assert c["alias"] == "huskname1"
+    assert "plan" in c["result"]
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:huskname1'")
+    assert row["status"] == "active", "a dry run must never fold anything"
+
+
+async def test_name_alias_automerge_executes_when_told_to(actions: Actions) -> None:
+    await _stub_project(actions, "repo:survivor2", "survivor2")
+    await _stub_project(actions, "repo:huskname2", "huskname2")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor2'")
+    await _name_alias(actions, survivor_id, "huskname2")
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test", execute=True)
+    assert out["executed"] is True
+    assert out["candidates"][0]["result"]["folded"] == "repo:huskname2"
+    assert out["candidates"][0]["result"]["into"] == "repo:survivor2"
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:huskname2'")
+    assert row["status"] == "merged"
+
+
+async def test_name_alias_automerge_skips_a_husk_with_its_own_remote_url(
+    actions: Actions,
+) -> None:
+    """Any disk evidence on the husk CONTRADICTS the alias rather than confirming it —
+    exactly the shape that made the real dtfb/dealer-to-fb pair a genuine (already-
+    resolved) fold and would make a husk with its own remote_url a genuine refusal."""
+    await _stub_project(actions, "repo:survivor3", "survivor3")
+    await _stub_project(actions, "repo:huskname3", "huskname3")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor3'")
+    husk_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:huskname3'")
+    await _name_alias(actions, survivor_id, "huskname3")
+    await _remote(actions, husk_id, "https://github.com/x/huskname3.git")
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "carries its own disk evidence" in out["skipped"][0]["reason"]
+
+
+async def test_name_alias_automerge_skips_a_husk_with_its_own_on_disk_path(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:survivor4", "survivor4")
+    await _stub_project(actions, "repo:huskname4", "huskname4")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor4'")
+    husk_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:huskname4'")
+    await _name_alias(actions, survivor_id, "huskname4")
+    await actions.assert_property(husk_id, "on_disk_path", "/home/x/huskname4", "test",
+                                  NOW, 0.9)
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "carries its own disk evidence" in out["skipped"][0]["reason"]
+
+
+async def test_name_alias_automerge_finds_nothing_when_the_alias_matches_no_object(
+    actions: Actions,
+) -> None:
+    """The COMMON case, and the exact reason zero live targets exist today: a
+    self-declared alias with no separate object behind it is not a duplicate pair —
+    silent, correct, never a skip either (nothing was ever a candidate)."""
+    await _stub_project(actions, "repo:survivor5", "survivor5")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor5'")
+    await _name_alias(actions, survivor_id, "nobody-answers-to-this")
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == [] and out["skipped"] == []
+
+
+async def test_name_alias_automerge_skips_an_already_merged_husk(
+    actions: Actions,
+) -> None:
+    """Thoth's own constraint 1, from his own dtfb/dealer-to-fb correction: a husk that
+    is already status='merged' must never even become a candidate — the husk lookup
+    itself is scoped to status='active', so a merged husk simply never matches, the
+    same silent-correctness shape as the no-match case above."""
+    await _stub_project(actions, "repo:survivor6", "survivor6")
+    await _stub_project(actions, "repo:huskname6", "huskname6")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor6'")
+    husk_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:huskname6'")
+    await _name_alias(actions, survivor_id, "huskname6")
+    await actions.pool.execute(
+        "UPDATE objects SET status='merged', merged_into=$1 WHERE id=$2",
+        survivor_id, husk_id)
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == [] and out["skipped"] == []
+
+
+async def test_name_alias_automerge_skips_ambiguous_when_multiple_objects_answer(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:survivor7", "survivor7")
+    await _stub_project(actions, "repo:huskname7a", "huskname7")
+    await _stub_project(actions, "repo:huskname7b", "huskname7")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor7'")
+    await _name_alias(actions, survivor_id, "huskname7")
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "ambiguous" in out["skipped"][0]["reason"]
+
+
+async def test_name_alias_automerge_skips_a_genuine_contradiction(actions: Actions) -> None:
+    await _stub_project(actions, "repo:survivor8", "survivor8")
+    await _stub_project(actions, "repo:huskname8", "huskname8")
+    survivor_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:survivor8'")
+    husk_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:huskname8'")
+    await _name_alias(actions, survivor_id, "huskname8")
+    await actions.assert_property(husk_id, "language", "python", "agent:alice", NOW, 0.9)
+    await actions.assert_property(survivor_id, "language", "go", "agent:bob", NOW, 0.9)
+
+    out = await name_alias_duplicate_candidates(
+        actions, evidence="op confirmed", actor="agent:test")
+    assert out["candidates"] == []
+    assert len(out["skipped"]) == 1
+    assert "contradicting values on: language" in out["skipped"][0]["reason"]
 
 
 # --- restore_attribution (thread 3f7969a3, operator ruling) ------------------------------

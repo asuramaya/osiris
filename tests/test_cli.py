@@ -2301,6 +2301,75 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
     assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
 
 
+async def _name_alias_dupe(actions: Actions, survivor: str, husk: str) -> None:
+    """A minimal name-alias-matched pair — the survivor's own graph already asserts
+    "I am also called <husk>" (a DIFFERENT source than its own primary name, matching
+    the real dtfb specimen: assert_property's same-source-only supersession would
+    collapse two same-source names to one current row otherwise), and the husk carries
+    no remote_url/on_disk_path of its own."""
+    now = datetime.now(UTC)
+    survivor_id = await actions.create_or_find_object(
+        "SoftwareProject", f"repo:{survivor}", "test")
+    await actions.create_or_find_object("SoftwareProject", f"repo:{husk}", "test")
+    await actions.assert_property(survivor_id, "name", survivor, "test", now, 0.9)
+    await actions.assert_property(survivor_id, "name", husk, "test-alias-source", now, 0.9)
+
+
+async def test_cmd_deploy_name_alias_automerge_executes_by_default(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#108 piece 4 wiring (Thoth dispatch 6547): the SAME env flag as pieces 2/3 gates
+    this step too — no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE it, not just survey."""
+    monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
+    await _name_alias_dupe(actions, "deploynamea", "deploynamea-husk")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
+    text = buf.getvalue()
+    assert "name-alias auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "repo:deploynamea-husk -> repo:deploynamea" in text
+    assert "decision 31e5bae1" in text  # item 4's discoverability pointer
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploynamea-husk'")
+    assert row["status"] == "merged"
+
+
+async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "0")
+    await _name_alias_dupe(actions, "deploynameb", "deploynameb-husk")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
+    assert "name-alias auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploynameb-husk'")
+    assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
+
+
 # --- dev-box systemd USER units are repo-managed (thread e6fd3772 piece 3-infra) ---------------
 # `osiris deploy` installs deploy/user/*.service over ~/.config/systemd/user/ before restarting
 # — these units were previously five hand-installed files this box's own operator diverged from

@@ -1617,6 +1617,40 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
     return notes
 
 
+async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
+    """#108 PIECE 4 WIRING (Thoth dispatch 6547, addendum to 118a98da) — a third
+    post-migration deploy step beside casefold's and remote_url's, same shape and same
+    OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out; every other value, including unset,
+    executes) — one standing autonomy ruling (22d47acb) over one class of act, never a
+    third env var to forget. Every candidate still goes through the SAME fold_project
+    door with its own contradiction gate.
+
+    THE RECEIPT NAMES THE STANDING PROCEDURE (item 4, Thoth's own ask): a fold that
+    executes here is also the specimen that would have made dsh00001's own
+    self-service fold (2026-08-21, ruling 31e5bae1) findable in one query instead of
+    the four this lane's own scoping took — so every executed candidate's note points
+    at 31e5bae1 directly, and names the alias that grounded it, the same way
+    dsh00001's own justification named its reason on the record."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import name_alias_duplicate_candidates
+
+    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
+    result = await name_alias_duplicate_candidates(
+        Actions(pool), evidence="osiris deploy: automatic name-alias-matched merge "
+        "(#108 piece 4, decision 118a98da/31e5bae1) — the survivor's own graph already "
+        "asserted this rename as a current name alias before this fold ran",
+        actor="osiris-deploy", execute=execute)
+    notes = [f"name-alias auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+             f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
+    for c in result["candidates"]:
+        notes.append(f"  {c['dupe']} -> {c['into']} (alias {c['alias']!r} was already "
+                     f"a current name on {c['into']} — see decision 31e5bae1 for the "
+                     "standing self-service procedure this fold follows)")
+    for s in result["skipped"]:
+        notes.append(f"  SKIPPED: {s['survivor']} alias {s['alias']!r} — {s['reason']}")
+    return notes
+
+
 MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
 MigrateRunner = Callable[[Path], Awaitable[None]]
 
@@ -1985,6 +2019,8 @@ async def cmd_deploy(
         for note in await _run_casefold_automerge(pool):
             print(note)
         for note in await _run_remote_url_automerge(pool):
+            print(note)
+        for note in await _run_name_alias_automerge(pool):
             print(note)
 
         expects_unit_install = bool(user_unit_sources(root))
