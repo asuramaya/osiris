@@ -177,11 +177,16 @@ def test_already_live_reads_as_a_state_not_a_refusal() -> None:
 
     THE LAW, symmetric across the pair: each verb exits 0 when the world is ALREADY in the
     state it was asked for — launch => a body exists, stop => none does. This asserts the
-    source states that law, so a later edit that flips the exit code has to argue with it."""
+    source states that law, so a later edit that flips the exit code has to argue with it.
+
+    LIVES IN THE SHARED GUARD NOW (operator ruling 60c78788's verb split, thread
+    bc11a2d3's family): `_cmd_launch_harness` composes `_resolve_and_guard_launch`
+    rather than carrying this check inline — both `osiris launch` and `osiris resume`
+    share this one occupancy gate, never two copies (#48's lesson)."""
     import inspect
 
-    from src.cli import _cmd_launch_harness
-    src = inspect.getsource(_cmd_launch_harness)
+    from src.cli import _resolve_and_guard_launch
+    src = inspect.getsource(_resolve_and_guard_launch)
     assert "already-live" in src, "the already-live verdict word is gone"
     # the diagnostic goes to stderr so a pipe carries only the verdict
     idx = src.index("already-live")

@@ -53,6 +53,13 @@ NO_MCP_EQUIVALENT = {
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
+    "resume": "operator ruling 60c78788 (2026-09-01) split the CLI's own `osiris launch` "
+             "into launch/resume so the two front doors are each exactly one predictable "
+             "thing (fresh --bg mint vs one-shot -p --resume). The MCP `launch` tool "
+             "(backed by trigger.launch_seat) still has its OWN automatic resume-or-fresh "
+             "branch, unsplit — whether it should also split into two MCP tools is a "
+             "real, separate, operator-owned question, named to Thoth rather than decided "
+             "unilaterally in this CLI-only change (thread bc11a2d3's family).",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
