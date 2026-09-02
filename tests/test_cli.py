@@ -40,6 +40,7 @@ from src.cli import (
     cmd_mint_seat,
     cmd_new,
     cmd_rematerialize,
+    cmd_resume,
     cmd_retention,
     cmd_seed,
     cmd_show,
@@ -414,6 +415,29 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
     assert out == 0
 
 
+async def test_cmd_resume_refuses_an_already_live_seat_same_occupancy_gate_as_launch(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A VERB SPLIT MUST NOT BECOME A GUARD HOLE (operator ruling 60c78788, Thoth's own
+    explicit instruction): `osiris resume` shares launch's exact twin/occupancy check
+    via `_resolve_and_guard_launch` — a seat already holding a live body refuses resume
+    too, same success-shaped exit 0, never a spawn attempt."""
+    office = tmp_path / "already-live-resume"
+    office.mkdir()
+    await ensure_seat(actions, house="osiris", handle="already-live-resume",
+                      anchor_cwd=str(office), source="test")
+
+    async def _boom_resume(*a: Any, **k: Any) -> None:
+        raise AssertionError("should never be called — a live body already holds this seat")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"name": "[OS] already-live-resume", "cwd": cwd, "sessionId": "sess-1"}]
+
+    out = await cmd_resume("already-live-resume", pool=actions.pool,
+                           agents_json=_agents_json, resume_spawn=_boom_resume)
+    assert out == 0
+
+
 async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cannot_see(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -482,12 +506,15 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     assert spawn_calls[0]["model"] == "claude-sonnet-5"
     assert f'mount(cwd="{office}"' in spawn_calls[0]["prompt"]
     assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
-    # GATE KNOBS ONLY WHEN THE GATE ACTUALLY RAN (thread bc11a2d3/msg 6262): this is a
-    # brand-new seat with NO holder at all — "not resumed" here is the correct, quiet,
-    # happy-path outcome, not a real gate refusal. Tuning parameters (min_tail_bytes,
-    # ceiling) belong on the branch that actually consulted them.
+    # CONTRACT CHANGED BY THE VERB SPLIT (operator ruling 60c78788). This used to assert
+    # "not resumed" — the line that explained why launch fell THROUGH its resume branch to
+    # a fresh spawn. There is no such branch any more: `osiris launch` always spawns fresh,
+    # so reporting a resume decision it never made would be noise about a road not taken.
+    # What must still hold is the same thing the old assertion was protecting: launch says
+    # nothing about resume machinery it did not run.
     out_text = buf.getvalue()
-    assert "not resumed" in out_text
+    assert "spawned" in out_text and "claude --bg" in out_text
+    assert "resumed" not in out_text          # launch never speaks of resuming, either way
     assert "min_tail_bytes" not in out_text and "ceiling=" not in out_text
 
 
@@ -526,15 +553,11 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
             return []
         return [{"name": "[OS] ooblek-cli", "cwd": cwd, "sessionId": "sess-ooblek"}]
 
-    async def _resume_spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("should never be called — this seat has no holder to resume")
-
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await _cmd_launch_harness("ooblek-cli", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
-                                        agents_json=_agents_json,
-                                        resume_spawn=_resume_spawn)
+                                        agents_json=_agents_json)
     assert out == 0
     assert "20.3MB" in buf.getvalue()
     assert "2026-08-02T17:57:18+00:00" in buf.getvalue()
@@ -565,9 +588,6 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     async def _no_sleep(secs: float) -> None:
         slept.append(secs)
 
-    async def _resume_spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("should never be called — this seat has no holder to resume")
-
     import io
     from contextlib import redirect_stdout
 
@@ -575,19 +595,19 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
     with redirect_stdout(buf):
         out = await _cmd_launch_harness("neverup", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
-                                        agents_json=_agents_json, resume_spawn=_resume_spawn,
-                                        sleep=_no_sleep)
+                                        agents_json=_agents_json, sleep=_no_sleep)
     assert out == 0
     assert len(slept) == 8  # the full bounded poll, never an indefinite wait
     assert "not yet visible" in buf.getvalue()
 
 
-# ═══ cmd_launch harness-native RESUME lane (task #136, 2026-08-05, decision 536de12f +
-# Thoth msg 3732 "GO — #136 LANE SWITCH"): mirrors launch_seat's own already-proven resume
-# branch exactly — _lineage_resume_candidate/_resume_guard/resume_spawn, reused verbatim,
-# never reimplemented (test_trigger.py's own identically-shaped fixtures already exhaust
-# the underlying gate logic — the guard, the compaction/ceiling math, the lineage walk —
-# so these tests only prove _cmd_launch_harness WIRES it correctly, not re-derive it).
+# ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, decision 536de12f; split into
+# its own verb by operator ruling 60c78788, 2026-09-01): mirrors launch_seat's own
+# already-proven resume branch exactly — _lineage_resume_candidate/_resume_guard/
+# resume_spawn, reused verbatim, never reimplemented (test_trigger.py's own identically-
+# shaped fixtures already exhaust the underlying gate logic — the guard, the compaction/
+# ceiling math, the lineage walk — so these tests only prove _cmd_resume_harness WIRES it
+# correctly, not re-derive it).
 #
 # VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json` (decision 536de12f,
 # confirming a829a15d, proven live twice, independently — a `-p --resume` body cannot
@@ -642,14 +662,16 @@ def _resume_settings(sense: Path, *, min_tail_bytes: int = 0) -> SimpleNamespace
                            osiris_wake_allowed_tools="mcp__osiris")
 
 
-async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
+async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE PAYOFF: a seat whose holder left a resumable session is CONTINUED via
-    resume_spawn's own `-p --resume` lane, never minted fresh via `claude --bg` — and
-    never polled through `agents_json` either (that registry cannot retain it, proven
-    live; the fake below asserts it is never even asked)."""
-    from src.cli import _cmd_launch_harness
+    """THE PAYOFF, now cmd_resume's own (operator ruling 60c78788's verb split): a seat
+    whose holder left a resumable session is CONTINUED via resume_spawn's own `-p
+    --resume` lane — and never polled through `agents_json` for it either (that
+    registry cannot retain it, proven live; the fake below asserts it is never even
+    asked). `agents_json` is still consulted ONCE, for the shared pre-resume
+    already-live twin check both verbs use."""
+    from src.cli import _cmd_resume_harness
 
     sense = await _resumable_seat(
         actions, tmp_path, handle="cliresume", agent_id="agent:cliresume01",
@@ -660,9 +682,6 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    async def _boom_spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("a resumable holder must never be minted fresh via --bg")
-
     async def _boom_agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return []  # only ever asked once, for the pre-resume already-live check
 
@@ -671,9 +690,9 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await _cmd_launch_harness(
+        out = await _cmd_resume_harness(
             "cliresume", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
-            spawn=_boom_spawn, agents_json=_boom_agents_json, resume_spawn=_resume_spawn,
+            agents_json=_boom_agents_json, resume_spawn=_resume_spawn,
             settings=_resume_settings(sense))
 
     assert out == 0
@@ -688,14 +707,15 @@ async def test_cmd_launch_harness_resumes_a_stale_but_resumable_holder(
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
     # THE HONEST MESSAGE (Thoth's msg 6260, the operator's real "marquee was not
     # launched into the claude agents list" complaint): no defensive "a harness fact,
-    # not a bug" framing — state the consequence and the two real next steps.
+    # not a bug" framing — state the consequence and the two real next steps. This
+    # text is now cmd_resume's own, unchanged word for word from before the split.
     assert "a harness fact, not a bug" not in out_text
     assert "gone from `claude agents --json` for good" in out_text
     assert "send it mail, it wakes on the next dispatch" in out_text
     assert f"claude -p --resume {_RESUME_SID}" in out_text
 
 
-async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
+async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """#173a's own door, mirrored through this CLI-facing lane (ruling 983ec87a, two doors
@@ -704,7 +724,7 @@ async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     act. The testimony arm alone would refuse this resident-unknown; the zero-hop graph
     door corroborates it via the graph's own session pointer + the seat's own launch
     location, and the resume proceeds through THIS door too, not just launch_seat's."""
-    from src.cli import _cmd_launch_harness
+    from src.cli import _cmd_resume_harness
 
     sense = await _resumable_seat_no_signed_testimony(
         actions, tmp_path, handle="clizerohop", agent_id="agent:clizerohop01",
@@ -715,15 +735,12 @@ async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    async def _boom_spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("a graph-corroborated zero-hop candidate must never be minted")
-
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return []
 
-    out = await _cmd_launch_harness(
+    out = await _cmd_resume_harness(
         "clizerohop", model=None, pool=actions.pool, wake_default=None,
-        spawn=_boom_spawn, agents_json=_agents_json, resume_spawn=_resume_spawn,
+        agents_json=_agents_json, resume_spawn=_resume_spawn,
         settings=_resume_settings(sense))
 
     assert out == 0
@@ -735,51 +752,38 @@ async def test_cmd_launch_harness_resumes_a_zero_hop_candidate_with_no_signed_te
 async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_resumable(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FALLBACK, proven too (Thoth's explicit bar — a fix that only works on the happy
-    path recreates the bug it replaced): a holder whose transcript compacted past the gate
-    is NOT auto-resumed — falls through to `claude --bg` exactly as before this lane
-    existed, with the refusal reason NAMED, never silent, and the (already-fixed)
-    dormant-history confession still firing unbypassed and undoubled."""
-    from src.cli import _cmd_launch_harness
+    """NEVER FALLS THROUGH TO FRESH ANYMORE (operator ruling 60c78788's verb split, the
+    whole point of it): a holder whose transcript compacted past the gate used to fall
+    through to `claude --bg`; `osiris resume` now REFUSES cleanly instead — nothing
+    spawned, the refusal reason still NAMED, never silent. Minting fresh on a failed
+    resume is `osiris launch`'s own separate act now, never this verb's."""
+    from src.cli import _cmd_resume_harness
 
     sense = await _resumable_seat(
         actions, tmp_path, handle="clicompact", agent_id="agent:clicompact01",
         anchor_cwd="/tmp/clicompact-office", compacted=True)
 
-    spawned: list[dict[str, Any]] = []
-
-    async def _spawn(repo: str, *, name: str, model: str | None, prompt: str) -> None:
-        spawned.append({"repo": repo, "name": name, "model": model, "prompt": prompt})
-
     async def _boom_resume(*a: Any, **k: Any) -> None:
         raise AssertionError("a tail closed at the seam itself must never be resumed")
 
-    poll_count = 0
-
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
-        nonlocal poll_count
-        poll_count += 1
-        if poll_count < 2:  # call 1 = the pre-resume already-live check: nothing there yet
-            return []
-        return [{"name": "[OS] clicompact", "cwd": cwd, "sessionId": "sess-fresh"}]
+        return []  # only ever asked once, for the pre-resume already-live check
 
     import io
-    from contextlib import redirect_stdout
+    from contextlib import redirect_stderr
 
     buf = io.StringIO()
-    with redirect_stdout(buf):
-        out = await _cmd_launch_harness(
+    with redirect_stderr(buf):
+        out = await _cmd_resume_harness(
             "clicompact", model=None, pool=actions.pool, wake_default=None,
-            spawn=_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
+            agents_json=_agents_json, resume_spawn=_boom_resume,
             settings=_resume_settings(sense, min_tail_bytes=1000))
 
-    assert out == 0
-    assert len(spawned) == 1  # the fresh spawn still happened — the fallback is not a dead end
+    assert out == 1  # refused — never spawns anything, fresh or otherwise
     out_text = buf.getvalue()
-    assert "not resumed" in out_text
+    assert "nothing resumable" in out_text
     assert "seam itself" in out_text
     assert "min_tail_bytes=1000" in out_text
-    assert "spawned" in out_text  # the pre-existing fresh-spawn confirmation still prints
 
 
 async def _resumable_seat_no_signed_testimony(
@@ -826,7 +830,7 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
     same contract) — must refuse the WHOLE launch. Before ef88e2bb this fell through to
     the same `claude --bg` mint as a genuine crossed-registry finding, exactly how
     ferryman's real, resumable session got a stranger minted over it."""
-    from src.cli import _cmd_launch_harness
+    from src.cli import _cmd_resume_harness
 
     sense = tmp_path / "projects"
     proj = sense / "-repo-demo"
@@ -853,9 +857,6 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
                                   0.9, evidence_class="self_declared")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:clihopback01-ii")
 
-    async def _boom_spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("resident-unknown must refuse the launch, never mint a stranger")
-
     async def _boom_resume(*a: Any, **k: Any) -> None:
         raise AssertionError("resident-unknown must refuse, never resume blind either")
 
@@ -867,9 +868,9 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await _cmd_launch_harness(
+        out = await _cmd_resume_harness(
             "clihopback", model=None, pool=actions.pool, wake_default=None,
-            spawn=_boom_spawn, agents_json=_agents_json, resume_spawn=_boom_resume,
+            agents_json=_agents_json, resume_spawn=_boom_resume,
             settings=_resume_settings(sense))
 
     assert out == 1  # refused, not the ordinary success-with-fresh-spawn path
@@ -3347,6 +3348,19 @@ async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
                             actor="console", pool=actions.pool)
     assert out == 0
     assert "note: paths use the lowercase form" not in buf.getvalue()
+
+async def test_cli_parser_accepts_resume(actions: Actions) -> None:
+    """The new verb (operator ruling 60c78788): a real positional handle + --model,
+    no --debug (resume has no PTY-broker fallback lane, launch's own concern only)."""
+    from src.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["resume", "Chad"])
+    assert args.command == "resume"
+    assert args.handle == "Chad" and args.model is None
+
+    named = parser.parse_args(["resume", "Chad", "--model", "claude-sonnet-5"])
+    assert named.model == "claude-sonnet-5"
 
 
 async def test_cli_parser_accepts_bootstrap(actions: Actions) -> None:

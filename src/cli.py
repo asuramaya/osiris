@@ -553,27 +553,31 @@ async def _await_launch_confirmation(
     return alive, mounted_model
 
 
-async def _resolve_launch_target(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | None:
+async def _resolve_launch_target(
+    pool: asyncpg.Pool, handle: str, *, verb: str = "launch",
+) -> dict[str, Any] | None:
     """Handle -> seat facts (with `seat_id` folded in), or None with an honest stderr message
-    already printed. Shared by both launch lanes below — the seat lookup and its error cases
-    don't change with the substrate, only what happens once a target is found."""
+    already printed. Shared by launch AND resume (thread 60c78788, the operator's verb
+    split) — the seat lookup and its error cases don't change with the door, only what
+    happens once a target is found. `verb` names the actual caller in every printed line
+    ('launch' or 'resume') so one function serves both without a second copy."""
     from src.orchestrator.seats import seat_facts, seats_by_handle
 
     seat_ids = await seats_by_handle(pool, handle)
     if not seat_ids:
-        print(f"osiris launch: no living Seat holds handle {handle!r}.", file=sys.stderr)
+        print(f"osiris {verb}: no living Seat holds handle {handle!r}.", file=sys.stderr)
         return None
     if len(seat_ids) > 1:
-        print(f"osiris launch: {handle!r} is ambiguous — {len(seat_ids)} seats share it: "
+        print(f"osiris {verb}: {handle!r} is ambiguous — {len(seat_ids)} seats share it: "
               f"{seat_ids}. Use a more specific handle.", file=sys.stderr)
         return None
     facts = await seat_facts(pool, seat_ids[0])
     if not facts["handle"]:
-        print(f"osiris launch: {seat_ids[0]} carries no handle assertion — a body cannot "
+        print(f"osiris {verb}: {seat_ids[0]} carries no handle assertion — a body cannot "
               "be named for a nameless seat.", file=sys.stderr)
         return None
     if not facts["anchor_cwd"]:
-        print(f"osiris launch: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
+        print(f"osiris {verb}: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
               "establish_office first; a body needs a room to be born in.", file=sys.stderr)
         return None
     facts["seat_id"] = seat_ids[0]
@@ -619,70 +623,21 @@ def _collapse_resume_log(log: list[str]) -> str:
     return "; ".join(singles + repeats)
 
 
-async def _cmd_launch_harness(
-    handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
-    spawn: SpawnClaudeBg, agents_json: AgentsJson, resume_spawn: ResumeSpawn,
-    settings: Settings | None = None,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> int:
-    """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
-    + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
-    surface — every body this creates is visible in the operator's own `claude agents` list
-    BY CONSTRUCTION. Mirrors launch_seat's harness lane exactly (same spawn/agents_json
-    primitives, same boot-prompt wording via `_bg_boot_prompt` — one wording, never two to
-    drift apart) but skips its managed_by/caller-seat gate: launch_seat's own docstring is
-    explicit that the operator is a different trust boundary and never calls it directly —
-    this function IS that boundary, same as the PTY lane below it.
+async def _resolve_and_guard_launch(
+    handle: str, *, pool: asyncpg.Pool, agents_json: AgentsJson, verb: str,
+) -> tuple[dict[str, Any], str] | int:
+    """THE GUARDS SHARED BY BOTH DOORS (thread 60c78788, the operator's verb split —
+    `osiris launch` always mints fresh, `osiris resume` always continues, no flag, no
+    automatic guess — the VERB is the property): resolve the seat, refuse a missing
+    anchor_cwd/tree_cwd BY NAME with the exact remedy (decision 27259e4d, thread
+    bc11a2d3), and refuse (as a SUCCESS, exit 0) when a body already holds this seat —
+    same occupancy gate for both verbs, so a verb split can never become a guard hole.
+    `verb` names the actual caller in every printed line so this stays ONE
+    implementation, never a second copy drifting from the first (#48's own lesson).
+    Returns `(facts, launch_cwd)` to proceed, or an int to return immediately."""
+    from src.orchestrator.trigger import _launch_twin_check, _tree_exists
 
-    TREE_CWD (task #135/#136, 2026-08-03, ruling 983ec87a — two doors onto one act must
-    return the same receipt): this door had drifted from launch_seat's own #103 update —
-    hardcoded to `office` and never reading `tree_cwd` at all, so it could not correctly
-    body any tree-bound seat; it always spawned into the office, silently. Now mirrors
-    launch_seat's own tree_cwd handling exactly: bound-but-missing refuses (osiris never
-    provisions a tree), unset falls back to `office` unchanged.
-
-    THE RESUME LANE (task #136, 2026-08-05, ruling via decision 536de12f + Thoth msg 3732 —
-    "GO — #136 LANE SWITCH"): before minting fresh, mirrors launch_seat's own already-proven
-    resume branch exactly — `_lineage_resume_candidate` + `_resume_guard` + `resume_spawn`
-    (trigger.py's `-p --resume` lane), reused verbatim, never a third bespoke implementation.
-    VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json`, ON PURPOSE (decision
-    536de12f, confirming a829a15d): a resumed `-p --resume` body cannot appear in that roster
-    even when it explicitly calls mount() mid-turn — proven live, twice, independently — that
-    registry only ever lists sessions spawned with `--bg --name`, unrelated to osiris's own
-    bookkeeping by construction. So a successful resume here returns immediately, WITHOUT
-    polling `agents_json` for it — polling would just spin out to the same false "not yet
-    visible" message on every resume, every time, which is worse than not polling at all.
-
-    THE CONFESSION KEEPS FIRING, UNCHANGED, ON THE FALLBACK PATH ONLY (Thoth's explicit
-    requirement: "the confession path you just fixed must keep working... do not let the
-    lane switch quietly bypass or double it"): a successful resume never reaches
-    `dormant_history_confession` at all (nothing left to confess — the launch already acted
-    on it); every path that falls through to a fresh spawn still gets it, exactly as before
-    this lane existed. The resume attempt's own reason (`resume_log`) prints separately,
-    named every time win or lose — Thoth's own rule for launch_seat's identical receipt
-    ("a correct decision made silently is indistinguishable from a broken one").
-
-    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
-    7d6815bb): a `resident-unknown` gate — an ABSENCE of signed testimony, not a positive
-    finding of a different mind — used to fall through to the same fresh `--bg` mint as a
-    genuine `crossed-registry` finding, exactly the bug that spawned strangers over
-    ferryman's and halcyon's real, resumable heads. Now it refuses the WHOLE launch instead,
-    spawning nothing and naming the exact `claude -p --resume <sid>` a human can run to
-    confirm the session themselves. `crossed-registry` (a positively different mind) still
-    falls through to fresh — that session was never this seat's, so a fresh body under its
-    name is legitimate."""
-    from src.orchestrator.agents import _generation
-    from src.orchestrator.seats import seat_receipt
-    from src.orchestrator.trigger import (
-        _DM_RESUME_PROMPT,
-        _bg_boot_prompt,
-        _launch_twin_check,
-        _lineage_resume_candidate,
-        _resume_guard,
-        _tree_exists,
-    )
-
-    facts = await _resolve_launch_target(pool, handle)
+    facts = await _resolve_launch_target(pool, handle, verb=verb)
     if facts is None:
         return 1
     office = facts["anchor_cwd"]
@@ -699,7 +654,7 @@ async def _cmd_launch_harness(
     # anchor_cwd/the on-disk path is the truth is an operator decision, not a guess either
     # side should make — this only refuses loudly and names which field disagrees.
     if not _tree_exists(office):
-        print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
+        print(f"osiris {verb}: {handle!r} names anchor_cwd={office!r} but it does not "
               "exist on disk — repoint it or create the directory before launch; osiris "
               "never provisions one itself. The anchor is a GRAPH assertion (not a "
               f".osiris pin file) — fix it with: rebind_seat(seat={handle!r}, "
@@ -709,7 +664,7 @@ async def _cmd_launch_harness(
     launch_cwd = office
     if tree_cwd:
         if not _tree_exists(tree_cwd):
-            print(f"osiris launch: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
+            print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
                   "exist on disk — osiris expects the harness (or a human, via "
                   "EnterWorktree) to have created it before launch; it never provisions "
                   "one itself. Fix it with: bind_seat_tree(seat_id="
@@ -746,82 +701,56 @@ async def _cmd_launch_harness(
         # know) goes to stderr so `osiris launch X | ...` stays clean; the VERDICT stays
         # on stdout, and now names which of the two things happened.
         print(f"already-live: {handle} — a body is already there, nothing started")
-        print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
+        print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
+    return facts, launch_cwd
+
+
+async def _cmd_launch_harness(
+    handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
+    spawn: SpawnClaudeBg, agents_json: AgentsJson,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> int:
+    """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
+    + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
+    surface — every body this creates is visible in the operator's own `claude agents` list
+    BY CONSTRUCTION. Mirrors launch_seat's harness lane exactly (same spawn/agents_json
+    primitives, same boot-prompt wording via `_bg_boot_prompt` — one wording, never two to
+    drift apart) but skips its managed_by/caller-seat gate: launch_seat's own docstring is
+    explicit that the operator is a different trust boundary and never calls it directly —
+    this function IS that boundary, same as the PTY lane below it.
+
+    ALWAYS FRESH, NEVER A RESUME CHECK (operator ruling 60c78788, thread bc11a2d3's
+    family, 2026-09-01): this used to check the seat's last holder for a resumable
+    session before minting — that automatic property is exactly what produced the
+    operator's own complaint ("marquee was not launched into the claude agents list"),
+    because a resumed body structurally cannot ever appear there. The operator, offered
+    three options (always-fresh / keep-resume-first / split-into-two-verbs), chose the
+    split: `osiris launch` is now ALWAYS this — a fresh, persistent `--bg` mint, always
+    listed, always attachable — and `osiris resume` (below) is the one-shot `-p
+    --resume` turn this function used to fall into automatically. Ruling 696d302c
+    ("the launch window is a property of launch, never a per-launch question") is
+    SATISFIED by naming, not overridden: nobody is ever asked which one they want: the
+    verb IS the answer.
+
+    TREE_CWD (task #135/#136, 2026-08-03, ruling 983ec87a — two doors onto one act must
+    return the same receipt): this door had drifted from launch_seat's own #103 update —
+    hardcoded to `office` and never reading `tree_cwd` at all, so it could not correctly
+    body any tree-bound seat; it always spawned into the office, silently. Now mirrors
+    launch_seat's own tree_cwd handling exactly: bound-but-missing refuses (osiris never
+    provisions a tree), unset falls back to `office` unchanged."""
+    pre = await _resolve_and_guard_launch(
+        handle, pool=pool, agents_json=agents_json, verb="launch")
+    if isinstance(pre, int):
+        return pre
+    facts, launch_cwd = pre
+    office = facts["anchor_cwd"]
+    tree_cwd = facts["tree_cwd"]
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
 
-    from src.config.settings import get_settings
-    st = settings or get_settings()
-    holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
-    resume_outcome = await _lineage_resume_candidate(
-        pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
-    resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
-    resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
-    if resume is not None:
-        # holder is truthy whenever resume is set — resume_outcome only comes from
-        # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
-        # holder was falsy. Asserted, not silently narrowed: a violated invariant here
-        # should be loud, never a quiet skip of the identity gate.
-        assert holder is not None
-        # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
-        # 983ec87a, two doors must return the same receipt): the SAME arithmetic
-        # _lineage_resume_candidate's own success line renders ("...resumable, N hop(s)
-        # back") — its log always ends with exactly one success entry when `resume` is
-        # set, so the count of entries BEFORE it is N.
-        gate, refusal = await _resume_guard(
-            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st,
-            hop=len(resume_log) - 1, launch_cwd=launch_cwd)
-        if gate == "resident-unknown":
-            # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
-            # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
-            # ABSENCE of signed testimony is not evidence this head belongs to someone
-            # else. "crossed-registry" (a POSITIVE finding) still falls through to a
-            # fresh mint below; "resident-unknown" refuses the WHOLE launch instead —
-            # nothing spawned, the exact resume command named. NOTE (#173a): only
-            # reached when the zero-hop graph door (hop/launch_cwd above) did NOT
-            # already clear the gate.
-            print(f"osiris launch: REFUSING — {handle!r} has a possibly-resumable "
-                  f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
-                  f"{resume[0]}` by hand to confirm it yourself; osiris will not mint "
-                  "a fresh mind over a resumable head it merely couldn't verify.",
-                  file=sys.stderr)
-            return 1
-        if gate is not None:
-            resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
-            resume = None
-    if resume is not None:
-        resumed_session_id, resumed_repo = resume[0], resume[1]
-        await resume_spawn(resumed_repo, _DM_RESUME_PROMPT, resume_session=resumed_session_id,
-                           model=resolved_model, allowed_tools=st.osiris_wake_allowed_tools
-                           or None)
-        print(f"osiris launch: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
-              f"walked {len(resume_log)} generation(s) back to find it "
-              f"({_collapse_resume_log(resume_log)}). It runs the brief and exits, then is "
-              "gone from `claude agents --json` for good — that registry only ever lists "
-              "`claude --bg --name` windows, never a `-p --resume` body; osiris cannot "
-              "change that. To reach it again: send it mail, it wakes on the next "
-              f"dispatch; or run `claude -p --resume {resumed_session_id}` by hand to "
-              "watch a turn live yourself.")
-        stamped_model = facts.get("intended_model")
-        if stamped_model and resolved_model != stamped_model:
-            print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
-                  f"stamped intended_model is {stamped_model!r} — never silent (thread "
-                  "20e4feb6).", file=sys.stderr)
-        return 0
-
-    # GATE KNOBS ONLY WHEN THE GATE ACTUALLY RAN (thread bc11a2d3/msg 6262: a brand-new
-    # seat with no holder at all never reaches the real gate — resume_log is just the
-    # placeholder ["no seat holder on record"] — so printing min_tail_bytes/ceiling there
-    # is tuning detail for a check that never happened, at the quietest, most correct
-    # moment in the whole flow). `holder` truthy means _lineage_resume_candidate's own
-    # gate genuinely ran against real data.
-    gate_note = (f" (gate: min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
-                 f"{st.osiris_resume_ceiling_bytes}b)") if holder else ""
-    print(f"osiris launch: {handle!r} not resumed — "
-          f"{_collapse_resume_log(resume_log)}{gate_note}")
-
     from src.ingest.sessions import dormant_history_confession, dormant_history_note
+    from src.orchestrator.trigger import _bg_boot_prompt
 
     # BOTH SLUGS, ALWAYS (task #135/#136): office and tree_cwd are two DIFFERENT slugs by
     # design (#103) — a dormant transcript can sit under either one, so check both
@@ -945,21 +874,19 @@ async def cmd_launch(
     handle: str, *, model: str | None, pool: asyncpg.Pool | None = None,
     manager: ManagerCall = _default_manager, wake_default: str | None = None,
     debug: bool = False, spawn: SpawnClaudeBg | None = None,
-    agents_json: AgentsJson | None = None, resume_spawn: ResumeSpawn | None = None,
-    settings: Settings | None = None,
+    agents_json: AgentsJson | None = None,
 ) -> int:
-    """Bodies a seat. DEFAULT LANE (task #72): harness-native `claude --bg`, following
-    trigger.launch_seat's own flip (rulings 0fe36e59 + 33d6a2eb clause 3) — every body lands
-    in the operator's own `claude agents` list by construction. `debug=True` (the CLI's
-    `--debug`) keeps the original osiris PTY-broker lane alive as an explicit fallback for an
-    incident or a build with no `claude --bg` — attachable via `osiris attach`, which the
-    default lane's body is not. `pool`/`manager`/`wake_default`/`spawn`/`agents_json`/
-    `resume_spawn`/`settings` are all injectable (mirrors launch_seat's own test seam) —
-    production callers (main()) leave them at their real defaults."""
-    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude, _spawn_claude_bg
+    """Bodies a seat: ALWAYS a fresh, persistent `claude --bg` mint (operator ruling
+    60c78788 — the launch/resume verb split; see `_cmd_launch_harness`'s own docstring
+    for why). `debug=True` (the CLI's `--debug`) keeps the original osiris PTY-broker
+    lane alive as an explicit fallback for an incident or a build with no `claude --bg` —
+    attachable via `osiris attach`, which the default lane's body is not.
+    `pool`/`manager`/`wake_default`/`spawn`/`agents_json` are all injectable (mirrors
+    launch_seat's own test seam) — production callers (main()) leave them at their real
+    defaults. For continuing a seat's last session instead, see `cmd_resume`."""
+    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude_bg
     spawn = spawn or _spawn_claude_bg
     agents_json = agents_json or _claude_agents_json
-    resume_spawn = resume_spawn or _spawn_claude
 
     owns_pool = pool is None
     if pool is None:
@@ -968,7 +895,7 @@ async def cmd_launch(
         from src.db.pool import create_pool
 
         apply_dev_fallback()
-        settings = settings or get_settings()
+        settings = get_settings()
         wake_default = settings.osiris_wake_model
         try:
             pool = await create_pool(
@@ -984,8 +911,146 @@ async def cmd_launch(
                                          wake_default=wake_default)
         return await _cmd_launch_harness(handle, model=model, pool=pool,
                                          wake_default=wake_default, spawn=spawn,
-                                         agents_json=agents_json, resume_spawn=resume_spawn,
-                                         settings=settings)
+                                         agents_json=agents_json)
+    finally:
+        if owns_pool:
+            await pool.close()
+
+
+# --- resume ------------------------------------------------------------------------------------
+
+async def _cmd_resume_harness(
+    handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
+    agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
+) -> int:
+    """ALWAYS THE ONE-SHOT `-p --resume` TURN (operator ruling 60c78788, thread bc11a2d3's
+    family): this is the resume branch `osiris launch` used to fall into automatically,
+    moved here VERBATIM — same `_lineage_resume_candidate` + `_resume_guard` +
+    `resume_spawn` primitives, same order, never a second implementation (#48's lesson).
+    Refuses if there is no seat holder, no resumable session, or the gate declines it —
+    `osiris resume` never falls through to a fresh mint; that is `osiris launch`'s job
+    now, a deliberate, separate act.
+
+    VISIBILITY RIDES OSIRIS'S OWN REGISTRY, NEVER `claude agents --json`, ON PURPOSE
+    (decision 536de12f, confirming a829a15d): a resumed `-p --resume` body cannot appear
+    in that roster even when it explicitly calls mount() mid-turn — proven live, twice,
+    independently — that registry only ever lists sessions spawned with `--bg --name`,
+    unrelated to osiris's own bookkeeping by construction. The receipt says so plainly —
+    this was never a workaround for the missing verb split, it is the correct receipt
+    for this verb and stays word for word."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.seats import seat_receipt
+    from src.orchestrator.trigger import _DM_RESUME_PROMPT, _lineage_resume_candidate, _resume_guard
+
+    pre = await _resolve_and_guard_launch(
+        handle, pool=pool, agents_json=agents_json, verb="resume")
+    if isinstance(pre, int):
+        return pre
+    facts, launch_cwd = pre
+    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
+
+    from src.config.settings import get_settings
+    st = settings or get_settings()
+    holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+    resume_outcome = await _lineage_resume_candidate(
+        pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+    resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
+    resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
+    if resume is not None:
+        # holder is truthy whenever resume is set — resume_outcome only comes from
+        # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
+        # holder was falsy. Asserted, not silently narrowed: a violated invariant here
+        # should be loud, never a quiet skip of the identity gate.
+        assert holder is not None
+        # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
+        # 983ec87a, two doors must return the same receipt): the SAME arithmetic
+        # _lineage_resume_candidate's own success line renders ("...resumable, N hop(s)
+        # back") — its log always ends with exactly one success entry when `resume` is
+        # set, so the count of entries BEFORE it is N.
+        gate, refusal = await _resume_guard(
+            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st,
+            hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+        if gate == "resident-unknown":
+            # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
+            # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
+            # ABSENCE of signed testimony is not evidence this head belongs to someone
+            # else. "crossed-registry" (a POSITIVE finding) still refuses too (below) —
+            # osiris resume never mints, whatever the registry finding is; "resident-
+            # unknown" gets the SHARPER message naming the exact resume command a human
+            # can run to confirm the session themselves.
+            print(f"osiris resume: REFUSING — {handle!r} has a possibly-resumable "
+                  f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
+                  f"{resume[0]}` by hand to confirm it yourself; osiris will not resume "
+                  "a head it merely couldn't verify.", file=sys.stderr)
+            return 1
+        if gate is not None:
+            resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
+            resume = None
+    if resume is None:
+        # NEVER FALLS THROUGH TO FRESH (the whole point of the split, operator ruling
+        # 60c78788): `osiris launch` mints fresh; `osiris resume` either resumes or
+        # refuses, cleanly, nothing spawned either way.
+        print(f"osiris resume: {handle!r} has nothing resumable — "
+              f"{_collapse_resume_log(resume_log)} (gate: "
+              f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
+              f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
+        return 1
+
+    resumed_session_id, resumed_repo = resume[0], resume[1]
+    await resume_spawn(resumed_repo, _DM_RESUME_PROMPT, resume_session=resumed_session_id,
+                       model=resolved_model, allowed_tools=st.osiris_wake_allowed_tools or None)
+    print(f"osiris resume: resumed session {resumed_session_id[:8]} as a ONE-SHOT turn — "
+          f"walked {len(resume_log)} generation(s) back to find it "
+          f"({_collapse_resume_log(resume_log)}). It runs the brief and exits, then is "
+          "gone from `claude agents --json` for good — that registry only ever lists "
+          "`claude --bg --name` windows, never a `-p --resume` body; osiris cannot "
+          "change that. To reach it again: send it mail, it wakes on the next "
+          f"dispatch; or run `claude -p --resume {resumed_session_id}` by hand to "
+          "watch a turn live yourself.")
+    stamped_model = facts.get("intended_model")
+    if stamped_model and resolved_model != stamped_model:
+        print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
+              f"stamped intended_model is {stamped_model!r} — never silent (thread "
+              "20e4feb6).", file=sys.stderr)
+    return 0
+
+
+async def cmd_resume(
+    handle: str, *, model: str | None = None, pool: asyncpg.Pool | None = None,
+    wake_default: str | None = None, agents_json: AgentsJson | None = None,
+    resume_spawn: ResumeSpawn | None = None, settings: Settings | None = None,
+) -> int:
+    """Continue a seat's last session as a ONE-SHOT `-p --resume` turn (operator ruling
+    60c78788): runs the brief and exits — never in `claude agents`, reached again by
+    sending it mail. Never falls through to a fresh mint; that is `osiris launch`'s own,
+    separate job. `pool`/`agents_json`/`resume_spawn`/`settings` are all injectable
+    (mirrors `cmd_launch`'s own test seam) — production callers (main()) leave them at
+    their real defaults."""
+    from src.orchestrator.trigger import _claude_agents_json, _spawn_claude
+    agents_json = agents_json or _claude_agents_json
+    resume_spawn = resume_spawn or _spawn_claude
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = settings or get_settings()
+        wake_default = settings.osiris_wake_model
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:resume")
+        except Exception as exc:  # noqa: BLE001
+            print(f"osiris resume: could not reach postgres at {settings.database_url} — "
+                  f"{exc}.", file=sys.stderr)
+            return 1
+    try:
+        return await _cmd_resume_harness(handle, model=model, pool=pool,
+                                         wake_default=wake_default, agents_json=agents_json,
+                                         resume_spawn=resume_spawn, settings=settings)
     finally:
         if owns_pool:
             await pool.close()
@@ -2929,7 +2994,7 @@ yet brings that house/project into existence in this same act too — --project 
 to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
-  start a mind          new, launch, mint-seat, attach
+  start a mind          new, launch, resume, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, boot-status, smoke
   read the record       desk, show
@@ -2992,11 +3057,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
     p_launch = sub.add_parser("launch", description=_d(
-        "body a seat, one of two ways, decided automatically (never a flag — see the "
-        "printed receipt for which one ran): a fresh, persistent `claude --bg` process "
-        "(shows up in `claude agents`) when there is nothing to continue, or a ONE-SHOT "
-        "`-p --resume` turn (runs the brief and exits — never in `claude agents`, reached "
-        "again by sending it mail) when the seat's last session is still resumable"),
+        "body a seat with a fresh, persistent `claude --bg` process — always shows up "
+        "in `claude agents`, always attachable. To continue the seat's last session "
+        "instead, use `osiris resume`"),
                               epilog="example: osiris launch Khnum")
     p_launch.add_argument("handle", help="the seat's handle to launch a body for")
     p_launch.add_argument("--model", default=None,
@@ -3005,6 +3068,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--debug", action="store_true",
                           help="use the osiris PTY-broker lane instead of the default "
                                "`claude --bg` — for an incident or a build with no --bg")
+
+    p_resume = sub.add_parser("resume", description=_d(
+        "continue a seat's last session as a ONE-SHOT `-p --resume` turn — runs the "
+        "brief and exits, never shows up in `claude agents`, reached again by sending "
+        "it mail. Refuses if there is nothing resumable; never falls through to a "
+        "fresh mint — for that, use `osiris launch`"),
+                              epilog="example: osiris resume Khnum")
+    p_resume.add_argument("handle", help="the seat's handle to resume")
+    p_resume.add_argument("--model", default=None,
+                          help="the model to resume with — defaults to the seat's own "
+                               "recorded intended_model, else the fleet's wake default")
 
     p_stop = sub.add_parser("stop", description=_d(
         "END a live body — `osiris launch`'s inverse. Stops the seat's own process (the "
@@ -3348,6 +3422,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
+    if args.command == "resume":
+        return asyncio.run(cmd_resume(args.handle, model=args.model))
     if args.command == "stop":
         return asyncio.run(cmd_stop(args.handle, reason=args.reason, as_json=args.as_json))
     if args.command == "fleet":
