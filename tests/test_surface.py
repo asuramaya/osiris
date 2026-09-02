@@ -106,6 +106,31 @@ async def test_sensing_is_dark_until_a_job_actually_goes_sick(actions: Actions) 
     assert "neverok" in stale_seg.sensing.data["sick"]
 
 
+async def test_a_fast_cadence_job_survives_a_deploy_restart_under_the_floor(
+    actions: Actions,
+) -> None:
+    """drain_cascade/evaluate_watch run every=5s — 3x that is 15s, which a routine deploy
+    restart's cancel-and-resume cost (measured up to ~43s, 2026-09-01) blows past on its own.
+    `_SICK_FLOOR_SECS` exists so THIS job survives that cost without reading sick, while a job
+    that is actually dead for longer than the floor still does."""
+    p = actions.pool
+    now = datetime.now(UTC)
+
+    inside_floor = now - timedelta(seconds=surface._SICK_FLOOR_SECS - 5)
+    await p.execute(
+        "INSERT INTO watermarks (key, cursor) VALUES ('job:drain_cascade', $1)",
+        f'{{"last_ok": "{inside_floor.isoformat()}", "every": 5}}')
+    seg = await surface.fetch(p)
+    assert "drain_cascade" not in seg.sensing.data["sick"]
+
+    past_floor = now - timedelta(seconds=surface._SICK_FLOOR_SECS + 5)
+    await p.execute(
+        "UPDATE watermarks SET cursor=$1 WHERE key='job:drain_cascade'",
+        f'{{"last_ok": "{past_floor.isoformat()}", "every": 5}}')
+    seg = await surface.fetch(p)
+    assert "drain_cascade" in seg.sensing.data["sick"]
+
+
 async def test_spend_is_dark_below_the_60_percent_gate(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
