@@ -13,6 +13,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from src.actions.core import Actions
 from src.ingest.soul_store import SoulStore, _chain_hash
@@ -271,6 +272,77 @@ async def test_ingest_returns_zero_when_the_only_content_is_an_unterminated_line
     n = await store.ingest_path(str(p), "0a11a11a")
     assert n == 0
     assert await store.raw_lines("0a11a11a") is None
+
+
+# --- streaming (msg 6583, the 307MB question) --------------------------------
+
+async def test_ingest_streams_across_several_batches(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forces a tiny batch size so a modest line count still spans several INSERT +
+    checkpoint round trips — proving the batch loop itself, not just its single-batch
+    fallback (every other test in this file uses too few lines to exercise it)."""
+    import src.ingest.soul_store as soul_store_mod
+
+    monkeypatch.setattr(soul_store_mod, "_INGEST_BATCH_LINES", 3)
+    lines = _synthetic_lines(11)  # 4 batches: 3+3+3+2
+    p = _write_transcript(tmp_path / "big.jsonl", lines)
+    n = await store.ingest_path(str(p), "57ea3157")
+    assert n == 11
+    assert await store.verify_chain("57ea3157") is True
+    assert await store.re_materialize("57ea3157") == "\n".join(lines)
+
+    # growing the file and re-ingesting still resumes correctly across a batch boundary
+    fuller = lines + _synthetic_lines(15)[11:]
+    p.write_text("\n".join(fuller) + "\n")
+    added = await store.ingest_path(str(p), "57ea3157")
+    assert added == 4
+    assert await store.verify_chain("57ea3157") is True
+    assert await store.re_materialize("57ea3157") == "\n".join(fuller)
+
+
+async def test_rematerialize_to_disk_streams_across_several_pages(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forces a tiny page size on the READ side too — proving `_stream_verified_write`'s
+    own multi-page loop reconstructs byte-identical content, not just its single-page
+    fallback."""
+    import src.ingest.soul_store as soul_store_mod
+
+    monkeypatch.setattr(soul_store_mod, "_REMATERIALIZE_PAGE_LINES", 4)
+    lines = _synthetic_lines(13)  # 4 pages: 4+4+4+1
+    source = _write_transcript(tmp_path / "s" / "fee1600d-session.jsonl", lines)
+    await store.ingest_path(str(source), "fee1600d")
+
+    dest = tmp_path / "d" / "target.jsonl"
+    receipt = await store.rematerialize_to_disk("fee1600d", dest=str(dest))
+    assert receipt["lines"] == 13
+    assert dest.read_bytes() == source.read_bytes()
+    assert receipt["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+async def test_rematerialize_to_disk_leaves_no_temp_file_on_a_broken_chain(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The streaming rewrite writes to a sibling temp file before the atomic rename —
+    a broken chain must discard that temp file too, not just refuse to create `dest`."""
+    import src.ingest.soul_store as soul_store_mod
+
+    monkeypatch.setattr(soul_store_mod, "_REMATERIALIZE_PAGE_LINES", 2)
+    lines = _synthetic_lines(6)
+    source = _write_transcript(tmp_path / "s" / "7ee7f11e-session.jsonl", lines)
+    await store.ingest_path(str(source), "7ee7f11e")
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea WHERE harness='claude-code' "
+        "AND anchor_sid='7ee7f11e' AND line_idx=4")
+
+    dest_dir = tmp_path / "d"
+    dest = dest_dir / "target.jsonl"
+    receipt = await store.rematerialize_to_disk("7ee7f11e", dest=str(dest))
+    assert "error" in receipt
+    assert not dest.exists()
+    assert dest_dir.is_dir()  # created for the temp writer, but holds nothing
+    assert list(dest_dir.iterdir()) == []
 
 
 async def test_rematerialize_to_disk_defaults_dest_to_the_recorded_source_path(

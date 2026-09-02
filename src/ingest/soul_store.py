@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -91,6 +93,50 @@ def _split_lines(content: bytes) -> list[bytes]:
     return content[:end].split(b"\n")
 
 
+_STREAM_CHUNK_BYTES = 4 * 1024 * 1024  # read granularity, not a line boundary
+_INGEST_BATCH_LINES = 2000  # rows per INSERT + progress checkpoint
+
+
+def _iter_complete_line_batches(
+    source_path: str, batch_lines: int = _INGEST_BATCH_LINES,
+) -> Iterator[list[bytes]]:
+    """Stream `source_path` in bounded chunks, yielding lists of up to `batch_lines`
+    COMPLETE lines each — never holding the whole file, nor the whole split line list,
+    in memory at once (msg 6583: measured ~881MB peak RSS ingesting a 307MB session the
+    old whole-file way; a long-lived shared process serving on-demand resume ingests
+    cannot carry that). Same completeness guarantee as `_split_lines` (never yields a
+    trailing, non-`\\n`-terminated fragment — the live-write safety fix applies exactly
+    the same way here, just applied across a chunk boundary instead of within one
+    `read_bytes()` call), by carrying any partial tail across chunk reads until it either
+    completes or the file ends, in which case it's silently dropped rather than yielded.
+
+    Pure generator, no I/O interleaved with a caller's own async work inside the loop
+    body — the file handle stays open only for the duration of iteration, a sync
+    generator is fine here for the same blocking-call-lint reasoning `_read_source`
+    already documents (the read is blocking either way)."""
+    batch: list[bytes] = []
+    carry = b""
+    with open(source_path, "rb") as f:
+        while True:
+            chunk = f.read(_STREAM_CHUNK_BYTES)
+            if not chunk:
+                break
+            data = carry + chunk
+            end = data.rfind(b"\n")
+            if end == -1:
+                carry = data  # no complete line in this window yet — keep accumulating
+                continue
+            complete, carry = data[:end], data[end + 1:]
+            batch.extend(complete.split(b"\n"))
+            while len(batch) >= batch_lines:
+                yield batch[:batch_lines]
+                batch = batch[batch_lines:]
+    if batch:
+        yield batch
+    # `carry`, if non-empty here, is a trailing unterminated fragment — dropped, exactly
+    # as `_split_lines` drops it; the next sweep re-reads it once it's `\n`-complete.
+
+
 def _path_mtime(path: Path) -> datetime | None:
     """Sync helper, same blocking-call-lint reasoning as `_read_source` — None when the
     path doesn't exist (nothing to compare against, never an error)."""
@@ -105,6 +151,37 @@ def _write_dest(path: Path, content: bytes) -> None:
     (0052) — the write side of the same byte-exact promise `_read_source` makes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+
+_REMATERIALIZE_PAGE_LINES = 2000  # rows fetched per soul_lines page during a streamed write
+
+
+def _open_tmp_writer(target: Path) -> tuple[Any, Path]:
+    """A sibling temp file, same directory as `target` (so the final rename is same-
+    filesystem and atomic) — the streaming half of `rematerialize_to_disk`'s own
+    promise that a broken chain writes NOTHING at `target`: every line lands in the temp
+    file first, verified as it's written, and only a fully clean pass ever gets renamed
+    onto the real destination. Sync helper, same blocking-call-lint reasoning as
+    `_read_source`/`_write_dest`."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.osiris-tmp-{uuid.uuid4().hex}")
+    return open(tmp, "wb"), tmp  # noqa: SIM115 — lifetime spans a whole async streaming loop
+
+
+def _discard_tmp(f: Any, tmp: Path) -> None:
+    """Close and delete the temp writer — a broken chain or a raised exception mid-
+    stream must leave no half-written file anywhere a caller could mistake for the real
+    thing, temp name included."""
+    f.close()
+    tmp.unlink(missing_ok=True)
+
+
+def _finalize_tmp(f: Any, tmp: Path, target: Path) -> None:
+    """Close the temp writer and atomically rename it onto `target` — the moment a
+    streamed rematerialize actually becomes visible at its destination, all at once,
+    never as a partially-written file a concurrent reader could observe mid-stream."""
+    f.close()
+    tmp.replace(target)
 
 
 def _chain_hash(prev_hash: str | None, raw_line: bytes) -> str:
@@ -168,6 +245,26 @@ class SoulStore:
             return 0, None
         return int(row["last_line_idx"]), row["last_hash"]
 
+    async def _checkpoint(
+        self, harness: str, anchor_sid: str, source_path: str, idx: int,
+        prev_hash: str | None,
+    ) -> None:
+        """One batch's worth of progress, committed — the same upsert `ingest_path`
+        always ran once at the end, now run once per batch so an interrupted 300MB+
+        ingest (msg 6583/ba329ccb: "the first run backfills 2,070 files and will be
+        interrupted") resumes from its last committed BATCH, not from scratch."""
+        await self.pool.execute(
+            "INSERT INTO soul_sessions "
+            "   (harness, anchor_sid, source_path, last_line_idx, last_hash) "
+            "VALUES ($1, $2, $3, $4, $5) "
+            "ON CONFLICT (harness, anchor_sid) DO UPDATE "
+            "   SET last_ingested_at = now(), "
+            "       last_line_idx = EXCLUDED.last_line_idx, "
+            "       last_hash = EXCLUDED.last_hash, "
+            "       source_path = EXCLUDED.source_path",
+            harness, anchor_sid, source_path, idx, prev_hash,
+        )
+
     async def ingest_path(
         self, source_path: str, anchor_sid: str, harness: str | None = None,
     ) -> int:
@@ -176,44 +273,53 @@ class SoulStore:
         line). Returns the count of NEW lines ingested. Never re-reads or re-hashes lines
         already stored: the chain resumes from last_hash, exactly where it left off.
 
+        STREAMS THE SOURCE IN BOUNDED BATCHES (msg 6583, the 307MB question): measured
+        ~881MB peak RSS ingesting a real 307MB session the old whole-file way (read the
+        entire file, split every line, build one giant rows list, one executemany) — not
+        viable in a long-lived shared process (osiris-worker, or an on-demand ingest
+        called from inside a resume request) serving other work at the same time. This
+        version reads via `_iter_complete_line_batches` (bounded chunks, never the whole
+        file in memory) and INSERTs + checkpoints progress once per batch of
+        `_INGEST_BATCH_LINES` lines, so peak memory is O(batch size) regardless of file
+        size, and an interruption mid-file resumes from the last committed batch rather
+        than redoing the whole ingest. SAME CONTRACT as before: same return value (count
+        of new lines), same idempotence, same signature — a caller (Khnum's resume wire
+        included) needs no changes.
+
         `harness` names the harness that owns this transcript (e.g. 'claude-code', 'dsh',
         'crush'). When None, it's auto-detected from `self._adapters` by matching
         `source_path` to an adapter's discovery."""
         harness = harness or self._detect_harness(source_path)
-        content = _read_source(source_path)
-        lines = _split_lines(content)
         since, prev_hash = await self._progress(anchor_sid, harness=harness)
-        new_lines = lines[since:]
-        if not new_lines:
-            return 0
-        rows = []
+        seen = 0
         idx = since
-        for raw_line in new_lines:
-            line_hash = _chain_hash(prev_hash, raw_line)
-            rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
-            prev_hash = line_hash
-            idx += 1
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.executemany(
-                    "INSERT INTO soul_lines "
-                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, prev_hash) "
-                    "VALUES ($1, $2, $3, $4, $5, $6) "
-                    "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
-                    rows,
-                )
-                await conn.execute(
-                    "INSERT INTO soul_sessions "
-                    "   (harness, anchor_sid, source_path, last_line_idx, last_hash) "
-                    "VALUES ($1, $2, $3, $4, $5) "
-                    "ON CONFLICT (harness, anchor_sid) DO UPDATE "
-                    "   SET last_ingested_at = now(), "
-                    "       last_line_idx = EXCLUDED.last_line_idx, "
-                    "       last_hash = EXCLUDED.last_hash, "
-                    "       source_path = EXCLUDED.source_path",
-                    harness, anchor_sid, source_path, idx, prev_hash,
-                )
-        return len(rows)
+        total_new = 0
+        for batch in _iter_complete_line_batches(source_path):
+            # skip lines already ingested — counted, never hashed or held past this loop
+            skip = max(0, since - seen)
+            seen += len(batch)
+            new_lines = batch[skip:]
+            if not new_lines:
+                continue
+            rows = []
+            for raw_line in new_lines:
+                line_hash = _chain_hash(prev_hash, raw_line)
+                rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
+                prev_hash = line_hash
+                idx += 1
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.executemany(
+                        "INSERT INTO soul_lines "
+                        "   (harness, anchor_sid, line_idx, raw_line, line_hash, "
+                        "    prev_hash) "
+                        "VALUES ($1, $2, $3, $4, $5, $6) "
+                        "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
+                        rows,
+                    )
+            await self._checkpoint(harness, anchor_sid, source_path, idx, prev_hash)
+            total_new += len(rows)
+        return total_new
 
     async def ingest(self, *, cwd: str | None, job_dir: str | None,
                       root: Path | None = None) -> int:
@@ -300,21 +406,31 @@ class SoulStore:
     async def verify_chain(self, anchor_sid: str) -> bool:
         """Re-walk every stored line and recompute the chain from scratch — the honest
         check, never trusting a stored line_hash in isolation. False on the first gap or
-        mismatch; True (including vacuously, on zero rows) otherwise."""
-        rows = await self.pool.fetch(
-            "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
-            "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
-            _HARNESS, anchor_sid)
+        mismatch; True (including vacuously, on zero rows) otherwise.
+
+        PAGED (msg 6583, the 307MB question): reads `soul_lines` `_REMATERIALIZE_PAGE_LINES`
+        rows at a time by `line_idx` range (the same index `soul_lines`' own PK already
+        gives this query for free) rather than one `fetch()` of every row — a 300MB-class
+        session's raw content never sits in memory all at once just to answer a yes/no."""
         expected_prev: str | None = None
-        for i, row in enumerate(rows):
-            if row["line_idx"] != i:
-                return False  # a gap in the sequence
-            if row["prev_hash"] != expected_prev:
-                return False
-            if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
-                return False
-            expected_prev = row["line_hash"]
-        return True
+        i = 0
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
+                "WHERE harness=$1 AND anchor_sid=$2 AND line_idx >= $3 AND line_idx < $4 "
+                "ORDER BY line_idx ASC",
+                _HARNESS, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                return True
+            for row in rows:
+                if row["line_idx"] != i:
+                    return False  # a gap in the sequence
+                if row["prev_hash"] != expected_prev:
+                    return False
+                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                    return False
+                expected_prev = row["line_hash"]
+                i += 1
 
     async def re_materialize(self, anchor_sid: str) -> str | None:
         """PIECE 2'S SMALLEST HALF, and piece 1's own acceptance test: reconstruct the
@@ -399,42 +515,62 @@ class SoulStore:
             })
         return out
 
-    async def _verified_lines(
-        self, anchor_sid: str,
-    ) -> tuple[list[bytes] | None, dict[str, Any] | None]:
-        """Walk soul_lines in order, verifying the hash chain AS it collects — a break is
-        a NAMED state (the second element), never a silent partial result. Returns
-        (lines, None) on a clean chain, (None, break_receipt) on the first gap/mismatch,
-        (None, None) when nothing was ever ingested for this session — three distinct
-        outcomes, never conflated. Raw bytes (0052) — `rematerialize_to_disk`'s own
-        byte-exact promise starts here."""
-        rows = await self.pool.fetch(
-            "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
-            "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
-            _HARNESS, anchor_sid)
-        if not rows:
-            return None, None
+    async def _stream_verified_write(
+        self, anchor_sid: str, target: Path,
+    ) -> dict[str, Any]:
+        """Page through soul_lines, verifying the hash chain AS each page arrives, and
+        write each verified line straight to a temp file next to `target` — never
+        holding the reconstructed content in memory (msg 6583: the old whole-file join
+        measured another ~888MB peak RSS on top of ingest's own, on a real 307MB
+        session). Same promise as before, just streamed: a break is a NAMED receipt
+        (`{"error": ..., "verified_through": N}`) and NOTHING lands at `target` — the
+        temp file is discarded, never renamed, on the first gap/mismatch or on zero rows
+        ever ingested. Only a fully clean pass gets the atomic rename onto `target`."""
+        f = None
+        tmp: Path | None = None
+        hasher = hashlib.sha256()
         expected_prev: str | None = None
-        lines: list[bytes] = []
-        for i, row in enumerate(rows):
-            if row["line_idx"] != i:
-                return None, {
-                    "error": f"chain broken — a GAP at line_idx {i} (expected {i}, "
-                             f"found {row['line_idx']})",
-                    "verified_through": i - 1}
-            if row["prev_hash"] != expected_prev:
-                return None, {
-                    "error": f"chain broken at line {i} — prev_hash does not match the "
-                             "prior line's own hash",
-                    "verified_through": i - 1}
-            if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
-                return None, {
-                    "error": f"chain broken at line {i} — stored hash does not match "
-                             "its own content (tampered or corrupted)",
-                    "verified_through": i - 1}
-            expected_prev = row["line_hash"]
-            lines.append(row["raw_line"])
-        return lines, None
+        i = 0
+        wrote_any = False
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
+                "WHERE harness=$1 AND anchor_sid=$2 AND line_idx >= $3 AND line_idx < $4 "
+                "ORDER BY line_idx ASC",
+                _HARNESS, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                break
+            if f is None:
+                f, tmp = _open_tmp_writer(target)
+            for row in rows:
+                if row["line_idx"] != i:
+                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
+                    return {"error": f"chain broken — a GAP at line_idx {i} (expected "
+                                     f"{i}, found {row['line_idx']})",
+                            "verified_through": i - 1}
+                if row["prev_hash"] != expected_prev:
+                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
+                    return {"error": f"chain broken at line {i} — prev_hash does not "
+                                     "match the prior line's own hash",
+                            "verified_through": i - 1}
+                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
+                    return {"error": f"chain broken at line {i} — stored hash does not "
+                                     "match its own content (tampered or corrupted)",
+                            "verified_through": i - 1}
+                expected_prev = row["line_hash"]
+                chunk = bytes(row["raw_line"]) + b"\n"
+                f.write(chunk)
+                hasher.update(chunk)
+                wrote_any = True
+                i += 1
+        if not wrote_any:
+            if f is not None:
+                _discard_tmp(f, tmp)  # type: ignore[arg-type]
+            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+                             "materialize"}
+        _finalize_tmp(f, tmp, target)  # type: ignore[arg-type]
+        return {"written": str(target), "lines": i, "sha256": hasher.hexdigest()}
 
     async def rematerialize_to_disk(
         self, anchor_sid: str, *, dest: str | None = None, force: bool = False,
@@ -443,10 +579,14 @@ class SoulStore:
         soul_lines alone — the acceptance test a soul store stands or falls on, made
         durable rather than in-memory-only (re_materialize's own job, unchanged).
 
-        Verifies the hash chain WHILE collecting (`_verified_lines`), not as a separate
-        pass before a separate write: a break is a NAMED state in the receipt
-        (`{"error": ..., "verified_through": N}`) and NOTHING is written — never a
-        silently truncated file that LOOKS complete.
+        STREAMS the verify-and-write (`_stream_verified_write`, msg 6583/the 307MB
+        question) rather than collecting every line in memory first: a break is still a
+        NAMED state in the receipt (`{"error": ..., "verified_through": N}`) and NOTHING
+        is written at `target` — never a silently truncated file that LOOKS complete,
+        now guaranteed by writing to a temp file and only renaming it onto `target` on a
+        fully clean pass, instead of by simply not calling `_write_dest` until the whole
+        content was already assembled. SAME RETURN SHAPE, SAME SIGNATURE as before — a
+        caller (Khnum's resume-materializing emit included) needs no changes.
 
         `dest` defaults to this session's own recorded source_path (soul_sessions) — the
         harness's OWN projects-slug convention, so `claude --resume` on a host that never
@@ -477,15 +617,4 @@ class SoulStore:
                             "ingest — writing over it would clobber content the store "
                             "never saw. Pass force=True to override.",
                 }
-        lines, broken = await self._verified_lines(anchor_sid)
-        if broken is not None:
-            return broken
-        if lines is None:
-            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
-                             "materialize"}
-        content = b"\n".join(lines) + b"\n"
-        _write_dest(target, content)
-        return {
-            "written": str(target), "lines": len(lines),
-            "sha256": hashlib.sha256(content).hexdigest(),
-        }
+        return await self._stream_verified_write(anchor_sid, target)
