@@ -55,12 +55,18 @@ def _resolve_data_dir(cwd: str | None) -> str | None:
     return str(Path(cwd) / ".crush") if local.is_file() else None
 
 
-def _to_dt(epoch_ms: int | None) -> datetime | None:
-    if epoch_ms is None:
+def _to_dt(epoch_s: int | None) -> datetime | None:
+    """Crush's own `created_at`/`finished_at`/`updated_at` columns are epoch-SECONDS,
+    not milliseconds (Thoth dispatch 6528/6535 — found by reading a real crush.db, not
+    inferred: sessions.created_at=1785360810 is 2026-07-29, a sane date; treated as
+    epoch-ms it read back as 1970-01-21, silently, on every Crush turn this adapter had
+    ever produced. This adapter's own docstring already confessed 'no test of its own'
+    before this fix — that missing coverage is exactly why nobody caught it live."""
+    if epoch_s is None:
         return None
     try:
         from datetime import UTC
-        return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=UTC)
+        return datetime.fromtimestamp(int(epoch_s), tz=UTC)
     except (OSError, ValueError, OverflowError):
         return None
 
@@ -176,7 +182,10 @@ class CrushSqliteAdapter:
             prov_s = provider if isinstance(provider, str) and provider else None
             dur_ms: int | None = None
             if finished is not None and created is not None:
-                dur_ms = int(finished - created) if finished > created else None
+                # SAME epoch-seconds fact as _to_dt above: created/finished are seconds,
+                # so the raw difference is a SECONDS duration — multiplied here to match
+                # duration_ms's own documented unit (TurnRow, milliseconds).
+                dur_ms = int((finished - created) * 1000) if finished > created else None
             yield TurnRow(
                 turn_idx=int(rid), role=str(role),
                 model=model_s, provider=prov_s,
