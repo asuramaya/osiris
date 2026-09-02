@@ -409,6 +409,93 @@ async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
     assert row["status"] == "active"
 
 
+# ═══ THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07) — self stays open,
+# third-party-on-live refuses by default, force=True (+ because) overrides and prices
+# the exception with a mandatory `live_session_repointed` signal. ═══
+
+_FOLD_LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
+
+
+def _fold_agents_json(rows: list[dict]) -> object:
+    async def _f() -> list[dict]:
+        return rows
+    return _f
+
+
+async def test_fold_project_refuses_a_third_party_fold_of_a_live_dupe(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:tpl1", "tpl1")
+    await _stub_project(actions, "repo:tpl1-into", "tpl1-into")
+    await save_mount(actions.pool, job_dir="/j/aaaaaaaa", agent_id="agent:tplworker",
+                     project="tpl1", cwd="/w/tpl1", model=None, session_key=None)
+    out = await fold_project(
+        actions, dupe="tpl1", into="tpl1-into", evidence="same project, two mints",
+        actor="agent:someone-else",
+        agents_json=_fold_agents_json(
+            [{"sessionId": "aaaaaaaa-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": "/w/tpl1"}]),
+        read_exe=lambda pid: _FOLD_LIVE_EXE, read_cwd=lambda pid: "/w/tpl1")
+    assert "THIRD-PARTY" in out["error"]
+    assert out["occupied_by"] == "agent:tplworker"
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:tpl1'")
+    assert row["status"] == "active"  # refused before any write
+
+
+async def test_fold_project_self_fold_of_a_live_dupe_stays_open(actions: Actions) -> None:
+    """The caller IS the live occupant's own lineage — no change from before this guard."""
+    await _stub_project(actions, "repo:tpl2", "tpl2")
+    await _stub_project(actions, "repo:tpl2-into", "tpl2-into")
+    await save_mount(actions.pool, job_dir="/j/bbbbbbbb", agent_id="agent:tplself",
+                     project="tpl2", cwd="/w/tpl2", model=None, session_key=None)
+    out = await fold_project(
+        actions, dupe="tpl2", into="tpl2-into", evidence="folding my own project",
+        actor="agent:tplself",
+        agents_json=_fold_agents_json(
+            [{"sessionId": "bbbbbbbb-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": "/w/tpl2"}]),
+        read_exe=lambda pid: _FOLD_LIVE_EXE, read_cwd=lambda pid: "/w/tpl2")
+    assert out["folded"] == "repo:tpl2"
+    assert "live_session_repointed" not in out
+
+
+async def test_fold_project_force_without_because_refuses(actions: Actions) -> None:
+    await _stub_project(actions, "repo:tpl3", "tpl3")
+    await _stub_project(actions, "repo:tpl3-into", "tpl3-into")
+    out = await fold_project(
+        actions, dupe="tpl3", into="tpl3-into", evidence="e", actor="agent:x", force=True)
+    assert "because" in out["error"]
+
+
+async def test_fold_project_force_overrides_and_prices_the_exception(
+    actions: Actions,
+) -> None:
+    await _stub_project(actions, "repo:tpl4", "tpl4")
+    await _stub_project(actions, "repo:tpl4-into", "tpl4-into")
+    await save_mount(actions.pool, job_dir="/j/cccccccc", agent_id="agent:tplworker4",
+                     project="tpl4", cwd="/w/tpl4", model=None, session_key=None)
+    out = await fold_project(
+        actions, dupe="tpl4", into="tpl4-into", evidence="operator authorized",
+        actor="agent:someone-else", force=True, because="operator ruling, deploy path",
+        agents_json=_fold_agents_json(
+            [{"sessionId": "cccccccc-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": "/w/tpl4"}]),
+        read_exe=lambda pid: _FOLD_LIVE_EXE, read_cwd=lambda pid: "/w/tpl4")
+    assert out["folded"] == "repo:tpl4"
+    assert out["live_session_repointed"] == "agent:tplworker4"
+
+
+async def test_fold_project_unaffected_when_nobody_live_on_dupe(actions: Actions) -> None:
+    """The common case, unchanged: no live agent_mounts row on dupe at all — the guard's
+    own first check (`if not rows: return None`) short-circuits before any census call."""
+    await _stub_project(actions, "repo:tpl5", "tpl5")
+    await _stub_project(actions, "repo:tpl5-into", "tpl5-into")
+    out = await fold_project(
+        actions, dupe="tpl5", into="tpl5-into", evidence="e", actor="agent:whoever",
+        agents_json=_fold_agents_json([]))
+    assert out["folded"] == "repo:tpl5"
+
+
 async def test_fold_project_ignores_a_superseded_cross_source_assertion(
     actions: Actions,
 ) -> None:

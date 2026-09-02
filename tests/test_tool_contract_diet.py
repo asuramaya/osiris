@@ -765,6 +765,14 @@ TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on mea
 # (removed the "unreached vs rebuild" narrative aside, a caller has no use for it at call
 # time; 1,850 -> 1,548 chars).
 TOOL_CONTRACT_CEILING_CHARS = 204880
+# 204,880 -> 205,497 (measured exact). Tool count unchanged at 147 (2026-09-02, Imhotep,
+# decision 7fe20cc5, obligation 53424b07, operator-authorized): `merge`/`rebind_seat`
+# each gained `force`/`because` params and a short docstring note for the new
+# third-party-on-a-live-target liveness guard — no new tool, existing tools' own
+# contracts grew because the guard's behavior is something a caller now genuinely needs
+# to know exists. Trimmed once under the category rule before raising (both new
+# docstring notes cut to one sentence each).
+TOOL_CONTRACT_CEILING_CHARS = 205497
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

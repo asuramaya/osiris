@@ -22,6 +22,8 @@ from src.orchestrator.agents import (
 from src.orchestrator.mailbox import send_message, unread_count
 from src.orchestrator.mounts import rebind_seat
 
+NOW = datetime.now(UTC)
+
 
 async def test_rebind_moves_the_anchor_preserving_everything(
     actions: Actions, tmp_path: Path
@@ -698,6 +700,97 @@ async def test_wholesale_rebind_repoints_the_co_residents_too(
     co = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id='agent:cafe0002'")
     assert co == new                                    # the housemate moved with the house
+
+
+# ═══ THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07) — self stays open,
+# third-party-on-live refuses by default, force=True (+ because) overrides. ═══
+
+_REBIND_LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
+
+
+def _rebind_agents_json(rows: list[dict]) -> object:
+    async def _f() -> list[dict]:
+        return rows
+    return _f
+
+
+async def test_rebind_refuses_a_third_party_rebind_of_a_live_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    a_dir = tmp_path / "rbg1-a"
+    b_dir = tmp_path / "rbg1-b"
+    a_dir.mkdir()
+    oid = await actions.create_or_find_object("Agent", "agent:rbg1worker", "test")
+    await actions.assert_property(oid, "project", "rbg1", "test", NOW, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/dddddddd", agent_id="agent:rbg1worker",
+                            project="rbg1", cwd=str(a_dir), model=None, session_key=None)
+    out = await rebind_seat(
+        actions, seat_or_agent="agent:rbg1worker", new_cwd=str(b_dir), actor="agent:someone-else",
+        agents_json=_rebind_agents_json(
+            [{"sessionId": "dddddddd-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": str(a_dir)}]),
+        read_exe=lambda pid: _REBIND_LIVE_EXE, read_cwd=lambda pid: str(a_dir))
+    assert "THIRD-PARTY" in out["error"]
+    assert out["occupied"] is True
+    row = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:rbg1worker'")
+    assert row == str(a_dir)  # refused before any write
+
+
+async def test_rebind_self_of_a_live_seat_stays_open(actions: Actions, tmp_path: Path) -> None:
+    """establish_office's own shape: the caller IS the live occupant's lineage."""
+    a_dir = tmp_path / "rbg2-a"
+    b_dir = tmp_path / "rbg2-b"
+    a_dir.mkdir()
+    oid = await actions.create_or_find_object("Agent", "agent:rbg2self", "test")
+    await actions.assert_property(oid, "project", "rbg2", "test", NOW, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/eeeeeeee", agent_id="agent:rbg2self",
+                            project="rbg2", cwd=str(a_dir), model=None, session_key=None)
+    out = await rebind_seat(
+        actions, seat_or_agent="agent:rbg2self", new_cwd=str(b_dir), actor="agent:rbg2self",
+        agents_json=_rebind_agents_json(
+            [{"sessionId": "eeeeeeee-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": str(a_dir)}]),
+        read_exe=lambda pid: _REBIND_LIVE_EXE, read_cwd=lambda pid: str(a_dir))
+    assert "error" not in out
+    row = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:rbg2self'")
+    assert row == str(b_dir)
+
+
+async def test_rebind_force_without_because_refuses(actions: Actions, tmp_path: Path) -> None:
+    oid = await actions.create_or_find_object("Agent", "agent:rbg3", "test")
+    await actions.assert_property(oid, "project", "rbg3", "test", NOW, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/rbg3", agent_id="agent:rbg3",
+                            project="rbg3", cwd=str(tmp_path / "a"), model=None,
+                            session_key=None)
+    out = await rebind_seat(
+        actions, seat_or_agent="agent:rbg3", new_cwd=str(tmp_path / "b"),
+        actor="agent:other", force=True)
+    assert "because" in out["error"]
+
+
+async def test_rebind_force_overrides_a_third_party_live_refusal(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    a_dir = tmp_path / "rbg4-a"
+    b_dir = tmp_path / "rbg4-b"
+    a_dir.mkdir()
+    oid = await actions.create_or_find_object("Agent", "agent:rbg4worker", "test")
+    await actions.assert_property(oid, "project", "rbg4", "test", NOW, 0.9)
+    await mounts.save_mount(actions.pool, job_dir="/j/ffffffff", agent_id="agent:rbg4worker",
+                            project="rbg4", cwd=str(a_dir), model=None, session_key=None)
+    out = await rebind_seat(
+        actions, seat_or_agent="agent:rbg4worker", new_cwd=str(b_dir), actor="agent:someone-else",
+        force=True, because="operator authorized",
+        agents_json=_rebind_agents_json(
+            [{"sessionId": "ffffffff-1111-2222-3333-444444444444", "pid": 999,
+              "cwd": str(a_dir)}]),
+        read_exe=lambda pid: _REBIND_LIVE_EXE, read_cwd=lambda pid: str(a_dir))
+    assert "error" not in out
+    row = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:rbg4worker'")
+    assert row == str(b_dir)
 
 
 def test_harness_slug_matches_the_current_scheme_and_legacy_converges(tmp_path: Path) -> None:
