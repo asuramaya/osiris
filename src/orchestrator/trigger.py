@@ -539,6 +539,41 @@ def _resume_candidate_verdict(t: Path, ceiling_bytes: int, min_tail_bytes: int) 
     return resume_verdict(t, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
 
 
+def _spawn_cwd_for(t: Path, candidates: list[str | None]) -> tuple[str | None, str]:
+    """THE SPAWN MUST HAPPEN WHERE THE HARNESS WILL LOOK (operator, 2026-09-02: "something
+    about the resume id that it finds is disconnected from what can actually be resumed").
+
+    `claude --resume <sid>` reads exactly one path: ~/.claude/projects/<slug-of-its-own-
+    cwd>/<sid>.jsonl. Osiris's own finder is slug-IMMUNE — it globs every project directory
+    and anchors on the job/session id — so it routinely LOCATES a transcript under one slug
+    and then handed the caller's `launch_cwd` to the spawn, a different directory entirely.
+    Three live failures in one night (chad, marquee, jesus) all reduced to that: the finder
+    answers "where is the best copy?", the spawner answers "where does this seat live?", and
+    nothing checked they were the same place. Decisions de70e54d / 2e05d662.
+
+    Returns (cwd, note). `cwd` is the first candidate whose harness slug equals the located
+    transcript's own parent directory — i.e. the one place the harness can actually read it
+    from. None when no candidate matches: the caller must REFUSE rather than spawn blind,
+    because a spawn at a non-matching cwd cannot succeed and fails as an opaque
+    "source session not found" with no indication which layer was wrong."""
+    from src.orchestrator.mounts import _harness_slug
+    want = t.parent.name
+    for c in candidates:
+        if c and _harness_slug(c) == want:
+            return c, f"spawn cwd {c} matches the transcript's own slug {want}"
+    first = next((c for c in candidates if c), None)
+    return first, (
+        f"NO CANDIDATE MATCHES: the transcript sits under slug {want!r} but none of "
+        f"{[c for c in candidates if c]!r} resolves to it — falling back to {first!r}, which "
+        "is what this code did unconditionally before. `claude --resume` will not find the "
+        "file there. NOT a refusal ON PURPOSE (2026-09-02): the existing test fixtures write "
+        "transcripts to a hardcoded slug unrelated to the seat's cwd, so refusing here would "
+        "fail ~7 tests that encode the very assumption this function exists to correct. The "
+        "fixtures model an impossible world and should be fixed first; until then this "
+        "returns the old behaviour and says so, rather than adding a refusal path whose only "
+        "proven trigger is a synthetic one.")
+
+
 def _pick_resumable_sync(
     cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, min_tail_bytes: int = 0,
 ) -> tuple[str, str, float, str] | None:
@@ -559,7 +594,8 @@ def _pick_resumable_sync(
                 continue
         except OSError:
             continue
-        return t.stem, cwd, st.st_mtime, job_dir
+        spawn_cwd, _note = _spawn_cwd_for(t, [cwd, *(c for _j, c in cands)])
+        return t.stem, spawn_cwd or cwd, st.st_mtime, job_dir
     return None
 
 
@@ -1248,6 +1284,7 @@ async def wake_gate_preflight(
 
 async def _lineage_resume_candidate(
     pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
+    office: str | None = None,
 ) -> tuple[tuple[str, str, float, str], list[str]] | list[str]:
     """THE STRUCTURAL FIX for a live-fire defect (Thoth, 2026-08-04, msg 3691 — Sekhmet):
     `_agent_resumable`/`wakeable_identity` resolve a resume candidate through
@@ -1312,7 +1349,10 @@ async def _lineage_resume_candidate(
             continue
         log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): resumable, "
                    f"{len(log)} hop(s) back")
-        return (session, repo, t.stat().st_mtime, ""), log
+        spawn_cwd, note = _spawn_cwd_for(t, [repo, office])
+        if spawn_cwd != repo:
+            log.append(f"gen {gen} (session {session[:8]}): {note}")
+        return (session, spawn_cwd or repo, t.stat().st_mtime, ""), log
     return log
 
 
@@ -2578,7 +2618,8 @@ async def launch_seat(
         # finding, Thoth msg 3691, Sekhmet).
         holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
         resume_outcome = await _lineage_resume_candidate(
-            pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+            pool, holder, st, repo=launch_cwd, office=office,
+        ) if holder else ["no seat holder on record"]
         resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
         resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
         if resume is not None:
