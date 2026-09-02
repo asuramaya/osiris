@@ -3232,10 +3232,38 @@ async def register_agent(
         # project_identity_evidence's own audit — but at DERIVED-tier confidence, so a
         # routine, uninformed mount can never outrank a declared rename on recency alone.
         if proj is not None:
+            # THE SELF-REINFECTING FOLD (Thoth dispatch 6547/6568, ruling a73aafa2, the
+            # Marquee specimen): the CLOBBER FIX above downgrades a differing pin-derived
+            # name to DERIVED-tier confidence rather than refusing it outright — right
+            # instinct, wrong mechanism. assert_property's supersession is same-source-
+            # only, so a DERIVED write from THIS session's source still lands as a NEW
+            # current row beside the strong ones; it loses a confidence-ordered read but
+            # WINS a recency-ordered one. Measured live: repo:dtfb carried a direct_
+            # observation/0.9 name from its 2026-08-21 fold, then a derived/0.4
+            # "dealer-to-fb" row was written on 2026-09-02 by exactly this code path (a
+            # mount resolving a stale .osiris pin that still declared the pre-fold name)
+            # — eleven days later, self-reinfecting on every such mount, never healed by
+            # a graph-only cleanup. THE STRUCTURAL FIX: when the incoming label is
+            # PROVABLY a dead identity — the canonical or a current `name` of some OTHER
+            # SoftwareProject already status='merged' INTO this exact `proj` — there is
+            # no genuine disagreement to record at any confidence; it is a fold being
+            # partially undone. Skip the write entirely, not merely downgrade it. This is
+            # a STRONGER signal than the case/whitespace check above, checked first: a
+            # merge record is structural proof, not a heuristic.
+            dead_husk_name = await actions.pool.fetchval(
+                "SELECT 1 FROM objects m WHERE m.type='SoftwareProject' "
+                "AND m.status='merged' AND m.merged_into=$1 AND ("
+                "  lower(m.canonical) = lower($2) OR EXISTS ("
+                "    SELECT 1 FROM current_assertions ca WHERE ca.object_id=m.id "
+                "    AND ca.name='name' AND lower(ca.value #>> '{}') = lower($3))) "
+                "LIMIT 1",
+                proj, f"repo:{identity.project}", identity.project)
             existing_name = await actions.pool.fetchval(
                 "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
                 "AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
-            if (existing_name is None
+            if dead_husk_name:
+                pass  # a folded husk's own name resurrected by a stale pin — never written
+            elif (existing_name is None
                     or existing_name.strip().casefold() == identity.project.strip().casefold()):
                 await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
                                               evidence_class=_EC)
