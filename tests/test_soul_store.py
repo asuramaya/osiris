@@ -393,3 +393,64 @@ async def test_mining_view_extracts_role_text_and_tool_calls(
 
 async def test_mining_view_none_when_never_ingested(store: SoulStore) -> None:
     assert await store.mining_view("neverseen2") is None
+
+
+# --- backfill (task #51 piece 1, Lane 1 msg 6527/ruling ba329ccb) -----------
+
+async def test_backfill_discovers_and_ingests_every_real_session(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    lines_a = _synthetic_lines(3)
+    lines_b = _synthetic_lines(2)
+    _write_transcript(projects / "-home-x-code-widget" / "aaaaaaaa-session.jsonl", lines_a)
+    _write_transcript(projects / "-home-x-code-gadget" / "bbbbbbbb-session.jsonl", lines_b)
+    counts = await store.backfill(root=projects)
+    assert sum(counts.values()) == 2  # two sessions touched, across both project dirs
+    assert await store.re_materialize("aaaaaaaa") == "\n".join(lines_a)
+    assert await store.re_materialize("bbbbbbbb") == "\n".join(lines_b)
+
+
+async def test_backfill_is_a_stat_only_noop_on_a_second_call(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """The spend gate: a source whose mtime hasn't moved since our own last_ingested_at
+    is skipped by stat + row lookup alone, never opened — the same law
+    transcript_store.py's sibling backfill already runs on this house's other store."""
+    projects = tmp_path / "projects"
+    _write_transcript(projects / "-home-x-code-widget" / "cccccccc-session.jsonl",
+                       _synthetic_lines(4))
+    first = await store.backfill(root=projects)
+    assert sum(first.values()) == 1
+    second = await store.backfill(root=projects)
+    assert sum(second.values()) == 0  # nothing changed — skipped, not re-ingested-to-zero
+
+
+async def test_backfill_resumes_a_session_that_grew_between_ticks(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    projects = tmp_path / "projects"
+    p = _write_transcript(
+        projects / "-home-x-code-widget" / "dddddddd-session.jsonl", _synthetic_lines(2))
+    await store.backfill(root=projects)
+    fuller = _synthetic_lines(2) + _synthetic_lines(5)[2:]
+    p.write_text("\n".join(fuller) + "\n")
+    second = await store.backfill(root=projects)
+    assert sum(second.values()) == 1  # the grown session counts as touched again
+    assert await store.re_materialize("dddddddd") == "\n".join(fuller)
+
+
+async def test_backfill_survives_one_bad_session_among_several(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A vanished/unreadable file must not abort the sweep — the next locator still
+    gets ingested (matches TranscriptStore.backfill's own per-session try/except)."""
+    projects = tmp_path / "projects"
+    good = _write_transcript(
+        projects / "-home-x-code-widget" / "eeeeeeee-session.jsonl", _synthetic_lines(2))
+    bad_dir = projects / "-home-x-code-ghost"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "ffffffff-session.jsonl").symlink_to(bad_dir / "does-not-exist")
+    counts = await store.backfill(root=projects)
+    assert sum(counts.values()) == 1
+    assert await store.re_materialize("eeeeeeee") == good.read_text().rstrip("\n")

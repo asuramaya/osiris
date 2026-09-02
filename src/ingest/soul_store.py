@@ -75,7 +75,7 @@ def _split_lines(content: bytes) -> list[bytes]:
     return lines
 
 
-def _dest_mtime(path: Path) -> datetime | None:
+def _path_mtime(path: Path) -> datetime | None:
     """Sync helper, same blocking-call-lint reasoning as `_read_source` — None when the
     path doesn't exist (nothing to compare against, never an error)."""
     try:
@@ -132,6 +132,13 @@ class SoulStore:
                 except Exception:  # noqa: BLE001
                     continue
         return "claude-code"
+
+    def _claude_code_adapters(self) -> list[HarnessAdapter]:
+        """`backfill()`'s own default — piece 1's claude-code-only scope, filtered out of
+        `self._adapters`' full set by class name rather than a second adapter list, so a
+        future adapter this instance was constructed with (a custom claude-code variant,
+        say) still participates without a maintained duplicate registry."""
+        return [a for a in self._adapters if type(a).__name__ == "ClaudeJsonlAdapter"]
 
     async def _progress(
         self, anchor_sid: str, harness: str = "claude-code",
@@ -205,6 +212,74 @@ class SoulStore:
                     locator.source_path, locator.anchor_sid, harness=harness,
                 )
         return 0
+
+    async def _last_ingested_at(self, harness: str, anchor_sid: str) -> datetime | None:
+        """One indexed row lookup — the cheap half of the spend gate, same shape
+        transcript_store.py's own `_freshness` uses against `harness_sessions`."""
+        return await self.pool.fetchval(  # type: ignore[no-any-return]
+            "SELECT last_ingested_at FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+            harness, anchor_sid)
+
+    async def backfill(
+        self, *, adapters: list[HarnessAdapter] | None = None,
+        root: Path | None = None, limit_per_adapter: int = 0,
+    ) -> dict[str, int]:
+        """The periodic sweep — eat every session file on disk into the store, lines
+        newly ingested (task #51 piece 1, Lane 1 msg 6527/ruling ba329ccb). Reuses each
+        HarnessAdapter's own `enumerate()` walk, the SAME file discovery
+        transcript_store.py's sibling backfill already trusts — no second file-walker.
+
+        DEFAULTS TO CLAUDE-CODE ONLY, never `self._adapters`' full set — piece 1's own
+        scope line ("Crush is SQLite-backed with no line-oriented raw concept... out of
+        scope here on purpose") is load-bearing here, not cosmetic: `ingest_path` raw-
+        byte-splits its source on `\\n`, which would silently mangle a crush.db's binary
+        content into garbage "lines" rather than erroring. Confirmed live while testing
+        this sweep: CrushSqliteAdapter.enumerate() IGNORES `root` entirely (walks
+        projects.json's registered cwds and the fixed seat-office path regardless of what
+        `root` is passed) — a caller has no way to sandbox it away by scoping `root`, so
+        the exclusion has to happen here, at the adapter-selection level, not by trusting
+        `root` to contain the blast radius. Pass `adapters=` explicitly to widen this once
+        a piece 2/3 verbatim strategy for DSH/Crush actually exists.
+
+        INCREMENTAL BY A STAT-ONLY SPEND GATE, same law as the sibling store (task #19,
+        the one-switch-one-cost rule, 51000597): a session whose source mtime is no newer
+        than this store's own `last_ingested_at` costs one stat + one indexed row lookup
+        and is never opened — a quiet fleet's steady-state sweep does no file IO beyond
+        that. `ingest_path` itself is separately idempotent/resumable (last_line_idx/
+        last_hash), so a file that DID change only pays for the lines actually new, never
+        a full re-hash — this gate exists purely to skip the `Path.read_bytes()` call
+        the resumable path would otherwise still pay for on every untouched file.
+
+        One bad session must not abort the sweep (matches TranscriptStore.backfill's own
+        per-session try/except) — a single malformed or vanished file logs nothing here
+        (fire-and-forget from a cron tick) and is retried next tick. `limit_per_adapter`
+        caps each adapter's sweep (0 = unlimited) so a first run over 2,000+ files does
+        not hog one tick — the interrupted-backfill case ruling ba329ccb named explicitly
+        is exactly this: resumable across many ticks by construction, never a special
+        case. Returns per-adapter counts of SESSIONS touched (not lines) — the same shape
+        TranscriptStore.backfill() returns, so a caller summing both stays simple."""
+        counts: dict[str, int] = {}
+        for adapter in (adapters if adapters is not None else self._claude_code_adapters()):
+            sessions = 0
+            for locator in adapter.enumerate(root=root):
+                try:
+                    mtime = _path_mtime(Path(locator.source_path))
+                    if mtime is None:
+                        continue  # vanished between discovery and here — skip, not an error
+                    harness = getattr(locator, "harness", "claude-code")
+                    last = await self._last_ingested_at(harness, locator.anchor_sid)
+                    if last is not None and mtime <= last:
+                        continue  # unchanged since our own last ingest — stat + lookup only
+                    new = await self.ingest_path(
+                        locator.source_path, locator.anchor_sid, harness=harness)
+                    if new:
+                        sessions += 1
+                except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
+                    continue
+                if limit_per_adapter and sessions >= limit_per_adapter:
+                    break
+            counts[adapter.name] = sessions
+        return counts
 
     async def verify_chain(self, anchor_sid: str) -> bool:
         """Re-walk every stored line and recompute the chain from scratch — the honest
@@ -375,7 +450,7 @@ class SoulStore:
                              "materialize"}
         target = Path(dest) if dest is not None else Path(row["source_path"])
         if not force:
-            existing_mtime = _dest_mtime(target)
+            existing_mtime = _path_mtime(target)
             if existing_mtime is not None and existing_mtime > row["last_ingested_at"]:
                 return {
                     "error": "refused — a LIVE transcript exists at the target",
