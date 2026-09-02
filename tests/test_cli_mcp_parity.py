@@ -163,6 +163,134 @@ RENAMED_PARAMS = {
         "reconciled",
 }
 
+# LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
+# every CLI command needs an MCP tool or a declared reason (NO_MCP_EQUIVALENT). It has no
+# reverse loop at all, so an MCP tool with zero CLI counterpart is structurally invisible to
+# it — not exempted, never checked. That is the actual, code-level reason it never caught the
+# seat/office/project binding-verb population being wildly CLI-poor (measured: 4 of ~20 had a
+# CLI door before Khnum's khnum-cli-parity lane added two more).
+#
+# The fix is NOT "walk all 147 MCP tools looking for a missing CLI door" — most of them
+# (search, recall, record_decision, dossier, ingest_*, the whole mail/thread/lease surface)
+# are agent-cognition primitives with no terminal analogue BY NATURE, and forcing every one
+# to carry a NO_CLI_EQUIVALENT reason would be the exact hollow-by-declaration failure Thoth
+# warned about: a table so large nobody reads it, satisfied by rote rather than judgment.
+# Ruling (decision this dispatch records): SCOPE THE GATE to the population the dispatch is
+# actually about — verbs that MOVE A BINDING (a seat's identity, tree, office, or a
+# project's own existence) — named explicitly here rather than inferred from a naming
+# convention, so adding a new binding-moving MCP tool later means adding it to this set on
+# purpose, not drifting into or out of scope silently.
+BINDING_VERBS = frozenset({
+    "mint_seat", "launch", "stop", "walk_in", "attach_seat", "detach_seat", "pause_seat",
+    "vacate_seat", "retire_seat", "rebind_seat", "bind_seat_tree", "sweep_seat_disk",
+    "rename_seat", "set_seat_attended", "reissue_office", "establish_office", "charter",
+    "charter_for", "invalidate_works_in", "reconcile_seat_identity",
+    "reconcile_seat_identity_third_party", "correct_pin_value", "create_project",
+    "rename_project", "retire_project", "fork_project", "unfork_project",
+})
+
+# mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
+# NO_MCP_EQUIVALENT's shape, reversed). "not yet built" is still a DECLARED gap, not a
+# hidden one — distinct from a "by design" entry, and worth re-reading before assuming any
+# one of these should stay this way forever.
+NO_CLI_EQUIVALENT = {
+    "walk_in": "agent-only by design (same shape as found_seat/launch, Thoth dispatch "
+        "6438): 'a mind with nothing but this server' names itself — there is no human "
+        "at a terminal on the other end of this call, ever.",
+    "charter": "self-charter has no CLI door by design: it resolves the target seat from "
+        "the CALLING agent's own mounted identity (set_charter), and a raw terminal holds "
+        "no such identity to be self about. charter_for (the operator-on-another's-behalf "
+        "form) already has one, --repos and all.",
+    "attach_seat": "not yet built — a real gap named by Khnum's lane-2 scoping (msg 6463): "
+        "not on the jesus/chad reconciliation path his dispatch scoped him to.",
+    "detach_seat": "not yet built — same scoping note as attach_seat.",
+    "pause_seat": "not yet built — not on the jesus/chad path; not ruled out.",
+    "vacate_seat": "not yet built — not on the jesus/chad path; not ruled out.",
+    "retire_seat": "not yet built at the RAW CLI layer — already reachable indirectly via "
+        "the /seat retire slash command (step 1 of its two-step retire), but that is a "
+        "prose composition outside this repo, not a `_build_parser()` subcommand this "
+        "gate can see; a direct CLI door is still a real, separate gap.",
+    "bind_seat_tree": "not yet built at the raw CLI layer — same shape as retire_seat: "
+        "already reachable via /seat bind-tree's slash composition, not via argparse.",
+    "sweep_seat_disk": "not yet built at the raw CLI layer — same shape: reachable via "
+        "/seat retire's step 2, not via argparse.",
+    "rename_seat": "not yet built — not on the jesus/chad path; not ruled out.",
+    "set_seat_attended": "not yet built — not on the jesus/chad path; not ruled out.",
+    "reissue_office": "not yet built — not on the jesus/chad path; not ruled out.",
+    "establish_office": "not yet built — not on the jesus/chad path; not ruled out.",
+    "invalidate_works_in": "not yet built — not on the jesus/chad path; not ruled out.",
+    "reconcile_seat_identity": "not yet built — not on the jesus/chad path; not ruled out.",
+    "reconcile_seat_identity_third_party": "not yet built — same as reconcile_seat_identity.",
+    "create_project": "not yet built — project lifecycle verbs weren't in lane 2's scope "
+        "(seat reconciliation only); a real gap, not ruled out.",
+    "rename_project": "not yet built — same scoping note as create_project.",
+    "retire_project": "not yet built — same scoping note as create_project.",
+    "fork_project": "not yet built — same scoping note as create_project.",
+    "unfork_project": "not yet built — same scoping note as create_project.",
+}
+
+
+def _find_missing_cli_doors(
+    cli: dict[str, set[str]], mcp: dict[str, set[str]], *,
+    binding_verbs: frozenset[str] = BINDING_VERBS,
+    no_cli_equivalent: dict[str, str] = NO_CLI_EQUIVALENT,
+) -> list[str]:
+    """The REVERSE of _find_problems's own direction, deliberately scoped to
+    BINDING_VERBS rather than all of `mcp` — see the ruling above the table this reads.
+    Returns one string per binding verb that exists on MCP, has no CLI command of the same
+    name (dashes for underscores), and carries no reason in NO_CLI_EQUIVALENT."""
+    cli_as_mcp_names = {name.replace("-", "_") for name in cli}
+    problems: list[str] = []
+    for name in sorted(binding_verbs):
+        if name not in mcp:
+            problems.append(
+                f"{name!r} is in BINDING_VERBS but no such MCP tool exists — stale entry")
+            continue
+        if name in cli_as_mcp_names:
+            continue
+        if name not in no_cli_equivalent:
+            problems.append(
+                f"MCP {name!r} is a binding-moving verb with no CLI command and no "
+                f"reason in NO_CLI_EQUIVALENT")
+    return problems
+
+
+async def test_every_binding_verb_has_a_cli_door_or_declares_why_not() -> None:
+    problems = _find_missing_cli_doors(_cli_commands(), await _mcp_tools())
+    assert problems == [], (
+        "a seat/office/project binding-moving verb drifted out of CLI reach, undeclared "
+        "(Thoth dispatch 6438 — BINDING_VERBS is the scoped population this lane gates; "
+        "add a NO_CLI_EQUIVALENT reason, or build the door):\n" + "\n".join(problems))
+
+
+def test_no_cli_equivalent_entries_still_name_real_binding_verbs() -> None:
+    """Same discipline as test_allowlist_entries_still_name_real_things, mirrored: an
+    exemption for a verb that got renamed, retired, or actually gained a CLI door should
+    fail here rather than sit stale and unread."""
+    for name in NO_CLI_EQUIVALENT:
+        assert name in BINDING_VERBS, (
+            f"{name!r} is in NO_CLI_EQUIVALENT but not in BINDING_VERBS — either scope it "
+            f"in or drop the now-pointless entry")
+
+
+def test_the_reverse_detector_itself_catches_an_undeclared_missing_cli_door() -> None:
+    """PROVE THE MECHANISM — same discipline as the forward detector's own proof tests."""
+    cli: dict[str, set[str]] = {}
+    mcp: dict[str, set[str]] = {"some_binding_verb": set()}
+    problems = _find_missing_cli_doors(
+        cli, mcp, binding_verbs=frozenset({"some_binding_verb"}), no_cli_equivalent={})
+    assert len(problems) == 1 and "some_binding_verb" in problems[0]
+
+    declared = _find_missing_cli_doors(
+        cli, mcp, binding_verbs=frozenset({"some_binding_verb"}),
+        no_cli_equivalent={"some_binding_verb": "test fixture, deliberate"})
+    assert declared == []
+
+    built = _find_missing_cli_doors(
+        {"some-binding-verb": set()}, mcp,
+        binding_verbs=frozenset({"some_binding_verb"}), no_cli_equivalent={})
+    assert built == []
+
 
 def _cli_commands() -> dict[str, set[str]]:
     """Every registered subcommand's own param set (positional dest + optional dest,
