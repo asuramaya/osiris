@@ -137,11 +137,34 @@ async def record_job(
     await set_cursor(pool, key, json.dumps(blob))
 
 
+# THE ONE PLACE THIS THRESHOLD LIVES (Thoth msg 6327): `grep -rn "3 \* every"` used to return
+# three hand-copied sites — this file, src/orchestrator/surface.py, and
+# scripts/osiris_fleet_glance.py — the exact "same word, same number, same SQL, three
+# implementations" bug surface.py's own module docstring names as its founding problem. A fix
+# landed at one site (surface.py's floor, commit ac20a0e) left the other two answering a
+# different question about the same job at the same instant. Every reader of "is this job
+# late" now calls THIS function; none re-derives the arithmetic.
+#
+# `_SICK_FLOOR_SECS`: a worker restart's boot cost is 0-2s (measured, 8 restarts, 2026-09-01)
+# and never explains a false alarm on its own — what does is a cron tick actually IN FLIGHT,
+# draining a real backlog, cancelled mid-run by a deploy's SIGTERM (measured worst case: 44s,
+# "cron:drain_cascade cancelled" in the worker log). 90s is 2x that. It only LOOSENS
+# sub-30s-cadence jobs (max(3*every, 90)); a 24h job still reads down after 3 days, unchanged.
+_SICK_FLOOR_SECS = 90
+
+
+def sick_after_secs(every: int) -> float:
+    """The age, in seconds, past which a job's silence stops being a blip and starts being
+    down. Three of its own cadences, floored so a fast job survives a deploy's restart+cancel
+    cost without a false alarm (see `_SICK_FLOOR_SECS` above)."""
+    return max(3 * every, _SICK_FLOOR_SECS)
+
+
 def _verdict(last_ok: datetime | None, every: int, now: datetime) -> tuple[str, float | None]:
     if last_ok is None:
         return "never", None
     age = (now - last_ok).total_seconds()
-    if age > 3 * every:      # three cadences missed in a row is not a blip
+    if age > sick_after_secs(every):      # three cadences missed in a row is not a blip
         return "down", age
     if age > 1.5 * every:
         return "stale", age

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from src.actions.core import Actions
-from src.orchestrator import surface
+from src.orchestrator import monitor, surface
 from src.orchestrator.mailbox import send_message
 from src.orchestrator.mounts import save_mount
 
@@ -111,19 +111,21 @@ async def test_a_fast_cadence_job_survives_a_deploy_restart_under_the_floor(
 ) -> None:
     """drain_cascade/evaluate_watch run every=5s — 3x that is 15s, which a routine deploy
     restart's cancel-and-resume cost (measured up to ~43s, 2026-09-01) blows past on its own.
-    `_SICK_FLOOR_SECS` exists so THIS job survives that cost without reading sick, while a job
-    that is actually dead for longer than the floor still does."""
+    `monitor._SICK_FLOOR_SECS` exists so THIS job survives that cost without reading sick,
+    while a job that is actually dead for longer than the floor still does. surface.py imports
+    the shared `sick_after_secs` from monitor.py (Thoth msg 6327: one threshold, not three
+    hand-copies) — this test exercises it through surface.fetch, its real caller."""
     p = actions.pool
     now = datetime.now(UTC)
 
-    inside_floor = now - timedelta(seconds=surface._SICK_FLOOR_SECS - 5)
+    inside_floor = now - timedelta(seconds=monitor._SICK_FLOOR_SECS - 5)
     await p.execute(
         "INSERT INTO watermarks (key, cursor) VALUES ('job:drain_cascade', $1)",
         f'{{"last_ok": "{inside_floor.isoformat()}", "every": 5}}')
     seg = await surface.fetch(p)
     assert "drain_cascade" not in seg.sensing.data["sick"]
 
-    past_floor = now - timedelta(seconds=surface._SICK_FLOOR_SECS + 5)
+    past_floor = now - timedelta(seconds=monitor._SICK_FLOOR_SECS + 5)
     await p.execute(
         "UPDATE watermarks SET cursor=$1 WHERE key='job:drain_cascade'",
         f'{{"last_ok": "{past_floor.isoformat()}", "every": 5}}')
