@@ -235,6 +235,44 @@ async def test_ingest_survives_an_embedded_nul_byte(store: SoulStore, tmp_path: 
     assert dest.read_bytes().count(b"\x00") == 3
 
 
+async def test_ingest_never_stores_a_trailing_unterminated_line(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE LIVE-WRITE SAFETY GUARD (msg 6583, Jesus resumed and appending mid-lane): a
+    session mid-write of its own last line leaves that line on disk with no trailing
+    `\\n` yet. Ingesting it as if complete would bake a half-written JSON object
+    permanently into the chain at that line_idx. The fix is structural (never trust an
+    unterminated tail), not an occupancy check."""
+    complete = _synthetic_lines(2)
+    p = tmp_path / "live.jsonl"
+    partial = json.dumps({"type": "user", "message": {"content": "still writ"}})
+    p.write_bytes(("\n".join(complete) + "\n").encode() + partial.encode())  # NO trailing \n
+    n = await store.ingest_path(str(p), "11ff11ff")
+    assert n == 2  # the partial third line is NOT ingested
+    rows = await store.raw_lines("11ff11ff")
+    assert rows == complete
+
+    # the write "finishes" — the file now ends in a real newline
+    full_line = partial + " and now done"
+    p.write_bytes(("\n".join(complete) + "\n").encode() + full_line.encode() + b"\n")
+    added = await store.ingest_path(str(p), "11ff11ff")
+    assert added == 1  # exactly the one completed line, never re-ingesting the first two
+    rows = await store.raw_lines("11ff11ff")
+    assert rows == [*complete, full_line]
+    assert await store.verify_chain("11ff11ff") is True
+
+
+async def test_ingest_returns_zero_when_the_only_content_is_an_unterminated_line(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A brand-new file, mid-write of its very first line — nothing complete yet."""
+    p = tmp_path / "brandnew.jsonl"
+    p.write_bytes(b'{"type": "user", "message": {"content": "not done ye')  # no \n at all
+    n = await store.ingest_path(str(p), "0a11a11a")
+    assert n == 0
+    assert await store.raw_lines("0a11a11a") is None
+
+
 async def test_rematerialize_to_disk_defaults_dest_to_the_recorded_source_path(
     store: SoulStore, tmp_path: Path,
 ) -> None:

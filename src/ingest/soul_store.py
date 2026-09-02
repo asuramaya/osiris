@@ -62,17 +62,33 @@ def _read_source(source_path: str) -> bytes:
 
 
 def _split_lines(content: bytes) -> list[bytes]:
-    """`content.split(b"\\n")`, minus the phantom trailing empty element a terminating
-    newline would otherwise produce — matches `str.splitlines()`'s own behavior for the
-    ordinary `\\n`-terminated case (every real transcript), without decoding to text
-    first (0052: decoding here is exactly the step that used to normalize away an
-    embedded NUL's exact byte position)."""
+    """Every COMPLETE line, `\\n`-terminated — NEVER a trailing partial fragment (msg
+    6583, the live-write safety gap: Jesus was resumed and being actively appended to
+    while this lane was dispatched). A session writes one JSON object per line, each
+    ending in `\\n`; if `ingest_path` reads mid-write of the LAST line on disk, the
+    bytes on disk end WITHOUT that terminating `\\n`. Returning that fragment as a
+    "line" would bake a half-written JSON object permanently into the hash chain at its
+    own line_idx — `ingest_path` never revisits an index once ingested, so a
+    subsequent re-read (once the write actually finishes) could never correct it.
+
+    THE FIX IS STRUCTURAL, NOT AN OCCUPANCY CHECK: rather than asking "is a session
+    live right now" (racy by construction — every occupancy read in this house tonight
+    has gone stale between the check and the write it gated), only ever trust content
+    up to and including the LAST complete `\\n`. Whatever trails it — complete or
+    mid-write, this function cannot tell and does not need to — waits for the next
+    sweep, when the same bytes (now `\\n`-terminated, if the write finished) are read
+    fresh and become the same line_idx's real content. A quiet file loses nothing (its
+    last real line already ends in `\\n`); a file being appended to right now loses
+    only the not-yet-complete tail, forever safe to re-read later.
+
+    Decodes nothing (0052: no `str.encode` round-trip to silently move an embedded NUL
+    byte off its exact position)."""
     if not content:
         return []
-    lines = content.split(b"\n")
-    if lines and lines[-1] == b"":
-        lines.pop()
-    return lines
+    end = content.rfind(b"\n")
+    if end == -1:
+        return []  # not even one complete line on disk yet
+    return content[:end].split(b"\n")
 
 
 def _path_mtime(path: Path) -> datetime | None:
