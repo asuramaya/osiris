@@ -4432,6 +4432,7 @@ async def charter_for(seat_id: str, repos: list[str], because: str,
 
 @mcp.tool()
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
+                      force: bool = False, because: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail. `seat`
     accepts a claimed name, a raw agent id, OR an unclaimed seat's own handle/canonical
@@ -4457,14 +4458,18 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
     then calls orient() moments later still measures the swap banner's intended_model
     against the OLD cwd's `.osiris`, missing the pin this call just wrote at `new_cwd`.
     Patch every live cached identity in the rebound lineage in place, below, so the very
-    next read on any of those connections sees the new anchor without a fresh mount()."""
+    next read on any of those connections sees the new anchor without a fresh mount().
+
+    LIVENESS GUARD (decision 7fe20cc5): self stays open; rebinding a different lineage's
+    live target refuses by default — `force=True` + `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
                 "why": _anchorless(ctx)}
     from src.orchestrator.mounts import rebind_seat as _rebind
     result = await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
-                           actor=ident.agent_id, extract=extract)
+                           actor=ident.agent_id, extract=extract,
+                           force=force, because=because or None)
     moved = result.get("agent")
     if moved and not result.get("error"):
         base = _generation(moved)[0]
@@ -4475,8 +4480,8 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
 
 
 @mcp.tool()
-async def merge(dupe: str, into: str, evidence: str,
-                ctx: Context | None = None) -> dict[str, Any]:
+async def merge(dupe: str, into: str, evidence: str, force: bool = False,
+                because: str = "", ctx: Context | None = None) -> dict[str, Any]:
     """THE RECONCILIATION FOLD (thread b975851b, unified under ruling 31c02dca) — declare
     two labels of the SAME type ONE THING: `dupe` folds into `into`. Replaces
     fold_agent/fold_seat/fold_project as the one door for all three; type is read off
@@ -4497,7 +4502,11 @@ async def merge(dupe: str, into: str, evidence: str,
     Refuses: dupe and into resolving to DIFFERENT types (the one refusal this collapse
     itself introduces); thin evidence; dupe==into; unknown or already-folded labels; an
     Agent same-lineage pair (succession's job, not a fold's); a SoftwareProject pair that
-    contradicts on any non-name/tag property."""
+    contradicts on any non-name/tag property.
+
+    LIVENESS GUARD (decision 7fe20cc5, SoftwareProject only): self stays open; a
+    different lineage's live session on `dupe` refuses by default — `force=True` +
+    `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
@@ -4506,7 +4515,7 @@ async def merge(dupe: str, into: str, evidence: str,
     from src.orchestrator.merge import merge as _merge
     pool = await _pool_get()
     out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence,
-                       actor=ident.agent_id)
+                       actor=ident.agent_id, force=force, because=because or None)
     if "error" in out or _merge_type((dupe or "").strip()) != "SoftwareProject":
         return out
     witness = await pool.fetchrow(

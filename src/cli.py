@@ -1478,6 +1478,14 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
     for c in result["candidates"]:
         notes.append(f"  {c['phantom']} -> {c['populated']} (correct case "
                      f"{c['correct_case']!r})")
+        live = c.get("result", {}).get("live_session_repointed")
+        if live:
+            # THE EXCEPTION'S PRICE (decision 7fe20cc5): this call runs force=True
+            # permanently, so a live session's own agent_mounts.project row getting
+            # re-pointed is never silent — it lands in deploy output, every time.
+            notes.append(f"    NOTE: live session {live} was mounted on the phantom "
+                         "side and had its project attribution re-pointed by this "
+                         "automatic merge")
     for s in result["skipped"]:
         notes.append(f"  SKIPPED: {s['canonicals']} — {s['reason']}")
     return notes
@@ -2128,8 +2136,8 @@ async def cmd_deploy(
 # --- merge / unmerge ---------------------------------------------------------------------------
 
 async def cmd_merge(
-    dupe: str, into: str, evidence: str, *, actor: str,
-    pool: asyncpg.Pool | None = None,
+    dupe: str, into: str, evidence: str, *, actor: str, force: bool = False,
+    because: str = "", pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris merge <dupe> <into> --evidence <text> [--actor <who>] — the console-script
     door onto orchestrator.merge.merge, the SAME function the merge MCP tool wraps (no
@@ -2145,7 +2153,11 @@ async def cmd_merge(
 
     TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474): the
     merge-event/same_as witness the MCP wrapper queries after the fact — SoftwareProject
-    merges only, matching the MCP tool's own conditional exactly — is queried here too."""
+    merges only, matching the MCP tool's own conditional exactly — is queried here too.
+
+    `--force` (+ `--because`): decision 7fe20cc5's liveness guard override, SoftwareProject
+    folds only — self stays open by default, a different lineage's live target refuses
+    unless forced."""
     from src.actions.core import Actions
     from src.orchestrator.merge import _merge_type
     from src.orchestrator.merge import merge as _merge
@@ -2167,7 +2179,8 @@ async def cmd_merge(
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
-        out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence, actor=actor)
+        out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence,
+                           actor=actor, force=force, because=because or None)
         if "error" not in out and _merge_type(dupe.strip()) == "SoftwareProject":
             witness = await pool.fetchrow(
                 "SELECT oe.id AS merge_event_id, l.id AS same_as_link_id "
@@ -2198,8 +2211,8 @@ async def cmd_merge(
 
 
 async def cmd_fold_project(
-    dupe: str, into: str, evidence: str, *, actor: str,
-    pool: asyncpg.Pool | None = None,
+    dupe: str, into: str, evidence: str, *, actor: str, force: bool = False,
+    because: str = "", pool: asyncpg.Pool | None = None,
 ) -> int:
     """DEPRECATED ALIAS (dispatch 3683): fold_project no longer exists as an MCP tool —
     it collapsed into merge() (ruling 31c02dca, decision a926a8d0) and the CLI never
@@ -2209,7 +2222,8 @@ async def cmd_fold_project(
     never break a human's muscle memory silently, but never advertise the old name either."""
     print("osiris fold-project is deprecated — use `osiris merge` (identical arguments, "
           "same evidence-gated fold). Continuing as merge.", file=sys.stderr)
-    return await cmd_merge(dupe, into, evidence, actor=actor, pool=pool)
+    return await cmd_merge(dupe, into, evidence, actor=actor, force=force, because=because,
+                           pool=pool)
 
 
 async def cmd_unmerge(
@@ -3093,6 +3107,14 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="who is performing this merge — defaults to "
                               f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
                               "operator authority, the only gate an Agent merge enforces)")
+    p_merge.add_argument("--force", action="store_true",
+                         help="override decision 7fe20cc5's liveness guard "
+                              "(SoftwareProject folds only) — required alongside "
+                              "--because to fold a project a DIFFERENT lineage's live "
+                              "session currently has mounted; self never needs this")
+    p_merge.add_argument("--because", default="",
+                         help="required when --force is used — why the live-session "
+                              "guard is being overridden")
 
     p_unmerge = sub.add_parser(
         "unmerge", description=_d("Reverse a wrongful `merge` — dry run by default (returns "
@@ -3154,6 +3176,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                      f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
                                      "operator authority); override to attribute it "
                                      "elsewhere")
+    p_fold_project.add_argument("--force", action="store_true",
+                                help="override decision 7fe20cc5's liveness guard — "
+                                     "required alongside --because")
+    p_fold_project.add_argument("--because", default="",
+                                help="required when --force is used")
 
     p_charter_for = sub.add_parser("charter-for", description=_d(
         "declare a charter on behalf of a seat — the "
@@ -3363,7 +3390,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "deploy":
         return asyncio.run(cmd_deploy())
     if args.command == "merge":
-        return asyncio.run(cmd_merge(args.dupe, args.into, args.evidence, actor=args.actor))
+        return asyncio.run(cmd_merge(args.dupe, args.into, args.evidence, actor=args.actor,
+                                     force=args.force, because=args.because))
     if args.command == "unmerge":
         return asyncio.run(cmd_unmerge(args.dupe, args.because, actor=args.actor,
                                        execute=args.execute, as_json=args.as_json))
@@ -3373,7 +3401,8 @@ def main(argv: list[str] | None = None) -> int:
                                          as_json=args.as_json))
     if args.command == "fold-project":
         return asyncio.run(cmd_fold_project(args.dupe, args.into, args.evidence,
-                                            actor=args.actor))
+                                            actor=args.actor, force=args.force,
+                                            because=args.because))
     if args.command == "charter-for":
         repos = [r.strip() for r in args.repos.split(",") if r.strip()]
         return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor))

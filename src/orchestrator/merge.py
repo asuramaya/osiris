@@ -57,6 +57,7 @@ def _merge_type(ref: str) -> str:
 
 
 async def merge(actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
+                force: bool = False, because: str | None = None,
                 ) -> dict[str, Any]:
     """Fold `dupe` into `into` — replaces fold_agent/fold_seat/fold_project as the one
     door for all three. Type is read off `dupe`'s and `into`'s OWN form (see this module's
@@ -68,7 +69,13 @@ async def merge(actions: Actions, *, dupe: str, into: str, evidence: str, actor:
     THE ONE NEW REFUSAL (never reachable before this collapse, because no single verb ever
     spanned two types): `dupe` and `into` resolving to DIFFERENT types — named plainly
     rather than falling through to a type-specific "unknown X" message that would not say
-    WHY."""
+    WHY.
+
+    THE LIVENESS GUARD (decision 7fe20cc5, SoftwareProject folds only — fold_agent/
+    fold_seat are out of this guard's measured scope): self stays fully open; folding a
+    project a DIFFERENT lineage's live session currently has mounted refuses by default.
+    `force=True` (requires a non-empty `because`) is the deliberate override — `force`/
+    `because` are passed through to fold_project only, ignored for Agent/Seat merges."""
     from src.orchestrator.folds import fold_agent
     from src.orchestrator.projects import fold_project
     from src.orchestrator.seats import fold_seat
@@ -87,7 +94,7 @@ async def merge(actions: Actions, *, dupe: str, into: str, evidence: str, actor:
         return await fold_seat(actions, dupe=dupe_s, into=into_s, evidence=evidence,
                                actor=actor)
     return await fold_project(actions, dupe=dupe_s, into=into_s, evidence=evidence,
-                              actor=actor)
+                              actor=actor, force=force, because=because)
 
 
 async def unmerge(actions: Actions, *, dupe: str, because: str, actor: str,

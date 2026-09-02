@@ -1311,7 +1311,8 @@ def migrate_harness_metadata(
 async def rebind_seat(
     actions: Actions, *, seat_or_agent: str, new_cwd: str, actor: str | None = None,
     projects_root: Path | None = None, claude_json: Path | None = None,
-    extract: bool = False,
+    extract: bool = False, force: bool = False, because: str | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail (`dd47c1da`
     — the fold the operator is blocked on). MINTS NOTHING: no new Agent, no handle or lineage
@@ -1351,7 +1352,16 @@ async def rebind_seat(
     `anchor_cwd`, using the seat's OWN derived house rather than an agent's.
 
     Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody at
-    all — neither an agent nor a seat — an unknown seat is never a silent no-op."""
+    all — neither an agent nor a seat — an unknown seat is never a silent no-op.
+
+    THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07): SELF (the caller's own
+    lineage matches the target's) stays exactly as open as before this guard existed —
+    establish_office's own onboarding ceremony depends on this, since its target is
+    definitionally live at that instant. THIRD-PARTY (a different lineage) acting on a
+    target a harness-confirmed live body currently occupies REFUSES by default;
+    `force=True` (requires `because`, same law every repair verb here follows) is the
+    deliberate override. A cold or never-yet-claimed target is unaffected either way —
+    this guard fires ONLY on genuine live occupancy, never on bare seat status."""
     seat_or_agent = (seat_or_agent or "").strip()
     from src.orchestrator.agents import _generation, house_of, resolve_handle
     from src.orchestrator.seats import derive_house
@@ -1401,6 +1411,25 @@ async def rebind_seat(
         return {"error": f"{agent_id} has no durable project label to preserve — it has never "
                          "been mounted in a project, so there is no anchor to move"}
     base = _generation(agent_id)[0]
+    if force and not (because or "").strip():
+        return {"error": "force=True requires because — a forced rebind of a live seat is "
+                         "not self-justifying"}
+    if not force:
+        from src.orchestrator.agents import is_occupied_by_a_live_body
+        if await is_occupied_by_a_live_body(
+            actions.pool, agent_id, agents_json=agents_json, read_exe=read_exe,
+            read_cwd=read_cwd,
+        ):
+            actor_base = _generation(actor)[0] if actor else None
+            if actor_base != base:
+                return {"error": f"{agent_id} is occupied by a live body right now, and the "
+                                 f"caller ({actor!r}) is not that same lineage — refusing a "
+                                 "THIRD-PARTY rebind of a live seat (decision 7fe20cc5's "
+                                 "guard: self stays open, third-party-on-live refuses by "
+                                 "default). Pass force=True with a because to override — "
+                                 "self-rebind (the caller IS this lineage) never needs this",
+                        "occupied": True, "target_lineage": base,
+                        "caller_lineage": actor_base}
     old_cwd = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
         "ORDER BY last_seen DESC NULLS LAST LIMIT 1", base)

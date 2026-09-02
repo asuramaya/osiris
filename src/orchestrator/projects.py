@@ -267,8 +267,40 @@ async def _contradicting_properties(
 _PROJECT_ESTATE_LINK_TYPES = ("in_repo", "works_in", "governs", "informs")
 
 
+async def _live_third_party_on_project(
+    pool: asyncpg.Pool, project_canonical: str, actor: str | None,
+    *, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> str | None:
+    """THE LIVENESS GUARD'S OWN CHECK (decision 7fe20cc5, obligation 53424b07): does
+    `project_canonical` currently have a harness-confirmed live agent_mounts row whose
+    agent is a DIFFERENT lineage than `actor`? Returns that agent's canonical (the first
+    one found) or None. One `registry_census` call, reused across every candidate row —
+    `is_occupied_by_a_live_body` is a subprocess + bounded /proc walk, not free, and this
+    is never a hot loop, but N separate calls for N rows on one project is still waste
+    the single shared census avoids."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.mounts import registry_census
+
+    bare = project_canonical.removeprefix("repo:")
+    rows = await pool.fetch(
+        "SELECT DISTINCT agent_id FROM agent_mounts WHERE project=$1", bare)
+    if not rows:
+        return None
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    matched = {m.get("agent_id") for m in census.get("matched", [])}
+    actor_base = _generation(actor)[0] if actor else None
+    for r in rows:
+        agent_id = str(r["agent_id"])
+        if agent_id in matched and _generation(agent_id)[0] != actor_base:
+            return agent_id
+    return None
+
+
 async def fold_project(
     actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
+    force: bool = False, because: str | None = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
     """Fold SoftwareProject `dupe` into `into` — the deliberate, evidence-gated cure for a
     TWIN (two SoftwareProject objects that are really one project under two labels; #107's
@@ -311,7 +343,14 @@ async def fold_project(
     Refuses LOUDLY, nothing written, on: empty evidence (an auto-merge wearing a
     signature); blank dupe/into; dupe==into; either label not resolving to an ACTIVE
     SoftwareProject (missing, wrong type, or already merged); a genuine cross-object
-    contradiction on any non-name/tag property."""
+    contradiction on any non-name/tag property.
+
+    THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07): self (the caller's own
+    lineage currently holds `dupe`) stays fully open — no change. A DIFFERENT lineage's
+    harness-confirmed live session currently mounted on `dupe` refuses the fold by
+    default; `force=True` (requires a non-empty `because`) is the deliberate override,
+    and the receipt then carries `live_session_repointed` — the exception's price is
+    always a visible signal, never a silent one."""
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
         return {"error": "a fold without evidence is an auto-merge wearing a signature — "
@@ -344,14 +383,35 @@ async def fold_project(
                          "two different projects, not one under two names; fold_project "
                          "refuses rather than destroy the disagreement",
                 "contradicted_on": conflicts}
+    if force and not (because or "").strip():
+        return {"error": "force=True requires because — a forced fold of a live project "
+                         "is not self-justifying"}
+    live_third_party = await _live_third_party_on_project(
+        actions.pool, dupe_row["canonical"], actor,
+        agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if live_third_party and not force:
+        return {"error": f"{dupe_row['canonical']} is currently mounted by a "
+                         f"harness-confirmed live session ({live_third_party}), a "
+                         f"different lineage than the caller ({actor!r}) — refusing "
+                         "a THIRD-PARTY fold of a live project (decision 7fe20cc5's "
+                         "guard: self stays open, third-party-on-live refuses by "
+                         "default). Pass force=True with a because to override",
+                "occupied_by": live_third_party}
     now = datetime.now(UTC)
     moved, mounts_moved = await _move_project_estate(
         actions, dupe_row["id"], into_row["id"], dupe_row["canonical"],
         into_row["canonical"], actor, now)
     await actions.merge_objects(into_row["id"], dupe_row["id"], justification=evidence,
                                 actor=actor)
-    return {"folded": dupe_row["canonical"], "into": into_row["canonical"],
-           "edges_moved": moved, "mounts_moved": mounts_moved}
+    out = {"folded": dupe_row["canonical"], "into": into_row["canonical"],
+          "edges_moved": moved, "mounts_moved": mounts_moved}
+    if live_third_party:
+        # THE EXCEPTION'S PRICE (decision 7fe20cc5): force=True bypassed the guard above,
+        # never the report — a live session's own agent_mounts.project row just got
+        # re-pointed out from under it, and that stays MANDATORY, visible output, not a
+        # silent side effect the exception buys away.
+        out["live_session_repointed"] = live_third_party
+    return out
 
 
 async def unfold_project(
@@ -1045,9 +1105,19 @@ async def normalize_project_casing(
             "would_write_pins": pins_ok, "pins_already_correct": pins_already_correct,
         }}
 
+    # THE NAMED EXCEPTION (decision 7fe20cc5): normalize_project_casing has exactly one
+    # caller anywhere (casefold_auto_merge_candidates, wired unconditionally into `osiris
+    # deploy` under operator ruling 22d47acb — "automatic, not bottlenecked by me") and
+    # this fold_project call is baked to force=True PERMANENTLY here, not exposed as a
+    # param, so the deploy path can never be silently re-bottlenecked by this guard. The
+    # phantom side is, by this function's own precondition, an empty twin (agent_count 0)
+    # — the guard should almost never actually have anything to bypass — but force=True
+    # still buys the mandatory `live_session_repointed` signal in fold_result if it does.
     fold_result = await fold_project(
         actions, dupe=phantom_row["canonical"], into=populated_row["canonical"],
-        evidence=evidence, actor=actor)
+        evidence=evidence, actor=actor, force=True,
+        because="casefold_auto_merge_candidates: operator ruling 22d47acb, automatic "
+                "case-twin merge on deploy, never bottlenecked on a human")
     if fold_result.get("error"):
         # every precondition above was proven immediately before this call — a refusal
         # here would mean the graph changed between the check and the write (a real
@@ -1088,6 +1158,10 @@ async def normalize_project_casing(
         "new_name": rename_result["new_name"],
         "pins_written": pin_writes, "pins_already_correct": pins_already_correct,
     }
+    if "live_session_repointed" in fold_result:
+        # THE EXCEPTION'S PRICE, carried through (decision 7fe20cc5) — force=True on the
+        # fold above must never make this signal silently vanish a layer up.
+        out["live_session_repointed"] = fold_result["live_session_repointed"]
     if pin_write_failed:
         out["pin_write_failed"] = pin_write_failed
         out["note"] = ("THE GRAPH SIDE (FOLD + RENAME) SUCCEEDED BUT AT LEAST ONE PIN "
