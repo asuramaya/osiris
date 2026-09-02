@@ -404,6 +404,36 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
     assert anchor == new
 
 
+async def test_rebind_collapses_the_old_anchor_never_leaves_it_coexisting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ANCHOR INVARIANT (Thoth msg 6546, ruling 12387fcc/2e05d662): rebind_seat used to
+    write anchor_cwd via assert_property, whose same-source-only supersession never
+    retires a DIFFERENT source's prior current row. When the mint's own console-sourced
+    anchor and a later self_declared rebind (a different source) both stayed is_current,
+    every LIMIT-1 read of the seat's office became a coin flip — exactly the corruption
+    found live on Jesus and Chad. assert_singular_property (this session's own mechanism,
+    ruling 1335332e) must collapse the old row, not merely outrank it by recency."""
+    from src.orchestrator.mounts import rebind_seat
+    from src.orchestrator.seats import ensure_seat
+
+    old = str(tmp_path / "old-office")
+    new = str(tmp_path / "new-office")
+    Path(old).mkdir()
+    (Path(old) / ".osiris").write_text('project = "anchorhouse"\n')
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves2",
+                             anchor_cwd=old, source="console")
+
+    await rebind_seat(actions, seat_or_agent=seat["seat_id"], new_cwd=new,
+                      actor="agent:different-source", projects_root=tmp_path / "projects",
+                      claude_json=tmp_path / "cj.json")
+
+    rows = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert [r["v"] for r in rows] == [new]
+
+
 # --- the resume heal (thread 39ea074c: the alfred transition test's catch) ---
 
 

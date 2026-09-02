@@ -1397,8 +1397,9 @@ async def rebind_seat(
         now = datetime.now(UTC)
         soid = await actions.create_or_find_object("Seat", direct_seat_id,
                                                    actor or direct_seat_id)
-        await actions.assert_property(soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now,
-                                      _CONF, evidence_class=_EC)
+        await actions.assert_singular_property(
+            soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now, _CONF,
+            evidence_class=_EC)
         return {
             "seat": direct_seat_id, "project": label, "new_cwd": new_cwd,
             "osiris_written": osiris_path,
@@ -1489,8 +1490,9 @@ async def rebind_seat(
     if seat_to_anchor:
         soid = await actions.create_or_find_object("Seat", seat_to_anchor,
                                                    actor or agent_id)
-        await actions.assert_property(soid, "anchor_cwd", new_cwd, actor or agent_id, now,
-                                      _CONF, evidence_class=_EC)
+        await actions.assert_singular_property(
+            soid, "anchor_cwd", new_cwd, actor or agent_id, now, _CONF,
+            evidence_class=_EC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(
         a, "anchor_moved", f"{old_cwd or '?'} → {new_cwd}", actor or agent_id, now, _CONF,
