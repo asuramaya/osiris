@@ -14,6 +14,7 @@ from src.orchestrator.boot_compiler import (
     MarkerError,
     _armed_practices,
     _has_any_markers,
+    _practice_block,
     boot_rollout_gap_notes,
     boot_rollout_gaps,
     compile_managed_body,
@@ -25,6 +26,7 @@ from src.orchestrator.boot_compiler import (
 )
 from src.orchestrator.capture import (
     _witness_link,
+    amend_practice,
     record_decision,
     record_practice,
     refute_practice,
@@ -181,6 +183,48 @@ async def test_armed_practices_excludes_refuted_and_filters_by_role_surface(
     assert "boot compiler coordinator-only lesson" not in worker_statements
     assert "boot compiler deploy domain lesson" in worker_statements
     assert "boot compiler deploy domain lesson" in coord_statements
+
+
+async def test_armed_practices_surfaces_latest_amendment(actions: Actions) -> None:
+    # thread bd28a41f: a self-corrected practice's `statement` never changes (amend_
+    # practice's own idempotency-key law) — its amendment must still reach the render.
+    d = await record_decision(actions, "boot-compiler amendment-surface witness")
+    unamended = await record_practice(actions, "boot compiler lesson with no amendment")
+    amended = await record_practice(actions, "boot compiler lesson later corrected")
+    await _witness_link(actions, unamended, d, "test", datetime.now(UTC))
+    await _witness_link(actions, amended, d, "test", datetime.now(UTC))
+    await amend_practice(actions, str(amended), "first correction", source="test")
+    await amend_practice(actions, str(amended), "second, newer correction", source="test")
+
+    armed = await _armed_practices(actions.pool, "coordinator", limit=20)
+    by_statement = {p["statement"]: p for p in armed}
+    assert by_statement["boot compiler lesson with no amendment"]["latest_amendment"] is None
+    # newest amendment wins (observed_at DESC), not the first one written
+    assert (by_statement["boot compiler lesson later corrected"]["latest_amendment"]
+            == "second, newer correction")
+
+
+async def test_practice_block_renders_amendment_inline(actions: Actions) -> None:
+    d = await record_decision(actions, "boot-compiler practice-block amendment witness")
+    amended = await record_practice(actions, "boot compiler practice-block corrected lesson")
+    await _witness_link(actions, amended, d, "test", datetime.now(UTC))
+    await amend_practice(actions, str(amended), "the corrected guidance", source="test")
+
+    block = await _practice_block(actions.pool, "coordinator")
+    assert "boot compiler practice-block corrected lesson" in block
+    assert "AMENDED: the corrected guidance" in block
+
+
+async def test_practice_block_truncates_a_long_amendment(actions: Actions) -> None:
+    d = await record_decision(actions, "boot-compiler practice-block long-amendment witness")
+    amended = await record_practice(actions, "boot compiler practice-block long-corrected lesson")
+    await _witness_link(actions, amended, d, "test", datetime.now(UTC))
+    long_amendment = "x" * 500
+    await amend_practice(actions, str(amended), long_amendment, source="test")
+
+    block = await _practice_block(actions.pool, "coordinator")
+    assert long_amendment not in block
+    assert "x" * 200 + "…" in block
 
 
 # ═══════════ compile_managed_body: worker vs coordinator shape ═══════════
