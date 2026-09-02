@@ -2888,7 +2888,23 @@ async def live_succession(
         if row["project"]:
             await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
                                           evidence_class=_EC)
-        sid_prop = _job_id(row["job_dir"]) or sid[:8]
+        # THE MARQUEE SPECIMEN (Thoth dispatch 6484/6515, decision f5d5473b's gen 12):
+        # `_job_id(job_dir)` was tried FIRST here, backwards from the precedent this same
+        # module already sets at line ~1248 (`session or _job_id(job_dir)` — explicit
+        # session wins, job_dir is only ever the fallback guess). For a `-p --resume`
+        # wake, job_dir IS per-session, so the two values happen to agree and the bug
+        # never shows. For a `--bg`-launched seat, job_dir is the DURABLE PER-SEAT anchor
+        # (`_launch_anchor`'s own `jobs/seat-<hex>`, unchanged across every generation) —
+        # `_job_id` has no way to know that isn't a session id, and dutifully returns the
+        # seat's own canonical, stamped as if it were one. Confirmed live: Marquee's gen
+        # 12 carries session="seat-bdbe031e" in the graph while her real session id
+        # (226a2695-...) sits, findable, right where her mount's transcript actually is —
+        # the corrupted stamp was the whole reason `osiris resume` reported "mounted but
+        # no transcript found on disk", not her anchor_cwd's own separate double-row leak.
+        # `sid` is ALREADY validated non-empty (the `len(sid) < 8` guard above returned
+        # early otherwise) — it is never a worse choice than a job_dir guess, so it goes
+        # first now, matching this module's own established precedent.
+        sid_prop = sid[:8] or _job_id(row["job_dir"])
         await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
                                       evidence_class=_EC)
         await actions.pool.execute(
