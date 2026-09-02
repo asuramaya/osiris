@@ -2805,6 +2805,14 @@ async def cmd_mint_seat(
     if office:
         print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
+        # THE PROJECT CONFESSION, same voice as `osiris new`'s own (decision 24e0b761):
+        # only fires when this call actually WROTE the pin (`project_declared is None`
+        # means the pin already existed and was left untouched — nothing new to confess).
+        if office.get("osiris_pin_project_declared") is False:
+            print("project: unset in this office's pin — no --project given, none "
+                  "invented. mount will fill this in on its own once the graph "
+                  "unambiguously knows it; `osiris mint-seat ... --project <name>` "
+                  "declares it now.")
     print(f"model: {out['intended_model']}"
           + (" (stamped)" if out.get("intended_model_stamped") else ""))
     print(f"manager: {out['manager_seat_id']} ({out['managed_by']})")
@@ -2882,7 +2890,18 @@ async def cmd_new(
         return 1
     print(f"{'founded' if out['seat_minted'] else 'converged on'} {out['handle']} "
           f"({out['seat_id']}) — self-managed, no manager")
-    print(f"project: {out['project']}")
+    # THE PROJECT CONFESSION (the operator, live, 2026-09-02: "the thing cannot handle
+    # 'no project' — it falsely creates a jesus project and a chad project when really
+    # they are working somewhere else", decision 24e0b761): no --project no longer
+    # fabricates one from the handle — say so plainly, the same "confess, never assume"
+    # voice as the cwd-default note above, rather than leaving a silent `project: None`
+    # for the next reader to puzzle over.
+    if out["project"]:
+        print(f"project: {out['project']}")
+    else:
+        print("project: unset — no --project given, none invented. mount will fill "
+              "this in on its own once the graph unambiguously knows it; "
+              "`osiris new <handle> --project <name>` declares it now.")
     print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
     office = out.get("office")
     if office:

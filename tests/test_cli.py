@@ -3254,11 +3254,38 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     assert out == 0
     text = buf.getvalue()
     assert "founded Henry" in text and "self-managed, no manager" in text
-    assert "project: Henry" in text
+    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
+    # chad project" — decision 24e0b761): no --project given, so none is invented, and
+    # the receipt confesses it plainly rather than staying silent.
+    assert "project: unset" in text and "none invented" in text
+    assert "project: Henry" not in text
     assert f"workspace: {workspace}" in text
     assert "next: osiris launch Henry" in text
     assert workspace.is_dir()
-    assert (workspace / ".osiris").read_text() == 'project = "Henry"\n'
+    assert (workspace / ".osiris").read_text() == ""
+
+
+async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # THE UNCHANGED DIRECTION (Thoth's acceptance item 2): an explicit --project still
+    # lands exactly as before.
+    import io
+    from contextlib import redirect_stdout
+
+    workspace = tmp_path / "dtfb-ws"
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_new("Bartow", str(workspace), project="dtfb", model=None,
+                            actor="console", pool=actions.pool)
+
+    assert out == 0
+    text = buf.getvalue()
+    assert "project: dtfb" in text
+    assert "unset" not in text
+    assert (workspace / ".osiris").read_text() == 'project = "dtfb"\n'
 
 
 async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
