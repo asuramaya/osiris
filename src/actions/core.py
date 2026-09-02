@@ -358,6 +358,83 @@ class Actions:
             await self._outbox(conn, "property_added", object_id, case_id, {"name": name})
             return new_id
 
+    # --- 2b*. assert_singular_property (the CROSS-source collapse, opt-in) -
+
+    async def assert_singular_property(
+        self,
+        object_id: uuid.UUID,
+        name: str,
+        value: Any,
+        source_id: str,
+        observed_at: datetime,
+        confidence: float,
+        *,
+        because: str = (
+            "a single-current-value property collapsed across sources — a workflow "
+            "transition (e.g. a thread's resolve) supersedes every open witness, unlike "
+            "assert_property's own same-source-only rule (ruling 1335332e, thread 6361)"
+        ),
+        case_id: uuid.UUID | None = None,
+        evidence_uri: str | None = None,
+        evidence_sha256: str | None = None,
+        evidence_class: str | None = None,
+        actor: str | None = None,
+    ) -> int:
+        """assert_property's own supersession is scoped to the SAME source only — correct
+        for multi-source corroboration (deploy_guard's alarm_schema_drift opens the same
+        alarm Thread from two boot services on purpose, source=f"boot:{service}" each,
+        thread 35c425f9) — but wrong for a property that is single-valued PER OBJECT
+        regardless of who writes it: a Thread's own `status` in the interactive obligation
+        lifecycle (one agent opens, a different one resolves — exactly one workflow state
+        should ever be current, ruling 1335332e).
+
+        `singular` is a property of the WRITE, not of the function (Thoth's scoping call,
+        thread 6361 msg 6408): a caller reaches for THIS verb, instead of assert_property,
+        only at the specific call sites where cross-source collapse is correct —
+        resolve_thread's own status/resolved_in/resolved_because writes and
+        record_decision's inline thread-close of the same shape — never open_thread's,
+        which must keep coexisting so a second boot service's witness isn't destroyed.
+        DEFAULT stays coexist (assert_property); this is an opt-in door, never a global
+        behavior change, because a wrong default that DESTROYS a witness is categorically
+        worse than a wrong default that merely leaves a leak unfixed at an un-migrated site.
+
+        Collapses EVERY other current row for (object_id, name), not just one arbitrary
+        witness — so resolving a thread with N open witnesses (N boot services corroborating
+        one alarm, say) still leaves exactly one current `status` afterward, not N-1.
+        Defers straight to assert_property when nothing else is current (the common case:
+        nothing to collapse) or when this source itself was already the sole holder."""
+        actor = actor or source_id
+        async with self._tx() as conn:
+            bound = Actions(self.pool, conn=conn)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))", f"{object_id}:{name}")
+            current_rows = await conn.fetch(
+                "SELECT id, source_id FROM assertions WHERE object_id=$1 AND name=$2 "
+                "AND is_current",
+                object_id, name,
+            )
+            others = [r for r in current_rows if r["source_id"] != source_id]
+            if not others:
+                return await bound.assert_property(
+                    object_id, name, value, source_id, observed_at, confidence,
+                    case_id=case_id, evidence_uri=evidence_uri,
+                    evidence_sha256=evidence_sha256, evidence_class=evidence_class,
+                    actor=actor,
+                )
+            own = next((r for r in current_rows if r["source_id"] == source_id), None)
+            primary = own or others[0]
+            new_id = await bound.supersede_assertion(
+                object_id, name, primary["id"], value, source_id, observed_at, confidence,
+                because, case_id=case_id, evidence_class=evidence_class, actor=actor,
+            )
+            remaining = [r["id"] for r in current_rows if r["id"] != primary["id"]]
+            if remaining:
+                await conn.execute(
+                    "UPDATE assertions SET is_current=false WHERE id = ANY($1::bigint[])",
+                    remaining,
+                )
+            return new_id
+
     # --- 2c. repair_stale_current_flags (the migration-0047 backfill) -----
 
     async def repair_stale_current_flags(

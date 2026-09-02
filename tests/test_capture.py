@@ -465,6 +465,50 @@ async def test_resolve_thread_returns_none_when_nothing_matches(actions: Actions
     assert await resolve_thread(actions, "no such thread anywhere") is None
 
 
+async def test_resolve_by_a_different_agent_than_the_opener_still_supersedes(
+    actions: Actions,
+) -> None:
+    """The leak this fix closes (ruling 1335332e, thread 6361): open_thread's own `status`
+    write lands under the OPENER's source; resolve_thread's lands under the RESOLVER's.
+    Under plain assert_property (same-source-only supersession) both would stay current —
+    a thread simultaneously open-and-resolved, the 713-obligation shape. assert_singular_
+    property closes it: exactly one current `status` row survives, and it's 'resolved'."""
+    t = await open_thread(actions, "opened by one agent, resolved by another",
+                          source="agent:opener-A")
+    await resolve_thread(actions, str(t), because="handled", source="agent:resolver-B")
+    rows = await actions.pool.fetch(
+        "SELECT is_current, value #>> '{}' AS value, source_id FROM assertions "
+        "WHERE object_id=$1 AND name='status' ORDER BY created_at", t)
+    current = [r for r in rows if r["is_current"]]
+    assert [r["value"] for r in current] == ["resolved"]
+    # both sources' rows are still readable in history — never deleted, only superseded
+    assert {r["source_id"] for r in rows} == {"agent:opener-A", "agent:resolver-B"}
+
+
+async def test_resolve_collapses_two_boot_witnesses_but_they_still_coexisted_while_open(
+    actions: Actions,
+) -> None:
+    """deploy_guard.alarm_schema_drift opens the SAME alarm thread from two boot services
+    (source=f"boot:{service}" each, thread 35c425f9) — both witnesses must coexist while
+    the thread is open (test_deploy_guard.py's own test covers that). But once a human/
+    agent resolves it through this generic door, EVERY open witness must collapse to one
+    current 'resolved' status, not just whichever one happened to be picked first."""
+    t = await open_thread(actions, "schema drift alarm from two boot listeners",
+                          source="boot:osiris-mcp")
+    await open_thread(actions, "schema drift alarm from two boot listeners",
+                      source="boot:osiris-worker")
+    open_rows = await actions.pool.fetch(
+        "SELECT source_id FROM assertions WHERE object_id=$1 AND name='status' "
+        "AND is_current", t)
+    assert {r["source_id"] for r in open_rows} == {"boot:osiris-mcp", "boot:osiris-worker"}
+
+    await resolve_thread(actions, str(t), because="schema reconciled", source="agent:human")
+    current = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS value FROM assertions WHERE object_id=$1 AND name='status' "
+        "AND is_current", t)
+    assert [r["value"] for r in current] == ["resolved"]
+
+
 async def test_a_reworded_summary_dedups_to_the_existing_open_thread(actions: Actions) -> None:
     """Two field witnesses (Aegis, Maat): the same fact minted twice across a lineage restart
     because the second telling reworded the summary. A near-identical restatement on the SAME
@@ -3280,6 +3324,23 @@ async def test_a_decision_closes_the_thread_it_answers(actions: Actions) -> None
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='resolved_because' ORDER BY a.observed_at DESC LIMIT 1", t)
     assert str(d)[:8] in because
+
+
+async def test_a_decision_answering_a_thread_opened_by_another_source_still_supersedes(
+    actions: Actions,
+) -> None:
+    """Same leak, same fix, at record_decision's own inline close (ruling 1335332e, thread
+    6361): the question was opened by one agent's source, the ruling that answers it lands
+    under a different one. Only one current `status` may survive — 'resolved'."""
+    t = await open_thread(actions, "opened by agent-Q, answered by agent-R",
+                          source="agent:opener-Q")
+    await record_decision(actions, "settled by a different agent than asked", kind="ruling",
+                          resolves=str(t), source="agent:ruler-R")
+    rows = await actions.pool.fetch(
+        "SELECT is_current, value #>> '{}' AS value FROM assertions "
+        "WHERE object_id=$1 AND name='status'", t)
+    current = [r for r in rows if r["is_current"]]
+    assert [r["value"] for r in current] == ["resolved"]
 
 
 async def test_a_decision_that_miscites_its_question_records_nothing(actions: Actions) -> None:

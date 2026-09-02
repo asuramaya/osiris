@@ -1542,13 +1542,16 @@ async def record_decision(
             if not exists:
                 await a.create_link(d, thread_id, "answers", source, observed, _CONF,
                                     evidence_class=_EC)
-            await a.assert_property(thread_id, "status", "resolved", source, observed, _CONF,
-                                    evidence_class=_EC)
-            await a.assert_property(thread_id, "resolved_in", source, source, observed, _CONF,
-                                    evidence_class=_EC)
-            await a.assert_property(thread_id, "resolved_because",
-                                    f"answered by decision {str(d)[:8]}: {summary[:200]}",
-                                    source, observed, _CONF, evidence_class=_EC)
+            # SINGULAR, same as resolve_thread's own writes above (ruling 1335332e, thread
+            # 6361) — an answering decision is the same workflow-transition act, so it must
+            # collapse every open witness too, not just its own source.
+            await a.assert_singular_property(thread_id, "status", "resolved", source, observed,
+                                             _CONF, evidence_class=_EC)
+            await a.assert_singular_property(thread_id, "resolved_in", source, source, observed,
+                                             _CONF, evidence_class=_EC)
+            await a.assert_singular_property(thread_id, "resolved_because",
+                                             f"answered by decision {str(d)[:8]}: {summary[:200]}",
+                                             source, observed, _CONF, evidence_class=_EC)
         # obligation ce12d2ef + thread 7e8cb735: all EIGHT extension-link params now
         # mint in THIS SAME transaction as the object itself — pure link/property
         # mints, no side-object creation that anything ELSE this call's own search
@@ -2818,13 +2821,18 @@ async def resolve_thread(
     if tid is None:
         return None
     observed = datetime.now(UTC)
-    await actions.assert_property(tid, "status", "resolved", source, observed, _CONF,
-                                  evidence_class=_EC)
-    await actions.assert_property(tid, "resolved_in", source, source, observed,
-                                  _CONF, evidence_class=_EC)
+    # SINGULAR (ruling 1335332e, thread 6361): a resolve is a workflow transition, not a
+    # corroborating witness — it must supersede EVERY open source's status, not just its
+    # own, or the thread reads simultaneously open-and-resolved (the 713-obligation shape).
+    # open_thread's own writes stay plain assert_property, unchanged, so multi-source
+    # ALARM coexistence (deploy_guard's two boot services, thread 35c425f9) is untouched.
+    await actions.assert_singular_property(tid, "status", "resolved", source, observed,
+                                           _CONF, evidence_class=_EC)
+    await actions.assert_singular_property(tid, "resolved_in", source, source, observed,
+                                           _CONF, evidence_class=_EC)
     if because:
-        await actions.assert_property(tid, "resolved_because", because, source, observed,
-                                      _CONF, evidence_class=_EC)
+        await actions.assert_singular_property(tid, "resolved_because", because, source,
+                                               observed, _CONF, evidence_class=_EC)
     target = None
     if artifact:
         await actions.assert_property(tid, "resolved_artifact", artifact.strip(), source,
