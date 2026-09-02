@@ -91,12 +91,24 @@ class Segments:
     spend: Segment
 
 
+# A worker restart alone never explains a sick reading (measured: 8 restarts on 2026-09-01,
+# boot-to-first-tick 0-2s every time). What DOES cost tens of seconds is a cron tick that was
+# actually IN FLIGHT — draining a real backlog — when the deploy's SIGTERM cancelled it: two of
+# those 8 restarts show a 5s-cadence job cancelled 40-43s into a run ("42.92s cron:drain_cascade
+# cancelled" in the worker log), so last_ok stays that old until the next tick lands. 90s is
+# 2x that observed worst case (decision, house osiris, 2026-09-02) — a floor, never a tighter
+# bound: a 24h job stays sick after 3 days regardless, this only protects sub-30s cadences from
+# their own restart/backlog cost.
+_SICK_FLOOR_SECS = 90
+
+
 async def _sensing(conn: Any) -> list[str]:
     """Is Osiris still SENSING? Relocated verbatim from the statusline's own inline copy (the
     only place this rule lived before this module) — a job is sick if it has never confessed
-    an ok, or if it has gone three of its own cadences quiet. Computed HERE, at read time, in a
-    process that is alive by construction (a watchdog cron would live inside the very worker
-    that died, 2026-07-12's ten-hour outage)."""
+    an ok, or if it has gone three of its own cadences quiet (or `_SICK_FLOOR_SECS`, whichever
+    is looser — a fast-cadence job survives a deploy's restart+cancel cost without a false
+    alarm). Computed HERE, at read time, in a process that is alive by construction (a watchdog
+    cron would live inside the very worker that died, 2026-07-12's ten-hour outage)."""
     jobs = await conn.fetch("SELECT key, cursor FROM watermarks WHERE key LIKE 'job:%'")
     sick: list[str] = []
     for j in jobs:
@@ -109,7 +121,7 @@ async def _sensing(conn: Any) -> list[str]:
             sick.append(j["key"][4:])
             continue
         age = (datetime.now(UTC) - datetime.fromisoformat(ok)).total_seconds()
-        if age > 3 * every:  # three cadences missed is not a blip
+        if age > max(3 * every, _SICK_FLOOR_SECS):  # three cadences missed is not a blip
             sick.append(j["key"][4:])
     return sick
 
