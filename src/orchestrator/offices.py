@@ -1005,3 +1005,117 @@ async def sweep_retired_office(
     return {"status": "deleted", "dry_run": False, "office": str(office),
             "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
             "entries": entries, "because": (because or "").strip()}
+
+
+async def sweep_seat_workspace(
+    pool: asyncpg.Pool, *, handle: str, dry_run: bool = True, because: str | None = None,
+    workspace_root: Path | None = None, sleep: Any = None,
+    agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+) -> dict[str, Any]:
+    """THE WORKSPACE HALF sweep_retired_office never covered (thread 6272, Thoth's own
+    lane, the operator's "jesus manages the godel project, chad manages the cdking"
+    correction that killed the accident premise this pair was first scoped under):
+    mint_seat/found_seat scaffold TWO directories per seat, the office
+    (`~/.osiris/seats/<handle>/`, an `.osiris` pin) AND the workspace (`~/code/<handle>/`
+    by convention, `path=` overridden at mint time, its OWN `.osiris` pin) — sweep_
+    retired_office only ever reached the first. A retired seat's workspace sits on disk
+    forever exactly the way its office used to, and needed the identical guard shape, not
+    a generalization of the office function (deliberately a SEPARATE function, same
+    reasoning sweep_retired_office's own docstring gives for staying separate from
+    retire_seat/vacate_holder: each caller relies on a narrow, specific contract).
+
+    `workspace_root` defaults to `Path.home() / "code"`, the documented mint-time default
+    (mintseat.py's own `workspace = Path.home() / "code" / handle.lower()` when no `path=`
+    was given) — the SAME best-effort convention sweep_retired_office's own `office_root`
+    resolution already leans on for the office half; a seat minted with an explicit custom
+    `path=` needs a caller-supplied `workspace_root` naming that real parent directory
+    instead, exactly as a test override does for the office side.
+
+    EVERY GUARD IS THE OFFICE FUNCTION'S OWN, reapplied to the workspace path, not
+    reinvented: the containment check (`workspace.resolve().parent == workspace_root.
+    resolve()` — a handle is a seat's name, never a path, so `../../` never sails past the
+    other five seat guards the way it did before sweep_retired_office's own containment fix
+    landed), the ambiguous-Seat refusal, the retired-or-no-Seat-row gate, the active-holder
+    refusal even on a nominally-retired seat, and the DOUBLE live-body check (immediate
+    plus a `_SWEEP_HEAL_WAIT_SECS` heal-wait re-check, wave6probe's own measured daemon-
+    respawn race) before `shutil.rmtree` is ever reached. `dry_run=True` (default) reports
+    `would-delete`; `dry_run=False` is operator-gated (`because` required), same law every
+    repair verb here follows."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "because is required to execute — a filesystem delete is not "
+                         "self-justifying the way a dry-run report is"}
+    handle = (handle or "").strip()
+    if not handle:
+        return {"error": "a handle is required"}
+    root = workspace_root or (Path.home() / "code")
+    workspace = root / handle.lower()
+    resolved_root = root.resolve()
+    if workspace.resolve().parent != resolved_root:
+        return {"error": f"handle {handle!r} does not name a workspace directly under "
+                         f"{resolved_root} — it resolves to {workspace.resolve()}, outside "
+                         "the workspace root. Refusing: this verb deletes, and a handle is "
+                         "a seat's name, never a path"}
+    if not workspace.is_dir():
+        return {"error": f"no workspace directory at {workspace} — nothing to sweep"}
+
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
+        "ORDER BY o.created_at", handle)
+    if len(rows) > 1:
+        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r} — "
+                         "ambiguous, refuses rather than guessing which one owns this "
+                         "workspace",
+                "workspace": str(workspace), "seats": [r["canonical"] for r in rows]}
+    seat_id = rows[0]["canonical"] if rows else None
+    seat_status = rows[0]["status"] if rows else None
+    if seat_id is not None and seat_status != "retired":
+        return {"error": f"{handle} is a graph Seat ({seat_id}) with status={seat_status!r} "
+                         "— sweep_seat_workspace only touches a RETIRED seat's workspace, "
+                         "or a workspace with no matching Seat row at all",
+                "workspace": str(workspace), "seat": seat_id, "seat_status": seat_status}
+    if seat_id is not None:
+        holder = await pool.fetchval(
+            "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+            "WHERE l.to_id=$1 AND l.type='holds' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", rows[0]["id"])
+        if holder:
+            return {"error": f"{handle} is retired but carries an active holder ({holder}) "
+                             "— a shape that should never exist; refusing rather than "
+                             "resolving it silently",
+                    "workspace": str(workspace), "seat": seat_id}
+
+    first = await _live_body_at_office(
+        pool, workspace, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if first is not None:
+        detail = ("the harness registry read itself failed (blind census) — never read as "
+                  "'nothing live'" if first.get("blind") else
+                  f"a live body's cwd resolves inside this workspace right now (pid "
+                  f"{first.get('pid')})")
+        return {"status": "refused-live-body", "workspace": str(workspace), "seat": seat_id,
+                "detail": detail}
+    _sleep = sleep or asyncio.sleep
+    await _sleep(_SWEEP_HEAL_WAIT_SECS)
+    second = await _live_body_at_office(
+        pool, workspace, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    if second is not None:
+        detail = ("the harness registry read itself failed on the heal-interval re-check "
+                  "(blind census) — never read as 'nothing live'" if second.get("blind") else
+                  f"clean at the first read, but a live body appeared after the "
+                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}) — "
+                  "exactly the daemon-respawn race wave6probe reproduced")
+        return {"status": "refused-live-body-after-heal-wait", "workspace": str(workspace),
+                "seat": seat_id, "detail": detail}
+
+    entries = sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*"))
+    if dry_run:
+        return {"status": "would-delete", "dry_run": True, "workspace": str(workspace),
+                "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
+                "entries": entries, **({"because": because.strip()} if because else {})}
+    import shutil
+    shutil.rmtree(workspace)
+    return {"status": "deleted", "dry_run": False, "workspace": str(workspace),
+            "seat": seat_id, "seat_status": seat_status, "entry_count": len(entries),
+            "entries": entries, "because": (because or "").strip()}
