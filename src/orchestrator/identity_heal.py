@@ -239,6 +239,55 @@ def _office_dir_exists(target: str) -> bool:
     return Path(target).is_dir()
 
 
+async def detect_anchor_invariant_violations(actions: Actions) -> dict[str, list[dict[str, Any]]]:
+    """THE ANCHOR INVARIANT'S OWN DETECTOR (piece 1, msg 6546) — read-only, ARMED here so a
+    caller need not remember to run the standalone script. Reports, for every active Seat:
+    (a) a current `anchor_cwd` OUTSIDE the office root, (b) more than one CURRENT
+    `anchor_cwd` row at all (the supersession-leak shape). Kept as SEPARATE axes on purpose
+    (#103/#141's own law: a surface that says "these disagree," never one that silently
+    collapses) — a seat can be outside-root with only one current row (a clean, if
+    invariant-violating, deliberate anchor) or multi-row while still resolving inside the
+    root (corrupted-but-lucky). `heal_seat_anchor`'s own target population is the seats
+    hitting BOTH axes at once, computed by the caller from this same result, never a third
+    axis duplicated here."""
+    from src.orchestrator.offices import _default_office_root
+
+    root = str(_default_office_root())
+    rows = await actions.pool.fetch(
+        "SELECT o.canonical AS seat, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " a.id, a.value #>> '{}' AS v, a.source_id, a.observed_at, a.confidence "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='anchor_cwd' AND o.type='Seat' AND o.status='active' "
+        "ORDER BY o.canonical, a.observed_at"
+    )
+    by_seat: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_seat.setdefault(r["seat"], []).append(dict(r))
+
+    outside_root: list[dict[str, Any]] = []
+    multi_current: list[dict[str, Any]] = []
+    for seat, seat_rows in by_seat.items():
+        handle = seat_rows[0]["handle"]
+        if len(seat_rows) > 1:
+            multi_current.append({
+                "seat": seat, "handle": handle,
+                "rows": [{"value": r["v"], "source_id": r["source_id"],
+                          "observed_at": r["observed_at"].isoformat()} for r in seat_rows],
+            })
+        for r in seat_rows:
+            v = r["v"]
+            if v and not (v == root or v.startswith(root.rstrip("/") + "/")):
+                outside_root.append({
+                    "seat": seat, "handle": handle, "value": v,
+                    "source_id": r["source_id"], "observed_at": r["observed_at"].isoformat(),
+                })
+
+    return {"outside_root": outside_root, "multi_current": multi_current}
+
+
 # --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6561/6563) -----------------------
 #
 # `heal_contradicting_property`'s own tie-break (confidence DESC, observed_at DESC — the

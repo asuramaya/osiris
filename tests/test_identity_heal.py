@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.identity_heal import (
+    detect_anchor_invariant_violations,
     detect_possibly_stale_seats,
     heal_contradicting_property,
     heal_seat_anchor,
@@ -648,3 +649,55 @@ async def test_heal_seat_anchor_third_party_requires_a_reason(
         actions, seat_id="seat:tphenry", because="anchor invariant sweep",
         actor="agent:coordinator", office_root=tmp_path, dry_run=False)
     assert out["healed"] is True
+
+
+# ═══ detect_anchor_invariant_violations — THE DETECTOR (piece 1, msg 6546) ════════════
+
+async def test_detector_flags_a_single_outside_root_anchor_without_multi_row(
+    actions: Actions,
+) -> None:
+    seat = await actions.create_or_find_object("Seat", "seat:det1outside", "test")
+    await actions.assert_property(seat, "handle", "Det1", "console", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(seat, "anchor_cwd", "/some/other/place", "console", NOW,
+                                  0.9, evidence_class=_SD)
+    result = await detect_anchor_invariant_violations(actions)
+    outside = [r for r in result["outside_root"] if r["seat"] == "seat:det1outside"]
+    multi = [m for m in result["multi_current"] if m["seat"] == "seat:det1outside"]
+    assert len(outside) == 1
+    assert multi == []
+
+
+async def test_detector_flags_multi_current_row_inside_root_separately(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.offices import _default_office_root
+
+    office = str(_default_office_root() / "det2")
+    seat = await actions.create_or_find_object("Seat", "seat:det2multi", "test")
+    await actions.assert_property(seat, "handle", "Det2", "console", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(seat, "anchor_cwd", office, "console",
+                                  NOW - timedelta(days=1), 0.9, evidence_class=_SD)
+    await actions.assert_property(seat, "anchor_cwd", office, "agent:x", NOW, 0.9,
+                                  evidence_class=_SD)
+    result = await detect_anchor_invariant_violations(actions)
+    outside = [r for r in result["outside_root"] if r["seat"] == "seat:det2multi"]
+    multi = [m for m in result["multi_current"] if m["seat"] == "seat:det2multi"]
+    assert outside == []
+    assert len(multi) == 1
+
+
+async def test_detector_reports_the_both_axes_target_population(actions: Actions) -> None:
+    seat = await actions.create_or_find_object("Seat", "seat:det3both", "test")
+    await actions.assert_property(seat, "handle", "Det3", "console", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(seat, "anchor_cwd", "/office/det3", "console",
+                                  NOW - timedelta(days=1), 0.9, evidence_class=_SD)
+    await actions.assert_property(seat, "anchor_cwd", "/other/repo", "agent:y", NOW, 0.9,
+                                  evidence_class=_SD)
+    result = await detect_anchor_invariant_violations(actions)
+    outside_seats = {r["seat"] for r in result["outside_root"]}
+    multi_seats = {m["seat"] for m in result["multi_current"]}
+    assert "seat:det3both" in outside_seats
+    assert "seat:det3both" in multi_seats

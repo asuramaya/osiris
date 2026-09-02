@@ -35,6 +35,7 @@ from src.cli import (
     cmd_deploy,
     cmd_desk,
     cmd_fold_project,
+    cmd_heal_seat_anchor,
     cmd_launch,
     cmd_merge,
     cmd_migrate,
@@ -1439,6 +1440,61 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
                            check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [tmp_path]
     assert out == 0
+
+
+# --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6577) — informational, never gating ----
+
+async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.offices import _default_office_root
+
+    now = datetime.now(UTC)
+    office = str(_default_office_root() / "deployanchor")
+    seat = await actions.create_or_find_object("Seat", "seat:deployanchor1", "test")
+    await actions.assert_property(seat, "handle", "DeployAnchor", "console", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(seat, "anchor_cwd", office, "console", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(seat, "anchor_cwd", str(tmp_path / "rogue"), "agent:rogue",
+                                  now + timedelta(seconds=1), 0.9,
+                                  evidence_class="self_declared")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(
+            repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+            pool=actions.pool, wait_for_health=_fake_wait_for_health,
+            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 0  # informational only — never refuses
+    assert "NOTE: anchor invariant" in buf.getvalue()
+    assert "seat:deployanchor1" in buf.getvalue()
+    assert "heal-seat-anchor" in buf.getvalue()
+
+
+async def test_cmd_deploy_prints_no_anchor_note_when_the_fleet_is_clean(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(
+            repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+            pool=actions.pool, wait_for_health=_fake_wait_for_health,
+            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 0
+    assert "NOTE: anchor invariant" not in buf.getvalue()
 
 
 # --- THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) ---------------
@@ -3058,6 +3114,104 @@ async def test_cli_parser_accepts_correct_pin_value(actions: Actions) -> None:
     assert args.command == "correct-pin-value"
     assert (args.seat, args.key, args.value, args.reason) == (
         "Alfred", "project", "newname", "reason")
+
+
+async def test_cmd_heal_seat_anchor_dry_run_reports_without_writing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="clihealhouse", handle="CliHeal",
+                             anchor_cwd=str(office), source="console")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(tmp_path / "rogue"), "agent:rogue", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal", because="test dry run", apply=False, actor="operator",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 0
+    assert "would heal" in buf.getvalue()
+    assert str(office) in buf.getvalue()
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert len(rows) == 2  # untouched — dry run
+
+
+async def test_cmd_heal_seat_anchor_apply_writes_and_reports(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal2"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="clihealhouse2", handle="CliHeal2",
+                             anchor_cwd=str(office), source="console")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(tmp_path / "rogue2"), "agent:rogue", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal2", because="test apply", apply=True, actor="operator",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 0
+    assert "healed" in buf.getvalue()
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert [r["v"] for r in rows] == [str(office)]
+
+
+async def test_cmd_heal_seat_anchor_refuses_a_missing_reason(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal3"
+    office.mkdir()
+    await ensure_seat(actions, house="clihealhouse3", handle="CliHeal3",
+                      anchor_cwd=str(office), source="console")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal3", because="", apply=False, actor="operator", pool=actions.pool,
+            office_root=tmp_path)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_heal_seat_anchor(actions: Actions) -> None:
+    """argparse wiring: seat positional, --because required, --apply flag, --actor default."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["heal-seat-anchor", "Jesus", "--because", "reason"])
+    assert args.command == "heal-seat-anchor"
+    assert (args.seat, args.because, args.apply) == ("Jesus", "reason", False)
+    assert args.actor == "console"
+
+    args2 = _build_parser().parse_args(
+        ["heal-seat-anchor", "Jesus", "--because", "reason", "--apply", "--actor", "operator"])
+    assert args2.apply is True and args2.actor == "operator"
 
 
 # --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
