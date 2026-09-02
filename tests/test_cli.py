@@ -31,6 +31,7 @@ from src.cli import (
     cmd_boot_status,
     cmd_bootstrap,
     cmd_charter_for,
+    cmd_correct_pin_value,
     cmd_deploy,
     cmd_desk,
     cmd_fold_project,
@@ -39,6 +40,7 @@ from src.cli import (
     cmd_migrate,
     cmd_mint_seat,
     cmd_new,
+    cmd_rebind_seat,
     cmd_rematerialize,
     cmd_resume,
     cmd_retention,
@@ -2923,6 +2925,140 @@ async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
     assert args.ref == "decision:abc12345"
     assert args.addendum == "reaffirmed"
     assert args.actor == "operator"
+
+
+# --- rebind-seat / correct-pin-value: the jesus/chad path from a terminal (thread 6437,
+# #199's parity lane) — both call the SAME orchestrator function their MCP twin wraps -----------
+
+async def test_cmd_rebind_seat_moves_the_anchor_and_reports(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name, house_of, register_agent, resolve_identity
+
+    a_dir = tmp_path / "clirebind-a"
+    b_dir = tmp_path / "clirebind-b"
+    a_dir.mkdir()
+    ident = resolve_identity(cwd=str(a_dir), session="clirebind01", project_label="clirebindhouse")
+    await register_agent(actions, ident, actor="analyst:operator")
+    await claim_name(actions, ident.agent_id, "CliRebind", source=ident.agent_id)
+    await mounts.save_mount(actions.pool, job_dir="/j/clirebind01", agent_id=ident.agent_id,
+                            project="clirebindhouse", cwd=str(a_dir), model="claude-fable-5",
+                            session_key="k")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_rebind_seat("CliRebind", str(b_dir), actor="operator",
+                                    pool=actions.pool)
+    assert out == 0
+    assert f"rebound CliRebind -> {b_dir}" in buf.getvalue()
+    assert await house_of(actions.pool, ident.agent_id) == "clirebindhouse"
+    row = await actions.pool.fetchrow(
+        "SELECT cwd FROM agent_mounts WHERE agent_id=$1", ident.agent_id)
+    assert row is not None and row["cwd"] == str(b_dir)
+
+
+async def test_cmd_rebind_seat_refuses_an_unknown_name(actions: Actions, tmp_path: Path) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_rebind_seat("no-such-seat-or-agent-anywhere", str(tmp_path),
+                                    actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_rebind_seat(actions: Actions) -> None:
+    """argparse wiring: seat/new_cwd positionals, --extract flag, --actor default."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(["rebind-seat", "Alfred", "/tmp/somewhere"])
+    assert args.command == "rebind-seat"
+    assert (args.seat, args.new_cwd, args.extract) == ("Alfred", "/tmp/somewhere", False)
+    assert args.actor == "console"
+
+    args2 = _build_parser().parse_args(
+        ["rebind-seat", "Alfred", "/tmp/elsewhere", "--extract", "--actor", "operator"])
+    assert args2.extract is True and args2.actor == "operator"
+
+
+async def test_cmd_correct_pin_value_corrects_the_named_seats_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:clipin1owner", "CliPinOwner", source="test")
+    office = tmp_path / "clipinowner"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_correct_pin_value(
+            "CliPinOwner", "project", "cultural-infrastructure", "task #152",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 0
+    assert claimed["seat_id"] in buf.getvalue()
+    assert "'tony' -> 'cultural-infrastructure'" in buf.getvalue()
+    assert 'project = "cultural-infrastructure"' in (office / ".osiris").read_text()
+
+
+async def test_cmd_correct_pin_value_refuses_an_unclaimed_name(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_correct_pin_value(
+            "NobodyEverClaimedThis", "project", "x", "y",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 1
+    assert "no such claimed seat or live agent" in buf.getvalue()
+
+
+async def test_cmd_correct_pin_value_propagates_the_missing_key_refusal(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No parallel guard logic — the underlying correct_own_pin_value's own refusal (an
+    EXISTING key only) surfaces through this door unchanged."""
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:clipin2owner", "CliPinMissingKey", source="test")
+    office = tmp_path / "clipinmissingkey"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "tony"\n')
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_correct_pin_value(
+            "CliPinMissingKey", "no_such_key", "x", "y",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 1
+    assert "is not declared in" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_correct_pin_value(actions: Actions) -> None:
+    """argparse wiring: seat/key/value positionals, --because required."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["correct-pin-value", "Alfred", "project", "newname", "--because", "reason"])
+    assert args.command == "correct-pin-value"
+    assert (args.seat, args.key, args.value, args.reason) == (
+        "Alfred", "project", "newname", "reason")
 
 
 # --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
