@@ -4951,6 +4951,43 @@ async def retire_seat(seat_id: str, reason: str = "",
 
 
 @mcp.tool()
+async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
+                          ctx: Context | None = None) -> dict[str, Any]:
+    """THE DISK HALF retire_seat never touches (thread 6272) — wires `sweep_retired_office`/
+    `sweep_seat_workspace` (offices.py) to MCP. Sweeps BOTH scaffolded directories for
+    `handle` — the office (`~/.osiris/seats/<handle>/`) AND the workspace (`~/code/
+    <handle>/` by convention) — and reports each half's own receipt under `office`/
+    `workspace`; a refusal on one never blocks the other from reporting its own result.
+
+    EVERY GUARD IS THEIRS, UNCHANGED: each half independently refuses on an ambiguous Seat
+    match, a Seat that is neither retired nor absent, an active holder, or a live body at
+    that path right now OR after a 90s heal-wait re-check (the daemon-respawn race
+    wave6probe measured) — a directory with no matching Seat row at all (pure filesystem
+    debris, never a real seat) is the other case both halves accept.
+
+    `dry_run=True` (default) reports `would-delete` for whichever half(s) pass their
+    guards — nothing is removed. `dry_run=False` requires `because` (operator-gated) and
+    deletes only the half(s) that pass every guard; a refusing half stays untouched in
+    execute mode exactly as it would be under dry-run."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a disk sweep is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    handle = (handle or "").strip()
+    if not handle:
+        return {"error": "a handle is required"}
+    pool = await _pool_get()
+    from src.orchestrator.offices import sweep_retired_office, sweep_seat_workspace
+    because_arg = because.strip() or None
+    office_out = await sweep_retired_office(pool, handle=handle, dry_run=dry_run,
+                                            because=because_arg)
+    workspace_out = await sweep_seat_workspace(pool, handle=handle, dry_run=dry_run,
+                                               because=because_arg)
+    return {"handle": handle, "dry_run": dry_run, "office": office_out,
+            "workspace": workspace_out}
+
+
+@mcp.tool()
 async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
     """Release a seat's holder WITHOUT retiring the seat itself — for the one case
     retire_seat correctly can't resolve on its own: a holder whose PROCESS actually died

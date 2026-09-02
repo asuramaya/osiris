@@ -18,6 +18,7 @@ from src.orchestrator.offices import (
     revert_pin_write,
     self_heal_project_pin,
     sweep_retired_office,
+    sweep_seat_workspace,
     write_pin_additions,
 )
 
@@ -1196,3 +1197,114 @@ async def test_sweep_still_accepts_an_ordinary_handle(
 
     assert out["status"] == "would-delete"
     assert out["entries"] == [".osiris"]
+
+
+# ═══ sweep_seat_workspace — the OTHER disk half (thread 6272): mint_seat/found_seat
+# scaffold a workspace (~/code/<handle>/) alongside the office, sweep_retired_office never
+# touched it. Same guard shape, applied to workspace_root instead of office_root — the
+# tests below mirror sweep_retired_office's own coverage, not the full matrix, since the
+# guard bodies are identical and already proven above. ═══
+
+async def test_workspace_sweep_deletes_a_stranger_with_no_seat_row_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The climintworker1/inferredworker1/deliberato shape: a real workspace directory, no
+    matching Seat object at any status."""
+    ws = tmp_path / "climintworker1"
+    ws.mkdir()
+    (ws / ".osiris").write_text('project = "cliproj1"\n')
+    out = await sweep_seat_workspace(
+        actions.pool, handle="climintworker1", dry_run=False, because="test cleanup",
+        workspace_root=tmp_path, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "deleted"
+    assert out["seat"] is None
+    assert not ws.exists()
+
+
+async def test_workspace_sweep_would_delete_a_retired_seats_workspace(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat, retire_seat
+
+    seat = await ensure_seat(actions, house="sweephouse", handle="WsRetired1",
+                             source="test")
+    await retire_seat(actions, seat["seat_id"], reason="role is over", actor="test")
+    ws = tmp_path / "wsretired1"
+    ws.mkdir()
+    (ws / "README.md").write_text("work\n")
+    out = await sweep_seat_workspace(
+        actions.pool, handle="WsRetired1", workspace_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert out["status"] == "would-delete"
+    assert out["seat"] == seat["seat_id"]
+    assert out["entries"] == ["README.md"]
+
+
+async def test_workspace_sweep_refuses_an_active_seats_workspace(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import ensure_seat
+
+    await ensure_seat(actions, house="sweephouse", handle="WsActive1", source="test")
+    ws = tmp_path / "wsactive1"
+    ws.mkdir()
+    out = await sweep_seat_workspace(
+        actions.pool, handle="WsActive1", workspace_root=tmp_path,
+        agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+    assert "status='active'" in out["error"]
+    assert ws.is_dir()
+
+
+async def test_workspace_sweep_refuses_a_live_body_at_the_workspace_right_now(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    ws = tmp_path / "wslive1"
+    ws.mkdir()
+    out = await sweep_seat_workspace(
+        actions.pool, handle="wslive1", workspace_root=tmp_path,
+        agents_json=_sweep_agents_json(
+            [{"sessionId": "wslive-1111-2222-3333-444444444444", "pid": 777,
+              "cwd": str(ws)}]),
+        read_exe=lambda pid: _LIVE_EXE, read_cwd=lambda pid: str(ws),
+        sleep=_instant_sleep)
+    assert out["status"] == "refused-live-body"
+    assert "right now" in out["detail"]
+
+
+async def test_workspace_sweep_refuses_a_handle_that_traverses_out_of_the_root(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    root = tmp_path / "code"
+    root.mkdir()
+    outside = tmp_path / "notaworkspace"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("real work\n")
+
+    out = await sweep_seat_workspace(
+        actions.pool, handle="../notaworkspace", dry_run=False, because="traversal attempt",
+        workspace_root=root, agents_json=_sweep_agents_json([]), sleep=_instant_sleep)
+
+    assert "does not name a workspace directly under" in out["error"]
+    assert outside.is_dir()
+    assert (outside / "precious.txt").read_text() == "real work\n"
+
+
+async def test_workspace_sweep_execute_refuses_without_because(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    ws = tmp_path / "wsnobecause"
+    ws.mkdir()
+    out = await sweep_seat_workspace(
+        actions.pool, handle="wsnobecause", dry_run=False, workspace_root=tmp_path,
+        sleep=_instant_sleep)
+    assert "because is required" in out["error"]
+    assert ws.is_dir()
+
+
+async def test_workspace_sweep_defaults_to_home_code(actions: Actions) -> None:
+    """No `workspace_root` override — resolves against the real Path.home()/'code', the
+    documented mint-time default. A handle nobody minted just reports nothing to sweep,
+    proving the default resolved somewhere real rather than erroring on its own."""
+    out = await sweep_seat_workspace(
+        actions.pool, handle="no-such-handle-ever-minted-zzz", sleep=_instant_sleep)
+    assert "nothing to sweep" in out["error"]

@@ -717,7 +717,9 @@ def _tool_chars(t: Any) -> int:
 # convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
-TOOL_CONTRACT_EXPECTED_COUNT = 146  # MEASURED against the merged tree, 2026-08-29.
+TOOL_CONTRACT_EXPECTED_COUNT = 147  # MEASURED against the merged tree, 2026-08-29.
+# 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
+# over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 144 -> 146: Seshat's retryable_ambiguous_abstentions + retry_ambiguous_abstentions
 # (thread 6001, Wave 5's ambiguous-abstention retry door).
 # THE DRIVER CORRECTLY DECLINED THIS ONE AND SAID SO: "TOOL_CONTRACT_EXPECTED_COUNT
@@ -755,7 +757,14 @@ TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on mea
 # open_thread — with no semantic prior-art check at all; #86's own borrowing went one way,
 # never back). Trimmed once under the category rule before raising (removed the two
 # obligation-id citations, which a caller has no use for at call time).
-TOOL_CONTRACT_CEILING_CHARS = 203332
+# 203,332 -> 204,880 (measured exact). Tool count 146 -> 147 (2026-09-01/02, Imhotep,
+# thread 6272, Thoth's dispatch "wire, don't rebuild"): new tool sweep_seat_disk wires
+# the fully-built, fully-guarded sweep_retired_office (offices.py, pre-existing) plus its
+# new workspace-half sibling sweep_seat_workspace to MCP for the first time — a genuinely
+# new capability, not padding. Trimmed once under the category rule before raising
+# (removed the "unreached vs rebuild" narrative aside, a caller has no use for it at call
+# time; 1,850 -> 1,548 chars).
+TOOL_CONTRACT_CEILING_CHARS = 204880
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
