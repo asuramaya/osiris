@@ -90,6 +90,71 @@ async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
 # `supersedes` without them. ═══
 
 
+async def test_assert_singular_property_supersedes_across_sources(
+    actions: Actions, case_id: str,
+) -> None:
+    """The opt-in cross-source collapse (ruling 1335332e, thread 6361): unlike
+    assert_property, a singular write retires ANOTHER source's current row too, leaving
+    exactly one current value regardless of who wrote it."""
+    obj = await actions.create_or_find_object("Thread", "thread:t1", "agent:opener", case_id)
+    opened = await actions.assert_property(obj, "status", "open", "agent:opener", NOW, 0.9)
+    resolved = await actions.assert_singular_property(
+        obj, "status", "resolved", "agent:resolver", NOW, 0.9)
+    rows = {r["id"]: r["is_current"] for r in await actions.pool.fetch(
+        "SELECT id, is_current FROM assertions WHERE id = ANY($1::bigint[])",
+        [opened, resolved])}
+    assert rows == {opened: False, resolved: True}
+    vals = await actions.current_values(obj, "status")
+    assert [v["value"] for v in vals] == ["resolved"]
+
+
+async def test_assert_singular_property_collapses_every_witness_not_just_one(
+    actions: Actions, case_id: str,
+) -> None:
+    """A resolve on a thread with N open witnesses (N boot services corroborating one
+    alarm) must leave exactly one current status afterward, not N-1 — the sub-question
+    Thoth flagged (msg 6408) as the sharpest part of the scoping call."""
+    obj = await actions.create_or_find_object("Thread", "thread:t2", "boot:svc-a", case_id)
+    a = await actions.assert_property(obj, "status", "open", "boot:svc-a", NOW, 0.9)
+    b = await actions.assert_property(obj, "status", "open", "boot:svc-b", NOW, 0.9)
+    resolved = await actions.assert_singular_property(
+        obj, "status", "resolved", "agent:human-resolver", NOW, 0.9)
+    rows = {r["id"]: r["is_current"] for r in await actions.pool.fetch(
+        "SELECT id, is_current FROM assertions WHERE id = ANY($1::bigint[])",
+        [a, b, resolved])}
+    assert rows == {a: False, b: False, resolved: True}
+    vals = await actions.current_values(obj, "status")
+    assert [v["value"] for v in vals] == ["resolved"]
+
+
+async def test_assert_singular_property_same_source_still_defers_to_assert_property(
+    actions: Actions, case_id: str,
+) -> None:
+    """No other source holds the property (or this source already does) -> behaves exactly
+    like assert_property, the common case, nothing to collapse."""
+    obj = await actions.create_or_find_object("Thread", "thread:t3", "agent:a", case_id)
+    first = await actions.assert_singular_property(obj, "status", "open", "agent:a", NOW, 0.9)
+    second = await actions.assert_singular_property(
+        obj, "status", "resolved", "agent:a", NOW, 0.9)
+    superseded_by = await actions.pool.fetchval(
+        "SELECT supersedes FROM assertions WHERE id=$1", second)
+    assert superseded_by == first
+
+
+async def test_assert_property_still_coexists_across_sources_unchanged(
+    actions: Actions, case_id: str,
+) -> None:
+    """The design guard for #102: assert_property itself is UNTOUCHED — multi-source
+    corroboration (deploy_guard's alarm_schema_drift shape) still coexists unless a caller
+    deliberately opts into assert_singular_property."""
+    obj = await actions.create_or_find_object("Thread", "thread:t4", "boot:svc-a", case_id)
+    await actions.assert_property(obj, "status", "open", "boot:svc-a", NOW, 0.9)
+    await actions.assert_property(obj, "status", "open", "boot:svc-b", NOW, 0.9)
+    vals = await actions.current_values(obj, "status")
+    assert {v["value"] for v in vals} == {"open"}
+    assert len(vals) == 2
+
+
 def test_static_check_only_two_sites_write_the_supersedes_column() -> None:
     """A THIRD insert path into assertions.supersedes, added later without this discipline,
     is exactly how a fresh stale-flag population gets born again. Grep the whole src tree —
