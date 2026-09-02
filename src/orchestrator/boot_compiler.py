@@ -92,6 +92,8 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
             f"in the graph.\n", who)
 
 
+_AMENDMENT_RENDER_CAP = 200
+
 async def _armed_practices(
     pool: asyncpg.Pool, role: str, *, limit: int = _PRACTICE_LIMIT,
 ) -> list[dict[str, Any]]:
@@ -103,7 +105,21 @@ async def _armed_practices(
     EXCLUDED for a role when its surface is LITERALLY 'worker' or 'coordinator' and
     doesn't match — any other surface value (a domain tag like 'deploy'/'search', or
     none at all) arms for every role, since that vocabulary is BlindSpot's domain
-    space, not a role space, and this function must not conflate the two."""
+    space, not a role space, and this function must not conflate the two.
+
+    `latest_amendment` (thread bd28a41f, Thoth's own measurement dispatch, 2026-09-01):
+    a practice's `statement` is deliberately immutable (amend_practice's own idempotency-
+    key law) — a correction lives ONLY in the append-only `amendment:<hex>` property
+    family `practice_amendments()` already reads. Before this, that family was invisible
+    here: a self-corrected practice compiled its original, now-wrong `statement` forever,
+    and ranking by raw witness count actively favored the stale one (measured live:
+    1637763e sat at confirmed=7 with a correcting amendment on file, while the newer
+    practice that superseded it in prose sat at confirmed=0 and would rarely if ever be
+    chosen). This does not re-rank anything — `ORDER BY confirmed DESC` is unchanged, and
+    inventing a Practice-to-Practice "corrects" edge is a separate, bigger question this
+    piece deliberately leaves alone — it only makes a practice's OWN latest amendment
+    visible wherever that practice is already shown, the smallest fix that stops a reader
+    from being taught a self-corrected lesson's stale half."""
     rows = await pool.fetch(
         "SELECT o.id, "
         " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -116,7 +132,10 @@ async def _armed_practices(
         "   AND a.name='surface' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS surface, "
         " (SELECT count(*) FROM links l WHERE l.from_id=o.id AND l.type='witnesses') "
-        "   AS confirmed "
+        "   AS confirmed, "
+        " (SELECT a.value #>>'{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name LIKE 'amendment:%' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS latest_amendment "
         "FROM objects o WHERE o.type='Practice' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='refuted_by') "
@@ -128,10 +147,20 @@ async def _armed_practices(
             continue
         out.append({"statement": r["statement"],
                     "failure_prevented": r["failure_prevented"],
-                    "confirmed": r["confirmed"]})
+                    "confirmed": r["confirmed"],
+                    "latest_amendment": r["latest_amendment"]})
         if len(out) >= limit:
             break
     return out
+
+
+def _render_amendment(amendment: str) -> str:
+    """Same truncate-with-ellipsis convention orient()'s terse mode already uses for a
+    capped summary — a reader who wants the whole thing has `practices()`."""
+    amendment = " ".join(amendment.split())
+    if len(amendment) <= _AMENDMENT_RENDER_CAP:
+        return amendment
+    return amendment[:_AMENDMENT_RENDER_CAP].rstrip() + "…"
 
 
 async def _practice_block(pool: asyncpg.Pool, role: str) -> str:
@@ -142,6 +171,8 @@ async def _practice_block(pool: asyncpg.Pool, role: str) -> str:
         f"- **{p['statement']}**"
         + (f" — {p['failure_prevented']}" if p["failure_prevented"] else "")
         + f" (confirmed: {p['confirmed']})"
+        + (f" — AMENDED: {_render_amendment(p['latest_amendment'])}"
+           if p["latest_amendment"] else "")
         for p in practices)
     return (
         "\n## Standing Practices\n"
