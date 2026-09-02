@@ -8409,7 +8409,8 @@ async def heartbeat_route(request: Any) -> Any:
             model_raw=str(body.get("model_raw") or ""),
             window_size=body.get("window_size"),
             intent_hint=(str(body.get("intent_hint") or "") or None),
-            lease_secs=get_settings().osiris_mail_lease_secs, on_succession=_succeed)
+            lease_secs=get_settings().osiris_mail_lease_secs, on_succession=_succeed,
+            cwd=str(body.get("cwd") or ""))
         return JSONResponse(result._asdict())
     except Exception as e:  # noqa: BLE001 — the chrome falls back to its own connect; never block
         return JSONResponse({"error": str(e)[:200]}, status_code=500)

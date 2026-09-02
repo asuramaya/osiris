@@ -9,6 +9,7 @@ pattern for exercising a `@mcp.custom_route` handler directly, no ASGI stack nee
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator import mounts
@@ -101,3 +102,43 @@ async def test_heartbeat_route_with_no_session_id_still_answers_project_counts(
     payload = json.loads(out.body)
     assert "error" not in payload
     assert payload["resolved_project"] == "osiris"
+
+
+async def test_heartbeat_route_threads_cwd_into_the_seats_own_location_split(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The (A)/(B) statusline-precedence split (thread 6483/6487/6492) lives in
+    compute_heartbeat itself (see test_heartbeat.py) — this only proves the route's own
+    JSON contract actually carries `cwd` through, since a body the hook never sends
+    (mismatched key, dropped field) would silently degrade to the pre-fix behavior with no
+    test catching it."""
+    from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    anchor = tmp_path / "routecwdcase"
+    anchor.mkdir()
+    (anchor / ".osiris").write_text('project = "StaleRouteName"\n')
+
+    agent = "agent:routecwdcase"
+    seat = await ensure_seat(actions, house="RouteHouse", handle="Routecwdcase",
+                             anchor_cwd=str(anchor), source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent)
+    await actions.create_or_find_object("Agent", agent, agent)
+    await mounts.save_mount(
+        actions.pool, job_dir="/home/test/.claude/jobs/routecwd", agent_id=agent,
+        project="RouteHouse", cwd=str(anchor), model="claude-fable-5", session_key="k")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heartbeat_route(_FakeRequest({
+            "project_hint": "StaleRouteName", "session_id": "routecwd",
+            "model_id": "claude-fable-5", "cwd": str(anchor),
+        }))
+    finally:
+        srv._pool = saved_pool
+    import json
+    payload = json.loads(out.body)
+    assert "error" not in payload
+    assert payload["resolved_seat_handle"] == "Routecwdcase"
+    assert payload["resolved_project"] == "RouteHouse"  # the graph wins at the seat's own anchor
