@@ -14,13 +14,16 @@ a580490f) — `verified` here is an independent re-derivation, never a collapsed
 
 SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just unbuilt — proven, not assumed. A caller's own
 `agent_mounts.last_seen` is kept perpetually fresh by ITS OWN TERMINAL's statusline heartbeat
-(`scripts/osiris_statusline.py`: `UPDATE agent_mounts SET last_seen=now()` fires on every
-render, independent of any tool call), so a live session can never observe itself as quiet
-from inside a call — and even bypassing that check, the running harness process keeps
-appending to its OLD transcript path regardless of what the database says (fixed at session
-start). So lift() always targets a NAMED, ALREADY-QUIET rogue from a DIFFERENT live session
-— never itself. `establish_office`'s own live-seat refusal (the rollout guard) is reused in
-spirit here, front-loaded as a `doors()` pre-check so the whole act refuses atomically
+(`compute_heartbeat`, src/orchestrator/heartbeat.py:62 — the write this comment used to cite
+lived in `scripts/osiris_statusline.py` until #187's 7-script retirement moved it here without
+updating this pointer, caught live 2026-09-02 chasing agent:f0d23039-ii's own phantom pulse:
+`UPDATE agent_mounts SET last_seen=now()` fires on every render, independent of any tool call),
+so a live session can never observe itself as quiet from inside a call — and even bypassing
+that check, the running harness process keeps appending to its OLD transcript path regardless
+of what the database says (fixed at session start). So lift() always targets a NAMED,
+ALREADY-QUIET rogue from a DIFFERENT live session — never itself. `establish_office`'s own
+live-seat refusal (the rollout guard) is reused in spirit here, front-loaded as a `doors()`
+pre-check so the whole act refuses atomically
 before `claim_name` ever runs, rather than leaving a claimed name stranded with no office.
 
 ONE PRE-EXISTING GAP, named and deliberately left alone (not lift()'s to fix): `held_seat`
