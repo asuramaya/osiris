@@ -403,13 +403,21 @@ async def fold_project(
         into_row["canonical"], actor, now)
     await actions.merge_objects(into_row["id"], dupe_row["id"], justification=evidence,
                                 actor=actor)
+    from src.orchestrator.identity_heal import detect_possibly_stale_seats
+
     out = {"folded": dupe_row["canonical"], "into": into_row["canonical"],
-          "edges_moved": moved, "mounts_moved": mounts_moved}
+          "edges_moved": moved, "mounts_moved": mounts_moved,
+          # A FOLD NOW NAMES WHO IT LEFT BEHIND (Seshat, dispatch 6484/6493): the
+          # self-service reconcilers already worked — nothing NAMED which seats went
+          # stale, so nobody knew to call them. Detection only; writes nothing.
+          "possibly_stale_seats": await detect_possibly_stale_seats(
+              actions.pool, dupe_row["canonical"])}
     if live_third_party:
         # THE EXCEPTION'S PRICE (decision 7fe20cc5): force=True bypassed the guard above,
         # never the report — a live session's own agent_mounts.project row just got
         # re-pointed out from under it, and that stays MANDATORY, visible output, not a
-        # silent side effect the exception buys away.
+        # silent side effect the exception buys away. KEPT ACROSS Seshat's merge: her
+        # branch predated this block and her version dropped it; both belong.
         out["live_session_repointed"] = live_third_party
     return out
 

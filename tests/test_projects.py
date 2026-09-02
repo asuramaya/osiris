@@ -271,6 +271,24 @@ async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> Non
     mount_project = await actions.pool.fetchval(
         "SELECT project FROM agent_mounts WHERE job_dir='/j/fold1'")
     assert mount_project == "into1"
+    assert out["possibly_stale_seats"]["checked"] is True  # additive, detection-only
+
+
+async def test_fold_project_names_a_seat_left_stale_by_the_fold(actions: Actions) -> None:
+    """The dtfb/dealer-to-fb acceptance shape (Thoth dispatch 6484/6493, decision f5d5473b):
+    the fold itself is correct (edges/mounts move), but a seat's OWN house never gets
+    re-asserted — this proves the fold's own receipt now names that seat rather than
+    leaving it to be found by hand."""
+    await _stub_project(actions, "repo:dupe2", "dupe2")
+    await _stub_project(actions, "repo:into2", "into2")
+    await ensure_seat(actions, house="dupe2", handle="stale-seat", source="test")
+
+    out = await fold_project(actions, dupe="dupe2", into="into2",
+                             evidence="same repo under two names, confirmed",
+                             actor="agent:test")
+    stale = out["possibly_stale_seats"]
+    assert stale["checked"] is True
+    assert any(h["field"] == "house" and h["value"] == "dupe2" for h in stale["hits"])
 
 
 async def test_fold_project_carries_the_original_writers_attribution_forward(

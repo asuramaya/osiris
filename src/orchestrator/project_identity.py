@@ -524,15 +524,18 @@ async def rename_project(
         "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
     mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
     from src.orchestrator.capture import property_prior_art
+    from src.orchestrator.identity_heal import detect_possibly_stale_seats
 
     prior_art_bits = await property_prior_art(
         actions.pool, subject_canonical=row["canonical"], field="name",
         new_value=new_name, because=because, actor=actor)
+    stale = await detect_possibly_stale_seats(actions.pool, old_name or bare_old)
     return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
            "mounts_moved": mounts_moved, "because": because,
            "note": f"{row['canonical']}'s canonical id never changes; edges already "
                    "pointing at it are unaffected; its own .osiris pin file on disk "
                    "is NOT touched by this verb",
+           "possibly_stale_seats": stale,
            **prior_art_bits}
 
 

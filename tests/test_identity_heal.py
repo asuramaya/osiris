@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.identity_heal import (
+    detect_possibly_stale_seats,
     heal_contradicting_property,
     reconcile_seat_identity,
     reconcile_seat_identity_third_party,
@@ -201,6 +202,81 @@ async def test_heal_never_touches_a_non_identity_property(actions: Actions) -> N
         "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
         "AND name='intended_model'", seat)
     assert len(rows) == 2
+
+
+# ═══ detect_possibly_stale_seats — fold/rename's own detection-only nudge (Thoth dispatch
+# 6484/6493, the dtfb specimen f5d5473b) ═══════════════════════════════════════════════
+
+async def test_detect_possibly_stale_seats_finds_a_house_hit(actions: Actions) -> None:
+    seat = await actions.create_or_find_object("Seat", "seat:dsdealer1", "test")
+    await actions.assert_property(seat, "house", "dealer-to-fb", "test", NOW, 0.9,
+                                  evidence_class=_SD)
+    out = await detect_possibly_stale_seats(actions.pool, "dealer-to-fb")
+    assert out["checked"] is True
+    assert {"seat": "seat:dsdealer1", "field": "house", "value": "dealer-to-fb",
+           "fix": "reconcile_seat_identity (self) or "
+                  "reconcile_seat_identity_third_party (another seat)"} in out["hits"]
+
+
+async def test_detect_possibly_stale_seats_finds_an_anchor_cwd_basename_hit(
+    actions: Actions,
+) -> None:
+    seat = await actions.create_or_find_object("Seat", "seat:dsdealer2", "test")
+    await actions.assert_property(seat, "anchor_cwd", "/home/asuramaya/code/dealer-to-fb",
+                                  "test", NOW, 0.9, evidence_class=_SD)
+    out = await detect_possibly_stale_seats(actions.pool, "dealer-to-fb")
+    hit = next(h for h in out["hits"] if h["field"] == "anchor_cwd")
+    assert hit["seat"] == "seat:dsdealer2"
+    assert hit["value"] == "/home/asuramaya/code/dealer-to-fb"
+
+
+async def test_detect_possibly_stale_seats_never_substring_matches_anchor_cwd(
+    actions: Actions,
+) -> None:
+    """A raw substring match would flag a totally unrelated seat whose path merely
+    CONTAINS the old name as a prefix segment — this checks the path's own BASENAME,
+    never a substring, precisely to avoid that."""
+    seat = await actions.create_or_find_object("Seat", "seat:dsdealer3", "test")
+    await actions.assert_property(
+        seat, "anchor_cwd", "/home/asuramaya/code/dealer-to-fb-unrelated-fork", "test",
+        NOW, 0.9, evidence_class=_SD)
+    out = await detect_possibly_stale_seats(actions.pool, "dealer-to-fb")
+    assert not any(h["seat"] == "seat:dsdealer3" for h in out["hits"])
+
+
+async def test_detect_possibly_stale_seats_reports_empty_old_name_without_raising(
+    actions: Actions,
+) -> None:
+    out = await detect_possibly_stale_seats(actions.pool, "")
+    assert out == {"checked": False, "reason": "empty old_name — nothing to match"}
+
+
+async def test_detect_possibly_stale_seats_finds_nothing_for_an_unmatched_name(
+    actions: Actions,
+) -> None:
+    out = await detect_possibly_stale_seats(actions.pool, "no-such-project-anywhere")
+    assert out["checked"] is True
+    assert out["hits"] == []
+    assert out["truncated"] is False
+
+
+async def test_detect_possibly_stale_seats_caps_and_flags_truncation(
+    actions: Actions,
+) -> None:
+    for i in range(3):
+        seat = await actions.create_or_find_object("Seat", f"seat:dscap{i}", "test")
+        await actions.assert_property(seat, "house", "common", "test", NOW, 0.9,
+                                      evidence_class=_SD)
+    out = await detect_possibly_stale_seats(actions.pool, "common", cap=2)
+    assert len(out["hits"]) == 2
+    assert out["truncated"] is True
+
+
+async def test_detect_possibly_stale_seats_the_note_always_names_the_pin_blind_spot(
+    actions: Actions,
+) -> None:
+    out = await detect_possibly_stale_seats(actions.pool, "anything")
+    assert ".osiris pin file is NOT checked" in out["note"]
 
 
 # ═══ reconcile_seat_identity — the self-service verb ═══════════════════════════════════

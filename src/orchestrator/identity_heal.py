@@ -21,7 +21,10 @@ alone, exactly as #102's agreement marks are."""
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
+
+import asyncpg
 
 from src.actions.core import Actions
 from src.orchestrator.retirement import retire_assertion
@@ -29,6 +32,74 @@ from src.orchestrator.retirement import retire_assertion
 # Deliberately just these two — see module docstring. Never read as a general allowlist to
 # extend without a fresh ruling: house/project were named BY THE OPERATOR, not inferred.
 SEAT_IDENTITY_PROPS = ("house", "project")
+
+_STALE_SEAT_DETECTION_CAP = 25
+
+
+async def detect_possibly_stale_seats(
+    pool: asyncpg.Pool, old_name: str, *, cap: int = _STALE_SEAT_DETECTION_CAP,
+) -> dict[str, Any]:
+    """DETECTION-ONLY, never a write (Thoth dispatch 6484/6493, the dtfb specimen f5d5473b):
+    fold_project and rename_project already carry every graph EDGE correctly (charter
+    included) and agent_mounts.project, but neither ever re-asserts a Seat's OWN `house` or
+    `anchor_cwd` under the new name — not because the self-service repair tools don't work
+    (`reconcile_seat_identity`/`_third_party` in this module, `rebind_seat` for a path),
+    but because nothing ever tells a seat it needs them (Practice a5938da2's shape:
+    capability exists, unadopted). This names the hits AND the verb that fixes each, in the
+    same line, so the nudge and the fix stay one hop apart — called from fold_project's and
+    rename_project's own receipts, adding a key, changing nothing else.
+
+    A HEURISTIC, NEVER A VERDICT: house is matched EXACTLY against `old_name`; anchor_cwd is
+    matched by its PATH'S OWN BASENAME (Path(value).name), not a raw substring — a bare
+    substring match on a common old name ("core", "seats") would flag half the fleet. Even
+    basename matching still over-matches on a common word; `note` says so in every response
+    rather than let a caller read this list as ground truth. Capped at `cap` hits per field
+    (a name common enough to blow the cap degrades to `truncated: true`, not a flood).
+
+    THE .osiris PIN FILE IS DELIBERATELY UNCHECKED: rename_project's own docstring already
+    calls itself "a graph-only verb" — reading another seat's pin off disk from inside this
+    call would be a filesystem read across someone else's tree, on the hot path of a live,
+    frequently-used verb. `note` says the pin is unchecked; a confessed blind spot beats a
+    slow or fragile one.
+
+    NEVER RAISES: any failure (a bad connection, a malformed row) degrades to
+    `{"checked": False, "error": ...}` rather than aborting the fold/rename that called it —
+    the #107 lesson (settle() whole-batch-aborting on one bad repo) applied to an advisory
+    field, not a batch. An empty `old_name` is the same shape, not an exception."""
+    try:
+        bare = (old_name or "").removeprefix("repo:").strip()
+        if not bare:
+            return {"checked": False, "reason": "empty old_name — nothing to match"}
+        hits: list[dict[str, str]] = []
+        house_rows = await pool.fetch(
+            "SELECT s.canonical AS seat, a.value #>> '{}' AS value "
+            "FROM current_assertions a JOIN objects s ON s.id = a.object_id "
+            "WHERE s.type = 'Seat' AND a.name = 'house' AND a.value #>> '{}' = $1 "
+            "ORDER BY s.canonical", bare)
+        for r in house_rows:
+            hits.append({"seat": r["seat"], "field": "house", "value": r["value"],
+                        "fix": "reconcile_seat_identity (self) or "
+                               "reconcile_seat_identity_third_party (another seat)"})
+        anchor_rows = await pool.fetch(
+            "SELECT s.canonical AS seat, a.value #>> '{}' AS value "
+            "FROM current_assertions a JOIN objects s ON s.id = a.object_id "
+            "WHERE s.type = 'Seat' AND a.name = 'anchor_cwd' ORDER BY s.canonical")
+        for r in anchor_rows:
+            value = r["value"] or ""
+            if value and Path(value).name == bare:
+                hits.append({"seat": r["seat"], "field": "anchor_cwd", "value": value,
+                            "fix": "rebind_seat, once the correct path is confirmed"})
+        return {
+            "checked": True,
+            "old_name": bare,
+            "hits": hits[:cap],
+            "truncated": len(hits) > cap,
+            "note": "heuristic name/basename match against the old name, never a verdict "
+                    "— a common old name over-matches; the .osiris pin file is NOT checked "
+                    "(off-graph, unsafe to read from a hot path)",
+        }
+    except Exception as exc:
+        return {"checked": False, "error": str(exc)}
 
 
 async def heal_contradicting_property(

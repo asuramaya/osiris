@@ -410,6 +410,24 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
     mount_row = await actions.pool.fetchval(
         "SELECT project FROM agent_mounts WHERE job_dir='/j/xxit'")
     assert mount_row == "handlingtheloop"
+    assert out["possibly_stale_seats"]["checked"] is True  # additive, detection-only
+
+
+async def test_rename_project_names_a_seat_left_stale_by_the_rename(
+    actions: Actions,
+) -> None:
+    """Same acceptance shape as fold_project's own (Thoth dispatch 6484/6493): renaming a
+    project moves zero edges (they're id-keyed already), but a seat's OWN house/anchor_cwd
+    still carries the OLD name — this proves the rename's own receipt now names it."""
+    await _mk_project(actions, "renseat1")
+    await ensure_seat(actions, house="renseat1", handle="stale-rename-seat", source="test")
+
+    out = await rename_project(actions, project="renseat1", new_name="renseat1new",
+                               because="operator ruling: repo renamed on its remote",
+                               actor="agent:test")
+    stale = out["possibly_stale_seats"]
+    assert stale["checked"] is True
+    assert any(h["field"] == "house" and h["value"] == "renseat1" for h in stale["hits"])
 
 
 async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
