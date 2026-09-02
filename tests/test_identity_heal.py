@@ -11,6 +11,8 @@ from src.actions.core import Actions
 from src.orchestrator.identity_heal import (
     detect_possibly_stale_seats,
     heal_contradicting_property,
+    heal_seat_anchor,
+    heal_seat_anchor_third_party,
     reconcile_seat_identity,
     reconcile_seat_identity_third_party,
 )
@@ -525,3 +527,124 @@ async def test_the_third_party_mcp_tool_refuses_an_unmounted_caller(actions: Act
     finally:
         srv._pool = saved_pool
     assert "mount first" in out["error"]
+
+
+# ═══ heal_seat_anchor — THE ANCHOR INVARIANT (ruling 23771416) ════════════════════════
+
+async def _seat_with_handle_and_anchors(
+    actions: Actions, seat_id: str, handle: str, *anchors: tuple[str, str, datetime],
+):
+    """Each anchors tuple is (value, source_id, observed_at)."""
+    seat = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(seat, "handle", handle, "test", NOW - timedelta(days=30),
+                                  0.9, evidence_class=_SD)
+    for value, source, at in anchors:
+        await actions.assert_property(seat, "anchor_cwd", value, source, at, 0.9,
+                                      evidence_class=_SD)
+    return seat
+
+
+async def test_heal_seat_anchor_refuses_a_seat_with_no_handle(actions: Actions, tmp_path) -> None:
+    await actions.create_or_find_object("Seat", "seat:nohandle", "test")
+    out = await heal_seat_anchor(actions, seat_id="seat:nohandle", actor="agent:test",
+                                 office_root=tmp_path)
+    assert "error" in out and "no handle" in out["error"]
+
+
+async def test_heal_seat_anchor_refuses_when_office_does_not_exist(
+    actions: Actions, tmp_path,
+) -> None:
+    await _seat_with_handle_and_anchors(
+        actions, "seat:noOffice", "NoOffice",
+        ("/somewhere/else", "agent:x", NOW - timedelta(days=1)))
+    out = await heal_seat_anchor(actions, seat_id="seat:noOffice", actor="agent:test",
+                                 office_root=tmp_path)
+    assert "error" in out and "does not exist on disk" in out["error"]
+
+
+async def test_heal_seat_anchor_reports_already_correct(actions: Actions, tmp_path) -> None:
+    (tmp_path / "correct").mkdir()
+    target = str(tmp_path / "correct")
+    await _seat_with_handle_and_anchors(
+        actions, "seat:already1", "Correct", (target, "console", NOW))
+    out = await heal_seat_anchor(actions, seat_id="seat:already1", actor="agent:test",
+                                 office_root=tmp_path)
+    assert out["healed"] is False
+    assert out["reason"] == "already correct"
+
+
+async def test_heal_seat_anchor_dry_run_does_not_write(actions: Actions, tmp_path) -> None:
+    (tmp_path / "jesus").mkdir()
+    target = str(tmp_path / "jesus")
+    await _seat_with_handle_and_anchors(
+        actions, "seat:dryjesus", "Jesus",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/REPOS/Godel", "agent:selfrebind", NOW - timedelta(days=1)))
+    out = await heal_seat_anchor(actions, seat_id="seat:dryjesus", actor="agent:test",
+                                 office_root=tmp_path, dry_run=True)
+    assert out["dry_run"] is True
+    assert out["target"] == target
+    assert len(out["current_before"]) == 2
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='anchor_cwd'", await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical='seat:dryjesus'"))
+    assert {r["v"] for r in rows} == {target, "/home/asuramaya/code/REPOS/Godel"}
+
+
+async def test_heal_seat_anchor_apply_retracts_the_rogue_value(
+    actions: Actions, tmp_path,
+) -> None:
+    (tmp_path / "chad").mkdir()
+    target = str(tmp_path / "chad")
+    seat = await _seat_with_handle_and_anchors(
+        actions, "seat:applychad", "Chad",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/cdking", "agent:selfrebind", NOW - timedelta(days=1)))
+    out = await heal_seat_anchor(actions, seat_id="seat:applychad", actor="agent:test",
+                                 office_root=tmp_path, dry_run=False)
+    assert out["healed"] is True
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='anchor_cwd'", seat)
+    assert [r["v"] for r in rows] == [target]
+
+
+async def test_heal_seat_anchor_apply_writes_when_no_office_anchor_exists(
+    actions: Actions, tmp_path,
+) -> None:
+    """Marquee's own shape: TWO rogue anchors, no office anchor at all — this call both
+    WRITES the office anchor and retracts both strays, in the one assert_singular_property
+    call."""
+    (tmp_path / "marquee").mkdir()
+    target = str(tmp_path / "marquee")
+    seat = await _seat_with_handle_and_anchors(
+        actions, "seat:applymarquee", "Marquee",
+        ("/home/asuramaya/code/dealer-to-fb", "agent:a", NOW - timedelta(days=20)),
+        ("/home/asuramaya/code/dtfb", "agent:b", NOW - timedelta(days=1)))
+    out = await heal_seat_anchor(actions, seat_id="seat:applymarquee", actor="agent:test",
+                                 office_root=tmp_path, dry_run=False)
+    assert out["healed"] is True
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='anchor_cwd'", seat)
+    assert [r["v"] for r in rows] == [target]
+
+
+async def test_heal_seat_anchor_third_party_requires_a_reason(
+    actions: Actions, tmp_path,
+) -> None:
+    (tmp_path / "henry").mkdir()
+    target = str(tmp_path / "henry")
+    await _seat_with_handle_and_anchors(
+        actions, "seat:tphenry", "Henry",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/shellbiz", "agent:selfrebind", NOW - timedelta(days=1)))
+    refused = await heal_seat_anchor_third_party(
+        actions, seat_id="seat:tphenry", because="", actor="agent:coordinator",
+        office_root=tmp_path)
+    assert "error" in refused
+    out = await heal_seat_anchor_third_party(
+        actions, seat_id="seat:tphenry", because="anchor invariant sweep",
+        actor="agent:coordinator", office_root=tmp_path, dry_run=False)
+    assert out["healed"] is True
