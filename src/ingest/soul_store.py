@@ -426,14 +426,19 @@ class SoulStore:
                 )
         return 0
 
-    async def verify_chain(self, anchor_sid: str) -> bool:
+    async def verify_chain(self, anchor_sid: str, harness: str = _HARNESS) -> bool:
         """Re-walk every stored line and recompute the chain from scratch — the honest
         check, never trusting a stored line_hash in isolation. False on the first gap or
-        mismatch; True (including vacuously, on zero rows) otherwise."""
+        mismatch; True (including vacuously, on zero rows) otherwise. `harness` (thread
+        6483/6587, Seshat's own catch): `ingest_path`/`splice_sources` already accept and
+        store a real harness — this read-back door defaulted to the module constant
+        regardless, so a spliced DSH/Crush anchor_sid would report "nothing ingested"
+        against a session genuinely fully stored. Defaults to 'claude-code' for backward
+        compatibility with every existing caller."""
         rows = await self.pool.fetch(
             "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
             "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
-            _HARNESS, anchor_sid)
+            harness, anchor_sid)
         expected_prev: str | None = None
         for i, row in enumerate(rows):
             if row["line_idx"] != i:
@@ -445,7 +450,7 @@ class SoulStore:
             expected_prev = row["line_hash"]
         return True
 
-    async def re_materialize(self, anchor_sid: str) -> str | None:
+    async def re_materialize(self, anchor_sid: str, harness: str = _HARNESS) -> str | None:
         """PIECE 2'S SMALLEST HALF, and piece 1's own acceptance test: reconstruct the
         transcript from stored lines alone, byte-for-byte reconstructable from the
         store — no read of the source file. None when nothing has been ingested for this
@@ -453,15 +458,17 @@ class SoulStore:
         newline the source may or may not have carried) get exactly that. Decodes the
         stored raw bytes (0052) to `str` at this boundary — `errors='replace'` only ever
         matters for a genuinely non-UTF-8 source, never for the NUL-byte class this
-        module exists to survive (NUL is valid UTF-8)."""
+        module exists to survive (NUL is valid UTF-8). `harness` (thread 6483/6587):
+        defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
+        note."""
         rows = await self.pool.fetch(
             "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
+            "ORDER BY line_idx ASC", harness, anchor_sid)
         if not rows:
             return None
         return "\n".join(bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows)
 
-    async def raw_lines(self, anchor_sid: str) -> list[str] | None:
+    async def raw_lines(self, anchor_sid: str, harness: str = _HARNESS) -> list[str] | None:
         """The stored lines as a plain list, in order — the SAME shape
         `Path.read_text().splitlines()` gives the disk-based miner, so a lines-consuming
         function (distill/models_in, in src.ingest.sessions) works unchanged whether its
@@ -469,15 +476,19 @@ class SoulStore:
         an empty list — the two are different facts: 'not ingested' vs 'ingested,
         genuinely empty', though the latter can't happen since ingest_path only ever
         writes a session that had at least one line). Decodes the stored raw bytes (0052)
-        to `str` at this boundary, same as `re_materialize`."""
+        to `str` at this boundary, same as `re_materialize`. `harness` (thread 6483/6587):
+        defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
+        note."""
         rows = await self.pool.fetch(
             "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
+            "ORDER BY line_idx ASC", harness, anchor_sid)
         if not rows:
             return None
         return [bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows]
 
-    async def mining_view(self, anchor_sid: str) -> list[dict[str, Any]] | None:
+    async def mining_view(
+        self, anchor_sid: str, harness: str = _HARNESS,
+    ) -> list[dict[str, Any]] | None:
         """THE MINING VIEW (task #51 piece 3, ruling 62dc6397): soul_lines projected into
         a mineable per-turn shape — {session, turn_index, role, text, tool_calls} — so a
         miner reads the STORE, never re-parsing raw JSONL by hand. None when nothing has
@@ -489,10 +500,12 @@ class SoulStore:
         layer so OTHER miners (closure, decision) get it for free instead of each
         re-implementing the same filter. `text` joins every text block (assistant) or
         the raw string content (user); `tool_calls` is `[{"name", "input"}, ...]` for
-        every tool_use block on that turn, `[]` when none."""
+        every tool_use block on that turn, `[]` when none. `harness` (thread 6483/6587):
+        defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
+        note."""
         rows = await self.pool.fetch(
             "SELECT line_idx, raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", _HARNESS, anchor_sid)
+            "ORDER BY line_idx ASC", harness, anchor_sid)
         if not rows:
             return None
         out: list[dict[str, Any]] = []
@@ -529,18 +542,19 @@ class SoulStore:
         return out
 
     async def _verified_lines(
-        self, anchor_sid: str,
+        self, anchor_sid: str, harness: str = _HARNESS,
     ) -> tuple[list[bytes] | None, dict[str, Any] | None]:
         """Walk soul_lines in order, verifying the hash chain AS it collects — a break is
         a NAMED state (the second element), never a silent partial result. Returns
         (lines, None) on a clean chain, (None, break_receipt) on the first gap/mismatch,
         (None, None) when nothing was ever ingested for this session — three distinct
         outcomes, never conflated. Raw bytes (0052) — `rematerialize_to_disk`'s own
-        byte-exact promise starts here."""
+        byte-exact promise starts here. `harness` (thread 6483/6587): defaults to
+        'claude-code' for backward compatibility — see `verify_chain`'s own note."""
         rows = await self.pool.fetch(
             "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
             "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
-            _HARNESS, anchor_sid)
+            harness, anchor_sid)
         if not rows:
             return None, None
         expected_prev: str | None = None
@@ -567,7 +581,7 @@ class SoulStore:
 
     async def rematerialize_to_disk(
         self, anchor_sid: str, *, dest: str | None = None, force: bool = False,
-        upto: str | None = None, confess: bool = True,
+        upto: str | None = None, confess: bool = True, harness: str = _HARNESS,
     ) -> dict[str, Any]:
         """PIECE 2: write a session's transcript back to disk, byte-for-byte, from
         soul_lines alone — the acceptance test a soul store stands or falls on, made
@@ -608,13 +622,15 @@ class SoulStore:
         so osiris's own mining/rendering skips it as it already skips other isMeta lines)
         naming the seek point and how many later entries were withheld — never silent,
         never a fabricated compaction (osiris does not invent what the model itself never
-        summarized). UNVERIFIED against a live Claude Code resume as of this build — the
-        prefix-cut mechanism itself is proven byte-exact; whether the harness accepts
-        THIS confession entry's exact shape on `--resume` has not been probed. Pass
-        confess=False for a caller that wants the bare prefix with no injected line."""
+        summarized). VERIFIED against a live Claude Code resume (thread 6483/6545/6553,
+        operator-authorized probe on disposable content): the harness accepts this exact
+        confession shape without error, and a resumed mind reads it honestly rather than
+        believing itself whole. Pass confess=False for a caller that wants the bare
+        prefix with no injected line. `harness` (thread 6483/6587): defaults to
+        'claude-code' for backward compatibility — see `verify_chain`'s own note."""
         row = await self.pool.fetchrow(
             "SELECT source_path, last_ingested_at FROM soul_sessions "
-            "WHERE harness=$1 AND anchor_sid=$2", _HARNESS, anchor_sid)
+            "WHERE harness=$1 AND anchor_sid=$2", harness, anchor_sid)
         if row is None:
             return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
                              "materialize"}
@@ -631,7 +647,7 @@ class SoulStore:
                             "ingest — writing over it would clobber content the store "
                             "never saw. Pass force=True to override.",
                 }
-        lines, broken = await self._verified_lines(anchor_sid)
+        lines, broken = await self._verified_lines(anchor_sid, harness)
         if broken is not None:
             return broken
         if lines is None:

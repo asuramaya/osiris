@@ -7188,6 +7188,92 @@ async def rematerialize(
 
 
 @mcp.tool()
+async def heal_seat_transcript(
+    handle: str, source_paths: list[str], dry_run: bool = True, because: str = "",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Splice a seat's session, fragmented across multiple project slugs by a mid-session
+    cwd move, back into ONE file at its own office slug — the transcript half of the
+    jesus/chad repair (thread 6483/6534/6559/6567/6575), the operator's own injection
+    thesis (804d59c3) made a callable verb instead of a hand-run script.
+
+    `handle` names the seat whose OFFICE the result lands at
+    (`_default_office_root()/handle.lower()/<session-uuid>.jsonl`). `source_paths` are
+    the ORIGINAL harness-written fragments, IN CHAIN ORDER (oldest first) — the same list
+    `SoulStore.splice_sources` takes; getting the order wrong is exactly what the
+    preflight below exists to catch, not something this door infers from mtime. The
+    session's full uuid and its 8-char anchor_sid are both DERIVED from
+    `source_paths[0]`'s own filename — one source of truth, no second id a caller could
+    pass out of sync with the files themselves.
+
+    EVERY GUARD IS SPLICE_SOURCES' OWN, UNCHANGED: `verify_jsonl_chain_boundary` runs on
+    every consecutive pair before anything is touched. A false "same session id"
+    coincidence, or genuinely separate sessions that only share a directory (Marquee's
+    own specimen, thread 6576 — three session ids, no pair of them chains) refuses here
+    exactly as it refused by hand.
+
+    `dry_run=True` (default, sweep_seat_disk's own convention) runs the SAME preflight
+    and reports per-pair clean/refused plus where the result WOULD be written — nothing
+    is read past the preflight scan, nothing is written. `dry_run=False` requires
+    `because` (operator-gated) and performs the real splice + `rematerialize_to_disk
+    (upto=None)` into the office slug. Never touches a Seat row, an anchor_cwd, or any
+    SOURCE transcript (splice only reads) — the anchor-repoint half of this repair is a
+    different door (Sekhmet's `heal_seat_anchor`) entirely."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a transcript heal is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    handle = (handle or "").strip()
+    if not handle:
+        return {"error": "a handle is required"}
+    if not source_paths or len(source_paths) < 2:
+        return {"error": "source_paths needs at least two fragments to splice — a single "
+                         "file has nothing to join"}
+    from pathlib import Path
+
+    from src.ingest.soul_store import SoulStore, verify_jsonl_chain_boundary
+    from src.orchestrator.offices import _default_office_root
+
+    first_stem = Path(source_paths[0]).stem
+    if len(first_stem) != 36 or first_stem.count("-") != 4:
+        return {"error": f"source_paths[0]'s filename ({first_stem!r}) is not a session "
+                         "uuid — cannot derive the session id to splice under"}
+    full_sid = first_stem
+    anchor_sid = full_sid.split("-")[0]
+    dest = _default_office_root() / handle.lower() / f"{full_sid}.jsonl"
+
+    preflight: list[dict[str, Any]] = []
+    for a, b in zip(source_paths, source_paths[1:], strict=False):
+        reason = verify_jsonl_chain_boundary(a, b)
+        preflight.append({"a": a, "b": b, "clean": reason is None, "reason": reason})
+    out: dict[str, Any] = {
+        "handle": handle, "anchor_sid": anchor_sid, "dry_run": dry_run,
+        "preflight": preflight, "office_dest": str(dest),
+    }
+    if any(not p["clean"] for p in preflight):
+        out["error"] = "preflight refused — see `preflight` for which pair and why"
+        return out
+    if dry_run:
+        return out
+
+    because = because.strip()
+    if not because:
+        return {"error": "because is required to execute — an operator-gated act needs "
+                         "a stated reason", **out}
+
+    pool = await _pool_get()
+    store = SoulStore(pool)
+    try:
+        spliced = await store.splice_sources(anchor_sid, source_paths)
+    except ValueError as e:
+        return {"error": str(e), **out}
+    out["spliced_lines"] = spliced
+    out["verify_chain"] = await store.verify_chain(anchor_sid)
+    out["rematerialize"] = await store.rematerialize_to_disk(anchor_sid, dest=str(dest))
+    return out
+
+
+@mcp.tool()
 async def correct_thread_summary(
     ref: str, corrected_summary: str, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,

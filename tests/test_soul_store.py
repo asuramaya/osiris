@@ -355,6 +355,146 @@ async def test_rematerialize_mcp_tool_wraps_the_same_verb(
     assert dest.read_text() == "\n".join(lines) + "\n"
 
 
+# --- heal_seat_transcript (the jesus/chad repair, made a callable MCP door) -------------
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+def _mount(srv: object, actions: Actions, agent_id: str, session: str) -> object:
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    ident = AgentIdentity(agent_id=agent_id, session=session, project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    return ctx
+
+
+async def test_heal_seat_transcript_refuses_without_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("someseat", ["/a.jsonl", "/b.jsonl"])
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
+async def test_heal_seat_transcript_refuses_fewer_than_two_sources(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    ctx = _mount(srv, actions, "agent:heal1", "heal1")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("someseat", ["/only-one.jsonl"], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "at least two fragments" in out["error"]
+
+
+async def test_heal_seat_transcript_dry_run_reports_clean_preflight_and_writes_nothing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines = _chained_lines(4, seed="healdry")
+    sid = "healdry0-0000-0000-0000-000000000001"  # not a real chained uuid, real filename shape
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b" / "irrelevant-name.jsonl", lines[2:])
+
+    ctx = _mount(srv, actions, "agent:heal2", "heal2")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("dryhandle", [str(a), str(b)], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert out["dry_run"] is True
+    assert "error" not in out
+    assert all(p["clean"] for p in out["preflight"])
+    assert not Path(out["office_dest"]).exists()
+
+
+async def test_heal_seat_transcript_dry_run_reports_a_refused_pair(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines_a = _chained_lines(2, seed="healrefa")
+    lines_b = _chained_lines(2, seed="healrefb")  # unrelated — not a real continuation
+    sid = "healrefa-0000-0000-0000-000000000002"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines_a)
+    b = _write_transcript(tmp_path / "b.jsonl", lines_b)
+
+    ctx = _mount(srv, actions, "agent:heal3", "heal3")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("refusehandle", [str(a), str(b)], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert any(not p["clean"] for p in out["preflight"])
+
+
+async def test_heal_seat_transcript_execute_requires_because(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines = _chained_lines(4, seed="healnoreason")
+    sid = "healnorea-0000-0000-0000-00000000003"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[2:])
+
+    ctx = _mount(srv, actions, "agent:heal4", "heal4")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript(
+            "noreasonhandle", [str(a), str(b)], dry_run=False, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "because is required" in out["error"]
+
+
+async def test_heal_seat_transcript_execute_splices_and_writes_the_office_slug(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.offices import _default_office_root
+
+    lines = _chained_lines(6, seed="healexec")
+    sid = "healexec-0000-0000-0000-000000000004"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:3])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[3:])
+
+    ctx = _mount(srv, actions, "agent:heal5", "heal5")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript(
+            "ExecHandle", [str(a), str(b)], dry_run=False, because="repair", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" not in out
+    assert out["spliced_lines"] == 6
+    assert out["verify_chain"] is True
+    dest = _default_office_root() / "exechandle" / f"{sid}.jsonl"
+    assert out["rematerialize"]["written"] == str(dest)
+    assert dest.read_bytes() == ("\n".join(lines) + "\n").encode()
+
+
 # --- raw_lines / mining_view (task #51 piece 3) -----------------------------
 
 async def test_raw_lines_matches_splitlines_of_the_source(

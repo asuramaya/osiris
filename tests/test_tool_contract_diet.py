@@ -717,7 +717,13 @@ def _tool_chars(t: Any) -> int:
 # convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
-TOOL_CONTRACT_EXPECTED_COUNT = 148  # MEASURED against the merged tree, 2026-08-29.
+TOOL_CONTRACT_EXPECTED_COUNT = 149  # MEASURED against the merged tree, 2026-08-29.
+# 148 -> 149 (2026-09-02, Khnum, thread 6483/6559/6567/6576, Thoth's own dispatch "build
+# the MCP door, treat it as required not optional"): new tool heal_seat_transcript —
+# splice_sources + rematerialize_to_disk(upto=None) as a callable repair verb, the
+# jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
+# function directly. A genuinely new capability (dry_run default, because required on
+# execute, same shape sweep_seat_disk's own door already established), not padding.
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -782,6 +788,10 @@ TOOL_CONTRACT_CEILING_CHARS = 205497
 # new capability, not padding. Trimmed both new docstrings once under the category rule
 # before raising.
 TOOL_CONTRACT_CEILING_CHARS = 206209
+# 206,209 -> 208,607 (measured exact). Tool count 148 -> 149 (2026-09-02, Khnum, thread
+# 6483/6559/6567/6576): new tool heal_seat_transcript (see the count changelog above) —
+# a genuinely new capability, not padding.
+TOOL_CONTRACT_CEILING_CHARS = 208607
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
