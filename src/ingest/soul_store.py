@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid as _uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,125 @@ def _chain_hash(prev_hash: str | None, raw_line: bytes) -> str:
     return h.hexdigest()
 
 
+def _hash_rows(
+    harness: str, anchor_sid: str, lines: list[bytes], start_idx: int,
+    prev_hash: str | None,
+) -> tuple[list[tuple[str, str, int, bytes, str, str | None]], int, str | None]:
+    """Build `soul_lines` rows for `lines`, continuing the hash chain from `(start_idx,
+    prev_hash)` — the one row-construction shape `ingest_path` and `splice_sources` both
+    need, extracted so a caller ingesting several sources in sequence for one anchor_sid
+    (splice_sources) chains them exactly the way a single growing file chains its own
+    lines, rather than a second, drifting copy of this loop."""
+    rows: list[tuple[str, str, int, bytes, str, str | None]] = []
+    idx = start_idx
+    for raw_line in lines:
+        line_hash = _chain_hash(prev_hash, raw_line)
+        rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
+        prev_hash = line_hash
+        idx += 1
+    return rows, idx, prev_hash
+
+
+def _addressable_entries(lines: list[bytes]) -> list[tuple[int, str, str | None]]:
+    """`(line_idx, uuid, parentUuid)` for every `user`/`assistant` line — the ONLY entry
+    types that carry a `uuid` at all (confirmed live: `queue-operation`/`attachment`/
+    `mode`/`last-prompt` lines never do) and therefore the only lines a chain-continuity
+    check or a `rematerialize_to_disk(upto=...)` seek can address. Lines that fail to
+    parse as JSON, or parse but carry no `uuid`, are silently skipped — they are real
+    transcript content (kept byte-exact by the store regardless) but not addressable
+    nodes in the harness's own parentUuid chain."""
+    out: list[tuple[int, str, str | None]] = []
+    for idx, raw in enumerate(lines):
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(d, dict) or d.get("type") not in ("user", "assistant"):
+            continue
+        u = d.get("uuid")
+        if isinstance(u, str) and u:
+            out.append((idx, u, d.get("parentUuid")))
+    return out
+
+
+def _confession_line(seek_entry: dict[str, Any], withheld: int) -> bytes:
+    """The withheld-entries confession (thread 6483/6534/6540, ratified as a standing rule
+    — an unexercised guard that states its own condition is worth having even the day it
+    doesn't fire): a synthetic `user`-typed entry, `isMeta: true` matching the marker real
+    hook-injected content already carries (so osiris's own mining/rendering skips it the
+    same way it already skips other isMeta lines), chained onto the seek point as its
+    `parentUuid` so it reads as the NEXT thing that happened, not a foreign insert. Never
+    a fabricated compaction — this states a fact about what was withheld, never invents
+    what the model itself would have summarized.
+
+    UNVERIFIED against a live Claude Code resume as of this build — see
+    `rematerialize_to_disk`'s own docstring."""
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    text = (f"[osiris] this session was resumed as of an earlier point in its own "
+            f"history — {withheld} later entr{'y' if withheld == 1 else 'ies'} exist in "
+            f"the stored record but were withheld from this transcript. Ask osiris to "
+            f"rematerialize the full session if you need them.")
+    entry = {
+        "parentUuid": seek_entry.get("uuid"),
+        "isSidechain": False,
+        "isMeta": True,
+        "type": "user",
+        "message": {"role": "user", "content": text},
+        "uuid": str(_uuid.uuid4()),
+        "timestamp": now,
+        "sessionId": seek_entry.get("sessionId"),
+        "cwd": seek_entry.get("cwd"),
+    }
+    return json.dumps(entry).encode("utf-8")
+
+
+def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
+    """Is `file_b` genuinely the CONTINUATION of `file_a` — one gapless conversation cut
+    by a mid-session cwd move (thread 6483/6534, decision 2e05d662's own by-hand proof on
+    jesus/chad, generalized here so a future pair is never spliced on the strength of a
+    same-session-id coincidence alone) — or two things that merely share a session id?
+    None means clean; otherwise the reason, matching `resume_verdict`'s own shape.
+
+    THREE CHECKS, the same ones 2e05d662 ran by hand, and no more: (1) `file_b`'s FIRST
+    addressable entry's `parentUuid` must equal `file_a`'s LAST addressable entry's
+    `uuid` — the literal join point; (2) zero `uuid` overlap between the two files — two
+    genuinely different halves, never the same content ingested twice under different
+    names; (3) every entry in `file_b` (after its first, already checked by (1)) must
+    have a `parentUuid` resolving to a `uuid` seen earlier in `file_a` or `file_b` — "B
+    entries whose parent is in neither file: ZERO", 2e05d662's own phrasing. `file_a`'s
+    OWN internal structure is trusted, not re-audited — it is a real, harness-written
+    prefix already ingested as itself; this function's job is the JOIN, not a second
+    from-scratch chain audit of content nobody is disputing.
+
+    A file with NO addressable entries at all can never be verified as either half of a
+    chain — refused, not silently treated as trivially clean."""
+    a = _addressable_entries(_split_lines(_read_source(file_a)))
+    b = _addressable_entries(_split_lines(_read_source(file_b)))
+    if not a:
+        return f"{file_a} has no addressable (user/assistant) entries — nothing to verify"
+    if not b:
+        return f"{file_b} has no addressable (user/assistant) entries — nothing to verify"
+    uuids_a = {u for _, u, _ in a}
+    uuids_b = {u for _, u, _ in b}
+    overlap = uuids_a & uuids_b
+    if overlap:
+        return (f"uuid overlap between {file_a} and {file_b}: {sorted(overlap)[:5]!r} — "
+                f"not two distinct halves of one conversation")
+    last_a_uuid = a[-1][1]
+    first_b_uuid, first_b_parent = b[0][1], b[0][2]
+    if first_b_parent != last_a_uuid:
+        return (f"chain broken at the join — {file_b}'s first entry ({first_b_uuid}) has "
+                f"parentUuid={first_b_parent!r}, expected {file_a}'s last entry "
+                f"({last_a_uuid!r})")
+    seen: set[str] = set(uuids_a)
+    for i, (_, u, parent) in enumerate(b):
+        if i > 0 and parent is not None and parent not in seen:
+            return (f"orphan entry {u} in {file_b} — its parentUuid {parent!r} matches "
+                    f"nothing in {file_a} or earlier in {file_b}")
+        seen.add(u)
+    return None
+
+
 class SoulStore:
     """The append-only, content-bearing transcript store.
 
@@ -163,13 +283,7 @@ class SoulStore:
         new_lines = lines[since:]
         if not new_lines:
             return 0
-        rows = []
-        idx = since
-        for raw_line in new_lines:
-            line_hash = _chain_hash(prev_hash, raw_line)
-            rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
-            prev_hash = line_hash
-            idx += 1
+        rows, idx, prev_hash = _hash_rows(harness, anchor_sid, new_lines, since, prev_hash)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.executemany(
@@ -191,6 +305,72 @@ class SoulStore:
                     harness, anchor_sid, source_path, idx, prev_hash,
                 )
         return len(rows)
+
+    async def splice_sources(
+        self, anchor_sid: str, source_paths: list[str], *, harness: str | None = None,
+        verify: bool = True,
+    ) -> int:
+        """Ingest SEVERAL DIFFERENT source files as one continuous soul_lines chain for
+        `anchor_sid` — the operation `ingest_path` cannot do (thread 6483/6534/6538,
+        caught before shipping the wrong claim: `ingest_path`'s own `since` offset slices
+        INTO the given file's own line list, which is correct for re-ingesting the SAME
+        file after it has grown, and silently WRONG for a second, different file that
+        should continue where the first left off — verified live: a 25-line probe
+        transcript split at line 12 and fed through two `ingest_path` calls lost 12 of the
+        second half's 13 lines, no error, because `since=12` sliced into a 13-line file).
+
+        Reads `_progress` ONCE, then ingests each source's FULL content from ITS OWN line
+        0, continuing the running (idx, prev_hash) across every source in a single
+        transaction — one soul_lines chain, indistinguishable at read time from a single
+        file that never split. `harness` auto-detects off the FIRST source when not
+        given. `soul_sessions.source_path` ends up naming the LAST source ingested (same
+        "most recent location" convention `ingest_path` already keeps) — a caller that
+        needs every physical source a chain was spliced from reads soul_lines' own
+        distinct raw content, not this one column.
+
+        `verify=True` (default) runs `verify_jsonl_chain_boundary` on every consecutive
+        pair before ingesting anything — refuses the WHOLE splice, writing nothing, on the
+        first pair that isn't a genuine continuation (Thoth's own instruction: jesus/chad
+        passed this check by hand, the next pair may not, and a blind append would chain
+        them anyway). Pass `verify=False` only for sources already known clean by another
+        route (e.g. a caller that ran the check itself moments earlier)."""
+        if not source_paths:
+            return 0
+        if verify:
+            for a, b in zip(source_paths, source_paths[1:], strict=False):
+                reason = verify_jsonl_chain_boundary(a, b)
+                if reason is not None:
+                    raise ValueError(f"splice_sources refused — {reason}")
+        harness = harness or self._detect_harness(source_paths[0])
+        idx, prev_hash = await self._progress(anchor_sid, harness=harness)
+        all_rows: list[tuple[str, str, int, bytes, str, str | None]] = []
+        for source_path in source_paths:
+            lines = _split_lines(_read_source(source_path))
+            rows, idx, prev_hash = _hash_rows(harness, anchor_sid, lines, idx, prev_hash)
+            all_rows.extend(rows)
+        if not all_rows:
+            return 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(
+                    "INSERT INTO soul_lines "
+                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, prev_hash) "
+                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                    "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
+                    all_rows,
+                )
+                await conn.execute(
+                    "INSERT INTO soul_sessions "
+                    "   (harness, anchor_sid, source_path, last_line_idx, last_hash) "
+                    "VALUES ($1, $2, $3, $4, $5) "
+                    "ON CONFLICT (harness, anchor_sid) DO UPDATE "
+                    "   SET last_ingested_at = now(), "
+                    "       last_line_idx = EXCLUDED.last_line_idx, "
+                    "       last_hash = EXCLUDED.last_hash, "
+                    "       source_path = EXCLUDED.source_path",
+                    harness, anchor_sid, source_paths[-1], idx, prev_hash,
+                )
+        return len(all_rows)
 
     async def ingest(self, *, cwd: str | None, job_dir: str | None,
                       root: Path | None = None) -> int:
@@ -347,6 +527,7 @@ class SoulStore:
 
     async def rematerialize_to_disk(
         self, anchor_sid: str, *, dest: str | None = None, force: bool = False,
+        upto: str | None = None, confess: bool = True,
     ) -> dict[str, Any]:
         """PIECE 2: write a session's transcript back to disk, byte-for-byte, from
         soul_lines alone — the acceptance test a soul store stands or falls on, made
@@ -366,7 +547,29 @@ class SoulStore:
         newer than this session's last_ingested_at, something has written to it more
         recently than what the store knows about (the file's own mtime is the "lease" —
         a live process still appending to it keeps moving it forward) — writing over it
-        would clobber content the store never saw. `force=True` skips this guard."""
+        would clobber content the store never saw. `force=True` skips this guard.
+
+        `upto` (thread 6483/6534/6540, the operator's own framing: "the store eats whole
+        transcripts, any resume point should be able to be spawned, defaulting to the
+        latest") SEEKS to a specific `user`/`assistant` entry's own `uuid` — the harness's
+        own parentUuid-chained addressable nodes (`_addressable_entries`), the same chain
+        `verify_jsonl_chain_boundary` walks. None (default) emits the full latest chain,
+        unchanged. Given, emits a genuine byte-exact PREFIX through that entry — REFUSES
+        (an error dict, nothing written) when `upto` matches no line in the chain, never a
+        silent full-chain fallback.
+
+        `confess` (default True, no effect when `upto` is None or already the true
+        latest): a seek that excludes real, later content is honest only if it SAYS so —
+        #102's "mark, never pick a winner" grammar, applied here as "never let a resumed
+        mind believe it is whole when it was seeked." Appends ONE synthetic `type":"user"`
+        entry (`isMeta: true`, the same marker real hook-injected content already uses,
+        so osiris's own mining/rendering skips it as it already skips other isMeta lines)
+        naming the seek point and how many later entries were withheld — never silent,
+        never a fabricated compaction (osiris does not invent what the model itself never
+        summarized). UNVERIFIED against a live Claude Code resume as of this build — the
+        prefix-cut mechanism itself is proven byte-exact; whether the harness accepts
+        THIS confession entry's exact shape on `--resume` has not been probed. Pass
+        confess=False for a caller that wants the bare prefix with no injected line."""
         row = await self.pool.fetchrow(
             "SELECT source_path, last_ingested_at FROM soul_sessions "
             "WHERE harness=$1 AND anchor_sid=$2", _HARNESS, anchor_sid)
@@ -392,9 +595,29 @@ class SoulStore:
         if lines is None:
             return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
                              "materialize"}
+        withheld = 0
+        seek_entry: dict[str, Any] | None = None
+        if upto is not None:
+            addressable = _addressable_entries(lines)
+            match = next(((i, u, p) for i, u, p in addressable if u == upto), None)
+            if match is None:
+                return {"error": f"upto={upto!r} matches no user/assistant entry in "
+                                 f"{anchor_sid!r}'s stored chain — refusing to guess"}
+            match_idx = match[0]
+            withheld = len(lines) - (match_idx + 1)
+            lines = lines[: match_idx + 1]
+            if withheld > 0:
+                seek_entry = json.loads(lines[match_idx])
         content = b"\n".join(lines) + b"\n"
+        if withheld > 0 and confess and seek_entry is not None:
+            confession = _confession_line(seek_entry, withheld)
+            content += confession + b"\n"
         _write_dest(target, content)
-        return {
+        out = {
             "written": str(target), "lines": len(lines),
             "sha256": hashlib.sha256(content).hexdigest(),
         }
+        if upto is not None:
+            out["seek"] = upto
+            out["withheld_entries"] = withheld
+        return out
