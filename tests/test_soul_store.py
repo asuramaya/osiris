@@ -462,13 +462,59 @@ async def test_verify_jsonl_chain_boundary_orphan_in_b(tmp_path: Path) -> None:
     assert reason is not None and "orphan entry" in reason
 
 
-async def test_verify_jsonl_chain_boundary_refuses_an_unaddressable_file(
+async def test_verify_jsonl_chain_boundary_refuses_a_file_with_no_uuid_bearing_entries(
     tmp_path: Path,
 ) -> None:
     a = _write_transcript(tmp_path / "a.jsonl", _synthetic_lines(2))  # no uuid field
     b = _write_transcript(tmp_path / "b.jsonl", _chained_lines(2, seed="lonely"))
     reason = verify_jsonl_chain_boundary(str(a), str(b))
-    assert reason is not None and "no addressable" in reason
+    assert reason is not None and "no uuid-bearing entries" in reason
+
+
+async def test_verify_jsonl_chain_boundary_sees_through_an_attachment_link(
+    tmp_path: Path,
+) -> None:
+    """THE REGRESSION jesus/chad's live splice caught (thread 6483/6559/6565): the join
+    itself is genuinely chained through a `type:"attachment"` line — a real link, never a
+    valid seek target, but a link `verify_jsonl_chain_boundary` must still see through or
+    it reports a false orphan on the entry right after it."""
+    lines = _chained_lines(4, seed="attachlink")
+    # splice an attachment line, chained correctly, between B's join point and its
+    # next real entry — the exact shape found live
+    b_raw = json.loads(lines[2])
+    attach_uuid = "attachlink-attach-0000-0000-000000000000"
+    attachment = json.dumps({
+        "type": "attachment", "uuid": attach_uuid, "parentUuid": b_raw["parentUuid"],
+        "sessionId": b_raw["sessionId"],
+    })
+    # re-point the entry that used to follow directly onto the attachment instead
+    b_raw["parentUuid"] = attach_uuid
+    lines[2] = json.dumps(b_raw)
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", [attachment, *lines[2:]])
+    assert verify_jsonl_chain_boundary(str(a), str(b)) is None
+
+
+async def test_verify_jsonl_chain_boundary_still_refuses_a_real_break_through_an_attachment(
+    tmp_path: Path,
+) -> None:
+    """Widening the walk to see attachment links must not make it MORE permissive on a
+    genuine break — Thoth's own instruction (thread 6567): prove the widened verifier
+    still refuses, on the same shape the fix just legitimized."""
+    lines = _chained_lines(4, seed="attachbreak")
+    b_raw = json.loads(lines[2])
+    attachment = json.dumps({
+        "type": "attachment", "uuid": "attachbreak-attach-0000-0000-000000000000",
+        "parentUuid": b_raw["parentUuid"], "sessionId": b_raw["sessionId"],
+    })
+    # the next real entry's parentUuid points at neither the attachment NOR anything
+    # else in A or B — a genuine, unrelated break, even with an attachment link present
+    b_raw["parentUuid"] = "points-at-nothing-real-at-all"
+    lines[2] = json.dumps(b_raw)
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", [attachment, *lines[2:]])
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "orphan entry" in reason
 
 
 async def test_splice_sources_chains_two_files_into_one(

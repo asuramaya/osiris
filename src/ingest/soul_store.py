@@ -125,13 +125,17 @@ def _hash_rows(
 
 
 def _addressable_entries(lines: list[bytes]) -> list[tuple[int, str, str | None]]:
-    """`(line_idx, uuid, parentUuid)` for every `user`/`assistant` line — the ONLY entry
-    types that carry a `uuid` at all (confirmed live: `queue-operation`/`attachment`/
-    `mode`/`last-prompt` lines never do) and therefore the only lines a chain-continuity
-    check or a `rematerialize_to_disk(upto=...)` seek can address. Lines that fail to
-    parse as JSON, or parse but carry no `uuid`, are silently skipped — they are real
-    transcript content (kept byte-exact by the store regardless) but not addressable
-    nodes in the harness's own parentUuid chain."""
+    """`(line_idx, uuid, parentUuid)` for every `user`/`assistant` line — the entry types
+    a human or an agent can meaningfully ask to SEEK to (`rematerialize_to_disk(upto=...)`).
+    `queue-operation`/`mode`/`last-prompt`/`custom-title`/`agent-name` lines carry no
+    `uuid` at all and are naturally excluded; `attachment` lines DO carry a real `uuid`/
+    `parentUuid` and a genuine link in the harness's own chain (found live, thread
+    6483/6559/6565 — the jesus/chad splice's own false-positive orphan, traced to this
+    exact gap) but are never a valid seek target — a caller must never land a resume on a
+    hook-injected attachment. Chain-CONTINUITY verification must NOT use this function;
+    see `_chain_linked_entries` below, the ONLY correct input to that check. Two named
+    functions, not one with a flag (Thoth's own instruction, thread 6567) — a flag
+    invites exactly the conflation that produced the false positive."""
     out: list[tuple[int, str, str | None]] = []
     for idx, raw in enumerate(lines):
         try:
@@ -139,6 +143,34 @@ def _addressable_entries(lines: list[bytes]) -> list[tuple[int, str, str | None]
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue
         if not isinstance(d, dict) or d.get("type") not in ("user", "assistant"):
+            continue
+        u = d.get("uuid")
+        if isinstance(u, str) and u:
+            out.append((idx, u, d.get("parentUuid")))
+    return out
+
+
+def _chain_linked_entries(lines: list[bytes]) -> list[tuple[int, str, str | None]]:
+    """`(line_idx, uuid, parentUuid)` for EVERY line that carries a `uuid`, regardless of
+    `type` — the correct, and ONLY correct, input to a chain-continuity walk. Found live
+    (thread 6483/6559/6565): `verify_jsonl_chain_boundary`'s first draft used
+    `_addressable_entries` (user/assistant only) and reported a false "orphan" on BOTH
+    jesus and chad, at the identical relative position (the second real entry after each
+    seat's own cwd-move cut) — traced to `type:"attachment"` lines, which genuinely
+    chain (`uuid`/`parentUuid` both real, verified by direct inspection of the raw file)
+    but were invisible to that walk. 2e05d662's own by-hand proof got the right answer by
+    luck: it checked only the JOIN (B's first entry's parentUuid against A's last), never
+    B's own full internal continuity — this function is what that protocol should have
+    used throughout. Never use this for a SEEK target (`rematerialize_to_disk`'s own
+    `upto`) — an attachment is a real chain link but never a place a caller should land a
+    resume; `_addressable_entries` stays the seek-only door, unchanged."""
+    out: list[tuple[int, str, str | None]] = []
+    for idx, raw in enumerate(lines):
+        try:
+            d = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(d, dict):
             continue
         u = d.get("uuid")
         if isinstance(u, str) and u:
@@ -185,7 +217,7 @@ def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
     None means clean; otherwise the reason, matching `resume_verdict`'s own shape.
 
     THREE CHECKS, the same ones 2e05d662 ran by hand, and no more: (1) `file_b`'s FIRST
-    addressable entry's `parentUuid` must equal `file_a`'s LAST addressable entry's
+    chain-linked entry's `parentUuid` must equal `file_a`'s LAST chain-linked entry's
     `uuid` — the literal join point; (2) zero `uuid` overlap between the two files — two
     genuinely different halves, never the same content ingested twice under different
     names; (3) every entry in `file_b` (after its first, already checked by (1)) must
@@ -195,14 +227,22 @@ def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
     prefix already ingested as itself; this function's job is the JOIN, not a second
     from-scratch chain audit of content nobody is disputing.
 
-    A file with NO addressable entries at all can never be verified as either half of a
+    WALKS `_chain_linked_entries` (every uuid-bearing line), NEVER `_addressable_entries`
+    (user/assistant only, the seek-only door) — found live (thread 6483/6559/6565): the
+    first draft used the addressable-only walk and reported a false orphan on BOTH jesus
+    and chad at the identical relative position (the second real entry after each seat's
+    own cwd-move cut), because `type:"attachment"` lines carry real chain links this walk
+    must see. 2e05d662's own by-hand protocol got the right answer by luck — it checked
+    only the join, never file_b's full internal continuity, so it never hit this gap.
+
+    A file with NO chain-linked entries at all can never be verified as either half of a
     chain — refused, not silently treated as trivially clean."""
-    a = _addressable_entries(_split_lines(_read_source(file_a)))
-    b = _addressable_entries(_split_lines(_read_source(file_b)))
+    a = _chain_linked_entries(_split_lines(_read_source(file_a)))
+    b = _chain_linked_entries(_split_lines(_read_source(file_b)))
     if not a:
-        return f"{file_a} has no addressable (user/assistant) entries — nothing to verify"
+        return f"{file_a} has no uuid-bearing entries — nothing to verify"
     if not b:
-        return f"{file_b} has no addressable (user/assistant) entries — nothing to verify"
+        return f"{file_b} has no uuid-bearing entries — nothing to verify"
     uuids_a = {u for _, u, _ in a}
     uuids_b = {u for _, u, _ in b}
     overlap = uuids_a & uuids_b
@@ -551,12 +591,14 @@ class SoulStore:
 
         `upto` (thread 6483/6534/6540, the operator's own framing: "the store eats whole
         transcripts, any resume point should be able to be spawned, defaulting to the
-        latest") SEEKS to a specific `user`/`assistant` entry's own `uuid` — the harness's
-        own parentUuid-chained addressable nodes (`_addressable_entries`), the same chain
-        `verify_jsonl_chain_boundary` walks. None (default) emits the full latest chain,
-        unchanged. Given, emits a genuine byte-exact PREFIX through that entry — REFUSES
-        (an error dict, nothing written) when `upto` matches no line in the chain, never a
-        silent full-chain fallback.
+        latest") SEEKS to a specific `user`/`assistant` entry's own `uuid` — the ONLY
+        valid seek targets (`_addressable_entries`), deliberately narrower than the full
+        uuid-bearing chain `verify_jsonl_chain_boundary` walks (`_chain_linked_entries`):
+        a caller must never land a resume on a hook-injected `attachment` line, even
+        though such a line is a real chain link (thread 6483/6559/6565). None (default)
+        emits the full latest chain, unchanged. Given, emits a genuine byte-exact PREFIX
+        through that entry — REFUSES (an error dict, nothing written) when `upto` matches
+        no addressable line, never a silent full-chain fallback.
 
         `confess` (default True, no effect when `upto` is None or already the true
         latest): a seek that excludes real, later content is honest only if it SAYS so —
