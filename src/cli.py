@@ -2690,7 +2690,7 @@ async def cmd_amend_decision(
 
 async def cmd_rebind_seat(
     seat_or_agent: str, new_cwd: str, *, actor: str, extract: bool = False,
-    pool: asyncpg.Pool | None = None,
+    because: str = "", force: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rebind-seat <seat> <new_cwd> --actor <who> — the console-script door
     onto mounts.rebind_seat, the SAME function the rebind_seat MCP tool wraps (no duplicated
@@ -2722,7 +2722,7 @@ async def cmd_rebind_seat(
             return 1
     try:
         out = await rebind_seat(Actions(pool), seat_or_agent=seat_or_agent, new_cwd=new_cwd,
-                                actor=actor, extract=extract)
+                                actor=actor, extract=extract, because=because, force=force)
     finally:
         if owns_pool:
             await pool.close()
@@ -3473,6 +3473,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rebind_seat.add_argument("--extract", action="store_true",
                                help="leave a SHARED cwd taking only this lineage's own "
                                     "transcripts, rather than moving the whole project")
+    p_rebind_seat.add_argument("--because", default="",
+                               help="why this seat is moving — the audit reason the MCP "
+                                    "tool takes; a repair with no stated reason is exactly "
+                                    "what this house forbids, so supply it")
+    p_rebind_seat.add_argument("--force", action="store_true",
+                               help="override rebind_seat's own refusals (it refuses loudly "
+                                    "by default) — same flag, same semantics as the MCP tool")
     p_rebind_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
                                help=f"who is performing this rebind — defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
@@ -3666,7 +3673,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_amend_decision(args.ref, args.addendum, actor=args.actor))
     if args.command == "rebind-seat":
         return asyncio.run(cmd_rebind_seat(args.seat, args.new_cwd, actor=args.actor,
-                                           extract=args.extract))
+                                           extract=args.extract, because=args.because,
+                                           force=args.force))
     if args.command == "correct-pin-value":
         return asyncio.run(cmd_correct_pin_value(args.seat, args.key, args.value,
                                                   args.reason))
