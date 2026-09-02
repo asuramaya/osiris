@@ -396,13 +396,28 @@ def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any)
     assert "owe 0" in out[0]
 
 
-def test_statusline_falls_back_to_graph_unreachable_on_route_failure(monkeypatch: Any) -> None:
+def test_statusline_route_failure_reports_the_probe_not_a_diagnosis(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """CONTRACT DELIBERATELY CHANGED, 2026-09-01. This test previously asserted
+    `graph unreachable` — the exact string that sent the operator after osiris-pg while
+    that container had been up 27 hours and the real cause was an osiris-mcp restart from
+    his own deploy. A failed POST is evidence about the PROBE and nothing else, so the
+    render now says so. Kept as a test (not deleted) because the fallback path still must
+    exist, exit 0, and never invent counts.
+
+    Also now ISOLATES THE CACHE: the original read the real ~/.osiris/statusline-cache,
+    so once the cache landed this test's outcome depended on whatever other agents had
+    written — a test that passes or fails on the machine's state, not the code's."""
+    monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
+                        lambda project: tmp_path / "empty" / f"{project}.json")
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
     out = []
     monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
     rc = osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
     assert rc == 0
-    assert "graph unreachable" in out[0]
+    assert "no answer" in out[0]
+    assert "unreachable" not in out[0]
 
 
 def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:
@@ -893,3 +908,107 @@ def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() 
                                           "tool_input": {}}),
                          capture_output=True, text=True, check=False, env=env)
     assert out.stdout.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has
+# to be self-healing over restarts and such"). It made ONE POST on a 1-second budget with
+# no retry and no cache, so any miss — every `osiris deploy` restarts osiris-mcp — painted
+# the bar `graph unreachable`, naming a subsystem that was up the whole time. These prove
+# the three states stay APART: LIVE, STALE (cached, marked), SILENT (nothing known).
+# ---------------------------------------------------------------------------
+
+_COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4,
+           "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0], "resolved_project": "osiris"}
+
+
+def _statusline(monkeypatch: Any, tmp_path: Path, *, answer: Any) -> str:
+    """Render one statusline with `_post` stubbed and the cache redirected into tmp."""
+    monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
+                        lambda project: tmp_path / f"{project}.json")
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: answer() if callable(answer) else answer)
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        osiris_hook._cmd_statusline({"workspace": {"current_dir": "/tmp/x"},
+                                     "model": {"id": "claude-opus-5"}})
+    return buf.getvalue()
+
+
+def test_statusline_live_answer_renders_counts_and_no_stale_marker(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    out = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})
+    assert "fleet 7" in out and "owe 2" in out
+    assert "ago" not in out                # a live answer is never marked stale
+    assert "graph" not in out              # and never carries a failure word
+
+
+def test_statusline_falls_back_to_cache_and_marks_it_rather_than_crying_unreachable(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE OPERATOR'S ACTUAL FAILURE. A miss must render the last good counts with a
+    marker — never `graph unreachable`, which blamed Postgres while it was up 27 hours."""
+    _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})   # warm the cache
+    out = _statusline(monkeypatch, tmp_path, answer=None)            # now the probe misses
+    assert "fleet 7" in out and "owe 2" in out    # last-known-good survives the miss
+    assert "ago" in out                           # ...and is HONESTLY marked as cached
+    assert "unreachable" not in out
+
+
+def test_statusline_marks_a_zero_second_old_cache_as_stale_too(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Gating the marker on the AGE (`if stale_age`) instead of on the SOURCE made a
+    cache written under a second ago render IDENTICALLY to a live answer — collapsing the
+    two states in the very line meant to keep them apart. Caught in live testing, not review."""
+    _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})
+    out = _statusline(monkeypatch, tmp_path, answer=None)
+    assert "0s ago" in out   # age really is 0 here; the marker must still appear
+
+
+def test_statusline_never_caches_the_callers_own_identity(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """The cache file is SHARED by every agent on the project. Caching caller-scoped fields
+    let one seat's bar wear another's name (seen live: a probe from the osiris tree rendered
+    `imhotep·osiris` off Imhotep's row). Counts are the project's; identity is not."""
+    _statusline(monkeypatch, tmp_path,
+                answer={"result": {**_COUNTS, "resolved_seat_handle": "imhotep",
+                                   "resolved_intent": "claude-opus-5"}})
+    # Find the file by GLOB, not by guessing its name: the cache key comes from
+    # read_project_label(cwd), a real filesystem pin-climb, so hard-coding "osiris.json"
+    # asserted a resolution this test never controls.
+    written = list(tmp_path.glob("*.json"))
+    assert len(written) == 1, f"expected exactly one cache file, got {written}"
+    cached = json.loads(written[0].read_text())["payload"]
+    assert "resolved_seat_handle" not in cached
+    assert "resolved_intent" not in cached
+    assert cached["souls"] == 7          # the shared counts DO survive
+
+
+def test_statusline_with_no_answer_and_no_cache_says_only_what_it_knows(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """SILENT: never invent zeroed counts (a confident `owe 0` is worse than silence), and
+    never name a subsystem this probe cannot see. It knows one thing: it got no answer."""
+    out = _statusline(monkeypatch, tmp_path, answer=None)
+    assert "no answer" in out
+    assert "unreachable" not in out
+    assert "owe 0" not in out            # absence of data is NOT a count of zero
+
+
+def test_statusline_retries_once_before_giving_up(monkeypatch: Any, tmp_path: Path) -> None:
+    """A restarting server is back within seconds; the retry is what makes a deploy
+    invisible to the operator instead of a red bar on every live agent."""
+    calls: list[int] = []
+
+    def _flaky() -> Any:
+        calls.append(1)
+        return {"result": _COUNTS} if len(calls) > 1 else None
+
+    out = _statusline(monkeypatch, tmp_path, answer=_flaky)
+    assert len(calls) == 2               # first missed, second landed
+    assert "fleet 7" in out and "ago" not in out   # and it counts as LIVE, not stale
