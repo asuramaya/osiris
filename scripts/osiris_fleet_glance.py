@@ -5,7 +5,16 @@ Atlas seat ran blind: no ambient mail count, no fleet pulse, no model-vs-intent 
 This prints the SAME vitals osiris_hook.py's `statusline` subcommand renders (the
 per-purpose osiris_statusline.py it once named was retired at the hook migration,
 dispatch 5441/5599), as plain text on demand (the honest trade: no refresh interval, the
-mind or the operator invokes it — the office's /fleet skill wraps exactly this script).
+mind or the operator invokes it by hand).
+
+NOT wrapped by /fleet (checked directly, 2026-09-02, Thoth msg 6336: .claude/commands/fleet.md
+calls the `fleet`/`fleet_digest` MCP tools, never this script — an earlier version of this
+docstring claimed otherwise and was wrong). DEAD AS A PROGRAM, LIVE AS A PRECEDENT: no systemd
+unit or CLI subcommand runs it today, but osiris_retention_reaper/osiris_pg_autotune/
+osiris_smoke/osiris_preflight and pool_health.py all cite it BY NAME for its deferred-import
+pattern and the `job:%` sick-job convention — deleting it orphans those citations. It stays for
+#97's stranger's test: the vendor-neutral arrival with no statusline and no MCP surface still
+needs a plain-text door, idle until the day it isn't.
 
 ONE AUTHORITY PER FACT (operator ruling 2026-07-19): every count comes from the shared
 formulas in src/orchestrator/{mailbox,vitals} and src/orchestrator/ceiling — the same
