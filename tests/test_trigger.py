@@ -3958,13 +3958,13 @@ async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt
     assert "job_dir" not in call  # env vars never reach a --bg spare either (same finding)
     # THE BOOT PROMPT IS A STATEMENT, NOT AN INSTRUCTION (Piece 1, Thoth dispatch msg 6692,
     # d161a156 one layer up): identity is bound SERVER-SIDE, before the body exists —
-    # `_bind_before_spawn` minted agent:hw01-ii (the heir of _managed_pair's own
-    # worker_agent="agent:hw01") and pre-registered its anchor row, so the fresh session's
-    # own mount() call re-attaches directly. claim_name never appears — the Marquee
-    # specimen showed a fresh session asked to re-derive its own binding through that
-    # fallible call can refuse and mint a phantom instead.
+    # `_bind_before_spawn` minted the seat's own next generation and pre-registered its
+    # anchor row, so the fresh session's own mount() call re-attaches directly. claim_name
+    # never appears — the Marquee specimen showed a fresh session asked to re-derive its
+    # own binding through that fallible call can refuse and mint a phantom instead. (The
+    # exact heir id here is `_managed_pair`'s own fixture shortcut's business — see
+    # test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage for the precise id.)
     assert "/tmp/sobek" in call["prompt"]
-    assert "agent:hw01-ii" in call["prompt"]
     assert "Sobek" in call["prompt"]
     assert "claim_name" not in call["prompt"]
 
@@ -3975,32 +3975,58 @@ async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt
 # (alive=False) anchor row either way so the spawned session's own mount() re-attaches
 # directly instead of needing claim_name. ═══════════════════════════════════════════════
 
-async def test_bind_before_spawn_mints_an_heir_of_the_seats_recorded_holder(
+async def test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage(
     actions: Actions,
 ) -> None:
-    """THE MARQUEE SHAPE: a seat with a real, recorded (but not live) holder. Reuses
-    mint_heir outright — next generation, succeeds_seat edge, and (via mint_heir's own
-    follow_binding) the seat's holds link moved onto the heir, all before any process
-    exists."""
+    """The ordinary case: the seat's handle-assertion source AND its `holds` edge agree on
+    the same lineage. Reuses mint_heir outright — next generation, succeeds_seat edge — and
+    the seat's holds link ends up on the heir (via the explicit bind_holder call, not left
+    to mint_heir's own follow_binding alone — see the disagreement test below for why)."""
     seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
-                                 source="test"))["seat_id"]
-    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9-xi")
+                                 source="agent:38cf08a9"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
 
     out = await trigger_module._bind_before_spawn(
         actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
-        current_holder="agent:38cf08a9-xi", office="/tmp/marquee",
+        current_holder="agent:38cf08a9", office="/tmp/marquee",
         anchor="/tmp/anchors/marquee", source="agent:thoth01")
 
-    assert out["agent"] == "agent:38cf08a9-xii"
-    assert out["generation"] == 12
-    # the seat's holds link followed the mint onto the heir — no separate bind_holder call
-    # needed, and no stray Seat/Agent/SoftwareProject minted alongside it (the phantom shape
-    # this whole dispatch exists to close).
+    assert out["agent"] == "agent:38cf08a9-ii"
+    assert out["generation"] == 2
     row = await actions.pool.fetchrow(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
-    assert row["canonical"] == "agent:38cf08a9-xii"
+    assert row["canonical"] == "agent:38cf08a9-ii"
+
+
+async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds_edge(
+    actions: Actions,
+) -> None:
+    """THE MARQUEE SPECIMEN, REPRODUCED DIRECTLY (Thoth's own correction, msg 6694,
+    measured against the real seat): a seat's `handle` assertion is sourced from ONE
+    lineage — the mind that actually built the seat — while its `holds` edge names an
+    UNRELATED agent that contributed nothing else (a corrupted/stale binding, cold means
+    'held, nobody live', not 'held by the right mind'). Resolving generation math from
+    `holds` would mint the wrong lineage's next generation while LOOKING like success (no
+    new objects minted, just the wrong ancestor) — the exact bug Thoth's own dispatch named
+    as the load-bearing requirement. The lineage wins; the stale holds edge gets corrected
+    as a byproduct of the SAME act, through the same named verb, never a hand write."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="agent:realmind"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:staleholder")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:staleholder", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    assert out["agent"] == "agent:realmind-ii"  # the LINEAGE's next gen, not staleholder's
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:realmind-ii"  # the stale edge is corrected, not left
 
 
 async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattaches(
@@ -4014,12 +4040,12 @@ async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattache
     from src.orchestrator.mounts import find_mount
 
     seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
-                                 source="test"))["seat_id"]
-    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9-xi")
+                                 source="agent:38cf08a9"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
 
     out = await trigger_module._bind_before_spawn(
         actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
-        current_holder="agent:38cf08a9-xi", office="/tmp/marquee",
+        current_holder="agent:38cf08a9", office="/tmp/marquee",
         anchor="/tmp/anchors/marquee", source="agent:thoth01")
 
     rec = await find_mount(actions.pool, job_dir="/tmp/anchors/marquee")
@@ -4034,11 +4060,11 @@ async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattache
 async def test_bind_before_spawn_mints_a_first_generation_when_the_seat_was_never_held(
     actions: Actions,
 ) -> None:
-    """No ancestor exists — mint_heir has nothing to mint an heir OF, so this mints a bare
-    first generation directly, under the same `agent:seat-<id>` root every pure-seat-office
-    lineage already carries."""
-    seat_id = (await ensure_seat(actions, house="freshhouse", handle="Freshling",
-                                 source="test"))["seat_id"]
+    """No ancestor exists — the seat has no `handle` assertion at all (nothing lineage-side
+    to read) and no `holds` edge — so this mints a bare first generation directly, under the
+    same `agent:seat-<id>` root every pure-seat-office lineage already carries."""
+    seat_id = "seat:freshling01"
+    await actions.create_or_find_object("Seat", seat_id, "test")  # bare: no handle asserted
 
     out = await trigger_module._bind_before_spawn(
         actions, target_seat=seat_id, handle="Freshling", house="freshhouse",

@@ -2435,17 +2435,38 @@ async def _bind_before_spawn(
 
     ANCESTOR CASE (the ordinary one): reuses `mint_heir` outright rather than duplicating
     its own hard-won mechanics — grave-avoidance, the succeeded_by/succeeded_from chain,
-    handle inheritance, and (via `follow_binding`, already inside mint_heir) re-linking
-    every Seat the ancestor holds onto the heir. `launch_seat` only reaches this fresh-mint
-    branch after confirming the current holder is NOT live (a live holder refuses the whole
-    launch, above) — so `current_holder`, when present, is always a real ancestor to mint
-    the next generation of, never a stale guess.
+    handle inheritance. The ancestor is resolved from THE SEAT'S OWN LINEAGE, never from
+    `current_holder` (the `holds` edge) directly (Thoth's own correction, msg 6694, measured
+    against Marquee: 11 generations of the seat's own substantive properties — handle,
+    house, intended_model — all sourced from lineage agent:38cf08a9, and exactly ONE
+    disagreeing edge, `holds`, naming an unrelated agent that built none of the rest). A
+    COLD seat's `holds` edge can go stale without the seat itself being wrong — the defect
+    is resolving generation math FROM that edge instead of walking the lineage that actually
+    built the seat. `_seat_lineage_ancestor` reads the seat's own `handle` assertion's
+    SOURCE (the property least likely to ever be written by a lineage that isn't genuinely
+    this seat's own) and walks it forward via `lineage_head` to the TRUE current generation
+    — the same succeeded_by walk fork resolution and mailbox routing already trust. Falls
+    back to `current_holder` only when the seat has no handle assertion at all (nothing
+    lineage-side to read yet — a seat still using the pre-Seat-object binding, or a launch
+    racing its own first-ever claim). Either way, `bind_holder` is called EXPLICITLY below,
+    never left to mint_heir's own `follow_binding` alone — a corrected-lineage ancestor may
+    not itself hold `target_seat` (Marquee's own 38cf08a9-xi doesn't; 226a2695-ii does), so
+    follow_binding would move nothing. This is deliberately the SAME act that corrects a
+    stale `holds` edge, sequenced to happen only when a real launch actually runs, through
+    this named verb, with the reasoning recorded on the heir — never a hand-write.
 
-    NO-ANCESTOR CASE (a seat truly never claimed): `mint_heir` has nothing to mint an heir
-    OF, so this mints a bare first generation directly, under the same `agent:seat-<id>`
-    root every pure-seat-office lineage already carries (my own root, `agent:seat-af50a33e`,
-    is one) — a deterministic, collision-free identity derived from the seat itself, never
-    invented from a transcript that does not exist yet.
+    NO-ANCESTOR CASE (a seat truly never described, no handle assertion, no holder): mints
+    a bare first generation directly, under the same `agent:seat-<id>` root every pure-seat-
+    office lineage already carries (my own root, `agent:seat-af50a33e`, is one) — a
+    deterministic, collision-free identity derived from the seat itself, never invented from
+    a transcript that does not exist yet.
+
+    HOUSE, NOT GOVERNS (Thoth's own flag, msg 6694, a separate axis, not this dispatch's to
+    chase): a seat's `house` property can be stale label residue after a project fold
+    (Marquee's own case: `house`='dealer-to-fb', `governs`->'dtfb', the merged live name) —
+    `house` here is `launch_seat`'s own caller-supplied param, unchanged from before this
+    dispatch; this function does not re-derive it, on purpose, so it carries forward exactly
+    whatever staleness already existed rather than silently fixing a different bug in passing.
 
     THE PRE-REGISTRATION IS WHAT MAKES claim_name UNNECESSARY: `save_mount(..., alive=False)`
     seeds the launch anchor's own durable row BEFORE the process exists, so the spawned
@@ -2460,10 +2481,11 @@ async def _bind_before_spawn(
     from src.orchestrator.seats import bind_holder
 
     now = datetime.now(UTC)
-    if current_holder:
-        ancestor_oid = await actions.create_or_find_object("Agent", current_holder, source)
+    ancestor = await _seat_lineage_ancestor(actions.pool, target_seat) or current_holder
+    if ancestor:
+        ancestor_oid = await actions.create_or_find_object("Agent", ancestor, source)
         heir_id, _heir_oid = await mint_heir(
-            actions, current_holder, ancestor_oid,
+            actions, ancestor, ancestor_oid,
             because="launch_seat: bind-before-spawn (piece 1, msg 6692)", succession=None,
             now=now, minting_door=anchor, upcoming_project=house)
     else:
@@ -2482,10 +2504,35 @@ async def _bind_before_spawn(
                                       evidence_class=do.value)
         await actions.assert_property(heir_oid, "seat_generation", "1", source, now, conf,
                                       evidence_class=do.value)
-        await bind_holder(actions, seat_id=target_seat, agent_id=heir_id, source=source)
+    # EXPLICIT, ALWAYS — never left to mint_heir's own follow_binding alone (see docstring:
+    # a corrected-lineage ancestor may not itself hold `target_seat` yet). Idempotent
+    # (bind_holder checks for an already-live identical link before writing) so this is a
+    # no-op when follow_binding already did the work, and the actual correction when it
+    # didn't.
+    await bind_holder(actions, seat_id=target_seat, agent_id=heir_id, source=source)
     await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id, project=house,
                      cwd=office, model=None, session_key=None, alive=False)
     return {"agent": heir_id, "generation": _generation(heir_id)[1]}
+
+
+async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """The generation to mint `_bind_before_spawn`'s heir OF — resolved from the seat's OWN
+    lineage, never from its `holds` edge (Thoth's correction, msg 6694). Reads the seat's own
+    `handle` assertion's source_id (the property least likely to ever be written by a
+    lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
+    (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
+    trust) to the TRUE current generation. None when the seat carries no handle assertion at
+    all — nothing lineage-side to read yet."""
+    source = await pool.fetchval(
+        "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
+        "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
+        "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+    if not source:
+        return None
+    from src.orchestrator.agents import _generation, lineage_head
+
+    base = _generation(str(source))[0]
+    return await lineage_head(pool, base)
 
 
 def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
