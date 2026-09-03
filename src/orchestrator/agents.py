@@ -517,6 +517,67 @@ def seat_label(canonical: str, handle: str | None, generation: int | None = None
 # Soundwave's 8th mind). Claiming it as a handle forks the lineage — see claim_name.
 _SEAT_SUFFIX = re.compile(r"[\s_-]+(?:[IVXLC]+)\s*$", re.IGNORECASE)
 
+
+async def _anchor_names_a_seat(
+    pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
+) -> tuple[str, str] | None:
+    """(seat_id, handle) the CALLER'S OWN anchor — the freshest `agent_mounts` row's cwd
+    or job_dir — names, or None when neither points at a real, existing Seat.
+
+    THE MARQUEE SPECIMEN (Thoth dispatch 6693, porting #48's refusal gate — ruling
+    120fcc81 — to the name-claim path): a session spawned into ~/.osiris/seats/marquee,
+    carrying job_dir seat-bdbe031e, asked `claim_name("Marquee")`. The name was correctly
+    refused (held by a different lineage) — but the CALLER then picked a fallback name,
+    "Awning", and THAT claim succeeded cleanly: no conflict existed for "Awning", so
+    nothing in `claim_name` itself knew the caller was sitting in Marquee's own office at
+    the time. #48's own gate guards arrival-with-no-identity; nothing guarded arrival-
+    with-a-refused-identity-that-then-invents-one. This function is the missing check:
+    it names WHICH seat (if any) the caller's own location claims to be, independent of
+    whatever name string it happens to pass — `claim_name` compares the two and refuses
+    the whole call, not just the specific collided name, when they disagree.
+
+    TWO ANCHOR SHAPES, either sufficient: (1) cwd is a seat's own office — `<office_root>/
+    <handle>`, the SAME convention `offices.seat_office_target` derives (office_root
+    defaults identically) — checked via `seats_by_handle` so an exact, unambiguous seat
+    is required (a twin — 2+ seats sharing the handle — is a SEPARATE, pre-existing
+    ambiguity this function declines to adjudicate, same as `claim_name`'s own twin
+    guard just above: returns None, deferring to whatever already handles that). (2)
+    job_dir is a `--bg`-launched seat's own durable per-seat anchor (`trigger.
+    _launch_anchor`'s convention, `.../jobs/seat-<id>`) — its basename starting with
+    'seat-' reconstructs to the canonical `seat:<id>`, verified against a real active
+    Seat rather than trusted blind (a malformed or stale job_dir must never manufacture
+    a seat that doesn't exist)."""
+    row = await pool.fetchrow(
+        "SELECT cwd, job_dir FROM agent_mounts WHERE agent_id=$1 "
+        "ORDER BY last_seen DESC LIMIT 1", agent_id)
+    if row is None:
+        return None
+    root = office_root or _default_office_root()
+    cwd, job_dir = row["cwd"], row["job_dir"]
+    if cwd:
+        p = Path(cwd)
+        if p.parent == root:
+            from src.orchestrator.seats import seat_facts, seats_by_handle
+            matches = await seats_by_handle(pool, p.name)
+            if len(matches) == 1:
+                facts = await seat_facts(pool, matches[0])
+                if facts.get("handle"):
+                    return matches[0], str(facts["handle"])
+    if job_dir:
+        base = Path(job_dir).name
+        if base.startswith("seat-"):
+            candidate = f"seat:{base[len('seat-'):]}"
+            exists = await pool.fetchval(
+                "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' "
+                "AND status='active'", candidate)
+            if exists:
+                from src.orchestrator.seats import seat_facts
+                facts = await seat_facts(pool, candidate)
+                if facts.get("handle"):
+                    return candidate, str(facts["handle"])
+    return None
+
+
 async def claim_name(
     actions: Actions, agent_id: str, name: str, *, source: str,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
@@ -557,6 +618,29 @@ async def claim_name(
         return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
                          f"and the substrate assigns it. Claim '{bare}' if that lineage is "
                          "yours to continue; otherwise pick a name of your own."}
+    # A MIS-RESOLUTION MUST REFUSE THE WHOLE CALL, NOT JUST THE COLLIDED NAME (Thoth
+    # dispatch 6693, porting #48's refusal gate to this path — the Marquee specimen: a
+    # session anchored in Marquee's own office/job_dir got refused claiming "Marquee",
+    # then successfully claimed "Awning" instead, minting a stranger where it already
+    # had a home). When the caller's OWN anchor names a real seat, this claim is only
+    # ever legitimate as a claim OF that seat's own name — any other name, however
+    # unconflicted on its own, is a mint the caller has no business making. #48's own
+    # third state stays distinct here too: a caller with no anchor match at all (a
+    # genuine visitor, or an anchor that names nothing) is unaffected and falls through
+    # to the ordinary uniqueness checks below.
+    anchor = await _anchor_names_a_seat(actions.pool, agent_id)
+    if anchor is not None:
+        mismatch_seat_id, anchor_handle = anchor
+        if (bare or name).lower() != anchor_handle.lower():
+            return {"error": f"MIS-RESOLUTION, NOT A STRANGER COLLISION — refusing the "
+                             f"whole claim, no writes: your own anchor (the office/"
+                             f"job_dir this session is actually running in) already "
+                             f"names seat {anchor_handle!r} ({mismatch_seat_id}). Claiming "
+                             f"{name!r} instead would mint a stranger where you already "
+                             f"have a home. If {anchor_handle!r} is genuinely yours, "
+                             f"claim THAT name; if it isn't, this session's own identity "
+                             "resolution is wrong and needs fixing before any name "
+                             "claim — never routed around by picking a different one."}
     # GLOBAL FIRST, HOUSE-SCOPED ONLY WHEN GENUINELY NEW (thread cb374585): a real,
     # unambiguous seat for this handle can be VACANT (no holder to disagree with a stale
     # house guess) — find_seat's own (house, handle) lookup silently misses it whenever the
