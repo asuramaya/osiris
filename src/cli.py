@@ -332,10 +332,18 @@ def diff_tool_lists(before: dict[str, str], after: dict[str, str]) -> list[str]:
            + [f"~{n} changed" for n in changed])
 
 
-async def cmd_smoke(*, chaos: bool = False) -> int:
+async def cmd_smoke(*, chaos: bool = False, as_json: bool = False) -> int:
+    """`as_json` (Thoth dispatch 6746, specimen A): never chaos's own path — `--chaos`
+    runs a longer-lived, separate probe (`cmd_smoke_chaos`) with its own text-only
+    receipt, untouched here; the ordinary probe's `fails`/`warnings` are already
+    `list[str]`, trivially JSON-serializable."""
     if chaos:
         return await cmd_smoke_chaos()
     fails, warnings = await _run_smoke_probes_full()
+    if as_json:
+        from src import cli_render as render
+        render.emit({"fails": fails, "warnings": warnings}, as_json=True)
+        return 0 if not fails else 1
     if not fails:
         print("smoke: all green (8 chrome routes + the live mcp pool)")
     else:
@@ -447,13 +455,18 @@ async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
 
 # --- boot-status -------------------------------------------------------------------------------
 
-async def cmd_boot_status(*, pool: asyncpg.Pool | None = None) -> int:
+async def cmd_boot_status(*, pool: asyncpg.Pool | None = None, as_json: bool = False) -> int:
     """Report-only rollout check (thread 0e5bae06, #84) — names every active seat NOT
     carrying a compiled managed section, classified by why, same shape as
     `composition_gap_notes`: a build isn't done when its acceptance test passes, it's
     done when the effect reaches every office, and 'reached most of them' is a gap this
     prints by name, never a count that can read clean while 19 offices are silently
-    unreached."""
+    unreached.
+
+    `as_json` (Thoth dispatch 6746, specimen A): the CLI's own top-level help claims
+    "Every read verb takes --json" for this verb's own displayed group — this used to be
+    false. `gaps` is already `list[dict[str, str]]`, trivially JSON-serializable; no
+    second data shape invented for the machine path."""
     from src.orchestrator.boot_compiler import boot_rollout_gap_notes, boot_rollout_gaps
 
     owns_pool = pool is None
@@ -477,6 +490,10 @@ async def cmd_boot_status(*, pool: asyncpg.Pool | None = None) -> int:
     finally:
         if owns_pool:
             await pool.close()
+    if as_json:
+        from src import cli_render as render
+        render.emit({"gaps": gaps}, as_json=True)
+        return 1 if gaps else 0
     if not gaps:
         print("boot: every active seat carries a compiled managed section")
         return 0
@@ -2414,12 +2431,15 @@ async def cmd_unmerge(
     finally:
         if owns_pool:
             await pool.close()
-    if "error" in out:
-        print(f"osiris unmerge: refused — {out['error']}", file=sys.stderr)
-        return 1
     from src import cli_render as render
+
+    # THE --json PROMISE HELD ON THE REFUSAL PATH TOO (Thoth dispatch 6746, specimen B):
+    # this used to short-circuit with a bare stderr print BEFORE reaching render.emit
+    # below, so `--json` was silently ignored on exactly the path a script most needs
+    # it. Same shape as cmd_show's own error handling — emit unconditionally, exit code
+    # carries the verdict.
     render.emit(out, as_json=as_json, title="unmerge")
-    return 0
+    return 1 if "error" in out else 0
 
 
 async def cmd_retention(
@@ -3365,11 +3385,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="crash replay: kill osiris-mcp/osiris-worker hard, fire a concurrent "
              "session-end storm, restart, then assert system invariants still hold "
              "under a real crash, never just a graceful restart")
+    p_smoke.add_argument("--json", action="store_true", dest="as_json",
+                         help="machine-readable: one compact JSON line. Never chaos's "
+                              "own path (--chaos runs a separate, longer-lived probe "
+                              "with its own text receipt) — the ordinary probe only")
 
-    sub.add_parser("boot-status", description=_d(
+    p_boot_status = sub.add_parser("boot-status", description=_d(
         "name every active seat with no compiled managed section, "
                                "classified by why (report-only; exit 1 if any)"),
                    epilog="example: osiris boot-status")
+    p_boot_status.add_argument("--json", action="store_true", dest="as_json",
+                               help="machine-readable: one compact JSON line")
 
     p_seed = sub.add_parser("seed", description=_d("seed default compositions (and rooms)"),
                             epilog="example: osiris seed\nexample: osiris seed "
@@ -3810,9 +3836,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "attach":
         return asyncio.run(cmd_attach(args.handle))
     if args.command == "smoke":
-        return asyncio.run(cmd_smoke(chaos=args.chaos))
+        return asyncio.run(cmd_smoke(chaos=args.chaos, as_json=args.as_json))
     if args.command == "boot-status":
-        return asyncio.run(cmd_boot_status())
+        return asyncio.run(cmd_boot_status(as_json=args.as_json))
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
