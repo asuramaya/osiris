@@ -2803,7 +2803,7 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
 
 
 async def _launch_twin_check(
-    pool: asyncpg.Pool, agents_json: Any, launch_cwd: str,
+    pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
 ) -> dict[str, Any] | None:
     """THE SHARED TWIN GUARD, reused by BOTH launch doors (ruling 983ec87a, "two doors, one
     receipt") — the harness-native launch lane's own idempotency check used to consult ONLY
@@ -2824,7 +2824,17 @@ async def _launch_twin_check(
     None). Both present is not treated as more ambiguous than either alone: two live-looking
     signals for the same cwd both mean the same thing (don't mint), so both are reported and
     both refuse the same way — there is no genuinely ambiguous case here to invent a third
-    verdict for, only ONE OR THE OTHER OR NEITHER, and this reports exactly which."""
+    verdict for, only ONE OR THE OTHER OR NEITHER, and this reports exactly which.
+
+    BY LINEAGE TOO, NOT ONLY BY CWD (operator, 2026-09-03 — the office ruling's own
+    hazard): the moment a seat's spawn location moves (tree_cwd rebound off a fabricated
+    ~/code/<handle>, resume now spawning at the office), a body of the SAME seat still
+    sitting at the OLD cwd is invisible to a cwd-keyed check, and the next launch/resume
+    forks the mind. With `seat_id`, this also reads the seat's current holder lineage:
+    any harness row whose sessionId is one of the lineage's own graph sessions, or any
+    live agent_mounts row for the lineage, at ANY cwd, refuses the same way. Jesus's live
+    shape tonight: its real mind sat at ~/code/jesus while the seat's launch cwd had just
+    become ~/code/REPOS/Godel — the cwd check saw nothing there."""
     try:
         roster = await agents_json(cwd=launch_cwd)
     except (OSError, TimeoutError, ValueError):
@@ -2834,12 +2844,38 @@ async def _launch_twin_check(
     from_mounts_row = await pool.fetchrow(
         "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
         "ORDER BY last_seen DESC NULLS LAST LIMIT 1", launch_cwd)
+    from src.orchestrator.mounts import is_live
     from_mounts = None
     if from_mounts_row is not None and from_mounts_row["last_seen"] is not None:
-        from src.orchestrator.mounts import is_live
         if is_live(from_mounts_row["last_seen"]):
             from_mounts = {"agent_id": from_mounts_row["agent_id"],
                            "last_seen": from_mounts_row["last_seen"].isoformat()}
+    if seat_id and from_harness is None and from_mounts is None:
+        from src.orchestrator.agents import _generation
+        from src.orchestrator.seats import seat_receipt
+        from src.orchestrator.succession import succession_chain
+        holder = ((await seat_receipt(pool, seat_id)) or {}).get("holder")
+        if holder:
+            root = _generation(holder)[0]
+            sessions = {str(h["session"]) for h in await succession_chain(pool, holder)
+                        if h.get("session")}
+            try:
+                everywhere = await agents_json()
+            except (OSError, TimeoutError, ValueError):
+                everywhere = []
+            from_harness = next(
+                (r for r in everywhere if isinstance(r, dict)
+                 and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
+                None)
+            lineage_row = await pool.fetchrow(
+                "SELECT agent_id, last_seen, cwd FROM agent_mounts "
+                "WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
+                "ORDER BY last_seen DESC NULLS LAST LIMIT 1", root)
+            if (lineage_row is not None and lineage_row["last_seen"] is not None
+                    and is_live(lineage_row["last_seen"])):
+                from_mounts = {"agent_id": lineage_row["agent_id"],
+                               "last_seen": lineage_row["last_seen"].isoformat(),
+                               "cwd": lineage_row["cwd"]}
     if from_harness is None and from_mounts is None:
         return None
     return {"harness": from_harness, "mounts": from_mounts}
@@ -3109,7 +3145,7 @@ async def launch_seat(
         # process already sitting there IS its body, whatever session id the harness gave it.
         # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
         # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
-        twin = await _launch_twin_check(pool, agents_json, launch_cwd)
+        twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat)
         if twin is not None:
             seen_via = [s for s in (
                 f"claude agents --json ({twin['harness'].get('name')!r})"

@@ -3944,3 +3944,57 @@ async def test_cmd_bootstrap_proceeds_when_database_url_is_already_set(
 
     assert out == 0
     assert "project=some-project" in buf.getvalue()
+
+
+async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_another_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE OFFICE RULING'S OWN HAZARD (2026-09-03): when a seat's spawn location moves
+    (a rebound tree, resume now spawning at the office), a body of the SAME seat still
+    sitting at the OLD cwd was invisible to the cwd-keyed twin check, and the next launch
+    forked the mind. The twin guard now also reads the holder lineage — a live
+    agent_mounts row for the lineage at ANY cwd reads as already-live (exit 0, nothing
+    spawned). Negative control: a stale row (not live) lets the launch proceed."""
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from src.orchestrator import mounts
+    from src.orchestrator.seats import bind_holder
+
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="clilineagetwin",
+                             anchor_cwd=str(office), source="test")
+    await actions.create_or_find_object("Agent", "agent:1ineage1", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:1ineage1",
+                      source="test")
+    # the seat's real mind, live RIGHT NOW, but at a cwd that is not the launch cwd
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "1ineage1"),
+                            agent_id="agent:1ineage1-ii", project="demo",
+                            cwd="/home/x/code/somewhere-else", model=None, session_key=None)
+
+    async def _empty(*a: Any, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    spawned: list[str] = []
+
+    async def _spawn(cwd: str, **k: Any) -> None:
+        spawned.append(cwd)
+
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    with redirect_stdout(out_buf), redirect_stderr(err_buf):
+        out = await cmd_launch("clilineagetwin", model=None, pool=actions.pool,
+                               spawn=_spawn, agents_json=_empty)
+    assert out == 0
+    assert spawned == []
+    assert "already-live" in out_buf.getvalue()
+    assert "agent:1ineage1-ii" in err_buf.getvalue()
+
+    # NEGATIVE CONTROL: the same row gone stale is no twin — the launch proceeds
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 day' "
+        "WHERE agent_id='agent:1ineage1-ii'")
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        await cmd_launch("clilineagetwin", model=None, pool=actions.pool,
+                         spawn=_spawn, agents_json=_empty)
+    assert spawned == [str(office)]

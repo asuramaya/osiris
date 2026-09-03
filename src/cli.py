@@ -714,7 +714,7 @@ async def _resolve_and_guard_launch(
     # — invisible to a resumed non-bg body by construction) AND agent_mounts (osiris's own
     # registry, which a resumed body's mid-turn mount() call DOES reach), same helper
     # launch_seat's own harness-native lane calls, so the two doors can never drift.
-    twin = await _launch_twin_check(pool, agents_json, launch_cwd)
+    twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"])
     if twin is not None:
         seen_via = [s for s in (
             f"claude agents --json ({twin['harness'].get('name')!r})"
