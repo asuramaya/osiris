@@ -4716,6 +4716,84 @@ async def test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_
     assert len(resumed) == 1 and resumed[0].get("resume_session") == FULL_SID
 
 
+async def test_lineage_resume_candidate_returns_hop_explicitly_not_via_log_length(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Regression for the #200 residual (Thoth dispatch 6786/6792, decision 6a0b1236/
+    6d6bf4e8 — the live Marquee specimen). A materialize refusal appends a SECOND log
+    line for the SAME winning hop ("materialize refused — a LIVE transcript exists at
+    the target") — a caller that derived hop via `len(log) - 1` on the documented
+    one-line-per-hop assumption would miscount a genuine hop-0 candidate as hop 1,
+    silently denying it `_zero_hop_graph_corroborates`'s own zero-hop fallback.
+    `_lineage_resume_candidate` must return the hop NUMBER directly (the tuple's 6th
+    field) so no caller ever has to re-derive it from log shape again."""
+    import os
+    import time as _time
+
+    sense = await _lineage_holder_with_unsigned_session(
+        actions, tmp_path, agent_id="agent:hopcount1")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hopcount1", manager_agent="agent:hm-hopcount",
+        worker_handle="HopCount-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/hopcount-test")
+
+    from src.orchestrator.mounts import _harness_slug
+    from src.orchestrator.offices import _default_office_root
+
+    office = str(_default_office_root() / "hopcount-test")
+    dest_dir = sense / _harness_slug(office)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{FULL_SID}.jsonl"
+    # SAME CONTENT as the fixture's real transcript (sense/-repo-demo/{FULL_SID}.jsonl) —
+    # discovery's own glob (locate_current_transcript, `*/*.jsonl` root-wide, newest-mtime-
+    # wins among same-stem anchors) will find WHICHEVER of the two this test's own future
+    # mtime makes newest; garbage content there would break ingestion itself rather than
+    # exercising the materialize-refusal path this test is actually after. Byte-identical
+    # to Marquee's own live specimen too — the stray file blocking rematerialize there was
+    # a genuine full copy, not a stub.
+    dest.write_bytes((sense / "-repo-demo" / f"{FULL_SID}.jsonl").read_bytes())
+    future = _time.time() + 3600  # newer than any last_ingested_at the store will record
+    os.utime(dest, (future, future))
+
+    st = _settings(enabled=True, sense=str(sense))
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:hopcount1", st, repo="/tmp/hopcount-test",
+        seat_id=worker_seat)
+
+    assert isinstance(outcome, tuple)
+    candidate, log = outcome
+    assert len(log) == 2  # the resumable line, THEN the materialize-refusal line
+    assert "resumable, 0 hop(s) back" in log[0]
+    assert "materialize refused" in log[1]
+    assert candidate[5] == 0  # THE FIX: read directly, never len(log) - 1 (which is 1, wrong)
+    assert candidate[4] is None  # materialized_at — refused, so no office to spawn into
+
+
+async def test_lineage_resume_candidate_hop_still_zero_for_an_ordinary_single_line_hop(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Negative control for the fix above: the ordinary case (materialize succeeds, one
+    log line per hop) must still report hop=0 correctly — proving the explicit field is
+    right for the common shape too, not only the two-line specimen."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:hopcount2")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hopcount2", manager_agent="agent:hm-hopcount2",
+        worker_handle="HopCount2-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/hopcount2-test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:hopcount2", st, repo="/tmp/hopcount2-test",
+        seat_id=worker_seat)
+
+    assert isinstance(outcome, tuple)
+    candidate, log = outcome
+    assert len(log) == 1
+    assert candidate[5] == 0
+    assert candidate[4] is not None  # materialized_at — succeeded this time
+
+
 async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
     actions: Actions, tmp_path: Path,
 ) -> None:

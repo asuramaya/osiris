@@ -1006,13 +1006,14 @@ async def _cmd_resume_harness(
         # should be loud, never a quiet skip of the identity gate.
         assert holder is not None
         # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
-        # 983ec87a, two doors must return the same receipt): the SAME arithmetic
-        # _lineage_resume_candidate's own success line renders ("...resumable, N hop(s)
-        # back") — its log always ends with exactly one success entry when `resume` is
-        # set, so the count of entries BEFORE it is N.
+        # 983ec87a, two doors must return the same receipt): READ DIRECTLY off `resume`'s
+        # own 6th field now (task #200 residual, decision 6a0b1236/6d6bf4e8) — never
+        # re-derived from `len(resume_log) - 1`, which silently miscounts whenever
+        # `_lineage_resume_candidate` appends a second log line for the winning hop (e.g.
+        # a materialize refusal).
         gate, refusal = await _resume_guard(
             pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
-            seat_id=facts["seat_id"], st=st, hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+            seat_id=facts["seat_id"], st=st, hop=resume[5], launch_cwd=launch_cwd)
         if gate == "resident-unknown":
             # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
             # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an

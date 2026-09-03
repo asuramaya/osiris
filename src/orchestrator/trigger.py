@@ -1273,7 +1273,7 @@ async def wake_gate_preflight(
                 g_gate, g_refusal = await _resume_guard(
                     pool, (graph_resume[0], graph_resume[1], graph_resume[2],
                           graph_resume[3]), _generation(target)[0], seat_id=seat_id,
-                    st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
+                    st=st, hop=graph_resume[5], launch_cwd=launch_cwd)
                 if g_gate is None:
                     return {"mode": "resumable", "status": "resumable",
                             "detail": f"resumable now via the lineage walk — session "
@@ -1323,7 +1323,7 @@ async def wake_gate_preflight(
 async def _lineage_resume_candidate(
     pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
     seat_id: str | None = None, materialize: bool = True,
-) -> tuple[tuple[str, str, float, str, str | None], list[str]] | list[str]:
+) -> tuple[tuple[str, str, float, str, str | None, int], list[str]] | list[str]:
     """THE STRUCTURAL FIX for a live-fire defect (Thoth, 2026-08-04, msg 3691 — Sekhmet):
     `_agent_resumable`/`wakeable_identity` resolve a resume candidate through
     `agent_mounts.job_dir`, which works for a `-p --resume`-triggered wake (a fresh,
@@ -1382,8 +1382,19 @@ async def _lineage_resume_candidate(
     silently done, so a reviewer can decide whether the existing mtime guard is enough or
     the occupancy check needs to move.
 
-    Returns ((session_id, repo, mtime, job_dir="", materialized_at), log) on the first hop
-    that clears both gates. `repo` is UNCHANGED IN MEANING from before this rewrite — the
+    Returns ((session_id, repo, mtime, job_dir="", materialized_at, hop), log) on the first
+    hop that clears both gates. `hop` IS THE EXPLICIT COUNT OF ENTRIES IN `log` BEFORE the
+    winning hop's own success line (task #200 residual, Thoth dispatch 6786/6792: a caller
+    used to derive this by `len(log) - 1`, on the documented assumption the log always ends
+    with exactly one success entry — a false assumption whenever this function itself
+    appends a SECOND line after the success line for the same hop, e.g. a materialize
+    refusal below. That miscounted a genuine hop-0 candidate as hop 1, which silently denies
+    it `_zero_hop_graph_corroborates`'s own zero-hop fallback and forces a resident-unknown
+    refusal on a session that IS the lineage head's own current, real transcript — the exact
+    live specimen: Marquee, `agent:38cf08a9-xi`, decision 6a0b1236). Read `hop` directly;
+    never re-derive it from `len(log)`.
+
+    `repo` is UNCHANGED IN MEANING from before this rewrite — the
     CALLER's own `launch_cwd`, since `_zero_hop_graph_corroborates`'s `resume[1] ==
     launch_cwd` invariant depends on it staying exactly that (Thoth's explicit ruling: do
     NOT smuggle the office into this field — the anchor_cwd/tree_cwd fusion, #103/#141, is
@@ -1437,8 +1448,9 @@ async def _lineage_resume_candidate(
             log.append(f"gen {gen} (session {session[:8]}, {tail_mb:.2f}MB store tail): "
                        f"{verdict}")
             continue
+        hop_num = len(log)
         log.append(f"gen {gen} (session {session[:8]}, {tail_mb:.2f}MB store tail): "
-                   f"resumable, {len(log)} hop(s) back")
+                   f"resumable, {hop_num} hop(s) back")
         materialized_at: str | None = None
         if materialize:
             office = await seat_office_target(pool, seat_id) if seat_id else None
@@ -1461,7 +1473,7 @@ async def _lineage_resume_candidate(
                     # re-derive the office from it instead of just using what it got.
                     materialized_at = office
         mtime = last_ingested.timestamp() if last_ingested is not None else time.time()
-        return (session, repo, mtime, "", materialized_at), log
+        return (session, repo, mtime, "", materialized_at, hop_num), log
     return log
 
 
@@ -2029,7 +2041,7 @@ async def dispatch_dm(
                           "message is never handed to a fresh twin"}
     session_id, repo, materialized_at = graph_resume[0], graph_resume[1], graph_resume[4]
     spawn_cwd = materialized_at or repo
-    hop = len(graph_log) - 1
+    hop = graph_resume[5]
     gate, refusal = await _resume_guard(
         pool, (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]), base,
         seat_id=seat_id, st=st, hop=hop, launch_cwd=launch_cwd)
@@ -2934,15 +2946,15 @@ async def launch_seat(
             # holder was falsy. Asserted, not silently narrowed: a violated invariant here
             # should be loud, never a quiet skip of the identity gate.
             assert holder is not None
-            # hop count (#173a): the SAME arithmetic `_lineage_resume_candidate`'s own
-            # success line renders ("...resumable, N hop(s) back") — its log always ends
-            # with exactly one success entry when `resume` is set, so the count of entries
-            # BEFORE it (this list minus that one) is N. `launch_cwd` is this seat's own
-            # launch location (office, or tree_cwd when tree-bound), the 1:1 identity the
-            # zero-hop graph door corroborates against.
+            # hop count (#173a): READ DIRECTLY off `resume`'s own 6th field now (task #200
+            # residual, decision 6a0b1236/6d6bf4e8) — never re-derived from
+            # `len(resume_log) - 1`, which silently miscounts whenever
+            # `_lineage_resume_candidate` appends a second log line for the winning hop.
+            # `launch_cwd` is this seat's own launch location (office, or tree_cwd when
+            # tree-bound), the 1:1 identity the zero-hop graph door corroborates against.
             gate, refusal = await _resume_guard(
                 pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
-                seat_id=target_seat, st=st, hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+                seat_id=target_seat, st=st, hop=resume[5], launch_cwd=launch_cwd)
             if gate == "resident-unknown":
                 # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb — self-healing
                 # over manual bandaids): an ABSENCE of signed testimony is not evidence this
