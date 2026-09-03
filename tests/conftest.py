@@ -96,6 +96,19 @@ _RESET_TABLES = (
     "links", "llm_usage", "mcp_tool_stats", "merge_candidates", "message_recipients",
     "object_events", "outbox", "pit_watch_alarms", "resource_leases", "search_log",
     "search_vectors",
+    # soul_lines/soul_sessions (migration 0050) were missing from the day the table
+    # shipped, the exact same shape as harness_messages' own gap above: FK-free by
+    # construction (0050 declares neither table with a REFERENCES/FOREIGN KEY — a
+    # plain composite PK on each, no relationship to anything else in this tuple), so
+    # no ordering constraint, but their ABSENCE meant Khnum's wire-resume-to-store
+    # lane (ruling d161a156/d63b2ca6) hit real cross-test contamination: many
+    # test_trigger.py/test_cli.py fixtures reuse the SAME literal session id constant
+    # (FULL_SID, _RESUME_SID) across dozens of DIFFERENT test functions, each writing
+    # DIFFERENT transcript bytes under that id — `ingest_path`'s own idempotent
+    # `ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING` means whichever test
+    # ran FIRST in a session permanently owns that anchor_sid's stored content for
+    # every OTHER test reusing the same id, silently, for the rest of the run.
+    "soul_lines", "soul_sessions",
     "sweep_ledger", "triggers", "watermarks",
     # these four must come LAST, in this order — each is the PARENT side of an
     # internal FK from a table above it in this tuple (alerts->compositions,
