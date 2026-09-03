@@ -1245,28 +1245,44 @@ async def recall(ref: str, kind: str | None = None) -> dict[str, Any]:
 
 # --- collect (federate a base) ----------------------------------------------
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def aim_entity(name: str) -> dict[str, Any]:
     """Resolve a name on Wikidata and ingest the entity + relationships + official
     social accounts; the broadest first pull for a company or person."""
     return await wikidata_aim(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_form_d(name: str) -> dict[str, Any]:
     """SEC Form D: a private company's financing rounds — officers, amounts, and the
     feeder SPVs that fund it (linked into the graph)."""
     return await aim_form_d(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def expand_operator(name: str) -> dict[str, Any]:
     """Pull a repeat player's thread: every Form D mentioning this operator → their
     whole portfolio, exposing the co-investment network."""
     return await expand_filings(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def lookup_lei(name: str) -> dict[str, int]:
     """GLEIF global LEI registry (keyless): the entity's Legal Entity Identifier,
     jurisdiction, status, and corporate ownership parents (direct + ultimate). The LEI
@@ -1274,7 +1290,11 @@ async def lookup_lei(name: str) -> dict[str, int]:
     return await aim_gleif(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def verify_bc_entity(name: str) -> dict[str, int]:
     """Canadian (British Columbia) corporate registry via OrgBook BC (keyless): pull a
     company/partnership — or a whole family name like 'Brilliant Phoenix' — with its BC
@@ -1283,14 +1303,22 @@ async def verify_bc_entity(name: str) -> dict[str, int]:
     return await aim_orgbook(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_trials(sponsor: str) -> dict[str, int]:
     """ClinicalTrials.gov: a sponsor's registered human trials — status, sites
     (facilities), named investigators."""
     return await aim_trials(Actions(await _pool_get()), sponsor)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]:
     """Court records (CourtListener): lawsuits & enforcement actions naming this
     entity — dockets, parties, judges. opinions=True searches case law instead of
@@ -1298,7 +1326,11 @@ async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]
     return await aim_litigation(Actions(await _pool_get()), name, kind="o" if opinions else "r")
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[str, Any]:
     """Trace an EVM crypto address on-chain (Etherscan): its top counterparties, native
     balance, token flow, and contract/token identity — graded as ledger ground truth.
@@ -1306,7 +1338,11 @@ async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[s
     return await aim_address(Actions(await _pool_get()), address, chain_id=chain_id, top=top)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     """Screen a traced EVM address against the federated sanctions base: is the
     address — or any of its counterparties — an OFAC-listed wallet? Returns the
@@ -1325,7 +1361,11 @@ async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     return await screen_against_sanctions(pool, uuid.UUID(str(oid)))
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def expand_clinical_site(facility: str) -> dict[str, int]:
     """The trials at a clinical SITE — revealing which other sponsors use it."""
     return await expand_facility(Actions(await _pool_get()), facility)
@@ -1394,7 +1434,11 @@ async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     return {"ref": ref, "chain": chain} if chain else {"error": f"no agent matches {ref!r}"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def dossier_report(object_ref: str) -> str:
     """The deliverable: a provenance-annotated Markdown dossier for an entity —
     identity, financing, litigation, footprint discrepancy, co-investment — with every
@@ -1463,7 +1507,11 @@ async def handoff_briefing(
 
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def create_room(name: str) -> dict[str, str]:
     """Create a ROOM — a saved STANCE the operator switches between (journalist / broker /
     engineer). A Room scopes WORK ARTIFACTS (cases + compositions) to a beat, never the
@@ -1518,7 +1566,11 @@ async def save_composition(
 
 # --- the shared console (real-time Claude↔front sync) -----------------------
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def get_console() -> dict[str, Any]:
     """What the operator is looking at RIGHT NOW — the shared cursor (room / composition /
     view / focused object). The front end is the conversation, so read this first to see
@@ -1526,7 +1578,11 @@ async def get_console() -> dict[str, Any]:
     return await _get_console(await _pool_get())
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str, Any]:
     """Focus an object (UUID or name) on the operator's LIVE screen — drives the console so
     they see what you're looking at. Returns the object's identity + properties so you can
@@ -4572,7 +4628,11 @@ async def unmerge(dupe: str, because: str, execute: bool = False,
                           actor=ident.agent_id, execute=execute)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> dict[str, Any]:
     """Accepts an ALREADY-MERGED `dupe` and re-points whatever mail/mount/thread/holder/
     managed_by/edge estate is still aimed at it, WITHOUT re-performing the merge —
@@ -5412,7 +5472,11 @@ async def peer_seats(seat_a: str, seat_b: str, because: str,
                              actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def unpeer(seat_a: str, seat_b: str, because: str,
                  ctx: Context | None = None) -> dict[str, Any]:
     """Invalidate an active peer_of bond between two Seats — the compensating-event
@@ -5430,7 +5494,11 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
                          actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_action(holder: str, held: str, act: str, because: str, hours: float = 24,
                       ctx: Context | None = None) -> dict[str, Any]:
     """Mint a mutual HOLD (task #76 item 4a, spec e6636c7e) — a peer's power to say HOLD on
@@ -5455,7 +5523,11 @@ async def hold_action(holder: str, held: str, act: str, because: str, hours: flo
                               because=because, hours=hours, actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def peer_reachable(seat_id: str) -> list[str]:
     """Every seat a search for `seat_id`'s own queue should also cover (task #76 item 5b,
     spec e6636c7e's "the pair faces the tree through both peers") — DISCOVERABILITY ONLY,
@@ -5469,7 +5541,11 @@ async def peer_reachable(seat_id: str) -> list[str]:
     return await _peer_reachable(pool, seat_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
     """The pair's shared reciprocity ledger (task #76 item 3, spec e6636c7e) — every OPEN
     thread owned by EITHER seat, oldest first, as one resumable list. Zero new storage:
@@ -5577,7 +5653,11 @@ async def invalidate_works_in(stale_project: str, because: str,
     return result
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
@@ -5857,7 +5937,11 @@ async def reissue_office(
                                  because=because, actor=ident.agent_id, adopt=adopt)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
     """File ONE ephemeral subagent under its spawner (ruling 0f76458c — a hand is never a
     first-class fleet member). Attributes it to its spawner (an existing spawned_by edge, or
@@ -5896,7 +5980,11 @@ async def file_subagents(project: str | None = None, dry_run: bool = True,
                                  dry_run=dry_run, actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def unwitnessed_spawns(agent_id: str | None = None,
                              ctx: Context | None = None) -> dict[str, Any]:
     """THE SELF-AUDIT (obligation cabfb4b2, Ptah VII's rotten-apple report): every LIVE
@@ -6018,7 +6106,11 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
                             actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
@@ -8335,7 +8427,11 @@ async def reclassify_thread(
     return out
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_tension(
     pole_a: str, pole_b: str, lean: str | None = None, why: str | None = None,
     repo: str | None = None, subagent_id: str | None = None,
@@ -8383,7 +8479,11 @@ async def register_blind_spot(
             "note": "held per (project, surface); orient() speaks it to every session here"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_memory(
     body: str, summary: str | None = None, repo: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
@@ -8410,7 +8510,11 @@ async def hold_memory(
     return {"kept": str(r), "as": "reflection — remembered, never actionable"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def task_sync_reconcile(
     tasks: list[dict[str, Any]], write: bool = False, thread_kind_field: str = "task",
 ) -> dict[str, Any]:

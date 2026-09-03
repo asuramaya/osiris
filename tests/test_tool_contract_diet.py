@@ -723,7 +723,37 @@ def _tool_chars(t: Any) -> int:
 # jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
 # function directly. A genuinely new capability (dry_run default, because required on
 # execute, same shape sweep_seat_disk's own door already established), not padding.
-TOOL_CONTRACT_EXPECTED_COUNT = 147
+TOOL_CONTRACT_EXPECTED_COUNT = 121
+# 147 -> 121 (2026-09-03, Imhotep, task #199 lane 2, thread 6822, Thoth dispatch: retirement
+# wave 1, operator's own stated goal "folding mcp slop from 100+ down to a few dozen"): 26
+# tools hidden via the same meta={"deprecated": True} mechanism as the earlier consolidation
+# pairs, but with no `use_instead` — these have no replacement, they were simply unused (off
+# Seshat's own measured list, decision 9a202c73/81b7112d: zero MCP traffic across the full
+# 3-week mcp_tool_stats history, old enough to judge, no CLI/daemon/slash-command bypass
+# found by direct grep of src/orchestrator/console.py, pulse.py, workers/arq_worker.py,
+# src/manager, cli.py, and ~/.claude/commands/*.md). Still fully callable via call_tool, per
+# the mechanism's whole point — this is a visibility shrink, not a deletion. Held back from
+# this cut, with reasons, rather than swept blind: fork_project (Seshat's list predates its
+# own consolidation into the surviving primary tool of the fork/unfork pair — deprecating it
+# now would have hidden the CURRENT primary, not a dead tool), unfork_project (already hidden
+# from the prior wave, no action needed), acquire_lease/check_lease/release_lease (a coherent
+# locking primitive family — reap_stale_leases, its automatic backstop, is a confirmed live
+# daemon caller per 81b7112d, so hiding the manual acquire/check/release doors would strand
+# the only agent-facing way to participate in a mechanism the daemon still depends on),
+# consolidate/resolve_fold (Constitution item 1's own review-gated identity-merge execution
+# doors — hiding the door that actually performs a reviewed fold is a different risk class
+# than hiding a genuinely orphaned leaf tool), retire (an active, explicitly-flagged STUB per
+# the seat skill's own doc — "do not hand-write around it" — entangling it with this wave
+# would conflate two different pieces of unfinished work). SEVEN MORE caught and reverted
+# only after a first pass and a full local test run: attach_seat, detach_seat,
+# invalidate_works_in, pause_seat, rename_seat, set_seat_attended, walk_in are all in
+# tests/test_cli_mcp_parity.py's own BINDING_VERBS set (Thoth dispatch 6438, Khnum's lane-2
+# seat-reconciliation scoping) with a NO_CLI_EQUIVALENT reason of "not yet built — not on the
+# jesus/chad path; not ruled out" — a DIFFERENT gate already tracks their missing CLI door as
+# a live, deliberate gap, and that gate reads absence-from-list_tools() as "stale entry
+# (deleted/renamed)", not "hidden but still real." Hiding them would have made a true gap
+# read as resolved. test_every_binding_verb_has_a_cli_door_or_declares_why_not caught this
+# live (watched fail, not assumed) before it landed.
 # 150 -> 147 (2026-09-03, Imhotep, task #199 lane 2, thread 6778/6788, operator mandate
 # upgrade — "fix all 3 problems end to end"): unfork_project, reconcile_seat_identity_
 # third_party, and ingest_project_third_party retired the same way heal_seat_anchor_
@@ -836,6 +866,13 @@ TOOL_CONTRACT_CEILING_CHARS = 209867
 # as the count changelog above — see there for the full list. Second shrink in a row,
 # same mechanism, not a fluke.
 TOOL_CONTRACT_CEILING_CHARS = 208349
+# 208,349 -> 186,392 (measured exact). Tool count 147 -> 121 (2026-09-03, Imhotep, task #199
+# lane 2, thread 6822, retirement wave 1 — see the count changelog above for the full list,
+# the held-back exceptions, and the 7 caught by test_cli_mcp_parity.py's own BINDING_VERBS
+# gate and reverted before this measurement). Largest single-wave drop either ratchet has
+# recorded: 26 tools hidden from list_tools() in one pass, all genuinely unused rather than
+# merged into a surviving sibling.
+TOOL_CONTRACT_CEILING_CHARS = 186392
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
