@@ -2183,10 +2183,30 @@ def _marker_landed_sync(root: Path, sid_prefix: str, marker: str) -> bool:
     under `sid_prefix`'s transcript(s) — never assumed from a queue op (ruling 986b12f0:
     reply() returning True means QUEUED, not SEEN; the operator has watched an injected
     turn erased by a keystroke before it ever submitted). Only a "type":"user" line whose
-    OWN content carries the marker counts."""
+    OWN content carries the marker counts.
+
+    RE-DERIVED, NOT INHERITED (Thoth dispatch 6715): Khnum's own survey found this glob's
+    shape (`*/{sid_prefix}*.jsonl`, a substring match) but had previously cleared it as
+    safe-by-construction because it scans EVERY match rather than trusting the first —
+    true when he said it, and it STAYS true even now that the materializer writes second
+    copies: scanning more physical copies of the SAME session's real content can only ever
+    ADD a confirmation, never suppress one (an `or` across matches has no failure mode
+    where MORE true matches makes the answer wrong). What duplicates change is the
+    UNRELATED risk this function shares with the old `forks._find` (also fixed this
+    dispatch): an unanchored substring match can catch a LOOK-ALIKE filename that merely
+    CONTAINS `sid_prefix`, never at the very start — and more files on disk (duplicates
+    included) is more surface for that pre-existing look-alike risk to fire. The fix here
+    is narrower than `_find`'s: this function's whole SAFETY PROPERTY depends on scanning
+    every genuine copy, so collapsing to `locate_current_transcript`'s single newest-
+    anchored file (as `_find` now does) would be a REAL regression — the marker landing in
+    a copy other than the newest would then read as a false negative, and `wake()`'s own
+    caller re-injects a turn that already landed. So: anchor the MATCH (stem-prefix, same
+    rule `locate_current_transcript` uses) while keeping the loop over every match."""
     if not sid_prefix or not marker:
         return False
-    for t in root.expanduser().glob(f"*/{sid_prefix}*.jsonl"):
+    for t in root.expanduser().glob("*/*.jsonl"):
+        if not t.stem.startswith(sid_prefix):
+            continue
         try:
             size = t.stat().st_size
             with t.open("rb") as f:

@@ -22,6 +22,7 @@ from src.orchestrator.mounts import save_mount
 from src.orchestrator.seats import bind_holder, ensure_seat, set_seat_attended
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
+    _marker_landed_sync,
     _wake_marker,
     dispatch_broadcast,
     dispatch_dm,
@@ -671,6 +672,49 @@ _COMPACT_LINE = (
 def _write_transcript(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
+
+
+def _user_line(text: str) -> bytes:
+    obj = {"type": "user", "message": {"role": "user", "content": text}}
+    return json.dumps(obj).encode() + b"\n"
+
+
+def test_marker_landed_sync_finds_an_anchored_match(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    _write_transcript(root / "-repo" / "aaaaaaaa-0000.jsonl", _user_line("hello ##MARK## world"))
+    assert _marker_landed_sync(root, "aaaaaaaa", "##MARK##") is True
+
+
+def test_marker_landed_sync_ignores_a_substring_look_alike(tmp_path: Path) -> None:
+    """Thoth dispatch 6715, re-derived rather than inherited: the old
+    `glob(f"*/{sid_prefix}*.jsonl")` matched `sid_prefix` ANYWHERE in the filename. A
+    look-alike whose stem merely CONTAINS the prefix — never at the very start — carries
+    the SAME marker text by construction here (to prove a real look-alike, not just an
+    absent one) and must still be ignored, or a coincidental filename could report a
+    marker landed in a session that never received it."""
+    root = tmp_path / "projects"
+    _write_transcript(root / "-repo" / "zzzz-aaaaaaaa-0000.jsonl", _user_line("##MARK##"))
+    assert _marker_landed_sync(root, "aaaaaaaa", "##MARK##") is False
+
+
+def test_marker_landed_sync_still_scans_every_genuine_match_not_just_the_first(
+    tmp_path: Path,
+) -> None:
+    """THE SAFETY PROPERTY RE-DERIVED, NOT REGRESSED: two genuine physical copies of the
+    same session (the materializer's own duplicate shape) both anchor on `sid_prefix` —
+    the marker landing in the SECOND one alone (the first is a stale/empty copy) must
+    still be found. Collapsing to a single newest-anchored file would miss this."""
+    root = tmp_path / "projects"
+    _write_transcript(root / "-repo" / "aaaaaaaa-0000.jsonl", _user_line("no marker here"))
+    _write_transcript(root / "-repo-materialized" / "aaaaaaaa-0001.jsonl",
+                      _user_line("##MARK##"))
+    assert _marker_landed_sync(root, "aaaaaaaa", "##MARK##") is True
+
+
+def test_marker_landed_sync_false_when_nothing_matches(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    _write_transcript(root / "-repo" / "bbbbbbbb-0000.jsonl", _user_line("##MARK##"))
+    assert _marker_landed_sync(root, "aaaaaaaa", "##MARK##") is False
 
 
 def test_pick_resumable_sync_rescues_a_large_transcript_with_a_small_tail(
