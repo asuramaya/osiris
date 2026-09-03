@@ -129,6 +129,10 @@ CLI_ONLY_PARAMS = {
         "verbs above; the stop receipt renders for a human by default and as one compact "
         "JSON line under --json, for the teardown scripts this verb exists to serve "
         "(Thoth LXXXVII, 2026-08-28)",
+    ("smoke", "as_json"): "a PRESENTATION flag, not an act — same reason as the read "
+        "verbs above (Thoth dispatch 6746, specimen A: the CLI's own top-level help "
+        "promises every read verb takes --json, which was false for this one until "
+        "this fix). Never --chaos's own path, which keeps its separate text-only receipt.",
     ("correct-pin-value", "seat"): "the MCP tool correct_pin_value is SELF-scoped by "
         "design (resolved off the mounted caller's own held_seat, msg 4761/obligation "
         "114f7ac9 — it can only ever correct ITS OWN seat's pin). A terminal has no "
