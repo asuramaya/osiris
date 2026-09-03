@@ -4799,62 +4799,71 @@ async def recover_harness_exchanges(
     return await _recover(await _pool_get(), anchor_sid, dry_run=dry_run, because=because)
 
 
-@mcp.tool()
-async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
-    """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
-    self-healing over manual cleanup) — the self-service replacement for #157's own repair,
-    which used to need an operator-authorized retire_assertion call per stale row. Heals a
-    cross-source CONTRADICTION (more than one current value from different sources) on
-    exactly two properties, both single-valued by nature and never generalised: your Seat's
-    `house` and your own Agent's `project`. Newest-declared-wins, the same tiebreak the read
-    path already applies — this only makes that rule stick instead of leaving the loser
-    sitting beside the winner forever, both technically "current". Reversible: every healed
-    row's own id is in the receipt, same as any retire_assertion call.
-
-    SELF-SCOPED, like correct_house — always your OWN held seat and your OWN agent identity,
-    never an argument naming someone else's. No sign-off required: this is exactly the class
-    of repair the operator ruled no agent should ever need to escalate for."""
+async def _reconcile_seat_identity_impl(
+    seat_id: str | None, agent_id: str | None, because: str | None, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `reconcile_seat_identity` (self OR third-party) and its
+    deprecated alias `reconcile_seat_identity_third_party` (task #199 lane 2, thread
+    6778/6788). `seat_id=None` heals the CALLER's own held seat and own agent identity,
+    `because` unused. `seat_id=<any seat>` is the third-party path — `agent_id`
+    optional (omitted heals `house` alone), `because` REQUIRED (a correction with no
+    stated reason is the silent overwrite 719ed5b1 rules against, not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — reconcile_seat_identity is a seat's own act",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.seats import held_seat
-    bound = await held_seat(await _pool_get(), ident.agent_id)
-    if bound is None:
-        return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
-    from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
-    return await _reconcile(Actions(await _pool_get()), seat_id=bound["seat_id"],
-                            agent_id=ident.agent_id, actor=ident.agent_id)
-
-
-@mcp.tool()
-async def reconcile_seat_identity_third_party(
-    seat_id: str, because: str, agent_id: str | None = None,
-    ctx: Context | None = None,
-) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of reconcile_seat_identity (decision f78b41c8's own gap:
-    mechanism 3 shipped self-service-only, and #157's population — four OTHER seats' stale
-    house/project rows — cannot be reached by a verb that always resolves its target from
-    the caller's own held seat). NOT self-scoped, on purpose — mirrors resync_seat_house_
-    third_party's own precedent exactly: `seat_id`/`agent_id` name ANY seat/agent, never
-    only your own; `because` is REQUIRED (a correction with no stated reason is the silent
-    overwrite 719ed5b1 rules against, not a fix); does NOT check caller authority beyond
-    being mounted — same as correct_agent_house and resync_seat_house_third_party, callers
-    are responsible for the authorization this docstring cannot enforce.
-
-    OTHERWISE IDENTICAL to the self-service verb — same heal_contradicting_property
-    mechanism, same two properties (house/project, never generalised), same reversibility,
-    the SAME graph writes for the same row. `agent_id` omitted heals `house` alone."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if seat_id is None:
+        from src.orchestrator.seats import held_seat
+        bound = await held_seat(pool, ident.agent_id)
+        if bound is None:
+            return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
+        from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
+        return await _reconcile(Actions(pool), seat_id=bound["seat_id"],
+                                agent_id=ident.agent_id, actor=ident.agent_id)
     from src.orchestrator.identity_heal import (
         reconcile_seat_identity_third_party as _reconcile_third_party,
     )
     return await _reconcile_third_party(
-        Actions(await _pool_get()), seat_id=seat_id, agent_id=agent_id, because=because,
+        Actions(pool), seat_id=seat_id, agent_id=agent_id, because=because or "",
         actor=ident.agent_id)
+
+
+@mcp.tool()
+async def reconcile_seat_identity(
+    seat_id: str | None = None, agent_id: str | None = None, because: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """HEAL a seat's identity (fe8ec7ff mechanism 3, operator ruling df646654: self-healing
+    over manual cleanup). Heals a cross-source CONTRADICTION (more than one current value
+    from different sources) on exactly two properties, both single-valued by nature and
+    never generalised: a Seat's `house` and its holder Agent's `project`. Newest-declared-
+    wins, the same tiebreak the read path already applies. Reversible: every healed row's
+    own id is in the receipt, same as any retire_assertion call.
+
+    `seat_id=None` (default) heals THE CALLER's own held seat, own agent identity,
+    `because` unused. `seat_id=<any seat>` heals a THIRD PARTY's — `agent_id` optional
+    (omitted heals `house` alone), `because` REQUIRED (task #199 lane 2, thread
+    6778/6788 — one verb, was two: `reconcile_seat_identity_third_party` now forwards
+    here, hidden from listing, still callable, retired once traffic shows it silent).
+    Does NOT check caller authority beyond being mounted on the third-party path — same
+    as correct_agent_house, callers are responsible for the authorization this docstring
+    cannot enforce."""
+    return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
+
+
+@mcp.tool(meta={"deprecated": True, "use_instead": "reconcile_seat_identity",
+                "since": "task #199 lane 2, thread 6778/6788"})
+async def reconcile_seat_identity_third_party(
+    seat_id: str, because: str, agent_id: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares reconcile_seat_identity's own _reconcile_seat_identity_impl body —
+    nothing duplicated. Kept only so a live or sleeping caller whose standing orders
+    still name this verb is not broken at its next turn; remove once tool_traffic()
+    shows it silent."""
+    return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
 
 
 async def _heal_seat_anchor_impl(
@@ -4937,43 +4946,72 @@ async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
     return {"count": len(rows), "trees": rows}
 
 
+async def _ingest_project_impl(
+    project: str | None, because: str | None, dry_run: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `ingest_project` and its deprecated alias `ingest_project_
+    third_party` (task #199 lane 2, thread 6778/6788). `because` blank/omitted is the
+    self-service shape (`project` omitted resolves to the caller's own mounted pin);
+    `because` given routes through the third-party orchestrator function instead, which
+    stamps it onto the receipt — the orchestrator layer already IS this same split
+    (ingest_project_third_party's own body is nothing but a because-required check
+    wrapping a call to ingest_project), this only removes the second MCP-layer copy of
+    that check."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — ingest_project is a seat's own act",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    because = (because or "").strip()
+    if because:
+        from src.orchestrator.tree_ingest import (
+            ingest_project_third_party as _ingest_third_party,
+        )
+        if not project:
+            return {"error": "a third-party ingest needs an explicit project — nothing "
+                             "to resolve a pin against on someone else's behalf"}
+        return await _ingest_third_party(Actions(pool), project=project, because=because,
+                                         dry_run=dry_run, actor=ident.agent_id)
+    target = project or ident.project
+    if not target:
+        return {"error": "no project given and none pinned — mount with a project, or pass "
+                         "one explicitly with a because for the third-party shape instead"}
+    from src.orchestrator.tree_ingest import ingest_project as _ingest_project
+    return await _ingest_project(Actions(pool), project=target, dry_run=dry_run,
+                                 actor=ident.agent_id)
+
+
 @mcp.tool()
 async def ingest_project(
-    project: str | None = None, dry_run: bool = True, ctx: Context | None = None,
+    project: str | None = None, dry_run: bool = True, because: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """SELF-SERVICE (thread 5126) — land YOUR OWN project's git history and close the
     threads it witnesses, one call, same authority shape as reconcile_seat_identity.
     `project` omitted resolves to your mounted pin; refuses cleanly if none is pinned.
     `dry_run=True` (default) writes NOTHING — the receipt names what would land (commits
     on disk vs already graphed) plus a closure preview over what's already graphed.
-    `dry_run=False` actually ingests, then closes."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — ingest_project is a seat's own act",
-                "why": _anchorless(ctx)}
-    target = project or ident.project
-    if not target:
-        return {"error": "no project given and none pinned — mount with a project, or pass "
-                         "one explicitly for ingest_project_third_party instead"}
-    from src.orchestrator.tree_ingest import ingest_project as _ingest_project
-    return await _ingest_project(Actions(await _pool_get()), project=target, dry_run=dry_run,
-                                 actor=ident.agent_id)
+    `dry_run=False` actually ingests, then closes.
+
+    `because=<reason>` (task #199 lane 2, thread 6778/6788 — one verb, was two) is the
+    THIRD-PARTY shape instead: `project` becomes required (no pin to fall back on for
+    someone else's tree), the reason lands on the receipt, does not check caller
+    authority beyond being mounted. The old name, `ingest_project_third_party`, still
+    works — it now forwards here — but no longer appears in a model's own tool list."""
+    return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={"deprecated": True, "use_instead": "ingest_project(because=...)",
+                "since": "task #199 lane 2, thread 6778/6788"})
 async def ingest_project_third_party(
     project: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THIRD-PARTY SIBLING of ingest_project — same shape as reconcile_seat_identity_
-    third_party: `project` names ANY tree; `because` is REQUIRED (empty refuses); does not
-    check caller authority beyond being mounted. Otherwise identical, same receipt."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — an ingest is a mind's act, and the graph must know "
-                         "whose", "why": _anchorless(ctx)}
-    from src.orchestrator.tree_ingest import ingest_project_third_party as _ingest_third_party
-    return await _ingest_third_party(Actions(await _pool_get()), project=project,
-                                     because=because, dry_run=dry_run, actor=ident.agent_id)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares ingest_project's own _ingest_project_impl body — nothing
+    duplicated. Kept only so a live or sleeping caller whose standing orders still name
+    this verb is not broken at its next turn; remove once tool_traffic() shows it
+    silent."""
+    return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
 @mcp.tool()
@@ -5247,9 +5285,36 @@ async def rename_project(project: str, new_name: str, because: str,
     return out
 
 
+async def _fork_project_impl(
+    project: str, fork_into: str, because: str, direction: str, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `fork_project` (both directions, by `direction`) and its
+    deprecated alias `unfork_project` — a plain helper, never itself an `@mcp.tool()`
+    (task #199 lane 2, thread 6778/6788, the six-pair consolidation). `direction="fork"`
+    (default) declares the pair; `direction="unfork"` reverses it — same verb, its own
+    inverse, Thoth's own named shape for this pair."""
+    if direction not in ("fork", "unfork"):
+        return {"error": f"direction must be 'fork' or 'unfork', got {direction!r}"}
+    verb = "a fork" if direction == "fork" else "an unfork"
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": f"mount first — {verb} is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if direction == "fork":
+        from src.orchestrator.project_identity import fork_project as _fork_project
+        return await _fork_project(Actions(pool), project=project, fork_into=fork_into,
+                                   because=because, actor=ident.agent_id)
+    from src.orchestrator.project_identity import unfork_project as _unfork_project
+    return await _unfork_project(Actions(pool), project=project, fork_into=fork_into,
+                                 because=because, actor=ident.agent_id)
+
+
 @mcp.tool()
-async def fork_project(project: str, fork_into: str, because: str,
-                       ctx: Context | None = None) -> dict[str, Any]:
+async def fork_project(
+    project: str, fork_into: str, because: str, direction: str = "fork",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """Declare TWO already-active SoftwareProjects a FORK pair — John's own redmonth/
     ballgem shape (decision 58597670): `fork_into` is the successor, naming `project` as
     its ancestor via one `forked_from` edge (heir -> ancestor, same direction convention
@@ -5260,35 +5325,30 @@ async def fork_project(project: str, fork_into: str, because: str,
     project_identity_evidence itself; read that report BEFORE calling this, then name
     both sides explicitly.
 
-    Refuses LOUDLY on: a blank `because`; `project`==`fork_into`; either ref ambiguous or
-    unresolved; either not an ACTIVE SoftwareProject; a live `forked_from` edge already
-    connecting this exact pair (idempotent refusal, never a duplicate mint)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a fork is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import fork_project as _fork_project
-    return await _fork_project(Actions(await _pool_get()), project=project,
-                               fork_into=fork_into, because=because, actor=ident.agent_id)
+    `direction="unfork"` (task #199 lane 2, thread 6778/6788 — one verb, was two)
+    reverses instead: invalidates the live `forked_from` edge. REVERSIBILITY PROVEN, not
+    claimed — since a fork never moves any estate, there is nothing to move back either,
+    the whole reversal is this one healed edge, by design. The old name,
+    `unfork_project`, still works — it now forwards here — but no longer appears in a
+    model's own tool list.
+
+    Refuses LOUDLY on: a blank `because`; `project`==`fork_into` (fork direction only);
+    either ref ambiguous or unresolved; either not an ACTIVE SoftwareProject (fork); a
+    live `forked_from` edge already connecting this exact pair (fork, idempotent refusal)
+    or no such live edge (unfork)."""
+    return await _fork_project_impl(project, fork_into, because, direction, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={"deprecated": True, "use_instead": "fork_project(direction='unfork')",
+                "since": "task #199 lane 2, thread 6778/6788"})
 async def unfork_project(project: str, fork_into: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Invalidate a live `forked_from` edge — the compensating-event complement to
-    fork_project. REVERSIBILITY PROVEN, not claimed: since fork_project never moves any
-    estate, there is nothing to move back either — the whole reversal is this one healed
-    edge, by design.
-
-    Refuses LOUDLY on: a blank `because`; either ref unresolved to a SoftwareProject; or
-    no active `forked_from` edge from `fork_into` to `project`."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — an unfork is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import unfork_project as _unfork_project
-    return await _unfork_project(Actions(await _pool_get()), project=project,
-                                 fork_into=fork_into, because=because, actor=ident.agent_id)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Forwards to `fork_project(direction="unfork")`, the same verb
+    parameterized. Kept only so a live or sleeping caller whose standing orders still
+    name this verb is not broken at its next turn; remove once tool_traffic() shows it
+    silent."""
+    return await _fork_project_impl(project, fork_into, because, "unfork", ctx)
 
 
 @mcp.tool()

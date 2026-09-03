@@ -588,6 +588,59 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     assert "nothing to unfork" in out["error"]
 
 
+# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2, thread 6778/6788): fork_project and
+# unfork_project used to be two separate @mcp.tool() wrappers; now `fork_project` takes
+# `direction="fork"|"unfork"` and unfork_project is a hidden, deprecated alias. WATCHED
+# FAIL BEFORE THIS CHANGE: `srv.fork_project(..., direction="unfork")` raised
+# TypeError(unexpected keyword argument 'direction'). ═══════════════════════════════════
+
+async def test_consolidated_fork_project_direction_param_reverses_the_edge(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _mk_project(actions, "mcpforkfrom")
+    await _mk_project(actions, "mcpforkinto")
+
+    class _McpCtx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ident = AgentIdentity(agent_id="agent:mcpforker", session="mcpfork1", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        forked = await srv.fork_project(
+            project="mcpforkfrom", fork_into="mcpforkinto", because="x", ctx=ctx)
+        assert "forked_from" in forked
+        unforked_via_new = await srv.fork_project(
+            project="mcpforkfrom", fork_into="mcpforkinto", because="y",
+            direction="unfork", ctx=ctx)
+        assert unforked_via_new["unforked"] == "repo:mcpforkfrom"
+
+        forked_again = await srv.fork_project(
+            project="mcpforkfrom", fork_into="mcpforkinto", because="z", ctx=ctx)
+        assert "forked_from" in forked_again
+        unforked_via_deprecated = await srv.unfork_project(
+            project="mcpforkfrom", fork_into="mcpforkinto", because="w", ctx=ctx)
+        assert unforked_via_deprecated["unforked"] == "repo:mcpforkfrom"
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+
+    listed = {t.name for t in await srv.mcp.list_tools()}
+    assert "unfork_project" not in listed
+    assert "fork_project" in listed
+    assert srv.mcp._tool_manager.get_tool("unfork_project") is not None
+
+
 # --- create_project (#139's CREATE half — NOT a seventh mint door) ---------------------
 # layers task #107's _validate_repo_name with task #137's case-insensitive de-dup, both
 # reused verbatim; never a fresh, unguarded create_or_find_object of its own.

@@ -775,18 +775,62 @@ async def test_the_deprecated_third_party_name_still_works_and_shares_the_same_b
     assert set(out) == {"seat_id", "handle", "target", "current_before", "dry_run", "healed"}
 
 
-async def test_deprecated_tool_is_hidden_from_list_tools_but_still_in_call_tools_registry() -> None:
+async def test_deprecated_tools_are_hidden_from_list_but_still_in_call_registry() -> None:
     """THE MECHANISM ITSELF: a tool registered with meta={"deprecated": True} must not
     appear in what a model's own tool list shows (the surface shrink), while remaining
     fully present in the manager's own registry call_tool resolves against (the
-    backward-compat guarantee) — the two halves of the hidden-alias design, both
-    verified against the REAL server, not a stand-in."""
+    backward-compat guarantee) — verified against the REAL server, not a stand-in, for
+    every retirement task #199 lane 2/6788's wave has landed so far."""
     from src import mcp_server as srv
 
     listed = {t.name for t in await srv.mcp.list_tools()}
-    assert "heal_seat_anchor_third_party" not in listed
-    assert "heal_seat_anchor" in listed
-    assert srv.mcp._tool_manager.get_tool("heal_seat_anchor_third_party") is not None
+    retired = {"heal_seat_anchor_third_party", "unfork_project",
+              "reconcile_seat_identity_third_party", "ingest_project_third_party"}
+    survivors = {"heal_seat_anchor", "fork_project", "reconcile_seat_identity",
+                "ingest_project"}
+    assert not (retired & listed), retired & listed
+    assert survivors <= listed
+    for name in retired:
+        assert srv.mcp._tool_manager.get_tool(name) is not None, name
+
+
+async def test_consolidated_reconcile_seat_identity_third_party_shape_and_deprecated_alias(
+    actions: Actions, tmp_path,
+) -> None:
+    """seat_id=<explicit seat> is the third-party path; the old name still works and
+    shares the same body (task #199 lane 2, thread 6778/6788)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _seat_with_house(
+        actions, "seat:rsmcp1", founding="oldh", founding_source="agent:old",
+        founding_age_days=9, winning="newh", winning_source="agent:new")
+
+    ident = AgentIdentity(agent_id="agent:rsmcpcaller", session="rsmcp1", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        refused = await srv.reconcile_seat_identity(seat_id="seat:rsmcp1", because="", ctx=ctx)
+        assert "error" in refused and "silent overwrite" in refused["error"]
+
+        out = await srv.reconcile_seat_identity(
+            seat_id="seat:rsmcp1", because="coordinator sweep", ctx=ctx)
+        assert out["healed"]["house"]["healed"] is True
+
+        await _seat_with_house(
+            actions, "seat:rsmcp2", founding="oldh2", founding_source="agent:old",
+            founding_age_days=9, winning="newh2", winning_source="agent:new")
+        via_deprecated = await srv.reconcile_seat_identity_third_party(
+            seat_id="seat:rsmcp2", because="legacy caller", ctx=ctx)
+        assert via_deprecated["healed"]["house"]["healed"] is True
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
 
 
 # ═══ detect_anchor_invariant_violations — THE DETECTOR (piece 1, msg 6546) ════════════

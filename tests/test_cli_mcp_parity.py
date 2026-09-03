@@ -209,8 +209,8 @@ BINDING_VERBS = frozenset({
     "vacate_seat", "retire_seat", "rebind_seat", "bind_seat_tree", "sweep_seat_disk",
     "rename_seat", "set_seat_attended", "reissue_office", "establish_office", "charter",
     "charter_for", "invalidate_works_in", "reconcile_seat_identity",
-    "reconcile_seat_identity_third_party", "correct_pin_value", "create_project",
-    "rename_project", "retire_project", "fork_project", "unfork_project",
+    "correct_pin_value", "create_project",
+    "rename_project", "retire_project", "fork_project",
     "heal_seat_anchor",
 })
 
@@ -245,13 +245,11 @@ NO_CLI_EQUIVALENT = {
     "establish_office": "not yet built — not on the jesus/chad path; not ruled out.",
     "invalidate_works_in": "not yet built — not on the jesus/chad path; not ruled out.",
     "reconcile_seat_identity": "not yet built — not on the jesus/chad path; not ruled out.",
-    "reconcile_seat_identity_third_party": "not yet built — same as reconcile_seat_identity.",
     "create_project": "not yet built — project lifecycle verbs weren't in lane 2's scope "
         "(seat reconciliation only); a real gap, not ruled out.",
     "rename_project": "not yet built — same scoping note as create_project.",
     "retire_project": "not yet built — same scoping note as create_project.",
     "fork_project": "not yet built — same scoping note as create_project.",
-    "unfork_project": "not yet built — same scoping note as create_project.",
 }
 
 

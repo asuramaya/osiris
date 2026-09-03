@@ -723,7 +723,13 @@ def _tool_chars(t: Any) -> int:
 # jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
 # function directly. A genuinely new capability (dry_run default, because required on
 # execute, same shape sweep_seat_disk's own door already established), not padding.
-TOOL_CONTRACT_EXPECTED_COUNT = 150
+TOOL_CONTRACT_EXPECTED_COUNT = 147
+# 150 -> 147 (2026-09-03, Imhotep, task #199 lane 2, thread 6778/6788, operator mandate
+# upgrade — "fix all 3 problems end to end"): unfork_project, reconcile_seat_identity_
+# third_party, and ingest_project_third_party retired the same way heal_seat_anchor_
+# third_party was — hidden, deprecated aliases of fork_project(direction="unfork"),
+# reconcile_seat_identity(seat_id=...), and ingest_project(because=...) respectively.
+# Three more shrinks in the same shape as the first.
 # 151 -> 150 (2026-09-03, Imhotep, task #199 lane 2, thread 6778): heal_seat_anchor_third_
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
@@ -825,6 +831,11 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # tool AND fewer total chars in the same change, not one traded for the other — the
 # mechanism this lane exists to prove.
 TOOL_CONTRACT_CEILING_CHARS = 209867
+# 209,867 -> 208,349 (measured exact). Tool count 150 -> 147 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6778/6788): three more hidden-alias retirements in the same wave
+# as the count changelog above — see there for the full list. Second shrink in a row,
+# same mechanism, not a fluke.
+TOOL_CONTRACT_CEILING_CHARS = 208349
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
