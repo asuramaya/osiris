@@ -3019,10 +3019,15 @@ async def live_succession(
         # no transcript found on disk", not her anchor_cwd's own separate double-row leak.
         # `sid` is ALREADY validated non-empty (the `len(sid) < 8` guard above returned
         # early otherwise) — it is never a worse choice than a job_dir guess, so it goes
-        # first now, matching this module's own established precedent.
+        # first now, matching this module's own established precedent. The `_job_id`
+        # fallback below is effectively unreachable in practice (`sid[:8]` on an
+        # already-length-checked `sid` is never falsy) — guarded anyway, for the same
+        # reason register_agent's own birth-time write is: never let a stable-anchor slug
+        # wear the `session` column (`_looks_like_a_real_session`, Thoth's dispatch 6734).
         sid_prop = sid[:8] or _job_id(row["job_dir"])
-        await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
-                                      evidence_class=_EC)
+        if _looks_like_a_real_session(sid_prop):
+            await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
+                                          evidence_class=_EC)
         await actions.pool.execute(
             "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() WHERE job_dir=$1",
             row["job_dir"], heir, observed)
@@ -3042,6 +3047,35 @@ async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
         "WHERE object_id=$1 AND name='retired' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", agent)
     return bool(v == "true")
+
+
+# A REAL HARNESS SESSION ID, TRUNCATED — never the shape `_job_id` hands back for a
+# STABLE ANCHOR (Thoth's own diagnosis, msg 6734, measured against Marquee): every genuine
+# sid this codebase ever produces — a heartbeat's own `session_id`, a transcript filename's
+# leading segment, DSH's own UUID slice — is exactly 8 lowercase hex characters (`_UUID_RE`
+# in ingest/sessions.py validates the same shape at 36 chars before this module's own
+# `[:8]`/`.split("-")[0]` truncations run). `_launch_anchor`'s own `jobs/seat-<hex>` is NOT
+# that shape (a literal seat canonical, unrelated to any session), so `_job_id` returns it
+# unvalidated — its "jobs" branch, unlike its own "sessions" branch twenty lines below it,
+# never checks. THE FIX DELIBERATELY LIVES HERE, NOT IN `_job_id` ITSELF: `_job_id`'s return
+# value does TWO JOBS — a session id AND (via `sid`/`identity.agent_id=f"agent:{sid}"` in
+# resolve_identity) a DURABLE IDENTITY ANCHOR for a session with no other observation at
+# all. Pure-seat-office lineages (this seat's own `agent:seat-af50a33e` root among them)
+# bootstrap their very first identity through exactly that anchor fallback — narrowing
+# `_job_id` itself would silently rename every future first-ever mount of that shape from a
+# readable `agent:seat-<hex>` to an opaque `agent:j<hash>` (resolve_identity's OWN "last
+# resort" branch), the second-role regression Thoth's own dispatch warned against (decision
+# 4faab225's precedent: source_id doing two jobs, the obvious fix breaking the other one).
+# Gating ONLY the `session` PROPERTY WRITE, never `_job_id`/`sid`/`agent_id` themselves,
+# fixes the resume-poisoning defect with zero anchor-role risk.
+_SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _looks_like_a_real_session(sid: str | None) -> bool:
+    """Is `sid` shaped like a genuine (truncated) harness session id, never a stable
+    per-seat anchor slug or any other non-session string wearing its column? See the
+    module comment just above for the full reasoning."""
+    return sid is not None and _SESSION_ID_RE.match(sid) is not None
 
 
 async def register_agent(
@@ -3191,8 +3225,18 @@ async def register_agent(
                            src, mint_because, exc)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
-    await actions.assert_property(a, "session", identity.session, src, now, _CONF,
-                                  evidence_class=_EC)
+    # THE BIRTH-TIME WRITE (Thoth's own dispatch, msg 6734): the FIRST-EVER mount of a
+    # `--bg`-launched seat has nothing else to observe yet and `identity.session` falls all
+    # the way to `_job_id(job_dir)` — the seat's own stable anchor slug, not a session id
+    # (see `_looks_like_a_real_session`'s own comment). Skipping this assert rather than
+    # writing the anchor as `session` leaves the property correctly ABSENT — never a
+    # confident lie — until a later call (the heartbeat's own live_succession, or a fresh
+    # resolve_identity once this session's transcript actually exists) has something real
+    # to stamp. `osiris resume`'s resident-unknown gate already treats "no signed
+    # testimony" as an honest unknown, never a refusal shaped like corruption.
+    if _looks_like_a_real_session(identity.session):
+        await actions.assert_property(a, "session", identity.session, src, now, _CONF,
+                                      evidence_class=_EC)
     await actions.assert_property(a, "identity_resolved", identity.resolved, src, now, _CONF,
                                   evidence_class=_EC)
     if identity.model:
