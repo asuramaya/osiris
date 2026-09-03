@@ -922,12 +922,21 @@ _COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4,
            "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0], "resolved_project": "osiris"}
 
 
-def _statusline(monkeypatch: Any, tmp_path: Path, *, answer: Any) -> str:
-    """Render one statusline with `_post` stubbed and the cache redirected into tmp."""
+def _statusline(
+    monkeypatch: Any, tmp_path: Path, *, answer: Any, project_hint: str | None = "testproj",
+) -> str:
+    """Render one statusline with `_post` stubbed and the cache redirected into tmp.
+
+    `project_hint` stands in for `read_project_label(cwd)`'s real filesystem pin-climb —
+    defaulted to a resolvable name so these tests exercise the cache's ordinary, keyed
+    behavior; pass `None` to exercise the unresolved-project path instead (no `.osiris`
+    pin anywhere up the tree, e.g. a bare seat-office container or an unpinned repo)."""
     monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
                         lambda project: tmp_path / f"{project}.json")
     monkeypatch.setattr(osiris_hook, "_post",
                         lambda *a, **k: answer() if callable(answer) else answer)
+    import src.orchestrator.agents as agents_mod
+    monkeypatch.setattr(agents_mod, "read_project_label", lambda cwd: project_hint)
     import contextlib
     import io
     buf = io.StringIO()
@@ -998,6 +1007,41 @@ def test_statusline_with_no_answer_and_no_cache_says_only_what_it_knows(
     assert "no answer" in out
     assert "unreachable" not in out
     assert "owe 0" not in out            # absence of data is NOT a count of zero
+
+
+def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE LIVE SPECIMEN (Thoth, msg 6655/6654): two DIFFERENT sessions whose cwd carries no
+    resolvable `.osiris` pin (a bare seat-office container; an unpinned repo like lilguy) both
+    got `project_hint is None`, both fell into `cache_key = project_hint or "_"` — the SAME
+    file — and one session's counts (not just its label) leaked into the other's bar on the
+    next fallback read. `"_"` is not a project; it is "we could not tell," and a bucket keyed
+    on ignorance has no shared identity to hold. Fix: never write, and never read, that bucket."""
+    # Session A: unresolved project, live answer — must NOT write any cache file at all.
+    out_a = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS}, project_hint=None)
+    assert "fleet 7" in out_a
+    assert list(tmp_path.glob("*.json")) == []
+
+    # Session B: also unresolved, but its own probe MISSES — it must render SILENT, never
+    # borrow session A's counts (there is nothing to borrow: A wrote nothing above, but the
+    # law holds even if some other unresolved caller had — the bucket is never read either).
+    out_b = _statusline(monkeypatch, tmp_path, answer=None, project_hint=None)
+    assert "no answer" in out_b
+    assert "fleet 7" not in out_b
+    assert "ago" not in out_b
+
+
+def test_statusline_resolved_project_still_caches_normally(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """The fix is scoped to the unresolved/`None` case only — a real project keeps its
+    ordinary shared, keyed cache (this is what every other project-scoped test here relies
+    on continuing to work)."""
+    _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS}, project_hint="realproj")
+    written = list(tmp_path.glob("*.json"))
+    assert len(written) == 1
+    assert written[0].name == "realproj.json"
 
 
 def test_statusline_retries_once_before_giving_up(monkeypatch: Any, tmp_path: Path) -> None:
