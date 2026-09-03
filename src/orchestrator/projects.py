@@ -1370,3 +1370,99 @@ async def remote_url_duplicate_candidates(
         candidates.append({"dupe": dupe_can, "into": into_can, "remote_url": remote_a,
                            "result": result})
     return {"executed": execute, "candidates": candidates, "skipped": skipped}
+
+
+async def name_alias_duplicate_candidates(
+    actions: Actions, *, evidence: str, actor: str, execute: bool = False,
+) -> dict[str, Any]:
+    """#108 PIECE 4 (Thoth dispatch 6547, addendum to 118a98da): the SECOND grounding
+    signal remote_url_duplicate_candidates' own scope memo (2ee34a9d) left for later — a
+    SURVIVOR whose own graph already asserts a rename ("I am also called X") is stronger
+    evidence than remote_url matching, which the house already trusts unattended; it is
+    also stronger than the casefold lane's own bar (a spelling coincidence), which already
+    executes on nothing but string shape.
+
+    THE OPERATOR'S OWN SPECIMEN, MEASURED, PROVED THE OPPOSITE OF WHAT IT LOOKED LIKE:
+    repo:dtfb carries `name`='dealer-to-fb' as a CURRENT alias alongside its own 'dtfb',
+    and repo:dealer-to-fb has no remote_url and no on_disk_path — exactly this clause's
+    shape. But repo:dealer-to-fb was ALREADY status='merged' (2026-08-21, self-service,
+    ruling 31e5bae1's own standing procedure working as intended) by the time this was
+    scoped — a fully self-healed pair, not a live candidate. Checked ALL TEN live multi-
+    current-name SoftwareProjects the same night: every alias that resolves to a
+    DIFFERENT object resolves to one already merged; the rest are self-declared aliases
+    on one object with no separate duplicate at all. ZERO LIVE TARGETS IN THIS FLEET
+    TODAY — built anyway, per the operator's own forward-looking complaint ("repos change
+    name all the time") and Thoth's explicit instruction, tested against synthetic
+    fixtures the same way the Crush timestamp lane was. Only a REAL future rename whose
+    husk carries no disk evidence will ever populate `candidates` here.
+
+    THE BAR: a SURVIVOR (active) carries some OTHER active SoftwareProject's bare
+    canonical or current `name` as one of its OWN current `name` aliases (never its own
+    primary spelling) — that is the husk. The husk must carry NO current `remote_url` AND
+    NO current `on_disk_path` of its own (Thoth's constraint 2: any disk evidence on the
+    husk CONTRADICTS the alias rather than confirming it — a human question, never
+    guessed). Both sides must be `status='active'` (Thoth's constraint 1, his own
+    dtfb/dealer-to-fb correction: a clause proposing to fold an already-merged object is
+    worse than no clause) — the husk-lookup itself already excludes non-active objects,
+    so this can never even construct a stale candidate. An alias matching MORE THAN ONE
+    other active object skips loudly as ambiguous, never guessed.
+
+    NOT A NEW MERGE MECHANISM: composes with `fold_project` exactly like pieces 2/3,
+    including its own `_contradicting_properties` preflight (a genuine disagreement on
+    any OTHER property still refuses, same as every other lane) — `execute=False` is the
+    default, same asymmetry as its siblings."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id AS survivor_id, o.canonical AS survivor_canonical, "
+        "array_agg(DISTINCT a.value #>> '{}') AS names "
+        "FROM objects o JOIN current_assertions a "
+        "  ON a.object_id=o.id AND a.name='name' "
+        "WHERE o.type='SoftwareProject' AND o.status='active' "
+        "GROUP BY o.id, o.canonical HAVING count(DISTINCT a.value #>> '{}') > 1")
+    candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        survivor_id, survivor_can = row["survivor_id"], row["survivor_canonical"]
+        survivor_bare = str(survivor_can).removeprefix("repo:")
+        for alias in (n for n in row["names"] if n != survivor_bare):
+            husks = await actions.pool.fetch(
+                "SELECT o2.id, o2.canonical FROM objects o2 "
+                "WHERE o2.type='SoftwareProject' AND o2.status='active' "
+                "AND o2.id <> $1 AND (o2.canonical = $2 OR EXISTS ("
+                "  SELECT 1 FROM current_assertions ca WHERE ca.object_id=o2.id "
+                "  AND ca.name='name' AND ca.value #>> '{}' = $3))",
+                survivor_id, f"repo:{alias}", alias)
+            if not husks:
+                continue  # a self-declared alias matching no other active object — nothing to fold
+            if len(husks) > 1:
+                skipped.append({"survivor": survivor_can, "alias": alias,
+                                "reason": f"{len(husks)} active projects answer to alias "
+                                f"{alias!r} — ambiguous, never guessed"})
+                continue
+            husk_id, husk_can = husks[0]["id"], husks[0]["canonical"]
+            remote = await actions.pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions "
+                "WHERE object_id=$1 AND name='remote_url'", husk_id)
+            disk = await actions.pool.fetchval(
+                "SELECT value #>> '{}' FROM current_assertions "
+                "WHERE object_id=$1 AND name='on_disk_path'", husk_id)
+            if remote or disk:
+                skipped.append({"survivor": survivor_can, "alias": alias, "husk": husk_can,
+                                "reason": f"husk carries its own disk evidence "
+                                f"(remote_url={remote!r}, on_disk_path={disk!r}) — "
+                                "contradicts the alias rather than confirming it, a "
+                                "human question"})
+                continue
+            conflicts = await _contradicting_properties(actions.pool, husk_id, survivor_id)
+            if conflicts:
+                skipped.append({"survivor": survivor_can, "alias": alias, "husk": husk_can,
+                                "reason": f"contradicting values on: {', '.join(conflicts)} "
+                                "— likely two different projects, not one under two names"})
+                continue
+            if execute:
+                result = await fold_project(actions, dupe=husk_can, into=survivor_can,
+                                            evidence=evidence, actor=actor)
+            else:
+                result = {"plan": {"would_fold": husk_can, "into": survivor_can}}
+            candidates.append({"dupe": husk_can, "into": survivor_can, "alias": alias,
+                               "result": result})
+    return {"executed": execute, "candidates": candidates, "skipped": skipped}
