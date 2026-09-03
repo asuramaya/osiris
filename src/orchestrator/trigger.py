@@ -769,10 +769,24 @@ _RESIDENT_DEEP_WINDOWS = 4
 def _resident_of_sync(root: Path, sid: str) -> str | None:
     """Sync (runs via to_thread): the agent id of the NEWEST signed osiris act in session
     `sid`'s transcript, or None when the session has never signed anything (no whisper, no
-    mount, no send — a stranger this dispatcher must not address)."""
+    mount, no send — a stranger this dispatcher must not address).
+
+    ANCHORED (the same fix as `_turn_fresh_sync`'s own, decision pending, msg 6653):
+    a bare `next(iter(root.glob(f"*/{sid}.jsonl")), None)` assumes exactly one file on
+    disk carries this session id — false the instant the materializer (ruling d161a156)
+    writes a second, static copy under the seat's own office slug. This is the CROSSED-
+    REGISTRY identity check itself — reading the wrong copy here doesn't just misjudge
+    liveness, it can miss real signed testimony the live file carries, or read stale
+    testimony a materialized snapshot happens to predate. Anchored on `f"jobs/{sid}"`
+    directly — `sid` is already the exact, authoritative session id (that's what the old
+    glob matched exactly on too), so synthesizing beats trusting a CALLER-supplied
+    job_dir hint that may not even be a real job_dir path (`_resume_guard`'s own
+    `job_dir_hint` can be a bare id, not a path — `_job_id` finds no anchor in that shape
+    at all). Among genuinely anchored matches, `locate_current_transcript` picks the
+    freshest by mtime — the live file, never a static copy."""
     if not sid:
         return None
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
     if t is None:
         return None
     try:
@@ -801,10 +815,14 @@ def _resident_of_deeper_sync(
     act found or the front of the file. Returns (resident_agent_id, transcript_path) — the
     path rides along even on a signature MISS, so `_resident_disagrees` can reason about
     the file for the registry corroboration step without a second glob. Bounded: total
-    cost never exceeds `extra_windows` chunks regardless of how large the file is."""
+    cost never exceeds `extra_windows` chunks regardless of how large the file is.
+
+    ANCHORED, matching `_resident_of_sync`'s own fix immediately above — same reasoning,
+    same `f"jobs/{sid}"` synthesis, so both halves of one scan always agree on which file
+    they read."""
     if not sid:
         return None, None
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
     if t is None:
         return None, None
     try:
@@ -879,16 +897,32 @@ async def _registry_corroborates(
     return seat_id is None or row["seat_id"] is None or row["seat_id"] == seat_id
 
 
-def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
+def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") -> bool:
     """Sync (runs via to_thread): is a TURN genuinely in flight in session `sid` — by the
     transcript's own newest timestamped line, never the inode. AWAKE and ASLEEP are
     different states and must not be confounded (operator, 2026-07-21, the Aegis phantom:
     a session 13 hours dead wore a seconds-old mtime — something in the chrome/daemon
     touches the file without writing). A turn appends timestamped records; a toucher
-    cannot. No timestamp in the tail = not moving."""
+    cannot. No timestamp in the tail = not moving.
+
+    ANCHORED, NEVER GLOBBED (the wire-resume-to-store finding, decision pending, msg
+    6653/Thoth: "the same disease we just spent the night removing, one function over"):
+    used to be `next(iter(root.glob(f"*/{sid}.jsonl")), None)` — an UNANCHORED search
+    assuming exactly one file on disk carries this session id, silently returning
+    "whichever the filesystem handed me first" when that assumption breaks. The
+    materializer (ruling d161a156) now routinely writes a SECOND copy of a session's
+    transcript under the seat's own office slug, so the assumption was already false the
+    instant that landed — a live, still-growing transcript and a static materialized copy
+    can share one stem. `locate_current_transcript(root, job_dir, anchored_only=True)` asks
+    the answerable question instead: the file at the address already known (the job_dir's
+    own anchor), and among genuinely anchored matches picks the FRESHEST by mtime — which
+    is exactly the live, still-being-written file, never a static copy sitting still.
+    `job_dir` defaults to `""`, synthesizing `f"jobs/{sid}"` below (the SAME convention
+    `_lineage_resume_candidate` used before its own rewrite) when a caller has no real
+    per-hop anchor to pass — a real job_dir, when the caller has one, is always preferred."""
     if not sid:
         return False
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
     if t is None:
         return False
     try:
@@ -1695,7 +1729,7 @@ async def dispatch_dm(
         root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
             else Path.home() / ".claude" / "projects"
         if await asyncio.to_thread(
-                _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs):
+                _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs, resume[3]):
             return {"mode": "delivered",
                     "detail": "the addressee's transcript is moving right now (genuinely "
                               "mid-turn) — its own turn's end surfaces the DM; no second "
@@ -2983,7 +3017,8 @@ async def _transcript_activity(
         return False, False
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
-    fresh = await asyncio.to_thread(_turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs)
+    fresh = await asyncio.to_thread(
+        _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs, resume[3])
     return True, fresh
 
 
