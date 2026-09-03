@@ -149,8 +149,10 @@ def _path_mtime(path: Path) -> datetime | None:
 
 def _write_dest(path: Path, content: bytes) -> None:
     """Sync helper, same blocking-call-lint reasoning as `_read_source`. Raw bytes
-    (0052) — the write side of the same byte-exact promise `_read_source` makes."""
+    (0052) — the write side of the same byte-exact promise `_read_source` makes. An
+    existing file at `path` is parked, never overwritten (`_park_superseded`)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    _park_superseded(path)
     path.write_bytes(content)
 
 
@@ -177,11 +179,35 @@ def _discard_tmp(f: Any, tmp: Path) -> None:
     tmp.unlink(missing_ok=True)
 
 
+def _park_superseded(target: Path) -> Path | None:
+    """Move whatever already sits at `target` into a sibling `.superseded-stubs/` directory
+    (a timestamped, id-preserving name) instead of overwriting it — Constitution 3 applied
+    to disk: the store is canon and a slug's file is a CACHE of it, but a cache the store
+    never ingested (a divergent fork, a truncated stub, a copy from a cwd the seat has since
+    left) is still evidence, never deleted. Two levels below `~/.claude/projects/<slug>/`,
+    so neither the harness's own session listing nor `locate_current_transcript`'s
+    one-level `*/*.jsonl` glob can ever pick the parked copy back up as the freshest —
+    Sekhmet's own precedent for Marquee's shadowing stub (decision b348e902), made the
+    materializer's standing rule rather than a one-off hand move. Returns where it went,
+    None when nothing was there. Sync helper, same blocking-call-lint reasoning as
+    `_write_dest`."""
+    if not target.exists():
+        return None
+    park_dir = target.parent / ".superseded-stubs"
+    park_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    parked = park_dir / f"{target.stem}-superseded-{stamp}{target.suffix}"
+    target.replace(parked)
+    return parked
+
+
 def _finalize_tmp(f: Any, tmp: Path, target: Path) -> None:
     """Close the temp writer and atomically rename it onto `target` — the moment a
     streamed rematerialize actually becomes visible at its destination, all at once,
-    never as a partially-written file a concurrent reader could observe mid-stream."""
+    never as a partially-written file a concurrent reader could observe mid-stream.
+    An existing file at `target` is PARKED first (`_park_superseded`), never overwritten."""
     f.close()
+    _park_superseded(target)
     tmp.replace(target)
 
 
@@ -479,7 +505,28 @@ class SoulStore:
                     )
             await self._checkpoint(harness, anchor_sid, source_path, idx, prev_hash)
             total_new += len(rows)
+        if total_new == 0 and since > 0 and seen == since:
+            # THE STORE'S CLOCK IS "LAST SYNCED", NOT "LAST GREW" (operator, 2026-09-03 —
+            # Chad's live shape): a full scan that finds the file holds EXACTLY the lines
+            # the store already has is a verified sync, and `last_ingested_at` must say
+            # so. Before this, a scan with nothing new never touched the row, so a file
+            # whose mtime had moved for any reason other than growth (a byte-identical
+            # re-materialize, a copy, a `touch`) read as "LIVE — modified more recently
+            # than the store's last ingest" forever, and every resume refused to emit
+            # canon into the office and fell back to a stale copy. Only an EXACT match
+            # earns the touch — a shorter file (a stale partial) is never mistaken for
+            # the canon, and a longer one already took the checkpoint above.
+            await self._touch(harness, anchor_sid, source_path)
         return total_new
+
+    async def _touch(self, harness: str, anchor_sid: str, source_path: str) -> None:
+        """Stamp `last_ingested_at = now()` (and the path just verified as complete) on a
+        session the store re-scanned and found fully ingested — see `ingest_path`."""
+        await self.pool.execute(
+            "UPDATE soul_sessions SET last_ingested_at = now(), source_path = $3 "
+            "WHERE harness = $1 AND anchor_sid = $2",
+            harness, anchor_sid, source_path,
+        )
 
     async def splice_sources(
         self, anchor_sid: str, source_paths: list[str], *, harness: str | None = None,
@@ -1009,6 +1056,21 @@ class SoulStore:
                             "ingest — writing over it would clobber content the store "
                             "never saw. Pass force=True to override.",
                 }
+            if (upto is None and existing_mtime is not None
+                    and str(target) == str(row["source_path"])):
+                # THE CANON IS ALREADY HERE (operator, 2026-09-03: "osiris should already
+                # have a copy of the latest canon transcript to resume from"): the target
+                # IS the very file this session was last ingested FROM, and the guard above
+                # just proved nothing touched it since. Re-emitting it byte-for-byte is a
+                # 300MB no-op at best; at worst a caller read the write's absence as "no
+                # canon at the spawn cwd" and fell back to a STALE copy in another slug —
+                # Chad's live shape, 2026-09-03: the office held the full 15.9MB canon,
+                # the fabricated tree slug held a 1.8MB partial, and every resume attempt
+                # refused here and spawned at the partial. A named success, never an
+                # error: `unchanged` tells the caller the canon is at `target` right now.
+                return {"written": str(target), "unchanged": True,
+                        "note": "target is this session's own last-ingested source — "
+                                "the store holds nothing newer to emit"}
         if upto is None:
             # THE FAST PATH, unconditionally: every real resume call reaches here with
             # no seek, and gets Imhotep's streamed writer at full 307MB-scale memory

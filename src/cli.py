@@ -652,7 +652,11 @@ async def _resolve_and_guard_launch(
     `verb` names the actual caller in every printed line so this stays ONE
     implementation, never a second copy drifting from the first (#48's own lesson).
     Returns `(facts, launch_cwd)` to proceed, or an int to return immediately."""
-    from src.orchestrator.trigger import _launch_twin_check, _tree_exists
+    from src.orchestrator.trigger import (
+        _launch_twin_check,
+        _tree_exists,
+        fabricated_tree_verdict,
+    )
 
     facts = await _resolve_launch_target(pool, handle, verb=verb)
     if facts is None:
@@ -688,6 +692,20 @@ async def _resolve_and_guard_launch(
                   f"{facts['seat_id']!r}, tree_cwd='<the real directory>', because='...') "
                   "via the osiris MCP tools, or by creating it at that exact path.",
                   file=sys.stderr)
+            return 1
+        # THE #199 FABRICATION (operator, 2026-09-03: "launch lands the agent in the wrong
+        # cwd"): a mint-time ~/code/<handle> with no git tree while the charter governs a
+        # real tree elsewhere. Same check launch_seat runs (one implementation, 983ec87a);
+        # refused BY NAME with the one-line remedy, never silently repointed.
+        fabricated = await fabricated_tree_verdict(pool, facts["seat_id"], tree_cwd)
+        if fabricated is not None:
+            repo, real_path = fabricated
+            print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r}, which holds no "
+                  f"git tree, while its charter governs {repo!r} at {real_path!r} (a real "
+                  "tree) — the #199 mint-time fabrication; a body spawned there lands in "
+                  "the wrong cwd. Fix it with: bind_seat_tree(seat_id="
+                  f"{facts['seat_id']!r}, tree_cwd={real_path!r}, because='...') via the "
+                  "osiris MCP tools.", file=sys.stderr)
             return 1
         launch_cwd = tree_cwd
 
@@ -982,7 +1000,12 @@ async def _cmd_resume_harness(
     and is visible to the exact roster the operator was complaining could never see it."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import seat_receipt
-    from src.orchestrator.trigger import _DM_RESUME_PROMPT, _lineage_resume_candidate, _resume_guard
+    from src.orchestrator.trigger import (
+        _DM_RESUME_PROMPT,
+        _lineage_resume_candidate,
+        _resume_guard,
+        _resume_office,
+    )
 
     pre = await _resolve_and_guard_launch(
         handle, pool=pool, agents_json=agents_json, verb="resume")
@@ -1040,14 +1063,19 @@ async def _cmd_resume_harness(
               f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
         return 1
 
-    resumed_session_id, resumed_repo, materialized_at = resume[0], resume[1], resume[4]
-    spawn_cwd = materialized_at or resumed_repo
+    resumed_session_id, materialized_at = resume[0], resume[4]
+    # THE SPAWN CWD IS THE OFFICE, ALWAYS — never the tree/launch cwd (operator, 2026-09-03:
+    # ~/.osiris is the anchor; the harness resumes the copy in the SPAWN cwd's own slug, so
+    # spawning anywhere the canon was not emitted resumes a stale partial). Mirrors
+    # trigger.py's dispatch_dm/launch_seat lines exactly (two doors, one receipt).
+    spawn_cwd = materialized_at or await _resume_office(
+        pool, facts["seat_id"], fallback=facts["anchor_cwd"])
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
-    print(f"osiris resume: resumed session {resumed_session_id[:8]} — "
-          f"walked {len(resume_log)} generation(s) back to find it "
+    print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd} — "
+          f"walked {resume[5]} generation(s) back to find it "
           f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "
           f"--resume`: it idles after this turn rather than exiting, and shows up in "
           f"`claude agents` as {name!r}. To reach it again: send it mail, it wakes on "

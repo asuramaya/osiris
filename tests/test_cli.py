@@ -943,6 +943,74 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
     assert "tree_cwd=" in err and "because=" in err
 
 
+async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter_names_a_real_tree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE #199 MINT-TIME FABRICATION AT THE LAUNCH DOOR (operator, 2026-09-03: "launch has
+    a bug that lands the agent in the wrong cwd" — Jesus/Chad, bound at mint to a
+    convention-derived ~/code/<handle> holding nothing but a .osiris pin while their
+    charters governed the real trees at ~/code/REPOS/Godel and ~/code/cdking): a bound
+    tree_cwd that holds NO git tree, while the seat's charter governs a project whose
+    recorded on_disk_path IS a git tree elsewhere, is refused BY NAME with the exact
+    bind_seat_tree remedy — never spawned into the bare directory, never silently
+    repointed. Negative control: the same seat with a REAL git tree bound launches."""
+    import io
+    from contextlib import redirect_stderr
+    from datetime import UTC, datetime
+
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import bind_seat_tree
+
+    office = tmp_path / "office"
+    office.mkdir()
+    real_tree = tmp_path / "REPOS" / "Godel"
+    (real_tree / ".git").mkdir(parents=True)
+    bare = tmp_path / "code" / "clifabricated"
+    bare.mkdir(parents=True)
+    (bare / ".osiris").write_text('project = "clifabricated"\n')
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:godel-cli", "test")
+    await actions.assert_property(proj, "on_disk_path", str(real_tree), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    seat = await ensure_seat(actions, house="osiris", handle="clifabricated",
+                             anchor_cwd=str(office), source="test")
+    charter = await set_charter(actions, seat["seat_id"], ["godel-cli"], actor="operator")
+    assert not charter.get("rejected"), charter
+    bind = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(bare),
+                                actor="operator", because="test: the fabricated shape")
+    assert bind.get("error") is None
+
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the fabrication check refuses first")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("clifabricated", model=None, pool=actions.pool,
+                               spawn=_unreachable, agents_json=_unreachable)
+    assert out == 1
+    err = buf.getvalue()
+    assert "holds no git tree" in err and "godel-cli" in err and str(real_tree) in err
+    assert f"bind_seat_tree(seat_id={seat['seat_id']!r}, tree_cwd={str(real_tree)!r}" in err
+
+    # NEGATIVE CONTROL: rebound to the real tree, the same seat gets past the check (the
+    # twin check is the next guard; an empty roster lets it through to the spawn).
+    spawned: list[str] = []
+
+    async def _spawn(cwd: str, **k: Any) -> None:
+        spawned.append(cwd)
+
+    async def _empty(*a: Any, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    bind = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(real_tree),
+                                actor="operator", because="test: the remedy the refusal names")
+    assert bind.get("error") is None
+    with redirect_stderr(io.StringIO()):
+        await cmd_launch("clifabricated", model=None, pool=actions.pool,
+                         spawn=_spawn, agents_json=_empty)
+    assert spawned == [str(real_tree)]
+
+
 async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:

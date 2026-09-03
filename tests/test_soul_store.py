@@ -1034,3 +1034,87 @@ async def test_backfill_survives_one_bad_session_among_several(
     counts = await store.backfill(root=projects)
     assert sum(counts.values()) == 1
     assert await store.re_materialize("eeeeeeee") == good.read_text().rstrip("\n")
+
+
+async def test_rematerialize_to_disk_reports_unchanged_when_target_is_its_own_source(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE CANON IS ALREADY HERE (operator, 2026-09-03 — Chad's live shape: the office held
+    the full canon, the store had just ingested it from there, and the resume caller read
+    the write's absence as 'no canon at the spawn cwd' and spawned at a stale partial one
+    slug over). A dest that IS the session's own last-ingested source, untouched since,
+    is a NAMED success (`unchanged`), never an error and never a byte-for-byte rewrite."""
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "s" / "5e1f5ame-session.jsonl", lines)
+    await store.ingest_path(str(source), "5e1f5ame")
+    before = source.stat().st_mtime_ns
+
+    receipt = await store.rematerialize_to_disk("5e1f5ame", dest=str(source))
+    assert "error" not in receipt
+    assert receipt.get("unchanged") is True
+    assert receipt["written"] == str(source)
+    assert source.stat().st_mtime_ns == before          # not rewritten
+    assert source.read_text() == "\n".join(lines) + "\n"
+
+
+async def test_rematerialize_to_disk_parks_a_stale_copy_instead_of_overwriting_it(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """Constitution 3 on disk: a stale, store-unseen copy at the destination is MOVED into
+    `.superseded-stubs/` (two levels below the slug root, invisible to the harness's own
+    listing and to `locate_current_transcript`'s `*/*.jsonl` glob) — never deleted, never
+    silently overwritten. Sekhmet's hand-move for Marquee's shadowing stub (b348e902),
+    made the materializer's standing rule."""
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "s" / "5ee7pa7k-session.jsonl", lines)
+    await store.ingest_path(str(source), "5ee7pa7k")
+
+    dest = tmp_path / "d" / "5ee7pa7k-session.jsonl"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("stale partial\n")
+    past = datetime.now(UTC).timestamp() - 3600
+    os.utime(dest, (past, past))                        # older than the ingest: not live
+
+    receipt = await store.rematerialize_to_disk("5ee7pa7k", dest=str(dest))
+    assert "error" not in receipt
+    assert dest.read_text() == "\n".join(lines) + "\n"  # canon now at the destination
+    parked = list((dest.parent / ".superseded-stubs").glob("5ee7pa7k-session-superseded-*.jsonl"))
+    assert len(parked) == 1
+    assert parked[0].read_text() == "stale partial\n"   # the old copy survives, parked
+    # `locate_current_transcript` globs `<root>/*/*.jsonl` — from this root, the parked
+    # copy sits at d/.superseded-stubs/…, one level too deep to ever be picked up again.
+    assert sorted(p.name for p in tmp_path.glob("*/*.jsonl")) == [
+        "5ee7pa7k-session.jsonl", "5ee7pa7k-session.jsonl"]
+
+
+async def test_ingest_path_touches_last_ingested_at_on_a_verified_full_sync(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """Chad's live shape, 2026-09-03: the office file's mtime moved (a byte-identical
+    re-materialize) with NOTHING new in it, `ingest_path` found zero new lines and never
+    touched the row, so the target read as LIVE on every resume forever. A full scan that
+    finds the file holds exactly the store's lines is a verified sync: the clock moves,
+    and the materializer then reports the canon as already there. A SHORTER file (a
+    stale partial) never earns the touch."""
+    lines = _synthetic_lines(4)
+    source = _write_transcript(tmp_path / "s" / "7ouc4c10-session.jsonl", lines)
+    assert await store.ingest_path(str(source), "7ouc4c10") == 4
+    before = await store.pool.fetchval(
+        "SELECT last_ingested_at FROM soul_sessions WHERE anchor_sid='7ouc4c10'")
+    moved = datetime.now(UTC).timestamp()
+    os.utime(source, (moved, moved))                # mtime moved, content did not
+
+    assert await store.ingest_path(str(source), "7ouc4c10") == 0
+    after = await store.pool.fetchval(
+        "SELECT last_ingested_at FROM soul_sessions WHERE anchor_sid='7ouc4c10'")
+    assert after > before                            # the clock moved: verified sync
+    receipt = await store.rematerialize_to_disk("7ouc4c10", dest=str(source))
+    assert receipt.get("unchanged") is True          # …and the canon reads as present
+
+    partial = _write_transcript(tmp_path / "p" / "7ouc4c10-session.jsonl", lines[:2])
+    assert await store.ingest_path(str(partial), "7ouc4c10") == 0
+    again = await store.pool.fetchrow(
+        "SELECT last_ingested_at, source_path FROM soul_sessions WHERE anchor_sid='7ouc4c10'")
+    assert again is not None
+    assert again["last_ingested_at"] == after        # a stale partial never touches it
+    assert again["source_path"] == str(source)

@@ -5723,3 +5723,39 @@ def test_occupancy_gate_arms_are_distinguishable_and_both_named_in_wake_status()
     assert _WAKE_STATUS["queued-live-holder"] != (
         _WAKE_STATUS["resume-refused-occupied-foreign"])
     assert _WAKE_STATUS["queued-live-holder"] == "queued"
+
+
+async def test_resident_verdict_ranks_the_minds_own_act_above_a_later_whisper_greeting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE WHISPER IS HEARSAY (Chad, 2026-09-03): a transcript whose every ACT (mount/send
+    receipts) is the addressee's own, but whose tail carries SessionStart greetings naming
+    another lineage (an anchor-leaked hand resume, class 2294e95d) with no act by that
+    lineage after them, is "unknown" — never a found different mind. Negative control:
+    an act by the other lineage AFTER the greeting is a real "mismatch"; a greeting naming
+    the addressee itself stays "match"."""
+    from src.orchestrator.trigger import _resident_verdict
+
+    root = tmp_path / "projects"
+    slug = root / "-home-x--osiris-seats-chad"
+    slug.mkdir(parents=True)
+    sid = "7451509a-f711-48ea-b67e-d2877d721ca3"
+    t = slug / f"{sid}.jsonl"
+    mount_by_chad = ('{"type":"user","text":"{\\"agent\\":\\"agent:7451509a\\",'
+                     '\\"project\\":\\"cdking\\"}"}\n')
+    greeting_khnum = '{"type":"attachment","text":"osiris knows you as agent:aad6603a-g40-vii"}\n'
+    send_by_khnum = ('{"type":"user","text":"{\\"sent\\":9,'
+                     '\\"from\\":\\"agent:aad6603a-g40-vii\\"}"}\n')
+    greeting_chad = '{"type":"attachment","text":"osiris knows you as agent:7451509a"}\n'
+
+    t.write_text(mount_by_chad + greeting_khnum + greeting_khnum)
+    assert await _resident_verdict(actions.pool, root, sid, "agent:7451509a") == "unknown"
+
+    t.write_text(mount_by_chad + greeting_khnum + send_by_khnum)
+    assert await _resident_verdict(actions.pool, root, sid, "agent:7451509a") == "mismatch"
+
+    t.write_text(mount_by_chad + greeting_chad)
+    assert await _resident_verdict(actions.pool, root, sid, "agent:7451509a") == "match"
+
+    t.write_text(greeting_khnum)                     # nothing but a stranger's greeting
+    assert await _resident_verdict(actions.pool, root, sid, "agent:7451509a") == "mismatch"

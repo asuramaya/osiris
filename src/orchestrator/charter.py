@@ -67,6 +67,26 @@ async def charter_of(pool: asyncpg.Pool, seat_id: str) -> list[str]:
     return sorted(r["canonical"].removeprefix("repo:") for r in rows)
 
 
+async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, str]]:
+    """`charter_of` plus each governed project's own recorded `on_disk_path` — (repo label,
+    path) pairs, only for projects that HAVE a path on record. The launch doors use this to
+    catch the #199 mint-time fabrication (operator, 2026-09-03, "launch lands the agent in
+    the wrong cwd"): a seat whose `tree_cwd` is the convention-derived ~/code/<handle> — a
+    bare directory holding nothing but a `.osiris` pin — while its charter governs a real
+    tree somewhere else. Same active-`governs` query as `charter_of`, one extra join, never
+    a second notion of what a seat governs."""
+    rows = await pool.fetch(
+        "SELECT p.canonical, a.value #>> '{}' AS path FROM links l "
+        "JOIN objects s ON s.id=l.from_id AND s.type='Seat' AND s.canonical=$1 "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "JOIN current_assertions a ON a.object_id=p.id AND a.name='on_disk_path' "
+        "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        seat_id,
+    )
+    return sorted((r["canonical"].removeprefix("repo:"), r["path"]) for r in rows
+                  if r["path"])
+
+
 async def set_charter(
     actions: Actions, seat_id: str, repos: list[str], *, actor: str,
 ) -> dict[str, Any]:

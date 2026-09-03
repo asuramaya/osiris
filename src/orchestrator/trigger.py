@@ -753,11 +753,42 @@ async def _seat_wakes(
 # the resident. The chrome cannot pollute this file; only turns write it.
 # receipts appear JSON-escaped inside transcript lines (\"from\":\"agent:…\") and
 # occasionally plain — the optional backslashes cover both encodings
-_SIGNED = [
+_SIGNED_ACTS = [
     re.compile(r'\\?"sent\\?":\s*\d+,\s*\\?"from\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)'),
     re.compile(r'\\?"agent\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)\\?",\s*\\?"project\\?"'),
+]
+# THE WHISPER IS HEARSAY, NOT TESTIMONY (Chad, 2026-09-03): "knows you as agent:…" is the
+# SessionStart hook's own greeting — the SERVER's resolution of who this window is, injected
+# as an attachment line. A mount or send receipt is the MIND's own act. The two are not the
+# same grade of evidence: Chad's transcript ends with two greetings naming Khnum's lineage
+# (an anchor leak — a hand-run `claude --resume` from Khnum's own shell carried Khnum's
+# CLAUDE_JOB_DIR, class 2294e95d) and NOT ONE act by that lineage after them, while every
+# act the file holds is Chad's own. Reading the greeting as a found different mind refused
+# the seat's own real session as crossed-registry. `_resident_verdict` ranks an act above a
+# greeting; a greeting still counts when nothing signed exists at all.
+_SIGNED_WHISPERS = [
     re.compile(r"knows you as (agent:[A-Za-z0-9._-]+)"),
 ]
+_SIGNED = [*_SIGNED_ACTS, *_SIGNED_WHISPERS]
+
+
+def _newest_signatures(lines: list[str]) -> tuple[str | None, str | None]:
+    """(newest ACT signature, newest WHISPER greeting) in `lines`, newest-first scan —
+    stops as soon as an act is found (anything older is not the newest of either kind
+    that matters: an act newer than every greeting settles the resident by itself)."""
+    whisper: str | None = None
+    for line in reversed(lines):
+        for pat in _SIGNED_ACTS:
+            m = pat.search(line)
+            if m:
+                return m.group(1), whisper
+        if whisper is None:
+            for pat in _SIGNED_WHISPERS:
+                m = pat.search(line)
+                if m:
+                    whisper = m.group(1)
+                    break
+    return None, whisper
 _RESIDENT_TAIL_BYTES = 400_000
 # THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding, design approved
 # Thoth DM 1825): how many further 400KB windows the deeper scan reads BEHIND the tail
@@ -796,16 +827,32 @@ def _resident_of_sync(root: Path, sid: str) -> str | None:
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
         return None
-    for line in reversed(tail.splitlines()):
-        for pat in _SIGNED:
-            m = pat.search(line)
-            if m:
-                return m.group(1)
-    return None
+    act, whisper = _newest_signatures(tail.splitlines())
+    return act or whisper
+
+
+def _resident_tail_signatures_sync(root: Path, sid: str) -> tuple[str | None, str | None]:
+    """`_resident_of_sync`'s two halves kept apart — (newest act, newest greeting) in the
+    tail — so `_resident_verdict` can tell testimony from hearsay. Same anchored file,
+    same window."""
+    if not sid:
+        return None, None
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
+    if t is None:
+        return None, None
+    try:
+        size = t.stat().st_size
+        with t.open("rb") as f:
+            f.seek(max(0, size - _RESIDENT_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None, None
+    return _newest_signatures(tail.splitlines())
 
 
 def _resident_of_deeper_sync(
     root: Path, sid: str, *, extra_windows: int = _RESIDENT_DEEP_WINDOWS,
+    acts_only: bool = False,
 ) -> tuple[str | None, Path | None]:
     """Sync (runs via to_thread): called ONLY after `_resident_of_sync`'s own tail check
     already returned None (thread 25943031 — halcyon's last 400KB was all unsigned harness
@@ -841,7 +888,7 @@ def _resident_of_deeper_sync(
         except OSError:
             break
         for line in reversed(chunk.splitlines()):
-            for pat in _SIGNED:
+            for pat in (_SIGNED_ACTS if acts_only else _SIGNED):
                 m = pat.search(line)
                 if m:
                     return m.group(1), t
@@ -1001,9 +1048,31 @@ async def _resident_verdict(
     target-generation context threaded at all — freshness is the one signal every caller
     already has (it is `wakeable_identity`'s own tiebreak)."""
     from src.orchestrator.agents import _generation
-    resident = await asyncio.to_thread(_resident_of_sync, root, sid)
-    if resident is not None:
-        return "mismatch" if _generation(resident)[0] != base else "match"
+    act, whisper = await asyncio.to_thread(_resident_tail_signatures_sync, root, sid)
+    if act is not None:
+        act_base = _generation(act)[0]
+        if whisper is not None and act_base == base and _generation(whisper)[0] != base:
+            # `whisper` is only ever recorded when it is NEWER than the act (see
+            # `_newest_signatures`): the addressee's own last act, then a greeting naming
+            # someone else, then silence — hearsay over the addressee's own session.
+            return "unknown"
+        return "mismatch" if act_base != base else "match"
+    if whisper is not None:
+        if _generation(whisper)[0] == base:
+            return "match"
+        # HEARSAY DISAGREEMENT (see `_SIGNED_WHISPERS`): the newest thing in the tail is
+        # the server's own greeting naming another lineage, and no mind has ACTED since.
+        # Look deeper for the newest act. An act by another lineage: a real mismatch. An
+        # act by the addressee's own lineage: the greeting was a misresolution over the
+        # addressee's own session — "unknown", never "match" (the greeting is still a
+        # disagreement on the record) and never "mismatch" (nothing signed names a
+        # different mind). A nudge stays refused on "unknown"; a resume can still clear
+        # it through `_zero_hop_graph_corroborates`'s own narrow door.
+        deep_act, _ = await asyncio.to_thread(
+            _resident_of_deeper_sync, root, sid, acts_only=True)
+        if deep_act is None or _generation(deep_act)[0] != base:
+            return "mismatch"
+        return "unknown"
     deep_resident, transcript = await asyncio.to_thread(_resident_of_deeper_sync, root, sid)
     if transcript is None:
         return "unknown"  # the transcript itself is unreadable — nothing left to check
@@ -1318,6 +1387,24 @@ async def wake_gate_preflight(
                 "status": f"refused-{guard_gate}", "detail": refusal}
     return {"mode": "resumable", "status": "resumable",
             "detail": f"resumable now — session {resume[0][:8]}, no gate refuses it"}
+
+
+async def _resume_office(
+    pool: asyncpg.Pool, seat_id: str | None, *, fallback: str | None,
+) -> str:
+    """WHERE A RESUME SPAWNS when the materializer had nothing to write (operator, 2026-09-03:
+    "~/.osiris is where osiris agents get their identity and meta from"): the seat's own
+    DERIVED office (`offices.seat_office_target`, the anchor invariant's own address — the
+    same target the materializer emits into), falling back to the recorded anchor only
+    when no office can be derived. Never the caller's tree/launch cwd: the harness resumes
+    whichever copy of a session id sits in the SPAWN cwd's own slug (measured live on
+    2.1.259 — a cwd whose slug held a stale 20KB partial resumed THAT over a fuller copy one
+    slug over, and a cwd holding no copy found nothing once two copies existed), so a
+    spawn anywhere the canon was not emitted continues a stale partial. One helper for all
+    three resume doors (cli.py, dispatch_dm, launch_seat), so the rule cannot drift."""
+    from src.orchestrator.offices import seat_office_target
+    office = await seat_office_target(pool, seat_id) if seat_id else None
+    return office or fallback or ""
 
 
 async def _lineage_resume_candidate(
@@ -2084,7 +2171,17 @@ async def dispatch_dm(
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo, materialized_at = graph_resume[0], graph_resume[1], graph_resume[4]
-    spawn_cwd = materialized_at or repo
+    # THE SPAWN CWD IS THE OFFICE, ALWAYS (operator, 2026-09-03: "~/.osiris is where osiris
+    # agents get their identity and meta from, and cannot drift from the db state"): the
+    # materializer emits the store's canon into the OFFICE slug, and the harness resumes
+    # whichever copy of a session id sits in the SPAWN cwd's own slug (measured live,
+    # 2.1.259: a cwd whose slug held a stale 20KB partial resumed THAT, not the fuller copy
+    # one slug over; cross-slug lookup found nothing at all once two copies existed). The
+    # old `or repo` fallback therefore spawned at a stale copy whenever the emit was
+    # declined — Chad's exact 2026-09-03 shape. `repo` stays in the tuple untouched for
+    # `_zero_hop_graph_corroborates`'s own invariant; it is the spawn location ONLY as
+    # the last-resort fallback for a seatless lineage whose office cannot be derived.
+    spawn_cwd = materialized_at or await _resume_office(pool, seat_id, fallback=repo)
     hop = graph_resume[5]
     gate, refusal = await _resume_guard(
         pool, (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]), base,
@@ -2508,6 +2605,37 @@ def _tree_exists(tree_cwd: str) -> bool:
     return Path(tree_cwd).is_dir()
 
 
+def _is_git_tree(path: str) -> bool:
+    """Sync helper, same ASYNC240 reasoning as `_tree_exists`: does `path` hold a git
+    checkout (a `.git` directory or worktree file)? A bound tree that does NOT is not
+    proof of anything by itself — but paired with a charter that governs a real tree
+    elsewhere, it is the #199 fabrication's exact signature."""
+    return (Path(path) / ".git").exists()
+
+
+async def fabricated_tree_verdict(
+    pool: asyncpg.Pool, seat_id: str, tree_cwd: str,
+) -> tuple[str, str] | None:
+    """THE #199 MINT-TIME FABRICATION, caught at the launch door (operator, 2026-09-03:
+    "launch has a bug that lands the agent in the wrong cwd" — Jesus and Chad were both
+    bound at mint to a convention-derived ~/code/<handle> holding nothing but a `.osiris`
+    pin, while their charters governed the real trees at ~/code/REPOS/Godel and
+    ~/code/cdking, where every real session had actually worked). Returns
+    `(repo, real_path)` when `tree_cwd` holds no git tree AND the seat's charter governs a
+    project whose recorded on_disk_path IS a git tree somewhere else — the one shape where
+    "spawn where the graph says" is knowably wrong. None otherwise: a tree with a `.git`
+    is trusted as bound (a non-git workspace with no chartered tree elsewhere is a
+    legitimate state, never refused). Shared by BOTH launch doors (cli.py and
+    launch_seat), one implementation — the guard-symmetry rule (983ec87a)."""
+    from src.orchestrator.charter import governed_trees
+    if _is_git_tree(tree_cwd):
+        return None
+    for repo, path in await governed_trees(pool, seat_id):
+        if path != tree_cwd and _tree_exists(path) and _is_git_tree(path):
+            return repo, path
+    return None
+
+
 def _launch_anchor(seat_id: str) -> str:
     """A STABLE durable anchor per SEAT (not per launch) — a re-launched seat re-wears its own
     anchor, the same 'one ghost, re-worn' discipline _wake_job_dir uses per project. The seat
@@ -2844,6 +2972,16 @@ async def launch_seat(
                               "does not exist on disk — osiris expects the harness (or a "
                               "human, via EnterWorktree) to have created it before launch; "
                               "it never provisions one itself"}
+        fabricated = await fabricated_tree_verdict(pool, target_seat, tree_cwd)
+        if fabricated is not None:
+            repo, real_path = fabricated
+            return {"status": "refused-fabricated-tree",
+                    "detail": f"{handle} ({target_seat}) names tree_cwd={tree_cwd!r}, which "
+                              f"holds no git tree, while its charter governs {repo!r} at "
+                              f"{real_path!r} (a real tree) — the #199 mint-time "
+                              "fabrication; a body spawned there lands in the wrong cwd. "
+                              f"Fix it with: bind_seat_tree(seat_id={target_seat!r}, "
+                              f"tree_cwd={real_path!r}, because='...')"}
         launch_cwd = tree_cwd
 
     # THE ATTACH LINE (ruling 0fe36e59, thread c171a3de finding #6): spawn location must never
@@ -3042,7 +3180,9 @@ async def launch_seat(
                 resume = None
         if resume is not None:
             session_id, repo, materialized_at = resume[0], resume[1], resume[4]
-            spawn_cwd = materialized_at or repo
+            # office, never `repo` — see dispatch_dm's own identical line for why.
+            spawn_cwd = materialized_at or await _resume_office(
+                pool, target_seat, fallback=office)
             # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike the fresh-mint lane
             # below (which sends its brief AFTER spawning): a fresh `--bg` body takes
             # seconds to boot, mount, and claim_name before its first inbox() call, so send-
