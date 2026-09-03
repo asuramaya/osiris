@@ -442,6 +442,65 @@ async def test_register_records_the_divergence_flag(actions: Actions, tmp_path: 
     assert row["dec_ec"] == EvidenceClass.CO_OCCURRENCE.value
 
 
+# ═══ THE BIRTH-TIME session POISONING (Thoth dispatch msg 6734, decision e10022b4): a
+# `--bg`-launched seat's FIRST-EVER mount has nothing else to observe, so identity.session
+# falls to `_job_id(job_dir)` — which for `_launch_anchor`'s own stable per-seat anchor
+# (`jobs/seat-<hex>`, never a real session id) returns the seat's own canonical, and
+# register_agent used to stamp it as `session` verbatim, poisoning osiris resume forever
+# for that generation (asserted once, never revisited). ═══════════════════════════════════
+
+async def test_register_never_stamps_a_stable_anchor_slug_as_the_session_property(
+    actions: Actions,
+) -> None:
+    """THE MARQUEE SPECIMEN, REPRODUCED DIRECTLY: a `--bg` seat's job_dir is
+    `_launch_anchor`'s own stable per-seat slug, never a real session id — resolve_identity
+    has no explicit session and nothing to observe, so it falls through to `_job_id`, which
+    returns the anchor's own basename unvalidated. register_agent must NEVER assert that as
+    `session` — the property must be absent, not confidently wrong. Absent is what lets
+    osiris resume's resident-unknown gate say 'no signed testimony' (honest) instead of
+    'try --resume seat-bdbe031e' (a command that can never work)."""
+    ident = resolve_identity(cwd="/x/marquee", job_dir="/home/x/.claude/jobs/seat-bdbe031e",
+                             model="claude-sonnet-5")
+    assert ident.session == "seat-bdbe031e"  # the poisoned value STILL flows through identity
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    row = await actions.pool.fetchrow(
+        "SELECT value#>>'{}' AS session FROM current_assertions "
+        "WHERE object_id=$1 AND name='session'", a)
+    assert row is None  # never written — not the anchor slug, not anything else
+
+
+def test_looks_like_a_real_session_shape() -> None:
+    """The validator directly: exactly 8 lowercase hex chars, nothing else — the same shape
+    every genuine sid in this codebase already reduces to (a heartbeat's own session_id, a
+    transcript filename's leading segment, DSH's own UUID slice)."""
+    from src.orchestrator.agents import _looks_like_a_real_session
+
+    assert _looks_like_a_real_session("deadbeef") is True
+    assert _looks_like_a_real_session("aa9990f2") is True
+    assert _looks_like_a_real_session("seat-bdbe031e") is False  # the anchor slug itself
+    assert _looks_like_a_real_session("j1234567") is False       # resolve_identity's own
+                                                                   # synthetic last-resort id
+    assert _looks_like_a_real_session("unknown") is False
+    assert _looks_like_a_real_session("DEADBEEF") is False       # case-sensitive, matches
+                                                                   # every real id's own case
+    assert _looks_like_a_real_session(None) is False
+    assert _looks_like_a_real_session("") is False
+
+
+async def test_register_still_stamps_a_genuine_per_session_job_dir(actions: Actions) -> None:
+    """THE NEGATIVE CONTROL — the path this fix must never regress: an ORDINARY session
+    (job_dir anchored on its own real id, the common non-`--bg` case) still gets its
+    `session` property stamped exactly as before."""
+    ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
+                             model="claude-sonnet-5")
+    assert ident.session == "deadbeef"
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    row = await actions.pool.fetchrow(
+        "SELECT value#>>'{}' AS session FROM current_assertions "
+        "WHERE object_id=$1 AND name='session'", a)
+    assert row is not None and row["session"] == "deadbeef"
+
+
 def _transcript_lines(dir_: Path, *models: str) -> None:
     """A transcript with one assistant line per model, in order — a within-session swap when it
     carries >1 distinct model."""
