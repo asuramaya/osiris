@@ -769,10 +769,24 @@ _RESIDENT_DEEP_WINDOWS = 4
 def _resident_of_sync(root: Path, sid: str) -> str | None:
     """Sync (runs via to_thread): the agent id of the NEWEST signed osiris act in session
     `sid`'s transcript, or None when the session has never signed anything (no whisper, no
-    mount, no send — a stranger this dispatcher must not address)."""
+    mount, no send — a stranger this dispatcher must not address).
+
+    ANCHORED (the same fix as `_turn_fresh_sync`'s own, decision pending, msg 6653):
+    a bare `next(iter(root.glob(f"*/{sid}.jsonl")), None)` assumes exactly one file on
+    disk carries this session id — false the instant the materializer (ruling d161a156)
+    writes a second, static copy under the seat's own office slug. This is the CROSSED-
+    REGISTRY identity check itself — reading the wrong copy here doesn't just misjudge
+    liveness, it can miss real signed testimony the live file carries, or read stale
+    testimony a materialized snapshot happens to predate. Anchored on `f"jobs/{sid}"`
+    directly — `sid` is already the exact, authoritative session id (that's what the old
+    glob matched exactly on too), so synthesizing beats trusting a CALLER-supplied
+    job_dir hint that may not even be a real job_dir path (`_resume_guard`'s own
+    `job_dir_hint` can be a bare id, not a path — `_job_id` finds no anchor in that shape
+    at all). Among genuinely anchored matches, `locate_current_transcript` picks the
+    freshest by mtime — the live file, never a static copy."""
     if not sid:
         return None
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
     if t is None:
         return None
     try:
@@ -801,10 +815,14 @@ def _resident_of_deeper_sync(
     act found or the front of the file. Returns (resident_agent_id, transcript_path) — the
     path rides along even on a signature MISS, so `_resident_disagrees` can reason about
     the file for the registry corroboration step without a second glob. Bounded: total
-    cost never exceeds `extra_windows` chunks regardless of how large the file is."""
+    cost never exceeds `extra_windows` chunks regardless of how large the file is.
+
+    ANCHORED, matching `_resident_of_sync`'s own fix immediately above — same reasoning,
+    same `f"jobs/{sid}"` synthesis, so both halves of one scan always agree on which file
+    they read."""
     if not sid:
         return None, None
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
     if t is None:
         return None, None
     try:
@@ -879,16 +897,32 @@ async def _registry_corroborates(
     return seat_id is None or row["seat_id"] is None or row["seat_id"] == seat_id
 
 
-def _turn_fresh_sync(root: Path, sid: str, active_secs: int) -> bool:
+def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") -> bool:
     """Sync (runs via to_thread): is a TURN genuinely in flight in session `sid` — by the
     transcript's own newest timestamped line, never the inode. AWAKE and ASLEEP are
     different states and must not be confounded (operator, 2026-07-21, the Aegis phantom:
     a session 13 hours dead wore a seconds-old mtime — something in the chrome/daemon
     touches the file without writing). A turn appends timestamped records; a toucher
-    cannot. No timestamp in the tail = not moving."""
+    cannot. No timestamp in the tail = not moving.
+
+    ANCHORED, NEVER GLOBBED (the wire-resume-to-store finding, decision pending, msg
+    6653/Thoth: "the same disease we just spent the night removing, one function over"):
+    used to be `next(iter(root.glob(f"*/{sid}.jsonl")), None)` — an UNANCHORED search
+    assuming exactly one file on disk carries this session id, silently returning
+    "whichever the filesystem handed me first" when that assumption breaks. The
+    materializer (ruling d161a156) now routinely writes a SECOND copy of a session's
+    transcript under the seat's own office slug, so the assumption was already false the
+    instant that landed — a live, still-growing transcript and a static materialized copy
+    can share one stem. `locate_current_transcript(root, job_dir, anchored_only=True)` asks
+    the answerable question instead: the file at the address already known (the job_dir's
+    own anchor), and among genuinely anchored matches picks the FRESHEST by mtime — which
+    is exactly the live, still-being-written file, never a static copy sitting still.
+    `job_dir` defaults to `""`, synthesizing `f"jobs/{sid}"` below (the SAME convention
+    `_lineage_resume_candidate` used before its own rewrite) when a caller has no real
+    per-hop anchor to pass — a real job_dir, when the caller has one, is always preferred."""
     if not sid:
         return False
-    t = next(iter(root.expanduser().glob(f"*/{sid}.jsonl")), None)
+    t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
     if t is None:
         return False
     try:
@@ -1226,15 +1260,19 @@ async def wake_gate_preflight(
         facts = await seat_facts(pool, seat_id) if seat_id is not None else None
         launch_cwd = (facts["tree_cwd"] or facts["anchor_cwd"]) if facts else None
         if launch_cwd:
+            # materialize=False: this function is a READ-ONLY entry point (its own
+            # docstring's promise) — it answers "would a resume succeed", never spawns,
+            # so it must never emit a materialized transcript as a side effect.
             graph_outcome = await _lineage_resume_candidate(
-                pool, wake_target, st, repo=launch_cwd)
+                pool, wake_target, st, repo=launch_cwd, seat_id=seat_id, materialize=False)
             graph_resume = (graph_outcome[0]
                             if isinstance(graph_outcome, tuple) else None)
             graph_log = (graph_outcome[1]
                         if isinstance(graph_outcome, tuple) else graph_outcome)
             if graph_resume is not None:
                 g_gate, g_refusal = await _resume_guard(
-                    pool, graph_resume, _generation(target)[0], seat_id=seat_id,
+                    pool, (graph_resume[0], graph_resume[1], graph_resume[2],
+                          graph_resume[3]), _generation(target)[0], seat_id=seat_id,
                     st=st, hop=len(graph_log) - 1, launch_cwd=launch_cwd)
                 if g_gate is None:
                     return {"mode": "resumable", "status": "resumable",
@@ -1284,8 +1322,8 @@ async def wake_gate_preflight(
 
 async def _lineage_resume_candidate(
     pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
-    office: str | None = None,
-) -> tuple[tuple[str, str, float, str], list[str]] | list[str]:
+    seat_id: str | None = None, materialize: bool = True,
+) -> tuple[tuple[str, str, float, str, str | None], list[str]] | list[str]:
     """THE STRUCTURAL FIX for a live-fire defect (Thoth, 2026-08-04, msg 3691 — Sekhmet):
     `_agent_resumable`/`wakeable_identity` resolve a resume candidate through
     `agent_mounts.job_dir`, which works for a `-p --resume`-triggered wake (a fresh,
@@ -1309,20 +1347,66 @@ async def _lineage_resume_candidate(
     succession_chain's own MAX_SUCCESSION_HOPS, the same "a walk never widens unbounded"
     discipline as every other resume check in this file.
 
-    Returns ((session_id, repo, mtime, job_dir=""), log) on the first hop that clears both
-    gates — `repo` is the CALLER's own `launch_cwd`, since every generation of one seat
-    works in the same place by construction, not a per-hop agent_mounts.cwd (which suffers
-    the identical anchor-collapse this function exists to route around); `job_dir=""`
+    THE INVERSION (ruling d161a156/d63b2ca6, Thoth dispatch 6620): this used to HUNT —
+    `locate_current_transcript` on disk, then `_spawn_cwd_for` to guess which candidate
+    cwd matched wherever the hunt landed. It now MATERIALIZES: per hop, ENSURE the session
+    is in the soul store (`SoulStore.ensure_ingested`, the same harness-adapter discovery
+    the old hunt used, just feeding the store instead of a direct disk read), then check
+    the verdict against the STORE's own tail measurement (`SoulStore.resume_diagnostics`
+    — never a disk stat; the load-bearing move: today's verdict was a measurement of
+    whatever file the hunt happened to land on, confidently wrong ABOUT THE WRONG FILE
+    when the hunt landed wrong, de70e54d's exact specimen). On the winning hop, when
+    `materialize` is true, EMIT via `rematerialize_to_disk` to the seat's own office
+    (`offices.seat_office_target`, the SAME derivation the anchor invariant heals toward —
+    never an independently-typed copy) — "elsewhere" cannot exist once nothing reads what
+    is already on disk.
+
+    `materialize` DEFAULTS TRUE for the real resume-spawn callers (cli.py, dispatch_dm,
+    launch_seat — the majority) but MUST be passed `False` by a caller that only checks
+    resumability without ever spawning (`wake_gate_preflight`'s own docstring promises
+    "a read-only entry point"; `succession_repair.unresumed_heads`'s own docstring promises
+    "read-only, proposes nothing, writes nothing") — `rematerialize_to_disk` already
+    refuses to clobber a live transcript (mtime-vs-last_ingested_at guard) so a stray
+    materialize would rarely corrupt anything, but a "read-only" function that silently
+    writes files is a broken promise regardless of whether the write was safe.
+
+    A NAMED ORDERING GAP, DISCLOSED RATHER THAN SILENT: the emit happens HERE, inside
+    candidate-finding, before any caller's own `_resume_occupancy_gate` check runs — so
+    THE PEN RULE's occupancy re-verification (agents-json + /proc, "at the moment of the
+    write") does not, today, gate this specific write. The write's own safety instead
+    rests entirely on `rematerialize_to_disk`'s existing, independently-reviewed guard
+    (refuses whenever the target's mtime is newer than the store's own last_ingested_at —
+    i.e. something wrote to it more recently than the store has seen, the honest signature
+    of a live writer). Moving the occupancy check to run BEFORE this emit would need
+    `agents_json` threaded into this function, a real restructure — named here rather than
+    silently done, so a reviewer can decide whether the existing mtime guard is enough or
+    the occupancy check needs to move.
+
+    Returns ((session_id, repo, mtime, job_dir="", materialized_at), log) on the first hop
+    that clears both gates. `repo` is UNCHANGED IN MEANING from before this rewrite — the
+    CALLER's own `launch_cwd`, since `_zero_hop_graph_corroborates`'s `resume[1] ==
+    launch_cwd` invariant depends on it staying exactly that (Thoth's explicit ruling: do
+    NOT smuggle the office into this field — the anchor_cwd/tree_cwd fusion, #103/#141, is
+    the exact bug that reinterpreting a field silently produces). `materialized_at` is the
+    NEW, own-named 5th field — WHERE rematerialize_to_disk actually wrote (or attempted to
+    write), None when `materialize=False` or when no seat office target could be derived —
+    the actual spawn cwd a caller that intends to spawn must use, never `repo`. `job_dir=""`
     because no per-hop anchor is available for `_resume_guard`'s corroboration fallback —
     a known, disclosed narrowing (see the caller's own receipt/report), not a silent one.
     Returns the bare `log` (no candidate) when NOTHING in the walk clears both gates — each
-    entry names the generation, its session's transcript size, and the SPECIFIC gate that
-    refused it (numbers, not adjectives — Thoth's own explicit requirement), so a caller's
-    receipt can read one line instead of a human re-running succession_chain by hand."""
+    entry names the generation, its session's STORE TAIL size (was "transcript size" before
+    this rewrite — the store, not a disk stat, is what's being measured now), and the
+    SPECIFIC gate that refused it (numbers, not adjectives — Thoth's own explicit
+    requirement), so a caller's receipt can read one line instead of a human re-running
+    succession_chain by hand."""
+    from src.ingest.sessions import _verdict_from_diagnostics
+    from src.ingest.soul_store import SoulStore
+    from src.orchestrator.offices import seat_office_target
     from src.orchestrator.succession import succession_chain
 
     chain = await succession_chain(pool, holder)
-    root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+    store = SoulStore(pool)
+    sense_root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     log: list[str] = []
     for hop in chain:
@@ -1330,29 +1414,54 @@ async def _lineage_resume_candidate(
         if not session:
             log.append(f"gen {gen}: minted but never mounted, no session to check")
             continue
-        t = await asyncio.to_thread(
-            locate_current_transcript, root, f"jobs/{session}", anchored_only=True)
-        if t is None:
+        anchor_sid = await store.ensure_ingested(
+            cwd=None, job_dir=f"jobs/{session}", root=sense_root)
+        if anchor_sid is None:
             log.append(f"gen {gen} (session {session[:8]}): mounted but no transcript "
-                       "found on disk")
+                       "found on disk or in the store")
             continue
-        try:
-            size_mb = t.stat().st_size / 1_000_000
-        except OSError:
-            log.append(f"gen {gen} (session {session[:8]}): transcript unreadable")
+        last_ingested = await pool.fetchval(
+            "SELECT last_ingested_at FROM soul_sessions WHERE harness='claude-code' "
+            "AND anchor_sid=$1", anchor_sid)
+        diagnostics = await store.resume_diagnostics(anchor_sid)
+        if diagnostics is None:
+            log.append(f"gen {gen} (session {session[:8]}): no transcript found on disk "
+                       "or in the store")
             continue
-        verdict = await asyncio.to_thread(
-            _resume_candidate_verdict, t, st.osiris_resume_ceiling_bytes,
-            st.osiris_resume_min_tail_bytes)
+        _count, tail_bytes, tail_lines = diagnostics
+        tail_mb = tail_bytes / 1_000_000
+        verdict = _verdict_from_diagnostics(
+            tail_bytes, tail_lines, ceiling_bytes=st.osiris_resume_ceiling_bytes,
+            min_tail_bytes=st.osiris_resume_min_tail_bytes)
         if verdict is not None:
-            log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): {verdict}")
+            log.append(f"gen {gen} (session {session[:8]}, {tail_mb:.2f}MB store tail): "
+                       f"{verdict}")
             continue
-        log.append(f"gen {gen} (session {session[:8]}, {size_mb:.0f}MB): resumable, "
-                   f"{len(log)} hop(s) back")
-        spawn_cwd, note = _spawn_cwd_for(t, [repo, office])
-        if spawn_cwd != repo:
-            log.append(f"gen {gen} (session {session[:8]}): {note}")
-        return (session, spawn_cwd or repo, t.stat().st_mtime, ""), log
+        log.append(f"gen {gen} (session {session[:8]}, {tail_mb:.2f}MB store tail): "
+                   f"resumable, {len(log)} hop(s) back")
+        materialized_at: str | None = None
+        if materialize:
+            office = await seat_office_target(pool, seat_id) if seat_id else None
+            if office is None:
+                log.append(f"gen {gen} (session {session[:8]}): no seat office target to "
+                           "materialize into — resumable, but nowhere to emit it")
+            else:
+                from src.orchestrator.mounts import _harness_slug
+                dest = str(sense_root / _harness_slug(office) / f"{session}.jsonl")
+                receipt = await store.rematerialize_to_disk(anchor_sid, dest=dest)
+                if "error" in receipt:
+                    log.append(f"gen {gen} (session {session[:8]}): materialize refused — "
+                               f"{receipt['error']}")
+                else:
+                    # `materialized_at` is the OFFICE (a real cwd), not `dest` (the jsonl
+                    # file the office's own harness slug resolves to) — a spawn's `cwd`
+                    # argument is a directory the harness derives its OWN slug from, the
+                    # same convention `resume_spawn`/`_spawn_claude_bg` already use for
+                    # `repo`; handing back the file path here would make every caller
+                    # re-derive the office from it instead of just using what it got.
+                    materialized_at = office
+        mtime = last_ingested.timestamp() if last_ingested is not None else time.time()
+        return (session, repo, mtime, "", materialized_at), log
     return log
 
 
@@ -1436,7 +1545,7 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
 
 
 async def _resume_occupancy_gate(
-    resume: tuple[str, str, float, str], *, agents_json: Any,
+    resume: tuple[str, str, float, str], *, agents_json: Any, spawn_cwd: str | None = None,
 ) -> tuple[str, str] | None:
     """IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave, operator's tonight-law:
     mechanisms not patches, 7d6815bb/df646654): `_lineage_resume_candidate` (and
@@ -1475,19 +1584,30 @@ async def _resume_occupancy_gate(
                   this mail is genuinely unknown, and the receipt must say so.
 
     Returns None when neither finds anybody home (safe to resume) — never a silent
-    block; the caller's own receipt names exactly which signal fired and what it means."""
+    block; the caller's own receipt names exactly which signal fired and what it means.
+
+    `spawn_cwd` (the wire-resume-to-store rewrite, ruling d161a156/d63b2ca6): the ACTUAL
+    directory the resume is about to spawn into and materialize onto — the office, once a
+    caller has one, never `resume[1]` (`repo`, which stays the work-tree/launch_cwd value
+    by contract and is no longer where the transcript lands). Defaults to `resume[1]` for
+    a caller with no office yet, unchanged from before this parameter existed. THE PEN
+    RULE (4d6844bc) is exactly why this must check the SPAWN target, not the launch_cwd
+    the old hunt happened to use: a live body sitting in the office — about to have its
+    own transcript overwritten by `rematerialize_to_disk` — must refuse, not go
+    undetected because the check looked at the wrong directory."""
     session_id, repo = resume[0], resume[1]
+    check_cwd = spawn_cwd or repo
     if await _confirm_listener({"sessionId": session_id, "short": ""}, agents_json):
         return ("self",
                 f"the addressee's OWN session ({session_id[:8]}) is live in "
                 "`claude agents --json`")
     from src.orchestrator.census import live_bodies_by_cwd
     bodies = await asyncio.to_thread(live_bodies_by_cwd)
-    if bodies is not None and bodies.get(repo):
-        pids = ", ".join(str(p) for p in bodies[repo])
+    if bodies is not None and bodies.get(check_cwd):
+        pids = ", ".join(str(p) for p in bodies[check_cwd])
         return ("foreign",
                 f"a live claude process (pid {pids}) of UNKNOWN identity is already "
-                f"sitting at {repo!r}")
+                f"sitting at {check_cwd!r}")
     return None
 
 
@@ -1695,7 +1815,7 @@ async def dispatch_dm(
         root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
             else Path.home() / ".claude" / "projects"
         if await asyncio.to_thread(
-                _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs):
+                _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs, resume[3]):
             return {"mode": "delivered",
                     "detail": "the addressee's transcript is moving right now (genuinely "
                               "mid-turn) — its own turn's end surfaces the DM; no second "
@@ -1826,7 +1946,7 @@ async def dispatch_dm(
         facts = await seat_facts(pool, seat_id)
         launch_cwd = facts["tree_cwd"] or facts["anchor_cwd"]
     graph_outcome = await _lineage_resume_candidate(
-        pool, wake_target, st, repo=launch_cwd) if launch_cwd else [
+        pool, wake_target, st, repo=launch_cwd, seat_id=seat_id) if launch_cwd else [
             "no seat/office known for this addressee — a resume needs a launch location"]
     graph_log = graph_outcome[1] if isinstance(graph_outcome, tuple) else graph_outcome
     graph_resume = graph_outcome[0] if isinstance(graph_outcome, tuple) else None
@@ -1885,10 +2005,12 @@ async def dispatch_dm(
         return {"mode": f"resume-refused-{miss_gate}",
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
-    session_id, repo = graph_resume[0], graph_resume[1]
+    session_id, repo, materialized_at = graph_resume[0], graph_resume[1], graph_resume[4]
+    spawn_cwd = materialized_at or repo
     hop = len(graph_log) - 1
     gate, refusal = await _resume_guard(
-        pool, graph_resume, base, seat_id=seat_id, st=st, hop=hop, launch_cwd=launch_cwd)
+        pool, (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]), base,
+        seat_id=seat_id, st=st, hop=hop, launch_cwd=launch_cwd)
     if gate is not None:
         return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
@@ -1896,7 +2018,9 @@ async def dispatch_dm(
     # OCCUPANCY, THE OTHER HALF (task #178): identity above says WHOSE session this is;
     # this asks whether anybody is ALREADY SITTING there. A `-p --resume` beside a live
     # body forks the mind — refuse it here, before the spend, never after.
-    occupied = await _resume_occupancy_gate(graph_resume, agents_json=agents_json)
+    occupied = await _resume_occupancy_gate(
+        (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]),
+        agents_json=agents_json, spawn_cwd=spawn_cwd)
     if occupied is not None:
         which, reason = occupied
         if which == "self":
@@ -1929,7 +2053,7 @@ async def dispatch_dm(
         await conn.execute(
             "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
             "VALUES ($1,$2,$3,'dm-resume')", project, sender, msg_id)
-    await spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
+    await spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
                 model=st.osiris_dm_resume_model or None,
                 allowed_tools=st.osiris_wake_allowed_tools or None)
     return {"mode": "resumed",
@@ -2618,7 +2742,7 @@ async def launch_seat(
         # finding, Thoth msg 3691, Sekhmet).
         holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
         resume_outcome = await _lineage_resume_candidate(
-            pool, holder, st, repo=launch_cwd, office=office,
+            pool, holder, st, repo=launch_cwd, seat_id=target_seat,
         ) if holder else ["no seat holder on record"]
         resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
         resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
@@ -2635,8 +2759,8 @@ async def launch_seat(
             # launch location (office, or tree_cwd when tree-bound), the 1:1 identity the
             # zero-hop graph door corroborates against.
             gate, refusal = await _resume_guard(
-                pool, resume, _generation(holder)[0], seat_id=target_seat, st=st,
-                hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+                pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
+                seat_id=target_seat, st=st, hop=len(resume_log) - 1, launch_cwd=launch_cwd)
             if gate == "resident-unknown":
                 # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb — self-healing
                 # over manual bandaids): an ABSENCE of signed testimony is not evidence this
@@ -2661,7 +2785,8 @@ async def launch_seat(
                 resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
                 resume = None
         if resume is not None:
-            session_id, repo = resume[0], resume[1]
+            session_id, repo, materialized_at = resume[0], resume[1], resume[4]
+            spawn_cwd = materialized_at or repo
             # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike the fresh-mint lane
             # below (which sends its brief AFTER spawning): a fresh `--bg` body takes
             # seconds to boot, mount, and claim_name before its first inbox() call, so send-
@@ -2675,7 +2800,7 @@ async def launch_seat(
                     pool, from_agent=caller, from_project=await house_of(pool, caller),
                     to_agent=target_seat, body=message, grade="ask")
                 resume_brief_id = sent.get("id")
-            await resume_spawn(repo, _DM_RESUME_PROMPT, resume_session=session_id,
+            await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
                                model=argv_model, allowed_tools=st.osiris_wake_allowed_tools
                                or None)
             out = {
@@ -2983,7 +3108,8 @@ async def _transcript_activity(
         return False, False
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
-    fresh = await asyncio.to_thread(_turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs)
+    fresh = await asyncio.to_thread(
+        _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs, resume[3])
     return True, fresh
 
 
