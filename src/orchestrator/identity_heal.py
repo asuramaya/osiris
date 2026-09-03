@@ -21,6 +21,7 @@ alone, exactly as #102's agreement marks are."""
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,11 @@ import asyncpg
 
 from src.actions.core import Actions
 from src.orchestrator.retirement import retire_assertion
+from src.parsers.base import EvidenceClass
+from src.parsers.evidence import confidence_for
+
+_ANCHOR_EC = EvidenceClass.SELF_DECLARED.value
+_ANCHOR_CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 # Deliberately just these two — see module docstring. Never read as a general allowlist to
 # extend without a fresh ruling: house/project were named BY THE OPERATOR, not inferred.
@@ -224,3 +230,154 @@ async def reconcile_seat_identity_third_party(
                          "719ed5b1 rules against — refusing"}
     return await reconcile_seat_identity(actions, seat_id=seat_id, agent_id=agent_id,
                                          actor=actor, reason=because)
+
+
+def _office_dir_exists(target: str) -> bool:
+    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, same
+    convention `trigger._tree_exists` documents) — this healer re-asserts identity at an
+    office that already exists; it never provisions one."""
+    return Path(target).is_dir()
+
+
+async def detect_anchor_invariant_violations(actions: Actions) -> dict[str, list[dict[str, Any]]]:
+    """THE ANCHOR INVARIANT'S OWN DETECTOR (piece 1, msg 6546) — read-only, ARMED here so a
+    caller need not remember to run the standalone script. Reports, for every active Seat:
+    (a) a current `anchor_cwd` OUTSIDE the office root, (b) more than one CURRENT
+    `anchor_cwd` row at all (the supersession-leak shape). Kept as SEPARATE axes on purpose
+    (#103/#141's own law: a surface that says "these disagree," never one that silently
+    collapses) — a seat can be outside-root with only one current row (a clean, if
+    invariant-violating, deliberate anchor) or multi-row while still resolving inside the
+    root (corrupted-but-lucky). `heal_seat_anchor`'s own target population is the seats
+    hitting BOTH axes at once, computed by the caller from this same result, never a third
+    axis duplicated here."""
+    from src.orchestrator.offices import _default_office_root
+
+    root = str(_default_office_root())
+    rows = await actions.pool.fetch(
+        "SELECT o.canonical AS seat, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        " a.id, a.value #>> '{}' AS v, a.source_id, a.observed_at, a.confidence "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='anchor_cwd' AND o.type='Seat' AND o.status='active' "
+        "ORDER BY o.canonical, a.observed_at"
+    )
+    by_seat: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_seat.setdefault(r["seat"], []).append(dict(r))
+
+    outside_root: list[dict[str, Any]] = []
+    multi_current: list[dict[str, Any]] = []
+    for seat, seat_rows in by_seat.items():
+        handle = seat_rows[0]["handle"]
+        if len(seat_rows) > 1:
+            multi_current.append({
+                "seat": seat, "handle": handle,
+                "rows": [{"value": r["v"], "source_id": r["source_id"],
+                          "observed_at": r["observed_at"].isoformat()} for r in seat_rows],
+            })
+        for r in seat_rows:
+            v = r["v"]
+            if v and not (v == root or v.startswith(root.rstrip("/") + "/")):
+                outside_root.append({
+                    "seat": seat, "handle": handle, "value": v,
+                    "source_id": r["source_id"], "observed_at": r["observed_at"].isoformat(),
+                })
+
+    return {"outside_root": outside_root, "multi_current": multi_current}
+
+
+# --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6561/6563) -----------------------
+#
+# `heal_contradicting_property`'s own tie-break (confidence DESC, observed_at DESC — the
+# NEWEST wins) is exactly WRONG for `anchor_cwd`: the corrupting value is always the newer
+# one (a self-invoked rebind at the moment a session's cwd moved), and the correct office
+# value is always the older, mint-time one. So this is a SEPARATE mechanism, not an
+# extension of SEAT_IDENTITY_PROPS — the winner here is never "whoever wrote last," it is
+# the one value the invariant itself computes: `<office_root>/<handle>`. Same shape as
+# reconcile_seat_identity otherwise: a self-service verb, a third-party sibling, reversible
+# writes only (assert_singular_property never deletes — a superseded row stays readable).
+
+
+async def heal_seat_anchor(
+    actions: Actions, *, seat_id: str, actor: str, because: str | None = None,
+    office_root: Path | None = None, dry_run: bool = True,
+) -> dict[str, Any]:
+    """Assert the INVARIANT anchor (`<office_root>/<handle>`) as the seat's sole current
+    `anchor_cwd`, via `Actions.assert_singular_property` — one call collapses every stray
+    current row regardless of source, whether there are zero (Marquee: no office anchor at
+    all, this call WRITES one), one (the common corrupted case: the correct office value
+    already current beside a rogue one), or more.
+
+    REFUSES rather than guesses: no handle on record (nothing to derive an office path
+    from), or the computed office directory does NOT exist on disk (this healer asserts
+    identity at an office that already exists; scaffolding one is `establish_office`'s job,
+    never silently done here). Returns `healed: False, reason: "already correct"` when the
+    sole current value already matches the invariant — never a no-op write.
+
+    `dry_run=True` is the hard default — the receipt always includes `current_before` and
+    `target`; only when `dry_run=False` does the write actually happen. `because`, when
+    given (the third-party sibling's own mandatory reason), rides into the audit trail the
+    same way `reconcile_seat_identity`'s `reason` does."""
+    from src.orchestrator.offices import seat_office_target
+
+    seat_row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if seat_row is None:
+        return {"error": f"no active seat matches {seat_id!r}"}
+    target = await seat_office_target(actions.pool, seat_id, office_root=office_root)
+    if target is None:
+        return {"error": f"{seat_id} has no handle on record — cannot derive an office path"}
+    handle = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        seat_row["id"])
+    if not _office_dir_exists(target):
+        return {"error": f"{target!r} does not exist on disk — this healer re-asserts "
+                         "identity at an office that already exists; establish_office "
+                         "scaffolds one, this verb never does"}
+    current = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v, source_id, observed_at FROM current_assertions "
+        "WHERE object_id=$1 AND name='anchor_cwd' ORDER BY observed_at", seat_row["id"])
+    values = {r["v"] for r in current}
+    receipt: dict[str, Any] = {
+        "seat_id": seat_id, "handle": handle, "target": target,
+        "current_before": [
+            {"value": r["v"], "source_id": r["source_id"],
+             "observed_at": r["observed_at"].isoformat()}
+            for r in current],
+    }
+    if values == {target}:
+        receipt["healed"] = False
+        receipt["reason"] = "already correct"
+        return receipt
+    receipt["dry_run"] = dry_run
+    if dry_run:
+        return receipt
+    now = datetime.now(UTC)
+    reason_text = (
+        "anchor invariant repair (ruling 23771416): asserting the office as the sole "
+        f"current anchor_cwd, collapsing {sorted(values - {target})!r}"
+        + (f" — {because}" if because else ""))
+    await actions.assert_singular_property(
+        seat_row["id"], "anchor_cwd", target, actor, now, _ANCHOR_CONF,
+        evidence_class=_ANCHOR_EC, because=reason_text)
+    receipt["healed"] = True
+    return receipt
+
+
+async def heal_seat_anchor_third_party(
+    actions: Actions, *, seat_id: str, because: str, actor: str,
+    office_root: Path | None = None, dry_run: bool = True,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING of `heal_seat_anchor` — same mandatory-`because` law as
+    `reconcile_seat_identity_third_party`: a correction with no stated reason is the silent
+    overwrite 719ed5b1 rules against, not a fix."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "a correction with no reason is exactly the silent overwrite "
+                         "719ed5b1 rules against — refusing"}
+    return await heal_seat_anchor(actions, seat_id=seat_id, actor=actor, because=because,
+                                  office_root=office_root, dry_run=dry_run)
