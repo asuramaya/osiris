@@ -4794,6 +4794,102 @@ async def test_lineage_resume_candidate_hop_still_zero_for_an_ordinary_single_li
     assert candidate[4] is not None  # materialized_at — succeeded this time
 
 
+async def _lineage_holder_with_truncated_session(
+    actions: Actions, tmp_path: Path, *, agent_id: str, full_sid: str = FULL_SID,
+) -> tuple[Path, str]:
+    """PRODUCTION SHAPE, not the other fixtures' shape (operator's own live catch,
+    2026-09-03, decision 5d31762a): the graph's `session` property is the 8-char
+    TRUNCATED anchor (`sid[:8]`, agents.py's own convention) — every OTHER fixture in
+    this file stamps the property with the SAME full uuid the transcript file is named
+    by, which never exercises the truncation bug at all (the whole reason it went
+    unnoticed by this suite). Here the property and the filename genuinely diverge, the
+    same divergence Marquee's own real graph carries. Returns (sense_root,
+    truncated_session)."""
+    import os
+    import time as _time
+
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    t = proj / f"{full_sid}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"' + agent_id + '\\"}"}\n').encode()
+    t.write_bytes(signed + b"x" * 16)
+    old = _time.time() - 3600
+    os.utime(t, (old, old))
+    truncated = full_sid.split("-")[0]
+    obj = await actions.create_or_find_object("Agent", agent_id, "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", truncated, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    return sense, truncated
+
+
+async def test_lineage_resume_candidate_returns_the_full_session_id_not_the_graphs_own_truncation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIX ITSELF (operator's own live catch, decision 5d31762a): `claude --bg
+    --resume <8-char-anchor>` matches nothing in the harness's own index and silently
+    mints a fresh, disposable session instead of erroring — the exact failure the
+    operator caught with the harness's own resume picker after this suite's own
+    (pre-fix) tests all reported a clean pass, because every other fixture's `session`
+    property already held the FULL id and never exercised the truncation. The candidate
+    returned must be the file's own full stem, read off `soul_sessions.source_path`,
+    never the graph's shorter key."""
+    sense, truncated = await _lineage_holder_with_truncated_session(
+        actions, tmp_path, agent_id="agent:fullsid1")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:fullsid1", manager_agent="agent:hm-fullsid1",
+        worker_handle="FullSid-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/fullsid-test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:fullsid1", st, repo="/tmp/fullsid-test",
+        seat_id=worker_seat, materialize=False)
+
+    assert isinstance(outcome, tuple)
+    candidate, _log = outcome
+    assert candidate[0] == FULL_SID
+    assert candidate[0] != truncated
+
+
+async def test_lineage_resume_candidate_refuses_a_hop_with_only_a_truncated_stub_on_disk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Negative control / the safety half of the fix: when the ONLY discoverable file
+    for this hop is itself named by the bare anchor (e.g. an earlier materialize wrote
+    its own destination the same truncated way, before that was fixed too), there is no
+    genuine full id to hand back — this hop must refuse honestly rather than return a
+    value already known to be unusable against the harness's own `--resume`."""
+    sense = tmp_path / "projects"
+    proj = sense / "-repo-demo"
+    proj.mkdir(parents=True, exist_ok=True)
+    truncated = FULL_SID.split("-")[0]
+    t = proj / f"{truncated}.jsonl"  # named by the BARE anchor — no fuller id at all
+    signed = (b'{"type":"user","toolUseResult":'
+              b'"{\\"sent\\":1,\\"from\\":\\"agent:stubonly\\"}"}\n')
+    t.write_bytes(signed + b"x" * 16)
+    obj = await actions.create_or_find_object("Agent", "agent:stubonly", "test")
+    await actions.assert_property(obj, "seat_generation", "1", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(obj, "session", truncated, "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stubonly", manager_agent="agent:hm-stubonly",
+        worker_handle="StubOnly-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/stubonly-test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:stubonly", st, repo="/tmp/stubonly-test",
+        seat_id=worker_seat, materialize=False)
+
+    assert not isinstance(outcome, tuple)  # no candidate — refused, never a broken id
+    assert any("truncated" in line or "synthetic" in line for line in outcome)
+
+
 async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
     actions: Actions, tmp_path: Path,
 ) -> None:

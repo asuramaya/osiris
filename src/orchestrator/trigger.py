@@ -1383,7 +1383,20 @@ async def _lineage_resume_candidate(
     the occupancy check needs to move.
 
     Returns ((session_id, repo, mtime, job_dir="", materialized_at, hop), log) on the first
-    hop that clears both gates. `hop` IS THE EXPLICIT COUNT OF ENTRIES IN `log` BEFORE the
+    hop that clears both gates. `session_id` IS THE FULL HARNESS ID, NEVER THE GRAPH'S OWN
+    TRUNCATED `session` PROPERTY (operator's own live catch, 2026-09-03, decision 5d31762a):
+    the graph stores an 8-char prefix by convention (`sid[:8]`, agents.py), which matches
+    nothing in the harness's own `--resume` index — passing it through unchanged silently
+    minted a fresh, disposable session on every "successful" resume this whole scheme ever
+    reported, never actually continuing anything, undetected because nothing checked the
+    SPAWNED PROCESS's own transcript. Read directly off the discovered file's own stem
+    (`ensure_ingested`'s winning `soul_sessions.source_path`) — a positive property of the
+    file itself, never inferred from the graph's shorter key. A hop whose only discoverable
+    file has NO fuller id than the bare anchor (e.g. an earlier materialize wrote its own
+    destination by the truncated value, the same bug one door over, also fixed here) is
+    refused rather than handed back a value already known unusable.
+
+    `hop` IS THE EXPLICIT COUNT OF ENTRIES IN `log` BEFORE the
     winning hop's own success line (task #200 residual, Thoth dispatch 6786/6792: a caller
     used to derive this by `len(log) - 1`, on the documented assumption the log always ends
     with exactly one success entry — a false assumption whenever this function itself
@@ -1431,9 +1444,33 @@ async def _lineage_resume_candidate(
             log.append(f"gen {gen} (session {session[:8]}): mounted but no transcript "
                        "found on disk or in the store")
             continue
-        last_ingested = await pool.fetchval(
-            "SELECT last_ingested_at FROM soul_sessions WHERE harness='claude-code' "
-            "AND anchor_sid=$1", anchor_sid)
+        soul_row = await pool.fetchrow(
+            "SELECT last_ingested_at, source_path FROM soul_sessions "
+            "WHERE harness='claude-code' AND anchor_sid=$1", anchor_sid)
+        last_ingested = soul_row["last_ingested_at"] if soul_row else None
+        # THE FULL SESSION ID, NEVER THE GRAPH'S OWN TRUNCATED `session` (operator's own
+        # live catch, 2026-09-03: `claude --bg --resume <8-char-anchor>` matches nothing in
+        # the harness's own index — it silently mints a fresh, disposable session instead
+        # of erroring, so every resume this scheme ever reported "success" on may have been
+        # a false positive nobody checked the SPAWNED PROCESS's own transcript for). The
+        # graph's `session` property is a deliberate 8-char truncation (this module's own
+        # `sid[:8]` convention) — fine for graph matching, NEVER valid as a harness CLI
+        # argument. `ensure_ingested`'s own discovered file's stem IS the harness's real id
+        # (ClaudeJsonlAdapter.discover: `session_id=stem`, `anchor_sid=stem.split("-")[0]`)
+        # — read it directly off disk here (a positive property of the file itself, never
+        # inferred from the graph's own shorter key) rather than widen ensure_ingested's own
+        # return contract, which every other caller already depends on staying anchor_sid.
+        full_sid = Path(soul_row["source_path"]).stem if soul_row else None
+        if not full_sid or full_sid == anchor_sid:
+            # The winning discovered file's own stem IS just the bare anchor — e.g. an
+            # earlier rematerialize wrote its destination as f"{session}.jsonl" (the SAME
+            # truncation bug, one door over: fixed below) and that stub, not a genuine
+            # harness transcript, won the anchored mtime race. Resuming into a value that
+            # can never match the harness's own index is worse than refusing this hop
+            # honestly — never silently hand back a value already known to be unusable.
+            log.append(f"gen {gen} (session {session[:8]}): only a truncated/synthetic "
+                       "transcript on disk — no genuine full session id to resume into")
+            continue
         diagnostics = await store.resume_diagnostics(anchor_sid)
         if diagnostics is None:
             log.append(f"gen {gen} (session {session[:8]}): no transcript found on disk "
@@ -1459,7 +1496,11 @@ async def _lineage_resume_candidate(
                            "materialize into — resumable, but nowhere to emit it")
             else:
                 from src.orchestrator.mounts import _harness_slug
-                dest = str(sense_root / _harness_slug(office) / f"{session}.jsonl")
+                # `full_sid`, never truncated `session` — naming the destination by the
+                # graph's own 8-char value is exactly how today's stray stub got created
+                # in the first place, and how it went on to shadow the real transcript in
+                # the next anchored discovery (mtime-max among same-prefix files).
+                dest = str(sense_root / _harness_slug(office) / f"{full_sid}.jsonl")
                 receipt = await store.rematerialize_to_disk(anchor_sid, dest=dest)
                 if "error" in receipt:
                     log.append(f"gen {gen} (session {session[:8]}): materialize refused — "
@@ -1473,7 +1514,10 @@ async def _lineage_resume_candidate(
                     # re-derive the office from it instead of just using what it got.
                     materialized_at = office
         mtime = last_ingested.timestamp() if last_ingested is not None else time.time()
-        return (session, repo, mtime, "", materialized_at, hop_num), log
+        # `full_sid`, not the graph's own truncated `session` — this is what a caller
+        # hands to resume_spawn/_spawn_claude_bg as `resume_session`, and the harness's
+        # `--resume` flag needs the exact id it knows itself by, never an 8-char prefix.
+        return (full_sid, repo, mtime, "", materialized_at, hop_num), log
     return log
 
 
