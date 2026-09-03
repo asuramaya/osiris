@@ -24,6 +24,7 @@ import asyncpg
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
+from mcp.types import Tool as MCPTool
 
 from src import memprofile
 from src.actions.core import Actions
@@ -131,6 +132,23 @@ class BoundedMCP(FastMCP):
             return tool.fn_metadata.convert_result(fit(result, tool=name))
         finally:
             _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000)
+
+    async def list_tools(self) -> list[MCPTool]:
+        """HIDDEN ALIASES (task #199 lane 2, thread 6778 — the consolidation-without-an-
+        outage mechanism): a tool registered with `meta={"deprecated": True, ...}` is
+        DROPPED from the listing a model ever sees, but stays fully in `self._tools` —
+        `call_tool` above resolves it directly off that dict, never off this method's own
+        output, so a live caller (including a sleeping one whose compiled standing orders
+        still name the old verb) keeps working at its next turn with zero code path
+        change. This is the thing plain shim-forwarding alone cannot give you: shrinking
+        the model-visible SURFACE (this list, and the char/count ratchets in
+        test_tool_contract_diet.py that measure exactly this) and the DUPLICATED CODE
+        (the old name's body is nothing but a one-line forward) in the same change,
+        instead of trading one for the other. Vanilla FastMCP has no such notion —
+        `list_tools`/`call_tool` share one undifferentiated registry — so this overrides
+        the SAME public seam `call_tool` above already overrides, no monkey-patch of
+        anything private."""
+        return [t for t in await super().list_tools() if not (t.meta or {}).get("deprecated")]
 
 
 # TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
@@ -4839,50 +4857,67 @@ async def reconcile_seat_identity_third_party(
         actor=ident.agent_id)
 
 
-@mcp.tool()
-async def heal_seat_anchor(dry_run: bool = True, ctx: Context | None = None) -> dict[str, Any]:
-    """SELF-HEAL your OWN seat's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416):
-    a Seat's anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session
-    happens to be sitting (Chad and Jesus each broke their own by rebinding themselves to
-    their own live cwd — `rebind_seat` no longer permits that for new seats; this tool
-    repairs a seat already corrupted before that fix). Asserts the invariant office path as
-    the SOLE current `anchor_cwd` via `Actions.assert_singular_property`, collapsing every
-    stray value in one call. REFUSES rather than guesses: no handle on record, or the
-    computed office directory does not exist on disk (never scaffolded here).
-
-    `dry_run=True` is the default; the receipt always shows `current_before` and `target`.
-    SELF-SCOPED — see `heal_seat_anchor_third_party` for another seat."""
+async def _heal_seat_anchor_impl(
+    seat_id: str | None, because: str | None, dry_run: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind both `heal_seat_anchor` (self OR third-party, by whether
+    `seat_id` is given) and its deprecated alias `heal_seat_anchor_third_party` — a plain
+    helper, never itself an `@mcp.tool()`, so the two names share this instead of each
+    re-implementing it (task #199 lane 2, thread 6778, the six-pair consolidation's proof).
+    `seat_id=None` heals the CALLER's own held seat, `because` optional; `seat_id=<any
+    seat>` heals a THIRD PARTY's, `because` REQUIRED (a correction with no stated reason
+    is the silent overwrite 719ed5b1 rules against, not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — heal_seat_anchor is a seat's own act",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.seats import held_seat
-    bound = await held_seat(await _pool_get(), ident.agent_id)
-    if bound is None:
-        return {"error": f"{ident.agent_id} holds no seat — nothing to heal"}
+    if seat_id is None:
+        from src.orchestrator.seats import held_seat
+        bound = await held_seat(await _pool_get(), ident.agent_id)
+        if bound is None:
+            return {"error": f"{ident.agent_id} holds no seat — nothing to heal"}
+        seat_id = bound["seat_id"]
+    else:
+        because = (because or "").strip()
+        if not because:
+            return {"error": "a correction with no reason is exactly the silent overwrite "
+                             "719ed5b1 rules against — refusing"}
     from src.orchestrator.identity_heal import heal_seat_anchor as _heal
-    return await _heal(Actions(await _pool_get()), seat_id=bound["seat_id"],
+    return await _heal(Actions(await _pool_get()), seat_id=seat_id, because=because,
                        actor=ident.agent_id, dry_run=dry_run)
 
 
 @mcp.tool()
+async def heal_seat_anchor(
+    seat_id: str | None = None, because: str | None = None, dry_run: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """HEAL A SEAT's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416): a Seat's
+    anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session happens
+    to be sitting. Asserts the invariant office path as the SOLE current `anchor_cwd`,
+    collapsing every stray value. REFUSES rather than guesses: no handle on record, or the
+    office directory does not exist on disk.
+
+    `seat_id=None` (default) heals the CALLER's own held seat, `because` optional;
+    `seat_id=<any seat>` heals a third party's, `because` REQUIRED (task #199 lane 2,
+    thread 6778 — one verb, was two: `heal_seat_anchor_third_party` now forwards here,
+    hidden from listing, still callable, retired once traffic shows it silent).
+
+    `dry_run=True` is the default; the receipt shows `current_before` and `target`."""
+    return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
+
+
+@mcp.tool(meta={"deprecated": True, "use_instead": "heal_seat_anchor",
+                "since": "task #199 lane 2, thread 6778"})
 async def heal_seat_anchor_third_party(
     seat_id: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of heal_seat_anchor — same shape as
-    reconcile_seat_identity_third_party: `seat_id` names ANY seat, `because` is REQUIRED
-    (a correction with no stated reason is the silent overwrite 719ed5b1 rules against).
-    `dry_run=True` still defaults. Otherwise identical to the self-service verb."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.identity_heal import (
-        heal_seat_anchor_third_party as _heal_third_party,
-    )
-    return await _heal_third_party(
-        Actions(await _pool_get()), seat_id=seat_id, because=because,
-        actor=ident.agent_id, dry_run=dry_run)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable (BoundedMCP.list_tools's filter, call_tool's own registry lookup bypasses
+    it). Shares `heal_seat_anchor`'s own `_heal_seat_anchor_impl` body — nothing
+    duplicated. Kept only so a live or sleeping caller whose standing orders still name
+    this verb is not broken at its next turn; remove once tool_traffic() shows it silent."""
+    return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
 @mcp.tool()

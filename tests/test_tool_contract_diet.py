@@ -723,7 +723,11 @@ def _tool_chars(t: Any) -> int:
 # jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
 # function directly. A genuinely new capability (dry_run default, because required on
 # execute, same shape sweep_seat_disk's own door already established), not padding.
-TOOL_CONTRACT_EXPECTED_COUNT = 151
+TOOL_CONTRACT_EXPECTED_COUNT = 150
+# 151 -> 150 (2026-09-03, Imhotep, task #199 lane 2, thread 6778): heal_seat_anchor_third_
+# party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
+# own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
+# recorded, not a rename or a merge-reconciliation artifact.
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -811,6 +815,16 @@ TOOL_CONTRACT_CEILING_CHARS = 202871
 # 3-way-reconciled) but their combined char cost was never actually measured together
 # until now. Measured fresh, not summed.
 TOOL_CONTRACT_CEILING_CHARS = 210451
+# 210,451 -> 209,867 (measured exact). Tool count 151 -> 150 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6778 — the six-pair consolidation's proof): heal_seat_anchor_third_
+# party retired as a hidden alias (BoundedMCP.list_tools now filters any tool registered
+# with meta={"deprecated": True}, still fully callable via call_tool — see mcp_server.py's
+# own docstring on the override), its body sharing heal_seat_anchor's own new
+# `seat_id=None` (self) / `seat_id=<seat>` (third-party, `because` required) parameter
+# instead of a second implementation. FIRST SHRINK either ratchet has recorded: one fewer
+# tool AND fewer total chars in the same change, not one traded for the other — the
+# mechanism this lane exists to prove.
+TOOL_CONTRACT_CEILING_CHARS = 209867
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.identity_heal import (
     detect_anchor_invariant_violations,
@@ -649,6 +650,143 @@ async def test_heal_seat_anchor_third_party_requires_a_reason(
         actions, seat_id="seat:tphenry", because="anchor invariant sweep",
         actor="agent:coordinator", office_root=tmp_path, dry_run=False)
     assert out["healed"] is True
+
+
+# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2, thread 6778) — heal_seat_anchor and
+# heal_seat_anchor_third_party used to be two separately-implemented @mcp.tool() wrappers
+# around this same orchestrator function; now one shared helper (_heal_seat_anchor_impl)
+# backs both, and the third-party name is a hidden, deprecated alias (dropped from
+# list_tools(), still fully callable). WATCHED FAIL BEFORE THIS CHANGE: on the pre-
+# consolidation code, `srv.heal_seat_anchor(seat_id=..., because=...)` raised
+# TypeError(unexpected keyword argument 'seat_id') — the self-scoped tool took no such
+# param at all. ════════════════════════════════════════════════════════════════════════
+
+class _McpCtx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_consolidated_heal_seat_anchor_self_path_still_resolves_the_callers_own_seat(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """seat_id=None (the default) must still heal the CALLER'S OWN held seat — the
+    self-service path the old self-scoped tool alone used to cover."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path))
+    (tmp_path / "mcpself1").mkdir()
+    target = str(tmp_path / "mcpself1")
+    seat_oid = await _seat_with_handle_and_anchors(
+        actions, "seat:mcpself1", "McpSelf1",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/rogue", "agent:x", NOW - timedelta(days=1)))
+    agent_oid = await actions.create_or_find_object("Agent", "agent:mcpself1", "test")
+    await actions.create_link(agent_oid, seat_oid, "holds", "test", NOW, 0.9,
+                              evidence_class="self_declared")
+
+    ident = AgentIdentity(agent_id="agent:mcpself1", session="mcps1", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.heal_seat_anchor(dry_run=False, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out.get("seat_id") == "seat:mcpself1", out
+    assert out["healed"] is True
+
+
+async def test_consolidated_heal_seat_anchor_third_party_path_requires_a_reason(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """seat_id=<explicit seat> is the third-party path — because is REQUIRED, same law
+    the old, separately-named heal_seat_anchor_third_party tool enforced."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path))
+    (tmp_path / "mcpthird1").mkdir()
+    target = str(tmp_path / "mcpthird1")
+    await _seat_with_handle_and_anchors(
+        actions, "seat:mcptp1", "McpThird1",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/rogue2", "agent:x", NOW - timedelta(days=1)))
+
+    ident = AgentIdentity(agent_id="agent:coordinatormcp", session="coordmcp",
+                          project="osiris", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        refused = await srv.heal_seat_anchor(seat_id="seat:mcptp1", because="", ctx=ctx)
+        assert "error" in refused and "silent overwrite" in refused["error"]
+        out = await srv.heal_seat_anchor(
+            seat_id="seat:mcptp1", because="anchor sweep", dry_run=False, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out["healed"] is True
+
+
+async def test_the_deprecated_third_party_name_still_works_and_shares_the_same_body(
+    actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """heal_seat_anchor_third_party is retired from listing but MUST still be callable by
+    name (a live or sleeping caller whose standing orders name it must not break at its
+    next turn) — and must produce the IDENTICAL receipt shape the consolidated tool does,
+    proving it shares _heal_seat_anchor_impl rather than a second implementation."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path))
+    (tmp_path / "mcpdep1").mkdir()
+    target = str(tmp_path / "mcpdep1")
+    await _seat_with_handle_and_anchors(
+        actions, "seat:mcpdep1", "McpDep1",
+        (target, "console", NOW - timedelta(days=30)),
+        ("/home/asuramaya/code/rogue3", "agent:x", NOW - timedelta(days=1)))
+
+    ident = AgentIdentity(agent_id="agent:deprecatedcaller", session="depc1",
+                          project="osiris", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.heal_seat_anchor_third_party(
+            seat_id="seat:mcpdep1", because="legacy caller", dry_run=False, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out["healed"] is True
+    assert out["seat_id"] == "seat:mcpdep1"
+    assert set(out) == {"seat_id", "handle", "target", "current_before", "dry_run", "healed"}
+
+
+async def test_deprecated_tool_is_hidden_from_list_tools_but_still_in_call_tools_registry() -> None:
+    """THE MECHANISM ITSELF: a tool registered with meta={"deprecated": True} must not
+    appear in what a model's own tool list shows (the surface shrink), while remaining
+    fully present in the manager's own registry call_tool resolves against (the
+    backward-compat guarantee) — the two halves of the hidden-alias design, both
+    verified against the REAL server, not a stand-in."""
+    from src import mcp_server as srv
+
+    listed = {t.name for t in await srv.mcp.list_tools()}
+    assert "heal_seat_anchor_third_party" not in listed
+    assert "heal_seat_anchor" in listed
+    assert srv.mcp._tool_manager.get_tool("heal_seat_anchor_third_party") is not None
 
 
 # ═══ detect_anchor_invariant_violations — THE DETECTOR (piece 1, msg 6546) ════════════
