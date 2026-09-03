@@ -675,10 +675,16 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     the resumed body's own post-resume visibility is `claude agents`'s job now, not
     something this function polls for."""
     from src.cli import _cmd_resume_harness
+    from src.orchestrator.offices import _default_office_root
 
     sense = await _resumable_seat(
         actions, tmp_path, handle="cliresume", agent_id="agent:cliresume01",
         anchor_cwd="/tmp/cliresume-office")
+    # the ACTUAL spawn cwd, post-inversion (ruling d161a156/d63b2ca6): the materializer
+    # emits to the seat's own DERIVED office (offices.seat_office_target), never the
+    # (possibly stale) anchor_cwd this fixture set — that's the anchor invariant's own
+    # self-healing working as designed, not a bug this test should paper over.
+    real_office = str(_default_office_root() / "cliresume")
 
     resumed: list[dict[str, Any]] = []
 
@@ -701,7 +707,7 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert out == 0
     assert len(resumed) == 1
     call = resumed[0]
-    assert call["repo"] == "/tmp/cliresume-office"          # the seat's own launch_cwd
+    assert call["repo"] == real_office          # the seat's own DERIVED office
     assert call.get("resume_session") == _RESUME_SID
     assert "job_dir" not in call                             # a resume is not a birth
     assert call.get("model") == "claude-sonnet-5"
@@ -727,10 +733,14 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     door corroborates it via the graph's own session pointer + the seat's own launch
     location, and the resume proceeds through THIS door too, not just launch_seat's."""
     from src.cli import _cmd_resume_harness
+    from src.orchestrator.offices import _default_office_root
 
     sense = await _resumable_seat_no_signed_testimony(
         actions, tmp_path, handle="clizerohop", agent_id="agent:clizerohop01",
         anchor_cwd="/tmp/clizerohop-office")
+    # see the sibling stale-holder test's own comment: post-inversion, the spawn cwd is
+    # the DERIVED office, never the (possibly stale) anchor_cwd this fixture set.
+    real_office = str(_default_office_root() / "clizerohop")
 
     resumed: list[dict[str, Any]] = []
 
@@ -747,7 +757,7 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
 
     assert out == 0
     assert len(resumed) == 1
-    assert resumed[0]["repo"] == "/tmp/clizerohop-office"
+    assert resumed[0]["repo"] == real_office
     assert resumed[0].get("resume_session") == _RESUME_SID
 
 

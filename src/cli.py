@@ -957,7 +957,7 @@ async def _cmd_resume_harness(
     holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
     resume_outcome = await _lineage_resume_candidate(
         pool, holder, st, repo=launch_cwd,
-        office=facts.get("anchor_cwd")) if holder else ["no seat holder on record"]
+        seat_id=facts["seat_id"]) if holder else ["no seat holder on record"]
     resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
     resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
     if resume is not None:
@@ -972,8 +972,8 @@ async def _cmd_resume_harness(
         # back") — its log always ends with exactly one success entry when `resume` is
         # set, so the count of entries BEFORE it is N.
         gate, refusal = await _resume_guard(
-            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st,
-            hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+            pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
+            seat_id=facts["seat_id"], st=st, hop=len(resume_log) - 1, launch_cwd=launch_cwd)
         if gate == "resident-unknown":
             # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
             # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
@@ -1000,9 +1000,10 @@ async def _cmd_resume_harness(
               f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
         return 1
 
-    resumed_session_id, resumed_repo = resume[0], resume[1]
+    resumed_session_id, resumed_repo, materialized_at = resume[0], resume[1], resume[4]
+    spawn_cwd = materialized_at or resumed_repo
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
-    await resume_spawn(resumed_repo, prompt=_DM_RESUME_PROMPT,
+    await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
     print(f"osiris resume: resumed session {resumed_session_id[:8]} — "

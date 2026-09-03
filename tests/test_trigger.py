@@ -1834,7 +1834,10 @@ async def test_a_paused_seat_queues_and_release_drains(
     queued DM rides the very next dispatch."""
     from datetime import timedelta
 
+    from src.orchestrator.offices import _default_office_root
+
     sense = await _stale_resumable_owner(actions, tmp_path)
+    real_office = str(_default_office_root() / "staleowner")
     msg_id = await _dm_to_owner(actions)
     a = await actions.create_or_find_object("Agent", "agent:abcd1234", "agent:abcd1234")
     await actions.assert_property(a, "paused", True, "agent:abcd1234", NOW, 0.9,
@@ -1856,7 +1859,7 @@ async def test_a_paused_seat_queues_and_release_drains(
     d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                            sender="agent:sender", settings=st, spawn=_spawn,
                            windows=_no_windows)
-    assert d2["mode"] == "resumed" and spawned == ["/repo/demo"]
+    assert d2["mode"] == "resumed" and spawned == [real_office]
 
 
 async def test_needs_input_gates_until_the_operators_word(
@@ -1865,7 +1868,10 @@ async def test_needs_input_gates_until_the_operators_word(
     """Wall #2, the implicit arm: a seat whose last act was asking the human (an undismissed
     decision/hands brief, quiet since) is not peer-resumable — its mail queues; the human's
     word is the release. Peer mail must never preempt the operator's judgment."""
+    from src.orchestrator.offices import _default_office_root
+
     sense = await _stale_resumable_owner(actions, tmp_path)  # mount last_seen: 1h ago
+    real_office = str(_default_office_root() / "staleowner")
     brief = await send_message(actions.pool, from_agent="agent:abcd1234",
                                from_project="demo", to_project=OPERATOR_ADDR,
                                body="which retraction tier?", desk_kind="decision")
@@ -1888,7 +1894,7 @@ async def test_needs_input_gates_until_the_operators_word(
     d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                            sender="agent:sender", settings=st, spawn=_spawn,
                            windows=_no_windows)
-    assert d2["mode"] == "resumed" and spawned == ["/repo/demo"]
+    assert d2["mode"] == "resumed" and spawned == [real_office]
 
 
 async def test_an_fyi_brief_never_gates(actions: Actions, tmp_path: Path) -> None:
@@ -2834,8 +2840,16 @@ async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
 ) -> None:
     """`census.live_bodies_by_cwd` matches BY OFFICE DIRECTORY via /proc — catches a live
     claude process sitting in the exact office this resume would land in, whatever session
-    id it thinks it has (invisible to the session-id signal above, on purpose)."""
+    id it thinks it has (invisible to the session-id signal above, on purpose).
+
+    Checked against the DERIVED office (ruling d161a156/d63b2ca6), never the seat's own
+    `/repo/demo` anchor_cwd — THE PEN RULE means occupancy is re-verified at the ACTUAL
+    materialize/spawn target, not a stale launch_cwd the materializer no longer spawns
+    into (see `_resume_occupancy_gate`'s own docstring)."""
+    from src.orchestrator.offices import _default_office_root
+
     sense = await _stale_resumable_owner(actions, tmp_path)
+    real_office = str(_default_office_root() / "staleowner")
     msg_id = await _dm_to_owner(actions)
 
     async def _boom(*a: Any, **kw: Any) -> None:
@@ -2844,7 +2858,7 @@ async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
 
     from src.orchestrator import census
     monkeypatch.setattr(census, "live_bodies_by_cwd",
-                        lambda **kw: {"/repo/demo": [999999]})
+                        lambda **kw: {real_office: [999999]})
 
     d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
                           sender="agent:sender",
@@ -2853,7 +2867,7 @@ async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
     # ...whereas an unidentified body in the office is the real refusal, and says the
     # reader is UNKNOWN rather than claiming a delivery nobody observed.
     assert d["mode"] == "resume-refused-occupied-foreign"
-    assert "999999" in d["detail"] and "/repo/demo" in d["detail"]
+    assert "999999" in d["detail"] and real_office in d["detail"]
     assert "unknown" in d["detail"].lower()
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
@@ -4263,12 +4277,19 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     resume is not a birth). The resumed body's own repo is the SEAT's own launch_cwd —
     deliberately, not a per-generation agent_mounts.cwd, which is exactly the record this
     lookup no longer trusts (see _lineage_resume_candidate's own docstring)."""
+    from src.orchestrator.offices import _default_office_root
+
     sense = await _lineage_holder_with_session(
         actions, tmp_path, agent_id="agent:abcd1234")
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-resume",
         worker_handle="Stale-Test", house="osiris")
     await _office(actions, worker_seat, "/tmp/stale-test-office")
+    # the ACTUAL spawn cwd, post-inversion (ruling d161a156/d63b2ca6): the materializer
+    # emits to the seat's own DERIVED office (offices.seat_office_target), never the
+    # (possibly stale) anchor_cwd `_office` set above — the anchor invariant's own
+    # self-healing working as designed.
+    real_office = str(_default_office_root() / "stale-test")
     manc = await actions.create_or_find_object("Agent", "agent:hm-resume", "test")
     await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
@@ -4291,11 +4312,12 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     assert d["body_exists"] is True and d["can_receive"] is True
     assert d.get("brief_message_id")
     # THE RECEIPT NAMES THE DECISION (Thoth msg 3691): which generation, how far back.
-    assert d["resume_check"] == [f"gen 1 (session {FULL_SID[:8]}, 0MB): resumable, 0 hop(s) back"]
+    assert d["resume_check"] == [
+        f"gen 1 (session {FULL_SID[:8]}, 0.00MB store tail): resumable, 0 hop(s) back"]
     assert "gen 1" in d["detail"] and "1 generation(s) back" in d["detail"]
     assert len(resumed) == 1
     call = resumed[0]
-    assert call["repo"] == "/tmp/stale-test-office"  # the SEAT's own launch_cwd
+    assert call["repo"] == real_office  # the seat's own DERIVED office
     assert call.get("resume_session") == FULL_SID
     assert "job_dir" not in call  # a resume is not a birth (mirrors dispatch_dm's own call)
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
@@ -4332,10 +4354,15 @@ async def test_launch_harness_lane_resumes_a_zero_hop_candidate_with_no_signed_t
                                   evidence_class="self_declared")
     await actions.assert_property(obj, "session", FULL_SID, "test", NOW, 0.9,
                                   evidence_class="self_declared")
+    from src.orchestrator.offices import _default_office_root
+
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:ferry1234", manager_agent="agent:hm-ferry",
         worker_handle="Ferryman-Test", house="osiris")
     await _office(actions, worker_seat, "/repo/ferryman")
+    # see test_launch_harness_lane_resumes_a_stale_but_resumable_holder's own comment:
+    # post-inversion the spawn cwd is the DERIVED office, never the anchor_cwd set above.
+    real_office = str(_default_office_root() / "ferryman-test")
     manc = await actions.create_or_find_object("Agent", "agent:hm-ferry", "test")
     await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
                                   evidence_class="self_declared")
@@ -4355,7 +4382,7 @@ async def test_launch_harness_lane_resumes_a_zero_hop_candidate_with_no_signed_t
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
-    assert len(resumed) == 1 and resumed[0]["repo"] == "/repo/ferryman"
+    assert len(resumed) == 1 and resumed[0]["repo"] == real_office
     assert resumed[0].get("resume_session") == FULL_SID
 
 

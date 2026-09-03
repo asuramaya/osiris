@@ -36,6 +36,7 @@ from typing import Any
 import asyncpg
 
 from src.ingest.harness import HarnessAdapter
+from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
 
 _HARNESS = "claude-code"
 
@@ -334,6 +335,74 @@ class SoulStore:
                     locator.source_path, locator.anchor_sid, harness=harness,
                 )
         return 0
+
+    async def ensure_ingested(
+        self, *, cwd: str | None, job_dir: str | None, root: Path | None = None,
+    ) -> str | None:
+        """THE MATERIALIZER'S OWN "ENSURE" STEP (design (b), ruling d161a156/d63b2ca6,
+        Thoth dispatch 6620): discover this session via the same adapter `ingest()` uses,
+        ingest whatever is new (idempotent — a no-op past the first call), and hand back
+        the `anchor_sid` the caller needs for every store query that follows
+        (`resume_diagnostics`, `rematerialize_to_disk`) — `ingest()` itself only returns a
+        line count, discarding the one thing a caller chaining further store calls
+        actually needs. None when no adapter can discover anything at this `job_dir`/`cwd`
+        (the session was never anchored on disk at all — a genuine absence, not a store
+        miss), distinct from "found and already fully ingested" (returns the anchor_sid
+        with 0 new lines, still a real ensure)."""
+        for adapter in self._adapters:
+            locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
+            if locator is not None:
+                harness = getattr(locator, "harness", "claude-code")
+                await self.ingest_path(locator.source_path, locator.anchor_sid, harness=harness)
+                return str(locator.anchor_sid)
+        return None
+
+    async def resume_diagnostics(self, anchor_sid: str) -> tuple[int, int, int] | None:
+        """The STORE's own (compaction_count, tail_bytes, tail_lines) — the same triple
+        `src.ingest.sessions.resume_diagnostics` computes from a transcript FILE, computed
+        here from `soul_lines` instead (design (c), ruling d161a156: "check resume_verdict
+        against the STORE's own tail measurement, never a disk stat" — the load-bearing
+        move: today's verdict is a measurement of whatever file the hunt happened to land
+        on; this makes it a measurement of the SESSION, the only thing it was ever supposed
+        to mean). None when nothing has been ingested for this `anchor_sid` — a distinct
+        fact from "ingested, zero compactions" (which returns `(0, total_bytes, total_lines)`
+        same as the file-based function does for a session that never compacted).
+
+        PAGED (same discipline as `verify_chain`/`_stream_verified_write`, msg 6583): a
+        300MB-class session's raw content never sits in memory all at once just to answer
+        three numbers — each line is measured (a trailing `\\n` counted in, matching how
+        the file-based reader counts each line it iterates) and discarded before the next
+        page is fetched."""
+        total = 0
+        count = 0
+        lines_total = 0
+        last_boundary_bytes: int | None = None
+        last_boundary_lines: int | None = None
+        seen_any = False
+        i = 0
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+                "AND line_idx >= $3 AND line_idx < $4 ORDER BY line_idx ASC",
+                _HARNESS, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                break
+            seen_any = True
+            for row in rows:
+                raw = bytes(row["raw_line"])
+                if all(marker in raw for marker in _COMPACT_BOUNDARY_MARKERS):
+                    count += 1
+                    last_boundary_bytes = total
+                    last_boundary_lines = lines_total
+                total += len(raw) + 1  # +1: the newline `soul_lines` doesn't store itself
+                lines_total += 1
+                i += 1
+        if not seen_any:
+            return None
+        tail_bytes = total - last_boundary_bytes if last_boundary_bytes is not None else total
+        tail_lines = (lines_total - last_boundary_lines if last_boundary_lines is not None
+                      else lines_total)
+        return count, tail_bytes, tail_lines
 
     async def _last_ingested_at(self, harness: str, anchor_sid: str) -> datetime | None:
         """One indexed row lookup — the cheap half of the spend gate, same shape
