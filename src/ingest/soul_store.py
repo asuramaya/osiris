@@ -582,7 +582,9 @@ class SoulStore:
                 return str(locator.anchor_sid)
         return None
 
-    async def resume_diagnostics(self, anchor_sid: str) -> tuple[int, int, int] | None:
+    async def resume_diagnostics(
+        self, anchor_sid: str, harness: str = _HARNESS,
+    ) -> tuple[int, int, int] | None:
         """The STORE's own (compaction_count, tail_bytes, tail_lines) — the same triple
         `src.ingest.sessions.resume_diagnostics` computes from a transcript FILE, computed
         here from `soul_lines` instead (design (c), ruling d161a156: "check resume_verdict
@@ -597,7 +599,11 @@ class SoulStore:
         300MB-class session's raw content never sits in memory all at once just to answer
         three numbers — each line is measured (a trailing `\\n` counted in, matching how
         the file-based reader counts each line it iterates) and discarded before the next
-        page is fetched."""
+        page is fetched.
+
+        `harness` (Thoth dispatch 6715, the fourth `_HARNESS` occurrence — worse than its
+        five siblings in soul_store.py: this one took no override at all): defaults to
+        'claude-code' for backward compatibility, same as `verify_chain`'s own note."""
         total = 0
         count = 0
         lines_total = 0
@@ -609,7 +615,7 @@ class SoulStore:
             rows = await self.pool.fetch(
                 "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
                 "AND line_idx >= $3 AND line_idx < $4 ORDER BY line_idx ASC",
-                _HARNESS, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+                harness, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
             if not rows:
                 break
             seen_any = True

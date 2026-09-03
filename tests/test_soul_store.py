@@ -673,6 +673,39 @@ async def test_non_claude_code_harness_ignored_reports_never_ingested(
     assert await store.mining_view("crush01") is None
 
 
+async def test_resume_diagnostics_honors_a_non_claude_code_harness(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE FOURTH `_HARNESS` OCCURRENCE (Thoth dispatch 6715), worse than its five
+    siblings: `resume_diagnostics` took no `harness` override at all until this fix —
+    a session ingested under any harness but 'claude-code' reported as never-ingested
+    (`None`) regardless of what a caller passed, because there was nothing to pass."""
+    lines = _synthetic_lines(4)
+    source = _write_transcript(tmp_path / "dsh02-session.jsonl", lines)
+    await store.ingest_path(str(source), "dsh02", harness="dsh")
+
+    diagnostics = await store.resume_diagnostics("dsh02", harness="dsh")
+    assert diagnostics is not None
+    count, tail_bytes, tail_lines = diagnostics
+    assert count == 0
+    assert tail_lines == 4
+    assert tail_bytes == sum(len(line.encode()) + 1 for line in lines)
+
+
+async def test_resume_diagnostics_wrong_harness_reports_never_ingested(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE CONTRAST, same shape as the round-trip test above: the same session, read
+    back under the wrong (default) harness, is indistinguishable from one that was
+    never ingested at all."""
+    lines = _synthetic_lines(2)
+    source = _write_transcript(tmp_path / "crush02-session.jsonl", lines)
+    await store.ingest_path(str(source), "crush02", harness="crush")
+
+    assert await store.resume_diagnostics("crush02", harness="crush") is not None
+    assert await store.resume_diagnostics("crush02") is None
+
+
 async def test_mining_view_extracts_role_text_and_tool_calls(
     store: SoulStore, tmp_path: Path,
 ) -> None:
