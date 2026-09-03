@@ -23,7 +23,7 @@ from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator import mounts
-from src.orchestrator.forks import fork_key, resolve_parent, seat_of_fork
+from src.orchestrator.forks import _find, fork_key, resolve_parent, seat_of_fork
 
 
 def _write(root: Path, project: str, sid: str, records: list[dict]) -> Path:
@@ -207,3 +207,29 @@ async def test_a_CYCLE_cannot_spin_the_walk(actions: Actions, tmp_path: Path) ->
     assert await resolve_parent(actions.pool, a, root=tmp_path) == "bbbbbbbb"
     assert await resolve_parent(actions.pool, b, root=tmp_path) == "aaaaaaaa"
     assert await seat_of_fork(actions.pool, a, root=tmp_path) is None   # no seat, and no hang
+
+
+def test_find_is_anchored_not_a_substring_match(tmp_path: Path) -> None:
+    """Thoth dispatch 6715: the old `glob(f"*/{sid}*.jsonl")` matched `sid` ANYWHERE in the
+    filename — a file whose stem merely CONTAINS the target sid, not just one that starts
+    with it, would wrongly match. `_find` must return the genuine stem-prefix match and
+    never a look-alike."""
+    real = _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
+    # a look-alike: "aaaaaaaa" appears as a SUBSTRING, but the stem does not START with it —
+    # the old bare-substring glob would have matched this one too (whichever sorts first).
+    _write(tmp_path, "-repo", "zzzz-aaaaaaaa", [_turn("u9")])
+
+    assert _find(tmp_path, "aaaaaaaa") == real
+
+
+def test_find_returns_none_for_an_unknown_sid(tmp_path: Path) -> None:
+    _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
+    assert _find(tmp_path, "ffffffff") is None
+
+
+def test_find_never_resolves_into_the_extractors_own_scratch_tree(tmp_path: Path) -> None:
+    """The old glob's own guard, preserved: an ancestor's transcript must never resolve
+    into `-osiris-extract`, the instrument's own self-reading scratch tree — even though
+    `locate_current_transcript` itself carries no such exclusion."""
+    _write(tmp_path, "-repo-osiris-extract", "aaaaaaaa", [_turn("u1")])
+    assert _find(tmp_path, "aaaaaaaa") is None

@@ -619,6 +619,93 @@ async def test_raw_lines_none_when_never_ingested(store: SoulStore) -> None:
     assert await store.raw_lines("neverseen1") is None
 
 
+# --- a non-claude-code harness round-trips (thread 6483/6587, the recurring catch) -----
+#
+# `ingest_path`/`splice_sources` have always accepted a real `harness` — but every
+# READ-back door (verify_chain, re_materialize, raw_lines, mining_view,
+# _stream_verified_write, rematerialize_to_disk) at one point or another hardcoded the
+# module constant `_HARNESS = "claude-code"` instead of taking the caller's own value.
+# Found once (Seshat, msg 6483/6587), fixed (Khnum), silently REGRESSED by Imhotep's
+# streaming rewrite (verify_chain + the new _stream_verified_write both reverted to the
+# constant), found again while reconciling khnum-splice-seek against that rewrite. Zero
+# tests asserted the round trip for any harness other than 'claude-code' through any of
+# this — every one of the three regressions shipped past a green suite. This is that
+# test: ingest under a non-claude-code harness and prove every read-back door honors it.
+
+async def test_non_claude_code_harness_round_trips_through_every_read_door(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _synthetic_lines(5)
+    source = _write_transcript(tmp_path / "d5h0000d-session.jsonl", lines)
+    n = await store.ingest_path(str(source), "d5h0000d", harness="dsh")
+    assert n == 5
+
+    assert await store.verify_chain("d5h0000d", harness="dsh") is True
+    assert await store.re_materialize("d5h0000d", harness="dsh") == "\n".join(lines)
+    assert await store.raw_lines("d5h0000d", harness="dsh") == lines
+    mined = await store.mining_view("d5h0000d", harness="dsh")
+    assert mined is not None and len(mined) > 0
+
+    dest = tmp_path / "out" / "target.jsonl"
+    receipt = await store.rematerialize_to_disk("d5h0000d", dest=str(dest), harness="dsh")
+    assert receipt["lines"] == 5
+    assert dest.read_bytes() == source.read_bytes()
+
+
+async def test_non_claude_code_harness_ignored_reports_never_ingested(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE EXACT LIE the bug tells: a caller that forgets (or a regression that drops)
+    the harness kwarg on read-back sees a session that was genuinely, fully ingested as
+    though it had never been touched at all — not an error, a silent false negative. This
+    locks in the CONTRAST as the regression test: same anchor_sid, same store, the only
+    difference is which harness the reader asks for."""
+    lines = _synthetic_lines(3)
+    source = _write_transcript(tmp_path / "crush01-session.jsonl", lines)
+    await store.ingest_path(str(source), "crush01", harness="crush")
+
+    assert await store.verify_chain("crush01", harness="crush") is True
+    # the SAME session, read back under the wrong (default) harness — reports exactly
+    # as if nothing had ever been ingested, never an error naming the mismatch
+    assert await store.verify_chain("crush01") is True  # vacuously — zero rows match
+    assert await store.re_materialize("crush01") is None
+    assert await store.raw_lines("crush01") is None
+    assert await store.mining_view("crush01") is None
+
+
+async def test_resume_diagnostics_honors_a_non_claude_code_harness(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE FOURTH `_HARNESS` OCCURRENCE (Thoth dispatch 6715), worse than its five
+    siblings: `resume_diagnostics` took no `harness` override at all until this fix —
+    a session ingested under any harness but 'claude-code' reported as never-ingested
+    (`None`) regardless of what a caller passed, because there was nothing to pass."""
+    lines = _synthetic_lines(4)
+    source = _write_transcript(tmp_path / "dsh02-session.jsonl", lines)
+    await store.ingest_path(str(source), "dsh02", harness="dsh")
+
+    diagnostics = await store.resume_diagnostics("dsh02", harness="dsh")
+    assert diagnostics is not None
+    count, tail_bytes, tail_lines = diagnostics
+    assert count == 0
+    assert tail_lines == 4
+    assert tail_bytes == sum(len(line.encode()) + 1 for line in lines)
+
+
+async def test_resume_diagnostics_wrong_harness_reports_never_ingested(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE CONTRAST, same shape as the round-trip test above: the same session, read
+    back under the wrong (default) harness, is indistinguishable from one that was
+    never ingested at all."""
+    lines = _synthetic_lines(2)
+    source = _write_transcript(tmp_path / "crush02-session.jsonl", lines)
+    await store.ingest_path(str(source), "crush02", harness="crush")
+
+    assert await store.resume_diagnostics("crush02", harness="crush") is not None
+    assert await store.resume_diagnostics("crush02") is None
+
+
 async def test_mining_view_extracts_role_text_and_tool_calls(
     store: SoulStore, tmp_path: Path,
 ) -> None:

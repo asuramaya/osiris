@@ -50,6 +50,8 @@ from pathlib import Path
 
 import asyncpg
 
+from src.ingest.sessions import locate_current_transcript
+
 _FORK = "fork:"        # watermark: this session's lineage root, resolved once and never again
 _NONE = "-"            # memoized "looked, and it is nobody's child" — an answer, not a gap
 _CHUNK = 1 << 20       # 1 MiB; the needle is 36 bytes, so a small overlap covers every straddle
@@ -184,11 +186,26 @@ def _parent(path: Path, root: Path) -> tuple[Path | None, bool]:
 
 
 def _find(root: Path, sid: str) -> Path | None:
-    """The transcript for a session id, anywhere in the fleet."""
-    for p in root.expanduser().glob(f"*/{sid}*.jsonl"):
-        if not p.parent.name.endswith("-osiris-extract"):
-            return p
-    return None
+    """The transcript for a session id, anywhere in the fleet.
+
+    ANCHORED (Thoth dispatch 6715, Khnum's own survey): `glob(f"*/{sid}*.jsonl")` is a
+    PREFIX match on the whole filename, not an exact stem match — looser than the three
+    sites Khnum already anchored in trigger.py, and reachable by the materializer's own
+    duplicate copies (a second file whose stem starts with this `sid` but isn't it).
+    `locate_current_transcript` is the SAME anchor those three sites use, given a
+    synthesized `jobs/<sid>` job_dir (this function only ever has a bare sid, never a
+    caller-supplied hint — the hint-first approach broke 5 tests elsewhere because a hint
+    can be a bare id with no "jobs/" component). `anchored_only=True`: a sid that matches
+    nothing must return None, never a co-tenant's newest transcript.
+
+    `locate_current_transcript` itself carries no `-osiris-extract` exclusion (its own
+    callers each apply that separately) — kept here unchanged from the old glob's own
+    guard, since an ancestor's transcript must never resolve into the extractor's own
+    self-reading scratch tree."""
+    found = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
+    if found is not None and found.parent.name.endswith("-osiris-extract"):
+        return None
+    return found
 
 
 async def resolve_parent(
