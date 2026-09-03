@@ -956,7 +956,8 @@ async def _cmd_resume_harness(
     st = settings or get_settings()
     holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
     resume_outcome = await _lineage_resume_candidate(
-        pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+        pool, holder, st, repo=launch_cwd,
+        office=facts.get("anchor_cwd")) if holder else ["no seat holder on record"]
     resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
     resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
     if resume is not None:
