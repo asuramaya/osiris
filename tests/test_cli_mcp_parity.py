@@ -19,8 +19,11 @@ edited by different people at different times for different reasons.
 from __future__ import annotations
 
 import argparse
+import re
+from pathlib import Path
 from typing import Any, TypedDict
 
+from src.actions.core import Actions
 from src.cli import _build_parser
 
 # MCP session-identity plumbing present on SOME tools' own signatures (never all — a raw
@@ -873,3 +876,112 @@ def test_known_tools_at_snapshot_and_declarations_never_collide() -> None:
     assert collision == set(), (
         f"{sorted(collision)} appear in BOTH KNOWN_TOOLS_AT_SNAPSHOT and "
         f"NEW_TOOL_DECLARATIONS — a tool is grandfathered or declared, never both")
+
+
+# ============================================================================================
+# THE THIRD SURFACE (Thoth ruling msg 6823, on Seshat's parked question msg 6809): a slash
+# command's prose (`~/.claude/commands/*.md`) names MCP tools and CLI commands it composes —
+# "composes the `X` MCP tool", "shells out to `osiris Y`" — and nothing anywhere checks those
+# names still exist. This is the SAME drift class the CLI<->MCP gate above already catches
+# for its own two surfaces, just never extended to the third — decision a34a9850's own
+# earlier finding named this exact gap ("~/.claude/commands/*.md is not a git repo, not
+# inside osiris's tree... no portable pytest gate can see it"), which is still true of a
+# gate that lives ONLY in this repo's CI — but nothing stops a LIVE test run on this machine
+# from reading the real files at their real path, same as this suite already reads the
+# live CLI/MCP surfaces rather than a checked-in copy. Static shape only for most commands
+# (Thoth: "static is fine for shape"); at least one test below actually EXECUTES the CLI
+# function a slash command names and parses its real output, same discipline
+# test_cli_json_promise.py already established — the parity gate's own known blindness
+# (two static comparisons, never invoking either surface) is exactly what let specimens A
+# and B through there, and nothing here should repeat it for a third surface.
+# ============================================================================================
+
+_SLASH_COMMANDS_DIR = Path.home() / ".claude" / "commands"
+
+# `` `X` MCP tool `` (an optional parenthetical between the name and "MCP tool" tolerated,
+# though none of today's docs use one) and `` `osiris word-word` `` — the two literal
+# reference shapes every current slash doc actually uses, surveyed directly rather than
+# guessed (grep -ohE across all seven files before writing this pattern).
+_SLASH_MCP_TOOL_REF = re.compile(r"`([a-zA-Z_]+)`(?:\s*\([^)]*\))?\s+MCP tool")
+_SLASH_CLI_REF = re.compile(r"`osiris ([a-z][a-z-]*)")
+
+
+def _slash_command_files() -> dict[str, str]:
+    """name -> raw text, read live off ~/.claude/commands/*.md — never a checked-in copy
+    (there isn't one; this directory sits outside the git repo entirely, decision
+    a34a9850's own named reason no CI gate can see it — a live test run on the real
+    machine can)."""
+    if not _SLASH_COMMANDS_DIR.is_dir():
+        return {}
+    return {p.stem: p.read_text() for p in sorted(_SLASH_COMMANDS_DIR.glob("*.md"))}
+
+
+def _slash_command_references(text: str) -> tuple[set[str], set[str]]:
+    """(mcp tool names, cli command names) a slash doc's own prose claims to compose —
+    extracted, never hand-copied, so a doc edit that renames what it points at is exactly
+    what this is for."""
+    return set(_SLASH_MCP_TOOL_REF.findall(text)), set(_SLASH_CLI_REF.findall(text))
+
+
+async def test_every_slash_command_reference_names_a_real_live_verb() -> None:
+    files = _slash_command_files()
+    if not files:
+        import pytest
+        pytest.skip("~/.claude/commands not present on this machine — the third surface "
+                    "this test walks lives outside the repo by design (decision a34a9850); "
+                    "nothing to check where it doesn't exist")
+    mcp = await _mcp_tools()
+    cli = _cli_commands()
+    problems: list[str] = []
+    for name, text in files.items():
+        mcp_refs, cli_refs = _slash_command_references(text)
+        for ref in sorted(mcp_refs):
+            if ref not in mcp:
+                problems.append(
+                    f"{name}.md references `{ref}` as an MCP tool — no such live tool "
+                    f"(renamed, retired, or a typo)")
+        for ref in sorted(cli_refs):
+            if ref not in cli:
+                problems.append(
+                    f"{name}.md references `osiris {ref}` — no such live CLI command "
+                    f"(renamed, retired, or a typo)")
+    assert problems == [], (
+        "a slash command's own prose references a verb that no longer exists on the "
+        "surface it names (Thoth ruling, msg 6823):\n" + "\n".join(problems))
+
+
+def test_the_slash_reference_extractor_itself_catches_a_stale_name() -> None:
+    text = "Composes the `nonexistent_tool` MCP tool, or shells out to `osiris ghost-verb`."
+    mcp_refs, cli_refs = _slash_command_references(text)
+    assert mcp_refs == {"nonexistent_tool"}
+    assert cli_refs == {"ghost-verb"}
+
+
+async def test_seat_slash_docs_stop_claim_is_true_not_just_written(actions: Actions) -> None:
+    """THE EXECUTION LEG (Thoth: "at least ONE test must EXECUTE a slash-command's
+    underlying CLI and parse its output, same as test_cli_json_promise.py" — never just
+    read the prose and trust it). seat.md's own `stop` entry claims: "Both callers
+    already reach the identical stop_seat function today ... prefer the MCP tool when
+    mounted, shell out otherwise. No seam here." Proven two ways, not one: (1) cmd_stop's
+    own docstring states it calls trigger.stop_seat directly, the same function the MCP
+    `stop` tool wraps (read from source, not asserted); (2) the CLI door is actually RUN
+    here (a real refusal, not a mock) and its real stdout is parsed, same edge shape
+    test_cli_json_promise.py's own cmd_stop test uses — proving the shell-out this slash
+    doc describes is a working command today, not prose describing a claim gone stale."""
+    import inspect
+    import io
+    from contextlib import redirect_stdout
+
+    from src.cli import cmd_stop
+
+    source = inspect.getsource(cmd_stop)
+    assert "trigger.stop_seat" in source or "stop_seat" in source, (
+        "cmd_stop no longer visibly calls stop_seat — seat.md's 'identical function, no "
+        "seam' claim needs re-checking against whatever it calls instead")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_stop("nonexistent-seat-xyz", pool=actions.pool)
+    assert out == 1
+    printed = buf.getvalue()
+    assert printed.strip(), "osiris stop produced no output at all on a real refusal"
