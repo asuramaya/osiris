@@ -3459,6 +3459,24 @@ async def test_cmd_fold_project_prints_a_deprecation_pointer(actions: Actions) -
     assert "osiris merge" in buf.getvalue()
 
 
+async def test_cmd_unmerge_refusal_still_emits_json(actions: Actions) -> None:
+    """Thoth dispatch 6746, specimen B: the refusal path used to short-circuit with a
+    bare stderr print BEFORE ever reaching render.emit, so `--json` was silently
+    ignored on exactly the path a script most needs it — found by RUNNING the command,
+    not by reading it (no existing test exercised this path at all)."""
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_unmerge("nonexistent-repo-xyz", "reconsidered", actor="operator",
+                                pool=actions.pool, as_json=True)
+    assert out == 1
+    printed = json.loads(buf.getvalue())
+    assert "error" in printed
+
+
 async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
     """Matches the MCP unmerge tool's own convention exactly: no --execute writes nothing."""
     import io
