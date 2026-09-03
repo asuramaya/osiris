@@ -2620,7 +2620,22 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
     (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
     trust) to the TRUE current generation. None when the seat carries no handle assertion at
-    all — nothing lineage-side to read yet."""
+    all — nothing lineage-side to read yet.
+
+    THE CONSOLE-ANCESTOR DEFECT (operator's own live catch, 2026-09-03, Chad's own seat):
+    "least likely to ever be written by a lineage that isn't genuinely this seat's own" was
+    still wrong for a seat established DIRECTLY by a human at the CLI — Chad's own genesis
+    `handle` assertion has ALWAYS carried `source_id='console'` (`seats.py`'s own
+    `_OPERATOR_ACTORS` sentinel, never an agent canonical), from before any lineage of its
+    own ever mounted. `osiris launch chad` fed that source straight into `lineage_head`,
+    which found no succeeded_by chain to walk and returned "console" unchanged — a
+    non-agent CLI actor label treated as a real ancestor, minting a phantom `console`/
+    `console-ii` "lineage" and REBINDING CHAD'S SEAT TO IT (agents.py's own `holds` edge,
+    2026-09-03 20:13:29). `_OPERATOR_ACTORS` is EXCLUDED HERE, never treated as a genuine
+    ancestor — falls through the SAME safe path as "no handle assertion at all" (the
+    caller's own `or current_holder` fallback), because a CLI actor sentinel is exactly
+    that: a label for WHO deliberately typed a command, never a fact about which agent
+    lineage built this seat."""
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
@@ -2628,7 +2643,10 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     if not source:
         return None
     from src.orchestrator.agents import _generation, lineage_head
+    from src.orchestrator.seats import _OPERATOR_ACTORS
 
+    if source in _OPERATOR_ACTORS:
+        return None
     base = _generation(str(source))[0]
     return await lineage_head(pool, base)
 

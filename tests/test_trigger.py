@@ -4088,6 +4088,40 @@ async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds
     assert row["canonical"] == "agent:realmind-ii"  # the stale edge is corrected, not left
 
 
+async def test_bind_before_spawn_never_treats_a_console_established_handle_as_an_ancestor(
+    actions: Actions,
+) -> None:
+    """THE CHAD SPECIMEN, REPRODUCED DIRECTLY (operator's own live catch, 2026-09-03): a
+    seat established DIRECTLY by a human at the CLI carries `source_id='console'`
+    (`seats.py`'s own `_OPERATOR_ACTORS` sentinel) on its `handle` assertion from birth —
+    never an agent lineage at all, unlike the OTHER `_bind_before_spawn` specimens above
+    where the handle's source genuinely IS the seat's own founding mind. Before this fix,
+    `_seat_lineage_ancestor` fed 'console' straight into `lineage_head`, which found no
+    succeeded_by chain to walk and handed 'console' back unchanged — minting a PHANTOM
+    console/console-ii lineage and rebinding the seat to it, discarding the real holder
+    entirely. `_OPERATOR_ACTORS` must fall through to `current_holder`, the SAME safe path
+    a seat with no handle assertion at all already takes."""
+    seat_id = (await ensure_seat(actions, house="Chad", handle="Chad",
+                                 source="console"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:7451509a")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Chad", house="Chad",
+        current_holder="agent:7451509a", office="/tmp/chad",
+        anchor="/tmp/anchors/chad", source="agent:thoth01")
+
+    assert out["agent"] == "agent:7451509a-ii"  # the REAL holder's next gen
+    assert "console" not in out["agent"]
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:7451509a-ii"  # never a phantom console lineage
+    phantom = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE canonical IN ('console', 'console-ii')")
+    assert phantom is None  # nothing minted from the CLI actor label at all
+
+
 async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattaches(
     actions: Actions,
 ) -> None:
