@@ -20,7 +20,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -36,6 +35,15 @@ from src.ingest.sessions import locate_current_transcript, resume_verdict
 from src.orchestrator.bodies import BodyProvider, LocalProvider
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
+from src.orchestrator.signatures import (
+    SIGNED as _SIGNED,
+)
+from src.orchestrator.signatures import (
+    SIGNED_ACTS as _SIGNED_ACTS,
+)
+from src.orchestrator.signatures import (
+    newest_signatures as _newest_signatures,
+)
 
 # Where a wake drops the CLI's own cost envelope (`--output-format json` -> total_cost_usd).
 # Outside the transcript tree ON PURPOSE: everything under ~/.claude/projects is read by the
@@ -753,42 +761,6 @@ async def _seat_wakes(
 # the resident. The chrome cannot pollute this file; only turns write it.
 # receipts appear JSON-escaped inside transcript lines (\"from\":\"agent:…\") and
 # occasionally plain — the optional backslashes cover both encodings
-_SIGNED_ACTS = [
-    re.compile(r'\\?"sent\\?":\s*\d+,\s*\\?"from\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)'),
-    re.compile(r'\\?"agent\\?":\s*\\?"(agent:[A-Za-z0-9._-]+)\\?",\s*\\?"project\\?"'),
-]
-# THE WHISPER IS HEARSAY, NOT TESTIMONY (Chad, 2026-09-03): "knows you as agent:…" is the
-# SessionStart hook's own greeting — the SERVER's resolution of who this window is, injected
-# as an attachment line. A mount or send receipt is the MIND's own act. The two are not the
-# same grade of evidence: Chad's transcript ends with two greetings naming Khnum's lineage
-# (an anchor leak — a hand-run `claude --resume` from Khnum's own shell carried Khnum's
-# CLAUDE_JOB_DIR, class 2294e95d) and NOT ONE act by that lineage after them, while every
-# act the file holds is Chad's own. Reading the greeting as a found different mind refused
-# the seat's own real session as crossed-registry. `_resident_verdict` ranks an act above a
-# greeting; a greeting still counts when nothing signed exists at all.
-_SIGNED_WHISPERS = [
-    re.compile(r"knows you as (agent:[A-Za-z0-9._-]+)"),
-]
-_SIGNED = [*_SIGNED_ACTS, *_SIGNED_WHISPERS]
-
-
-def _newest_signatures(lines: list[str]) -> tuple[str | None, str | None]:
-    """(newest ACT signature, newest WHISPER greeting) in `lines`, newest-first scan —
-    stops as soon as an act is found (anything older is not the newest of either kind
-    that matters: an act newer than every greeting settles the resident by itself)."""
-    whisper: str | None = None
-    for line in reversed(lines):
-        for pat in _SIGNED_ACTS:
-            m = pat.search(line)
-            if m:
-                return m.group(1), whisper
-        if whisper is None:
-            for pat in _SIGNED_WHISPERS:
-                m = pat.search(line)
-                if m:
-                    whisper = m.group(1)
-                    break
-    return None, whisper
 _RESIDENT_TAIL_BYTES = 400_000
 # THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding, design approved
 # Thoth DM 1825): how many further 400KB windows the deeper scan reads BEHIND the tail
@@ -1405,6 +1377,55 @@ async def _resume_office(
     from src.orchestrator.offices import seat_office_target
     office = await seat_office_target(pool, seat_id) if seat_id else None
     return office or fallback or ""
+
+
+async def _adopt_resumed_body(
+    pool: asyncpg.Pool, *, agents_json: Any, office: str, requested_sid: str,
+    holder: str, project: str | None, attempts: int = 6, delay: float = 2.0,
+) -> dict[str, Any]:
+    """WHAT THE HARNESS ACTUALLY STARTED (measured live, 2026-09-03, harness 2.1.259):
+    `claude --bg --resume <id>` continues the session under its own id — OR, when any
+    background record for it still exists (a `claude stop` leaves a "stopped" one),
+    "starts a copy and says so": a NEW session id whose window carries the old
+    conversation but whose file and whisper are a stranger's. Three copies of Chad in a
+    row tonight, each minted a fresh root by the whisper and reported by osiris as
+    "resumed 7451509a" — the receipt lying by omission, the 5d31762a class again.
+
+    Polls `claude agents --json` for the body at `office`, then: the requested id came
+    back → `copied: False`, nothing to do. A different id → `copied: True`, and the copy
+    is ADOPTED as the seat's own continuation before its first act can mint a stranger:
+    the session ledger files the copy's sid under `holder` (`record_session_anchor`, whose
+    own transcript guard still applies) and the copy's registry row (the whisper's own
+    provisional row, keyed on jobs/<copy8>) is rebound to `holder` — the same two facts
+    a `--fork-session` copy resolves through. No body found within the window →
+    `session_id: None`, confessed, never assumed. Every caller prints what happened."""
+    from src.actions.core import Actions
+    from src.orchestrator.handshake import record_session_anchor
+    from src.orchestrator.mounts import save_mount
+
+    req8 = requested_sid[:8]
+    row: dict[str, Any] | None = None
+    for _ in range(attempts):
+        try:
+            rows = await agents_json(cwd=office)
+        except (OSError, TimeoutError, ValueError):
+            rows = []
+        row = next((r for r in rows if isinstance(r, dict) and r.get("cwd") == office
+                    and r.get("sessionId")), None)
+        if row is not None:
+            break
+        await asyncio.sleep(delay)
+    if row is None:
+        return {"session_id": None, "copied": False, "adopted": False}
+    sid = str(row["sessionId"])
+    if sid.startswith(req8):
+        return {"session_id": sid, "copied": False, "adopted": False}
+    filed = await record_session_anchor(Actions(pool), agent_id=holder, session_id=sid,
+                                        actor="osiris-resume")
+    await save_mount(pool, job_dir=str(Path.home() / ".claude" / "jobs" / sid[:8]),
+                     agent_id=holder, project=project, cwd=office, model=None,
+                     session_key=None)
+    return {"session_id": sid, "copied": True, "adopted": True, "ledgered": filed}
 
 
 async def _lineage_resume_candidate(
@@ -3235,6 +3256,13 @@ async def launch_seat(
             await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
                                model=argv_model, allowed_tools=st.osiris_wake_allowed_tools
                                or None)
+            adoption = await _adopt_resumed_body(
+                pool, agents_json=agents_json, office=spawn_cwd, requested_sid=session_id,
+                holder=str(holder), project=facts.get("house"))
+            if adoption.get("copied"):
+                resume_log.append(f"harness started a COPY ({str(adoption['session_id'])[:8]}) "
+                                  f"instead of continuing {session_id[:8]} — a stopped record was "
+                                  "still on file; adopted as the seat's own continuation")
             out = {
                 "status": "launched", "mode": "resumed", "seat": target_seat,
                 "session": session_id, "body_exists": True, "can_receive": True,
@@ -3408,6 +3436,21 @@ async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
             "claude", "stop", job_dir_key,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         if await proc.wait() == 0:
+            # THEN REMOVE THE STOPPED RECORD (measured live, 2026-09-03, harness 2.1.259):
+            # `claude stop` leaves a "stopped" background record, and `claude --bg
+            # --resume <id>` against a session that still has ANY record "starts a copy
+            # and says so" (the harness's own --bg help text) — a NEW session id, a fresh
+            # transcript, and osiris's whisper meeting a stranger. Three copies of Chad in
+            # a row tonight (092b7418, 5f54e1fc, a9d4118e) until the record was removed;
+            # with it removed, `--bg --resume` continued 7451509a under its own id. `claude
+            # rm` "deletes a background session and its worktree" — the RECORD, never the
+            # transcript (all three of Chad's files stayed on disk) — so a stopped seat is
+            # resumable in place, which is the whole point of stopping instead of killing.
+            # Best effort: a failed rm leaves exactly the pre-fix state, never worse.
+            rm = await asyncio.create_subprocess_exec(
+                "claude", "rm", job_dir_key,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await rm.wait()
             return
     import signal
     os.kill(pid, signal.SIGTERM)

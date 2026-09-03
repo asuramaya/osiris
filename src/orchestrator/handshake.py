@@ -346,8 +346,38 @@ async def record_bridge_anchor(
         return True
 
 
+def _transcript_contradicts(sid: str, agent_id: str, root: Path | None = None) -> str | None:
+    """Sync (to_thread): the lineage the session's own newest ACT names, when it differs
+    from `agent_id`'s — None when no anchored transcript exists, no act has been signed
+    yet, or the act agrees. Reads the tail of the freshest anchored copy (the same
+    `locate_current_transcript` anchoring the resume gate uses)."""
+    from src.config.settings import get_settings
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.signatures import newest_signatures
+
+    if root is None:
+        st = get_settings()
+        root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+            else Path.home() / ".claude" / "projects"
+    t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
+    if t is None:
+        return None
+    try:
+        size = t.stat().st_size
+        with t.open("rb") as f:
+            f.seek(max(0, size - 400_000))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    act, _whisper = newest_signatures(tail.splitlines())
+    if act is None:
+        return None
+    return act if _generation(act)[0] != _generation(agent_id)[0] else None
+
+
 async def record_session_anchor(
     actions: Actions, *, agent_id: str, session_id: str, actor: str,
+    root: Path | None = None,
 ) -> bool:
     """THE SESSION LEDGER, write side: file the sid→soul fact whenever a session binds to
     a NAMED identity the sid alone could not re-derive. Idempotent (a sid already on any
@@ -369,6 +399,18 @@ async def record_session_anchor(
         "JOIN objects o ON o.id=a.object_id AND o.type='Agent' AND o.status='active' "
         "WHERE a.name = 'anchor_sid:' || $1 LIMIT 1", sid8)
     if exists:
+        return False
+    # THE TRANSCRIPT OUTRANKS THE ANCHOR (Chad + Jesus, 2026-09-03): a hand-run
+    # `claude --resume` from another agent's shell carries THAT agent's CLAUDE_JOB_DIR, the
+    # session resolves as the leaker, and this ledger — first writer wins, forever — filed
+    # both seats' real sessions under Khnum's lineage. Every later resume then re-bound the
+    # window to Khnum through `ledger_seat`. Before filing a sid under `agent_id`, read the
+    # session's own transcript: if its newest ACT (a mount/send receipt — the mind's own
+    # word, never a whisper greeting) names a different lineage, this claim is the leak and
+    # the ledger stays unwritten. A transcript with no act yet (a fresh session) files
+    # normally — nothing contradicts the claim.
+    contradicted = await asyncio.to_thread(_transcript_contradicts, sid, agent_id, root)
+    if contradicted:
         return False
     obj = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
@@ -657,7 +699,7 @@ async def automount(
     # no future registry accident can orphan this sid. Fail-open like the deed.
     try:
         await record_session_anchor(actions, agent_id=ident.agent_id,
-                                    session_id=session_id, actor=actor)
+                                    session_id=session_id, actor=actor, root=root)
     except Exception:  # noqa: BLE001 — the whisper must land whatever the ledger does
         pass
     # THE BRIDGE, write side (task #68 binding leg): filed unconditionally, same as the

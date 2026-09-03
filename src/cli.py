@@ -1002,6 +1002,7 @@ async def _cmd_resume_harness(
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.trigger import (
         _DM_RESUME_PROMPT,
+        _adopt_resumed_body,
         _lineage_resume_candidate,
         _resume_guard,
         _resume_office,
@@ -1074,6 +1075,23 @@ async def _cmd_resume_harness(
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
+    # WHAT THE HARNESS ACTUALLY STARTED (2026-09-03): a stopped record still on file makes
+    # `--bg --resume` start a COPY under a new id. Read the body back and say so — and
+    # adopt the copy as the seat's own continuation before its first act mints a stranger.
+    adoption = await _adopt_resumed_body(
+        pool, agents_json=agents_json, office=spawn_cwd, requested_sid=resumed_session_id,
+        holder=str(holder), project=facts.get("house"))
+    if adoption.get("copied"):
+        print(f"osiris resume: NOTE — the harness started a COPY (session "
+              f"{str(adoption['session_id'])[:8]}) instead of continuing "
+              f"{resumed_session_id[:8]}: a stopped background record was still on file "
+              f"(`osiris stop` now removes it; `claude rm {resumed_session_id[:8]}` clears "
+              f"one by hand). Adopted as {holder}'s own continuation — its ledger and "
+              "registry now name this seat's lineage.", file=sys.stderr)
+    elif adoption.get("session_id") is None:
+        print("osiris resume: NOTE — no body appeared at the office within the check "
+              "window; `claude agents --json` is the witness, not this receipt.",
+              file=sys.stderr)
     print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd} — "
           f"walked {resume[5]} generation(s) back to find it "
           f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "

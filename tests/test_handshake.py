@@ -1526,3 +1526,40 @@ async def test_the_whisper_carries_the_handoff_specifically(
     assert handoff is not None, "the structurally-marked handoff must ride along, separately"
     assert handoff["from"] == ident.agent_id
     assert "estate is settled structurally" in " ".join(n["text"] for n in handoff["notes"])
+
+
+async def test_the_ledger_refuses_a_sid_whose_own_transcript_names_another_lineage(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """THE TRANSCRIPT OUTRANKS THE ANCHOR (Chad + Jesus, 2026-09-03): a hand resume run
+    from another agent's shell carried that agent's CLAUDE_JOB_DIR, resolved as the
+    leaker, and the ledger — first writer wins, forever — filed both seats' real sessions
+    under Khnum's lineage; every later resume then re-bound the window to Khnum. Before
+    filing a sid under an agent, the write side reads the session's own newest ACT (a
+    mount/send receipt, never a whisper greeting): a different lineage means this claim
+    is the leak, and nothing is filed. A transcript with no act yet files normally."""
+    import json as _json
+
+    from src.orchestrator.handshake import record_session_anchor
+
+    root = tmp_path / "projects"
+    proj = root / "-w-ledger-repo"
+    proj.mkdir(parents=True)
+    t = proj / f"{SID}.jsonl"
+    mount_by_owner = _json.dumps(
+        {"type": "user", "text": '{"agent":"agent:0wner001","project":"x"}'})
+    greeting_leaker = _json.dumps(
+        {"type": "attachment", "text": "osiris knows you as agent:1eaker01"})
+    t.write_text(mount_by_owner + "\n" + greeting_leaker + "\n")
+    for canon in ("agent:0wner001", "agent:1eaker01"):
+        await actions.create_or_find_object("Agent", canon, "test")
+
+    # the leaker's claim (the greeting was hearsay; the owner's act is the testimony)
+    assert await record_session_anchor(
+        actions, agent_id="agent:1eaker01", session_id=SID, actor="test", root=root) is False
+    filed = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions WHERE name = 'anchor_sid:' || $1", SID[:8])
+    assert filed is None                                      # nothing written
+    # the owner's own claim files normally
+    assert await record_session_anchor(
+        actions, agent_id="agent:0wner001", session_id=SID, actor="test", root=root) is True

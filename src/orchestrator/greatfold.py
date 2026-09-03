@@ -74,7 +74,7 @@ def signed_matches_sync(projects_root: Path, handle: str) -> list[list[str]]:
     the delivery gate's semantics. That filtering needs the graph (quoted ids that no
     registration ever backed must drop FIRST, or a trailing quote shadows the real
     resident), so it lives in survey_seats, not here."""
-    from src.orchestrator.trigger import _SIGNED
+    from src.orchestrator.signatures import SIGNED as _SIGNED
 
     out: list[list[str]] = []
     files = sorted((f for d in _office_slug_dirs(projects_root, handle)

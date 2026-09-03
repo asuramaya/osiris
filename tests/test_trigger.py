@@ -5646,7 +5646,9 @@ async def test_real_kill_pid_prefers_claude_stop_when_a_harness_id_is_known(
 
     await trigger_module._real_kill_pid(4242, "wgjobkey5")
 
-    assert calls == [["claude", "stop", "wgjobkey5"]]
+    # stop, THEN rm the stopped record (2026-09-03: a record left on file makes the next
+    # `--bg --resume` start a copy instead of continuing the session)
+    assert calls == [["claude", "stop", "wgjobkey5"], ["claude", "rm", "wgjobkey5"]]
     assert killed == []  # claude stop succeeded — SIGTERM must never also fire
 
 
@@ -5759,3 +5761,50 @@ async def test_resident_verdict_ranks_the_minds_own_act_above_a_later_whisper_gr
 
     t.write_text(greeting_khnum)                     # nothing but a stranger's greeting
     assert await _resident_verdict(actions.pool, root, sid, "agent:7451509a") == "mismatch"
+
+
+async def test_adopt_resumed_body_adopts_a_harness_copy_and_leaves_a_true_resume_alone(
+    actions: Actions,
+) -> None:
+    """WHAT THE HARNESS ACTUALLY STARTED (2026-09-03, harness 2.1.259): with a stopped
+    background record still on file, `--bg --resume <id>` starts a COPY under a new id.
+    The copy is adopted as the seat's own continuation — ledgered under the holder,
+    registry row rebound — never left as a stranger; a body that came back under the
+    requested id is left alone; no body at all is confessed, never assumed."""
+    from src.orchestrator.trigger import _adopt_resumed_body
+
+    office = "/home/x/.osiris/seats/adopt"
+    requested = "7451509a-f711-48ea-b67e-d2877d721ca3"
+    copy = "5f54e1fc-be7b-40c7-b941-ee3881b44775"
+    await actions.create_or_find_object("Agent", "agent:ad0p7ee1", "test")
+
+    async def _copy(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"id": copy[:8], "sessionId": copy, "cwd": office, "name": "[AD] Adopt"}]
+
+    out = await _adopt_resumed_body(actions.pool, agents_json=_copy, office=office,
+                                    requested_sid=requested, holder="agent:ad0p7ee1",
+                                    project="adopthouse", attempts=1, delay=0)
+    assert out["copied"] is True and out["adopted"] is True and out["session_id"] == copy
+    ledgered = await actions.pool.fetchval(
+        "SELECT o.canonical FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name = 'anchor_sid:' || $1", copy[:8])
+    assert ledgered == "agent:ad0p7ee1"
+    bound = await actions.pool.fetchrow(
+        "SELECT agent_id, cwd FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1", copy[:8])
+    assert bound is not None and bound["agent_id"] == "agent:ad0p7ee1" and bound["cwd"] == office
+
+    async def _same(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"id": requested[:8], "sessionId": requested, "cwd": office}]
+
+    out = await _adopt_resumed_body(actions.pool, agents_json=_same, office=office,
+                                    requested_sid=requested, holder="agent:ad0p7ee1",
+                                    project="adopthouse", attempts=1, delay=0)
+    assert out == {"session_id": requested, "copied": False, "adopted": False}
+
+    async def _none(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    out = await _adopt_resumed_body(actions.pool, agents_json=_none, office=office,
+                                    requested_sid=requested, holder="agent:ad0p7ee1",
+                                    project="adopthouse", attempts=2, delay=0)
+    assert out == {"session_id": None, "copied": False, "adopted": False}
