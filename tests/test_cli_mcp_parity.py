@@ -213,6 +213,13 @@ BINDING_VERBS = frozenset({
     "reconcile_seat_identity_third_party", "correct_pin_value", "create_project",
     "rename_project", "retire_project", "fork_project", "unfork_project",
     "heal_seat_anchor", "heal_seat_anchor_third_party",
+    # ADDED per Thoth ruling on decision 6283c51a's own audit (msg 6823): "a verb that
+    # writes holds, house, handle, managed_by or a merge estate moves a binding by
+    # definition; 'adjacent to' is not a category." merge/unmerge were the STALE-LIST
+    # finding named in that same ruling — both already have CLI doors and simply were
+    # never added to the population that credits them for it.
+    "correct_house", "correct_agent_house", "reconcile_merge", "retire", "retire_agent",
+    "fleet_reconcile", "heal_seat_transcript", "merge", "unmerge",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -258,6 +265,32 @@ NO_CLI_EQUIVALENT = {
     "retire_project": "not yet built — same scoping note as create_project.",
     "fork_project": "not yet built — same scoping note as create_project.",
     "unfork_project": "not yet built — same scoping note as create_project.",
+    # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
+    # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
+    # binding by definition"). merge/unmerge (also added to BINDING_VERBS above) already
+    # have CLI doors and need no entry here — they were the STALE-LIST half of the same
+    # ruling, simply never credited.
+    "correct_house": "self-scoped by design (same shape as charter above): it resolves "
+        "the target seat from the CALLING agent's own mounted identity — a raw terminal "
+        "holds no such identity to be self about. correct_agent_house (the third-party, "
+        "explicit-target form) is the real gap; see its own entry below.",
+    "correct_agent_house": "not yet built — a real gap, found by the #199 lane 3B audit "
+        "rather than any prior scoping; not ruled out.",
+    "reconcile_merge": "not yet built — a real gap, found by the #199 lane 3B audit; "
+        "not ruled out.",
+    "retire": "self-scoped by design (same shape as charter/correct_house above): it "
+        "marks THIS mounted session retired off the caller's own identity — a raw "
+        "terminal has no mounted session of that kind to retire. retire_agent (the "
+        "third-party, explicit-target form) is the real gap; see its own entry below.",
+    "retire_agent": "not yet built — a real gap, found by the #199 lane 3B audit; "
+        "not ruled out.",
+    "fleet_reconcile": "not yet built — a real gap, found by the #199 lane 3B audit; "
+        "not ruled out.",
+    "heal_seat_transcript": "not yet built — the ORIGINAL specimen this whole lane "
+        "exists to prevent recurring (task #199, tonight): shipped with no CLI door and "
+        "no declaration anywhere, silently, because it was never added to the "
+        "population this gate walks. Declared now, still not built — a real gap named "
+        "honestly rather than hidden a second time.",
 }
 
 
