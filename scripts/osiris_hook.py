@@ -234,10 +234,18 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     # after a container that never moved (the #169 shape \u2014 a remedy that cannot tell two
     # states apart and confidently prescribes one).
     stale_age, from_cache = 0, False
-    cache_key = project_hint or "_"
+    cache_key = project_hint or None
+    r: dict[str, Any] | None = None
     if resp is not None and not resp.get("error"):
         r = resp.get("result") or resp
-        if isinstance(r, dict):
+        # A BUCKET KEYED ON IGNORANCE HAS NO SHARED IDENTITY TO HOLD (Thoth's own framing,
+        # msg 6655, live specimen: his bar rendered "Lilguy"). `cache_key is None` means
+        # `project_hint` never resolved locally (any bare seat-office container, any
+        # unpinned repo) — every such session collapsed into the SAME "_" file, so an
+        # unrelated session's counts (not just its label) leaked in on the next fallback
+        # read. Never write, and below, never read, that bucket at all: an unresolved
+        # session stays live-only, same as a genuinely offline `/heartbeat`.
+        if isinstance(r, dict) and cache_key is not None:
             # CACHE ONLY THE PROJECT-SCOPED COUNTS. resolved_seat_handle / resolved_intent
             # are the CALLER's, not the project's, and this file is shared by every agent
             # working the project — caching them let one seat's bar wear another's name
@@ -248,7 +256,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             _statusline_cache_write(cache_key, {k: v for k, v in r.items()
                                                 if k not in ("resolved_seat_handle",
                                                              "resolved_intent")})
-    else:
+    elif cache_key is not None:
         r, stale_age = _statusline_cache_read(cache_key)
         from_cache = r is not None
 
