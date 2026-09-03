@@ -2902,85 +2902,25 @@ async def _launch_twin_check(
     return {"harness": from_harness, "mounts": from_mounts}
 
 
-async def launch_seat(
-    actions: Actions, *, caller: str, target: str, message: str = "",
-    model: str | None = None, settings: Settings | None = None,
-    manager: Any = None, windows: Any = None, substrate: str | None = None,
-    spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
-    resume_spawn: Any = None,
+async def _launch_target_setup(
+    actions: Actions, *, caller: str, target: str, agents_json: Any,
 ) -> dict[str, Any]:
-    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
-    Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
-    body_exists and can_receive SEPARATELY, each from an independent read — Ra's requirement
-    (53ae1a87): a launch that returns success must mean a body exists AND can receive, and where
-    those are separable states the verb must not collapse them into one lying boolean.
+    """THE GATE + FACTS SHARED BY BOTH launch_seat AND resume_seat (extracted, task #199
+    lane 3C, ruling 41a41437/msgs 6823/6831: "one shared orchestration shell, the
+    managed_by-vs-operator gate as the single irreducible branch" — this is that shell's
+    MCP-agent half; the caller-trust gate below is the one piece that genuinely differs
+    from the CLI's own operator door and stays irreducible on purpose, not collapsed).
 
-    THE OPERATOR NEVER CALLS THIS (no operator param, exactly like wake): an override a caller can
-    assert in an argument is an override that can be forged; the operator's hand stays out-of-band.
+    Runs the managed_by trust gate, resolves seat_facts/tree_cwd, builds the attach line,
+    and enforces ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1) — checked here,
+    once, so neither launch nor resume can ever fork a second eligible head.
 
-    SUBSTRATE (the default flip, task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): `substrate`
-    picks the spawn lane — an explicit argument wins, then `osiris_launch_substrate`
-    (default 'harness'). 'harness' bodies the seat as a `claude --bg` background session
-    (visible in `claude agents --json` BY CONSTRUCTION); 'pty' keeps the original osiris
-    PTY-broker lane alive as an explicit, vendor-neutral fallback. `manager`/`windows` are
-    injected for the PTY lane's tests; `spawn`/`agents_json`/`cost_reader` for the harness
-    lane's — either way, without a live daemon or a live `claude` binary.
-
-    THE RESUME LANE (operator's own order, 2026-08-04, ruling via decision a829a15d + msg
-    3639 — reverses the "not built, deliberately" call in 315c3181): the harness lane, before
-    minting fresh, now checks whether the seat's own lineage left a resumable session
-    (`_lineage_resume_candidate` — walks past a zero-turn generation to find one, the SAME
-    compaction+ceiling gates dispatch_dm's mail-wake already honors — resumable never means
-    resume-everything) and, if so, CONTINUES it instead — reusing dispatch_dm's own resume
-    machinery (`_resume_guard`, `_DM_RESUME_PROMPT`, `_spawn_claude`'s `--resume` lane it
-    already runs in production) rather than reimplementing it, so the two can never drift
-    apart the way a hand-copied gate check already has once this reign (eebeb1f).
-
-    WHY A LINEAGE WALK, NOT PLAIN `_agent_resumable` (live-fire correction, 2026-08-04,
-    Thoth msg 3691 — Sekhmet): a `--bg`-launched seat's every generation shares ONE durable
-    per-seat mount anchor (`_launch_anchor`), fixed in CLAUDE_JOB_DIR for that OS process's
-    entire life — so `agent_mounts`' one shared row for it NEVER encodes a real session id,
-    only whichever generation most recently mounted, and a plain `agent_mounts`-keyed
-    lookup is structurally blind to every earlier generation's own resumable transcript,
-    not merely a stillborn one. `_lineage_resume_candidate` reads `session` instead — a
-    GRAPH property, immune to the shared-anchor collapse — and the receipt now NAMES the
-    decision every time (which generation, how many hops back, the actual transcript size
-    and gate numbers), never a silent correct-by-accident refusal (4ef68cfe).
-
-    ONE-SHOT, DELIBERATELY, not a standing window: a
-    `-p --resume` body runs its one turn and exits (confirmed live: `claude agents --json
-    --all` cannot retain it even when the body itself calls mount() mid-turn — a harness
-    fact, not ours to fix, decision a829a15d). This is not a downgrade from `--bg`'s
-    persistent window — it is RE-SUMMONABLE, not unreachable: dispatch_dm's own resume lane
-    wakes the same session again on the next mail, so a standing window here would be a
-    SECOND mechanism doing a job dispatch_dm's resume lane already does (38c71544's shape).
-    Whether `osiris launch` should ALSO offer a persistent resumed window was once an open
-    fork (thread 65d8846a) — RESOLVED, not left dangling: decision 696d302c named "the
-    launch window is a property of launch, not a per-launch question" as the general rule
-    for this whole class of recurring coordinator decisions, and this branch already lives
-    that rule (window shape is DERIVED from `_lineage_resume_candidate`, never asked of a
-    human per call). No persistent-resumed-window lane is being added on top of it; asking
-    would reintroduce exactly the per-launch human judgment the ruling retired.
-    `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for this branch's tests,
-    parallel to `spawn`/`agents_json`/`cost_reader` above.
-
-    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
-    7d6815bb — mirrored in `_cmd_launch_harness`, ruling 983ec87a's "two doors, one
-    receipt"): a `resident-unknown` gate is an ABSENCE of signed testimony, not a positive
-    finding of a different mind — it used to fall through to the same fresh mint as a real
-    `crossed-registry` finding, minting strangers over ferryman's and halcyon's actually-
-    resumable heads. It now refuses the WHOLE launch (`status: refused-resume-unknown`),
-    spawning nothing, naming the exact `claude -p --resume <sid>` a human can run by hand.
-    `crossed-registry` still falls through to fresh — that session was never this seat's."""
+    A dict with NO `target_seat` key is an ERROR — return it to the caller UNCHANGED.
+    Otherwise every field a launch or resume decision needs is resolved and ready:
+    target_seat, handle, house, office, tree_cwd, launch_cwd, attach, anchor,
+    current_holder, facts."""
     pool = actions.pool
-    from src.orchestrator.agents import _generation, house_of
     from src.orchestrator.seats import held_seat, seat_receipt
-    manager = manager or _manager_control
-    windows = windows or _manager_windows
-    spawn = spawn or _spawn_claude_bg
-    resume_spawn = resume_spawn or _spawn_claude
-    agents_json = agents_json or _claude_agents_json
-    cost_reader = cost_reader or _bg_session_cost
 
     caller_held = await held_seat(pool, caller)
     caller_seat = (caller_held or {}).get("seat_id")
@@ -3011,15 +2951,6 @@ async def launch_seat(
                 "detail": f"{handle} ({target_seat}) has no anchor_cwd — establish_office first; "
                           "a body needs a room to be born in"}
 
-    # TREE_CWD (task #103's re-scope, ff3bdc37, Thoth DM 2794): the seat's OFFICE (identity —
-    # unchanged above, `office`) and its CODE CHECKOUT are distinct properties on purpose;
-    # collapsing them is John's own catastrophe (#128) repeated. OSIRIS NEVER PROVISIONS a
-    # tree (harness owns isolation) — a bound-but-missing tree_cwd is refused, mirroring the
-    # refused-no-office shape exactly, one line up; an UNSET tree_cwd falls back to `office`
-    # silently, the unchanged behavior every seat not doing isolated tree work keeps getting.
-    # `launch_cwd` — never `office` alone — is what the body actually spawns into and what
-    # idempotency below matches against, or a tree-bound seat would twin on every relaunch
-    # (its live process sits at tree_cwd; a check still reading `office` would never find it).
     tree_cwd = facts["tree_cwd"]
     launch_cwd = office
     if tree_cwd:
@@ -3041,22 +2972,10 @@ async def launch_seat(
                               f"tree_cwd={real_path!r}, because='...')"}
         launch_cwd = tree_cwd
 
-    # THE ATTACH LINE (ruling 0fe36e59, thread c171a3de finding #6): spawn location must never
-    # matter, so REACHING the body can never depend on which harness project slug its cwd
-    # happened to register under — every receipt below hands the operator everything needed
-    # to get there directly, independent of that. `command` uses the plumbing that's actually
-    # live today (src/manager/attach.py); `osiris attach <handle>` is the same door once that
-    # CLI build (thread 16a0c76b) lands.
     anchor = _launch_anchor(target_seat)
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
 
-    # ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c —
-    # the halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on
-    # the same seat). Consult the SAME occupancy authority the fold/reanimation/send()
-    # doors already share (`is_occupied_by_a_live_body`, built at 3014910) rather than a
-    # second notion of occupancy — checked centrally, before either spawn lane, so a
-    # launch can never fork a second eligible head regardless of substrate.
     from src.orchestrator.agents import is_occupied_by_a_live_body
     current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
     if current_holder and await is_occupied_by_a_live_body(
@@ -3068,6 +2987,59 @@ async def launch_seat(
                           f"({current_holder}, confirmed via registry_census) — one seat, "
                           "one live lineage head; refusing rather than forking a second "
                           "eligible head. If this is stale, vacate_seat first."}
+
+    return {"target_seat": target_seat, "handle": handle, "house": house, "office": office,
+            "tree_cwd": tree_cwd, "launch_cwd": launch_cwd, "attach": attach, "anchor": anchor,
+            "current_holder": current_holder, "facts": facts}
+
+
+async def launch_seat(
+    actions: Actions, *, caller: str, target: str, message: str = "",
+    model: str | None = None, settings: Settings | None = None,
+    manager: Any = None, windows: Any = None, substrate: str | None = None,
+    spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
+) -> dict[str, Any]:
+    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
+    Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
+    body_exists and can_receive SEPARATELY, each from an independent read — Ra's requirement
+    (53ae1a87): a launch that returns success must mean a body exists AND can receive, and where
+    those are separable states the verb must not collapse them into one lying boolean.
+
+    THE OPERATOR NEVER CALLS THIS (no operator param, exactly like wake): an override a caller can
+    assert in an argument is an override that can be forged; the operator's hand stays out-of-band.
+
+    SUBSTRATE (the default flip, task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): `substrate`
+    picks the spawn lane — an explicit argument wins, then `osiris_launch_substrate`
+    (default 'harness'). 'harness' bodies the seat as a `claude --bg` background session
+    (visible in `claude agents --json` BY CONSTRUCTION); 'pty' keeps the original osiris
+    PTY-broker lane alive as an explicit, vendor-neutral fallback. `manager`/`windows` are
+    injected for the PTY lane's tests; `spawn`/`agents_json`/`cost_reader` for the harness
+    lane's — either way, without a live daemon or a live `claude` binary.
+
+    ALWAYS A FRESH MINT NOW, NEVER AN AUTOMATIC RESUME (ruling 41a41437, task #199 lane 3C,
+    mirroring the CLI's own ruling 60c78788 exactly — "the verb IS the property, no flag,
+    no automatic guess"). This lane used to check the seat's own lineage for a resumable
+    session before minting fresh — that automatic branch is GONE. Continuing a dormant
+    session is now `resume_seat`'s own, separate job (right below this function); its own
+    docstring carries the full history this one used to (the lineage walk, the resident-
+    unknown refusal, the one-shot `-p --resume` shape, the receipt's decision-naming
+    discipline) — read it there, not here, if that is what you are looking for."""
+    pool = actions.pool
+    from src.orchestrator.agents import house_of
+    manager = manager or _manager_control
+    windows = windows or _manager_windows
+    spawn = spawn or _spawn_claude_bg
+    agents_json = agents_json or _claude_agents_json
+    cost_reader = cost_reader or _bg_session_cost
+
+    setup = await _launch_target_setup(
+        actions, caller=caller, target=target, agents_json=agents_json)
+    if "target_seat" not in setup:
+        return setup
+    target_seat, handle, house = setup["target_seat"], setup["handle"], setup["house"]
+    office, tree_cwd = setup["office"], setup["tree_cwd"]
+    launch_cwd, attach, anchor = setup["launch_cwd"], setup["attach"], setup["anchor"]
+    current_holder, facts = setup["current_holder"], setup["facts"]
 
     st = settings or get_settings()
     lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
@@ -3181,108 +3153,12 @@ async def launch_seat(
                     "detail": f"a live body already holds {handle} — not minting a twin "
                               f"(seen via {', '.join(seen_via)})"}
 
-        # THE RESUME LANE (this docstring's own "THE RESUME LANE" section explains the
-        # policy; this is just the mechanism). Checked BEFORE minting fresh. `holder` (not
-        # `target_seat`) is the identity `_lineage_resume_candidate`/`_resume_guard` need —
-        # a Seat is never itself an Agent lineage. WALKS THE LINEAGE (`_lineage_resume_
-        # candidate`, not the plain agent_mounts-keyed `_agent_resumable`/`wakeable_
-        # identity` dispatch_dm's DM lane uses) — a `--bg`-launched seat's every generation
-        # shares ONE durable per-seat mount anchor, so the job-dir-keyed lookup is
-        # structurally blind to any of them; the lineage's own `session` graph property
-        # survives where agent_mounts cannot (see that function's own docstring; live-fire
-        # finding, Thoth msg 3691, Sekhmet).
-        holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
-        resume_outcome = await _lineage_resume_candidate(
-            pool, holder, st, repo=launch_cwd, seat_id=target_seat,
-        ) if holder else ["no seat holder on record"]
-        resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
-        resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
-        if resume is not None:
-            # holder is truthy whenever resume is set — resume_outcome only comes from
-            # _lineage_resume_candidate(holder, ...), never the bare-string branch, when
-            # holder was falsy. Asserted, not silently narrowed: a violated invariant here
-            # should be loud, never a quiet skip of the identity gate.
-            assert holder is not None
-            # hop count (#173a): READ DIRECTLY off `resume`'s own 6th field now (task #200
-            # residual, decision 6a0b1236/6d6bf4e8) — never re-derived from
-            # `len(resume_log) - 1`, which silently miscounts whenever
-            # `_lineage_resume_candidate` appends a second log line for the winning hop.
-            # `launch_cwd` is this seat's own launch location (office, or tree_cwd when
-            # tree-bound), the 1:1 identity the zero-hop graph door corroborates against.
-            gate, refusal = await _resume_guard(
-                pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
-                seat_id=target_seat, st=st, hop=resume[5], launch_cwd=launch_cwd)
-            if gate == "resident-unknown":
-                # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb — self-healing
-                # over manual bandaids): an ABSENCE of signed testimony is not evidence this
-                # head belongs to someone else — it is exactly the case a resumable session
-                # (ferryman gen 8, 2MB, 0 hops back) was refused for and then a stranger was
-                # minted OVER it anyway. "crossed-registry" (a POSITIVE finding of a
-                # different mind) still falls through to a fresh mint below — that session
-                # genuinely isn't this seat's, so a fresh body under this seat's own name is
-                # legitimate. "resident-unknown" gets no such pass: refuse the WHOLE launch,
-                # spawn nothing, name the exact command a human can run to confirm it
-                # themselves — never silently degrade into "mint a stranger." NOTE (#173a):
-                # this branch is only reached when the zero-hop graph door (passed via
-                # hop/launch_cwd above) did NOT already clear the gate — a zero-hop,
-                # graph-corroborated candidate resolves gate=None before this check ever runs.
-                return {"status": "refused-resume-unknown", "seat": target_seat,
-                        "session": resume[0], "body_exists": False, "can_receive": False,
-                        "detail": f"{refusal} — refusing rather than minting a stranger "
-                                  f"over a possibly-resumable head; run `claude -p --resume "
-                                  f"{resume[0]}` by hand to confirm it yourself, or clear "
-                                  "the seat's stale session pointer if it's truly dead"}
-            if gate is not None:
-                resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
-                resume = None
-        if resume is not None:
-            session_id, repo, materialized_at = resume[0], resume[1], resume[4]
-            # office, never `repo` — see dispatch_dm's own identical line for why.
-            spawn_cwd = materialized_at or await _resume_office(
-                pool, target_seat, fallback=office)
-            # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike the fresh-mint lane
-            # below (which sends its brief AFTER spawning): a fresh `--bg` body takes
-            # seconds to boot, mount, and claim_name before its first inbox() call, so send-
-            # after-spawn there is safely ordered by the boot lag alone. A RESUMED body has
-            # no such lag — its first turn IS the inbox() check (_DM_RESUME_PROMPT) — so the
-            # mail row must exist first, the same "ledger before spawn" discipline
-            # dispatch_dm's own resume branch already follows for its wake ledger.
-            resume_brief_id: int | None = None
-            if message.strip():
-                sent = await send_message(
-                    pool, from_agent=caller, from_project=await house_of(pool, caller),
-                    to_agent=target_seat, body=message, grade="ask")
-                resume_brief_id = sent.get("id")
-            await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
-                               model=argv_model, allowed_tools=st.osiris_wake_allowed_tools
-                               or None)
-            adoption = await _adopt_resumed_body(
-                pool, agents_json=agents_json, office=spawn_cwd, requested_sid=session_id,
-                holder=str(holder), project=facts.get("house"))
-            if adoption.get("copied"):
-                resume_log.append(f"harness started a COPY ({str(adoption['session_id'])[:8]}) "
-                                  f"instead of continuing {session_id[:8]} — a stopped record was "
-                                  "still on file; adopted as the seat's own continuation")
-            out = {
-                "status": "launched", "mode": "resumed", "seat": target_seat,
-                "session": session_id, "body_exists": True, "can_receive": True,
-                "spawned_model": argv_model, "attach": attach,
-                "resume_check": resume_log,
-                "detail": f"resumed session {session_id[:8]} as a ONE-SHOT turn — walked "
-                          f"{len(resume_log)} generation(s) back to find it "
-                          f"({'; '.join(resume_log)}); it runs the brief and exits; "
-                          "`claude agents --json` shows it only WHILE it runs, never after "
-                          "(a harness fact, not a bug: a further mail wake continues it, "
-                          "exactly like any other dormant addressee)",
-            }
-            if resume_brief_id is not None:
-                out["brief_message_id"] = resume_brief_id
-            stamped_model = facts.get("intended_model")
-            if stamped_model and argv_model != stamped_model:
-                out["model_mismatch"] = (
-                    f"spawned on {argv_model!r} but the seat's own stamped intended_model "
-                    f"is {stamped_model!r} — never silent (thread 20e4feb6)")
-            return out
+        # NO RESUME CHECK HERE, DELIBERATELY (ruling 41a41437/60c78788, task #199 lane 3C):
+        # launch ALWAYS mints fresh now, mirroring the CLI's own osiris launch exactly — the
+        # resume-lineage walk this lane used to run first (and the receipt's resume_check
+        # field explaining "why booted fresh") moved wholesale to resume_seat below, which
+        # owns that decision now. Continuing a dormant session is resume_seat's job, never
+        # an automatic branch inside launch again.
 
         # IDENTITY IS BOUND HERE, BEFORE THE BODY EXISTS (Piece 1, Thoth dispatch msg 6692,
         # d161a156 one layer up — replacing the prior design, which told the session to
@@ -3343,20 +3219,16 @@ async def launch_seat(
                               if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         except (OSError, TimeoutError, ValueError):
             pass
-        # THE RECEIPT NAMES THE RESUME DECISION EVERY TIME (Thoth's explicit condition,
-        # msg 3691: "a correct decision made silently is indistinguishable from a broken
-        # one"). `resume_log` carries WHY this booted fresh instead — numbers, not
-        # adjectives (transcript size, compaction count, the gate's own threshold), one
-        # line a human reads instead of re-running succession_chain by hand.
-        booted_why = (f"booted fresh — {'; '.join(resume_log)} (gate: min_tail_bytes="
-                      f"{st.osiris_resume_min_tail_bytes}, ceiling="
-                      f"{st.osiris_resume_ceiling_bytes}b)")
+        # NO resume_check FIELD HERE ANYMORE (ruling 41a41437): there is no resume decision
+        # for this receipt to name — launch never walks the lineage now, it just mints. Use
+        # resume() to continue a dormant session; its own receipt carries this same kind of
+        # decision-naming discipline for the question it actually answers.
         out = {
             "status": "launched", "window": name, "seat": target_seat,
             "body_exists": True, "can_receive": alive_row is not None,
-            "spawned_model": argv_model, "resume_check": resume_log,
-            "detail": (f"{booted_why}; live" if alive_row is not None else
-                       f"{booted_why}; mount NOT yet confirmed — the claude is booting and "
+            "spawned_model": argv_model,
+            "detail": ("body created and live" if alive_row is not None else
+                       "body created; mount NOT yet confirmed — the claude is booting and "
                        "will self-bind via its own boot prompt; confirm with `claude agents "
                        "--json`"),
             "attach": attach,
@@ -3405,6 +3277,158 @@ async def launch_seat(
             f"{stamped_model!r} — never silent (thread 20e4feb6)")
     if brief_id is not None:
         out["brief_message_id"] = brief_id
+    return out
+
+
+async def resume_seat(
+    actions: Actions, *, caller: str, target: str, message: str = "",
+    model: str | None = None, settings: Settings | None = None,
+    agents_json: Any = None, resume_spawn: Any = None,
+) -> dict[str, Any]:
+    """Continue a seat's own DORMANT session — `launch_seat`'s former auto-resume branch,
+    now its own verb (ruling 41a41437, task #199 lane 3C, mirroring the CLI's own
+    ruling 60c78788: launch always mints fresh, resume always continues, no flag, no
+    automatic guess — the VERB is the property). Same managed_by gate and seat/occupancy
+    facts as launch_seat (`_launch_target_setup`, the one shared shell), then walks the
+    seat's own LINEAGE for a resumable session and either continues it or REFUSES —
+    NEVER falls through to a fresh mint, mirroring the CLI's own `_cmd_resume_harness`
+    exactly: minting on this door is `launch_seat`'s job alone, never resume's.
+
+    WALKS THE LINEAGE (`_lineage_resume_candidate`, not the plain agent_mounts-keyed
+    `_agent_resumable`/`wakeable_identity` dispatch_dm's DM lane uses) — a `--bg`-launched
+    seat's every generation shares ONE durable per-seat mount anchor (`_launch_anchor`),
+    fixed in CLAUDE_JOB_DIR for that OS process's entire life, so `agent_mounts`' one
+    shared row for it NEVER encodes a real session id, only whichever generation most
+    recently mounted. `_lineage_resume_candidate` reads `session` instead — a GRAPH
+    property, immune to the shared-anchor collapse (live-fire finding, 2026-08-04, Thoth
+    msg 3691, Sekhmet) — and the receipt NAMES the decision every time (which generation,
+    how many hops back, the actual transcript size and gate numbers), never a silent
+    correct-by-accident refusal (4ef68cfe).
+
+    ONE-SHOT, DELIBERATELY, not a standing window: a `-p --resume` body runs its one turn
+    and exits (confirmed live: `claude agents --json --all` cannot retain it even when the
+    body itself calls mount() mid-turn — a harness fact, not ours to fix, decision
+    a829a15d). This is not a downgrade from `--bg`'s persistent window — it is
+    RE-SUMMONABLE, not unreachable: dispatch_dm's own resume lane wakes the same session
+    again on the next mail, so a standing window here would be a SECOND mechanism doing a
+    job dispatch_dm's resume lane already does (38c71544's shape). Decision 696d302c named
+    "the launch window is a property of launch, not a per-launch question" as the general
+    rule for this whole class of recurring coordinator decisions, and this function already
+    lives that rule. `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for
+    tests, parallel to `agents_json` above.
+
+    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
+    7d6815bb): a `resident-unknown` gate is an ABSENCE of signed testimony, not a positive
+    finding of a different mind — it used to fall through to a fresh mint (back when this
+    logic lived inside launch_seat) the same as a real `crossed-registry` finding, minting
+    strangers over ferryman's and halcyon's actually-resumable heads. It refuses the WHOLE
+    resume (`status: refused-resume-unknown`), spawning nothing, naming the exact
+    `claude -p --resume <sid>` a human can run by hand. `crossed-registry` REFUSES here too
+    now (`status: refused-nothing-to-resume`) — that session was never this seat's, and
+    resume has nothing left to fall through TO; the caller wants `launch` instead."""
+    pool = actions.pool
+    from src.orchestrator.agents import _generation, house_of
+    from src.orchestrator.seats import seat_receipt
+    agents_json = agents_json or _claude_agents_json
+    resume_spawn = resume_spawn or _spawn_claude
+
+    setup = await _launch_target_setup(
+        actions, caller=caller, target=target, agents_json=agents_json)
+    if "target_seat" not in setup:
+        return setup
+    target_seat, handle = setup["target_seat"], setup["handle"]
+    launch_cwd, attach = setup["launch_cwd"], setup["attach"]
+    office, facts = setup["office"], setup["facts"]
+
+    st = settings or get_settings()
+    argv_model = model or facts.get("intended_model") or st.osiris_wake_model or None
+
+    # THE RESUME LANE (mechanism moved verbatim from launch_seat's own former harness
+    # branch, task #199 lane 3C — behavior UNCHANGED, only where it lives). `holder` (not
+    # `target_seat`) is the identity `_lineage_resume_candidate`/`_resume_guard` need — a
+    # Seat is never itself an Agent lineage.
+    holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
+    resume_outcome = await _lineage_resume_candidate(
+        pool, holder, st, repo=launch_cwd, seat_id=target_seat,
+    ) if holder else ["no seat holder on record"]
+    resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
+    resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
+    if resume is not None:
+        assert holder is not None
+        # hop count (#173a): READ DIRECTLY off `resume`'s own 6th field (task #200
+        # residual, decision 6a0b1236/6d6bf4e8) — never re-derived from
+        # `len(resume_log) - 1`, which silently miscounts whenever
+        # `_lineage_resume_candidate` appends a second log line for the winning hop.
+        gate, refusal = await _resume_guard(
+            pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
+            seat_id=target_seat, st=st, hop=resume[5], launch_cwd=launch_cwd)
+        if gate == "resident-unknown":
+            return {"status": "refused-resume-unknown", "seat": target_seat,
+                    "session": resume[0], "body_exists": False, "can_receive": False,
+                    "detail": f"{refusal} — refusing rather than minting a stranger "
+                              f"over a possibly-resumable head; run `claude -p --resume "
+                              f"{resume[0]}` by hand to confirm it yourself, or clear "
+                              "the seat's stale session pointer if it's truly dead"}
+        if gate is not None:
+            resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
+            resume = None
+
+    if resume is None:
+        # NEVER FALLS THROUGH TO A FRESH MINT (the one deliberate behavior change from
+        # launch_seat's former combined lane, per ruling 41a41437/_cmd_resume_harness's
+        # own precedent): resume answers ONE question, and "nothing to resume" is a real
+        # answer to it, not an invitation to do launch's job instead.
+        return {"status": "refused-nothing-to-resume", "seat": target_seat,
+                "body_exists": False, "can_receive": False, "resume_check": resume_log,
+                "detail": f"no resumable session found for {handle} ({'; '.join(resume_log)}) "
+                          f"(gate: min_tail_bytes={st.osiris_resume_min_tail_bytes}, "
+                          f"ceiling={st.osiris_resume_ceiling_bytes}b) — nothing was spawned; "
+                          "use launch() to mint a fresh body instead"}
+
+    session_id, materialized_at = resume[0], resume[4]
+    # office, never the resume candidate's own repo field — see dispatch_dm's own
+    # identical line for why.
+    spawn_cwd = materialized_at or await _resume_office(pool, target_seat, fallback=office)
+    # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike launch's fresh-mint lane
+    # (which sends its brief AFTER spawning): a fresh `--bg` body takes seconds to boot,
+    # mount, and claim_name before its first inbox() call, so send-after-spawn there is
+    # safely ordered by the boot lag alone. A RESUMED body has no such lag — its first
+    # turn IS the inbox() check (_DM_RESUME_PROMPT) — so the mail row must exist first,
+    # the same "ledger before spawn" discipline dispatch_dm's own resume branch follows.
+    resume_brief_id: int | None = None
+    if message.strip():
+        sent = await send_message(
+            pool, from_agent=caller, from_project=await house_of(pool, caller),
+            to_agent=target_seat, body=message, grade="ask")
+        resume_brief_id = sent.get("id")
+    await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
+                       model=argv_model, allowed_tools=st.osiris_wake_allowed_tools or None)
+    adoption = await _adopt_resumed_body(
+        pool, agents_json=agents_json, office=spawn_cwd, requested_sid=session_id,
+        holder=str(holder), project=facts.get("house"))
+    if adoption.get("copied"):
+        resume_log.append(f"harness started a COPY ({str(adoption['session_id'])[:8]}) "
+                          f"instead of continuing {session_id[:8]} — a stopped record was "
+                          "still on file; adopted as the seat's own continuation")
+    out = {
+        "status": "launched", "mode": "resumed", "seat": target_seat,
+        "session": session_id, "body_exists": True, "can_receive": True,
+        "spawned_model": argv_model, "attach": attach,
+        "resume_check": resume_log,
+        "detail": f"resumed session {session_id[:8]} as a ONE-SHOT turn — walked "
+                  f"{len(resume_log)} generation(s) back to find it "
+                  f"({'; '.join(resume_log)}); it runs the brief and exits; "
+                  "`claude agents --json` shows it only WHILE it runs, never after "
+                  "(a harness fact, not a bug: a further mail wake continues it, "
+                  "exactly like any other dormant addressee)",
+    }
+    if resume_brief_id is not None:
+        out["brief_message_id"] = resume_brief_id
+    stamped_model = facts.get("intended_model")
+    if stamped_model and argv_model != stamped_model:
+        out["model_mismatch"] = (
+            f"spawned on {argv_model!r} but the seat's own stamped intended_model "
+            f"is {stamped_model!r} — never silent (thread 20e4feb6)")
     return out
 
 

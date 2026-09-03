@@ -57,13 +57,6 @@ NO_MCP_EQUIVALENT = {
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
-    "resume": "operator ruling 60c78788 (2026-09-01) split the CLI's own `osiris launch` "
-             "into launch/resume so the two front doors are each exactly one predictable "
-             "thing (fresh --bg mint vs one-shot -p --resume). The MCP `launch` tool "
-             "(backed by trigger.launch_seat) still has its OWN automatic resume-or-fresh "
-             "branch, unsplit — whether it should also split into two MCP tools is a "
-             "real, separate, operator-owned question, named to Thoth rather than decided "
-             "unilaterally in this CLI-only change (thread bc11a2d3's family).",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -170,6 +163,8 @@ MCP_ONLY_PARAMS = {
     ("heal_seat_anchor", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) "
         "is the same concept, inverted and renamed to match this house's --apply repair "
         "convention rather than the MCP tools' own dry_run=True default.",
+    ("resume", "message"): "same gap as launch's own message param above — the CLI has "
+        "no way to deliver an opening brief in one act today; not yet built",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -189,6 +184,11 @@ RENAMED_PARAMS = {
     ("charter-for", "seat", "charter_for", "seat_id"):
         "the same seat reference, two names — found building this detector; not yet "
         "reconciled",
+    ("resume", "handle", "resume", "target"):
+        "the same seat reference, two names — MATCHES launch's own handle/target split "
+        "exactly (both entries above), and deliberately so: resume is launch's own sibling "
+        "verb now, split from it by the same ruling (60c78788/41a41437); the pair must "
+        "read identically at the terminal for the same reason stop/launch already do",
 }
 
 # LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
@@ -223,6 +223,9 @@ BINDING_VERBS = frozenset({
     # never added to the population that credits them for it.
     "correct_house", "correct_agent_house", "reconcile_merge", "retire", "retire_agent",
     "fleet_reconcile", "heal_seat_transcript", "merge", "unmerge",
+    # `resume` (task #199 lane 3C, ruling 41a41437) — a brand-new tool tonight, already
+    # declared in NEW_TOOL_DECLARATIONS below, not grandfathered in the snapshot.
+    "resume",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -758,7 +761,9 @@ class NewToolDeclaration(TypedDict, total=False):
 # Empty at birth — the ratchet's whole point is that this population grows only by someone
 # adding an entry here, in the same PR that adds the tool. See the block comment above for
 # what each field means.
-NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {}
+NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
+    "resume": {"binding_verb": True},
+}
 
 
 async def _live_tool_meta() -> dict[str, dict[str, Any]]:

@@ -4231,6 +4231,41 @@ async def launch(target: str, message: str = "", model: str | None = None,
 
 
 @mcp.tool()
+async def resume(target: str, message: str = "", model: str | None = None,
+                 subagent_id: str | None = None, subagent_type: str | None = None,
+                 session_anchor: str | None = None,
+                 ctx: Context | None = None) -> dict[str, Any]:
+    """Continue a seat's own DORMANT session — `launch`'s former auto-resume branch, now
+    its own verb (ruling 41a41437, task #199 lane 3C, mirroring the CLI's own
+    ruling 60c78788: launch always mints fresh, resume always continues, no flag, no
+    automatic guess — the VERB is the property). Same managed_by/downward-only gate as
+    launch (a manager resumes a seat it MANAGES, never a peer or itself upward).
+
+    NEVER FALLS THROUGH TO A FRESH MINT: if the seat's own lineage left nothing resumable,
+    this REFUSES (`status: refused-nothing-to-resume`) rather than minting a stranger over
+    a question it was never asked — call launch() for that, a deliberate, separate act.
+    ONE-SHOT: a resumed body runs its one turn (over `-p --resume`) and exits — re-
+    summonable via the next mail wake (dispatch_dm's own resume lane), never a standing
+    window; `claude agents --json` shows it only WHILE it runs. `status` is one of:
+    `launched` with `mode: resumed` (the continuation succeeded), `refused-nothing-to-
+    resume` (no resumable session found — nothing spawned), `refused-resume-unknown`
+    (thread ef88e2bb: a resumable-looking session with no signed testimony — refuses
+    rather than guessing whose mind it is; the exact `claude -p --resume <sid>` a human
+    can run by hand is named in `detail`), or `refused-not-your-worker` (no downward
+    managed_by edge — nothing spawned). `resume_check` on every non-error receipt NAMES
+    the decision (which generation, how many hops back, the actual gate numbers) — never
+    a silent correct-by-accident refusal."""
+    ident = await _ident_for(ctx, session_anchor)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first — a resume must say who "
+                         "it's from", "why": _anchorless(ctx)}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from src.orchestrator.trigger import resume_seat
+    return await resume_seat(Actions(await _pool_get()), caller=actor, target=target,
+                             message=message, model=model)
+
+
+@mcp.tool()
 async def stop(target: str | None = None, reason: str = "",
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
