@@ -1483,8 +1483,10 @@ async def test_mount_from_bare_root_writes_the_seated_house_to_the_registry(
         "the REGISTRY row must carry the seated house too — fleet() reads this column "
         "directly and must never file a seated agent under '?'")
     # THE ACTUAL REPORTED SYMPTOM: fleet() reads the AGENT's own current_assertions
-    # 'project' (not agent_mounts.project) — this is the field register_agent asserted
-    # BEFORE _resolve_project_seat_first's override, so it must be checked separately.
+    # 'project' (not agent_mounts.project) — checked separately from the receipt/registry
+    # assertions above, since it's a genuinely different write with its own history of
+    # going stale (thread 6a00e942; the ordering itself was later fixed too, thread
+    # 178e5a41 — register_agent now sees the corrected project from the start).
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
@@ -1527,6 +1529,77 @@ async def test_mount_from_bare_root_first_ever_mount_of_a_seated_agent(
     assert out["project"] == "osiris"
     rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
     assert rec is not None and rec.project == "osiris"
+
+
+async def test_mount_at_a_seats_own_office_never_mints_a_handle_named_phantom_project(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE INTEGRATION TEST (thread 178e5a41, Thoth dispatch 6713/6724): the real Marquee
+    shape, reproduced. A seat's own OFFICE basename is its HANDLE ("marquee"), never its
+    HOUSE — houses can differ from handles after a project fold (Marquee's own real case:
+    house 'dealer-to-fb', handle 'marquee'). Mounting from that exact office with the OLD
+    ordering (register_agent's own project mint ran BEFORE _resolve_project_seat_first's
+    correction) would mint a phantom SoftwareProject named after the office basename
+    ('marquee') from resolve_identity's own pre-correction cwd guess, moments before the
+    correction ever ran — an orphan no fleet()/roster() ever counts as this agent's real
+    project. Reordered: register_agent now sees the seat's own TRUE house from the start,
+    so no such phantom is ever minted, on the very first call — not healed after the fact,
+    never created at all.
+
+    PRE-REGISTERS THE MOUNT ROW (`alive=False`), matching `_bind_before_spawn`'s own real
+    shape (Sekhmet's Piece 1) rather than a bare `bind_holder` — a `holds` link alone
+    satisfies neither `lived` nor `office_claim`'s own recognition doors (find_mount/fork/
+    ledger/bridge, or an office deed/agent_mounts-cwd match), so a seat bound WITHOUT a
+    pre-registered anchor row correctly falls into the visitor path today (no Agent
+    object, this test's own first, failing draft caught exactly that) — a real, separate
+    fact from the ordering bug this test exists to prove, not something to paper over."""
+    from src import mcp_server as srv
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
+    office = fake_root / "marquee"
+    office.mkdir()
+
+    seat = await ensure_seat(actions, house="dealer-to-fb", handle="marquee", source="test")
+    assert seat.get("error") is None
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:mq0001",
+                      source="test")
+    job_dir = str(tmp_path / "jobs" / "mq0001")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:mq0001",
+                     project="dealer-to-fb", cwd=str(office), model=None,
+                     session_key=None, alive=False)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out.get("error") is None
+    assert out["agent"] == "agent:mq0001"
+    assert out["project"] == "dealer-to-fb", (
+        f"the receipt must show the seat's TRUE house, never the office basename: {out}")
+    # THE NEGATIVE ACCEPTANCE CRITERION (Thoth's own framing, msg 6693): not "produces a
+    # warning" — produces NOTHING. No SoftwareProject named after the office basename
+    # exists anywhere, active or retired — it was never minted, not healed after landing.
+    phantom = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND lower(canonical) = 'repo:marquee'")
+    assert phantom == 0, "no phantom SoftwareProject named after the office basename"
+    real = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "AND lower(canonical) = 'repo:dealer-to-fb'")
+    assert real == 1, "the seat's own TRUE house project must exist"
+    # THE AGENT'S OWN project ASSERTION — what fleet() actually reads — is correct from
+    # this same first call, not merely the in-memory receipt.
+    proj = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:mq0001' AND a.name='project' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert proj == "dealer-to-fb"
 
 
 async def test_mount_resolves_project_from_the_seat_not_cwd_when_seated(
