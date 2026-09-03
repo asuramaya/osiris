@@ -695,8 +695,40 @@ async def claim_name(
         "  <> COALESCE($2, '') LIMIT 1",
         name, house)
     if elsewhere is not None and not holders:
-        return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}) — a name "
-                         "belongs to one house; pick a name for your own."}
+        # PIECE 3 (Thoth dispatch, msg 6692): THE ANCHOR AS THE LAST LINE OF DEFENSE, not
+        # the first — Piece 1 (launch_seat's own `_bind_before_spawn`) should mean this
+        # branch is never load-bearing again for a `--bg`-launched seat, but a human or an
+        # older body can still reach it, and a defence that only works when nothing else is
+        # wrong isn't one. THE MARQUEE SPECIMEN: a session sitting in its own seat's office
+        # (~/.osiris/seats/marquee) called claim_name("Marquee") and was refused here — the
+        # name also names an agent in a DIFFERENT project, so the house-derived guess said
+        # "elsewhere" — but that guess is a HOUSE COMPUTATION, and the caller's own cwd,
+        # when it sits inside a seat's own OFFICE, is a location fact no guess outranks
+        # (the same #103/ff3bdc37 discipline this whole reign keeps re-learning). Scoped
+        # narrowly on purpose: this only ever PREVENTS a refusal that would otherwise fall
+        # through to the caller's own fresh-mint fallback — it never overrides a case that
+        # would otherwise have succeeded, and only fires when the CONFLICTING name-holder's
+        # OWN seat is the one whose office the caller is physically standing in.
+        from src.orchestrator.heartbeat import _seat_owns_cwd
+        from src.orchestrator.seats import held_seat
+        from src.orchestrator.seats import seat_facts as _seat_facts
+
+        anchor_seat_id: str | None = None
+        caller_cwd = await actions.pool.fetchval(
+            "SELECT cwd FROM agent_mounts WHERE agent_id=$1 "
+            "ORDER BY last_seen DESC NULLS LAST LIMIT 1", agent_id)
+        elsewhere_seat = await held_seat(actions.pool, str(elsewhere["canonical"]))
+        if caller_cwd and elsewhere_seat and elsewhere_seat.get("seat_id"):
+            anchor_cwd = (await _seat_facts(actions.pool, elsewhere_seat["seat_id"])
+                         ).get("anchor_cwd")
+            if _seat_owns_cwd(caller_cwd, handle=name, anchor_cwd=anchor_cwd):
+                anchor_seat_id = elsewhere_seat["seat_id"]
+        if anchor_seat_id is None:
+            return {"error": f"'{name}' is a seat in another house ({elsewhere['canonical']}) — "
+                             "a name belongs to one house; pick a name for your own."}
+        seat_id = anchor_seat_id
+        counting_house = await derive_house(actions.pool, seat_id) or house
+        counting_holders = await seat_holders(actions.pool, counting_house, name)
     # a seat a LIVE mind is already sitting in is not vacant: two minds in one house do two jobs.
     # UNCONDITIONAL now (thread cb374585): gating this behind `holders` — an AGENT-history,
     # house-scoped count — meant a caller whose own computed house didn't match the seat's

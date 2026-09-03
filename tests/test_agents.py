@@ -1822,6 +1822,72 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
         actions, outsider, "Soundwave", source=outsider))["error"]
 
 
+async def test_claim_name_the_anchor_overrides_a_house_mismatch_when_standing_in_the_office(
+    actions: Actions,
+) -> None:
+    """PIECE 3 (Thoth dispatch msg 6692), THE MARQUEE SPECIMEN REPRODUCED DIRECTLY: a
+    session sitting IN a seat's own office calls claim_name with that seat's own name, but
+    the house-derived guess disagrees (a stale/corrupted project stamp on the recorded
+    holder — exactly what Marquee's real holder carried) — the plain 'another house'
+    refusal used to fire regardless of where the caller actually was. The caller's own cwd,
+    when it matches the seat's OWN anchor_cwd, now overrides that guess: the anchor is a
+    location FACT, the house derivation is a GUESS, and a guess never outranks a fact.
+    Scoped: this only ever prevents a refusal that would otherwise fall through to a fresh
+    mint — it does not fire for the plain 'another house' case with no matching cwd at all
+    (test_you_do_not_take_another_houses_name, unchanged, still refuses)."""
+    from src.orchestrator.agents import claim_name
+
+    async def mind(canon: str, house: str) -> str:
+        a = await actions.create_or_find_object("Agent", canon, "session")
+        await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
+        return canon
+
+    first = await mind("agent:anchor-a1", "wronghouse")
+    claimed = await claim_name(actions, first, "Marquee", source=first)
+    assert claimed["seat"] == "Marquee I"
+    seat_id = claimed["seat_id"]
+    seat_oid = await actions.create_or_find_object("Seat", seat_id, "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", "/home/x/.osiris/seats/marquee",
+                                  "test", datetime.now(UTC), 0.9)
+
+    outsider = await mind("agent:anchor-b1", "realhouse")
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, cwd, mounted_at) "
+        "VALUES ('/j/anchor-b1', $1, $2, now())",
+        outsider, "/home/x/.osiris/seats/marquee")
+
+    out = await claim_name(actions, outsider, "Marquee", source=outsider)
+    assert "error" not in out
+    assert out["seat_id"] == seat_id
+    assert out["generation"] == 2
+    assert out["inherited_from"] == first
+    assert out["seat"] == "Marquee II"
+
+
+async def test_claim_name_the_anchor_never_fires_without_a_matching_cwd(
+    actions: Actions,
+) -> None:
+    """The narrow scope, proven negatively: an outsider with NO agent_mounts row at all
+    (the ordinary case — a fresh, unmounted mind) still gets the plain refusal. The anchor
+    check is an ADDITIONAL fact required, never a relaxation of the guard itself."""
+    from src.orchestrator.agents import claim_name
+
+    async def mind(canon: str, house: str) -> str:
+        a = await actions.create_or_find_object("Agent", canon, "session")
+        await actions.assert_property(a, "project", house, "session", datetime.now(UTC), 0.9)
+        return canon
+
+    first = await mind("agent:anchor-c1", "wronghouse")
+    claimed = await claim_name(actions, first, "Awning", source=first)
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", "/home/x/.osiris/seats/awning",
+                                  "test", datetime.now(UTC), 0.9)
+
+    outsider = await mind("agent:anchor-d1", "realhouse")
+    err = await claim_name(actions, outsider, "Awning", source=outsider)
+    assert "another house" in err["error"]
+
+
 async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
     """RA V'S REFINEMENT (sibling-eight, msg 374), and it is the case that breaks the naive model.
     He and his predecessor were not sequential — they OVERLAPPED for two and a half days, two live

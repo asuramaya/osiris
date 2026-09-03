@@ -1964,18 +1964,19 @@ async def dispatch_dm(
         # COMPACTION ONLY: the other gates (ceiling/no-anchor/crossed-registry/
         # resident-unknown) are each a genuine "who this even is" uncertainty, and
         # minting on top of THAT would repeat the exact stranger-over-a-live-head class
-        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location with
-        # the SAME fresh-mint boot prompt launch_seat's own fallthrough already uses —
-        # no separate carry-the-message prompt needed, `_bg_boot_prompt` already tells
-        # a fresh body to inbox() for its opening brief, and this very mail sits there
-        # addressed to the seat's own name.
+        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location.
         handle = facts.get("handle") if facts else None
         office = facts.get("anchor_cwd") if facts else None
         house = facts.get("house") if facts else None
         if (miss_gate == "compaction" and seat_id is not None and launch_cwd
                 and handle and office):
             anchor = _launch_anchor(seat_id)
-            boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+            # THE LEDGER ROW GOES IN UNDER AN ADVISORY LOCK, BEFORE THE MINT (matching
+            # dispatch_dm's own established discipline elsewhere in this function: two
+            # dispatchers — send()'s immediate leg and a concurrent worker-tick sweep —
+            # can both reach here for one message, and only one may spend). The bind-
+            # before-spawn write below is exactly a spend (it mints a heir), so it must
+            # not run before this gate decides which dispatcher, if either, gets to.
             async with pool.acquire() as conn, conn.transaction():
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, "
@@ -1990,6 +1991,27 @@ async def dispatch_dm(
                 await conn.execute(
                     "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ($1,$2,$3,'dm-fresh-heir')", project, sender, msg_id)
+            # BOUND BEFORE SPAWN, HERE TOO (Thoth dispatch 6713, closing the hole above
+            # Khnum's own claim_name backstop, 2c65c6d): this fallback used to hand a
+            # fresh body `_bg_boot_prompt`'s INSTRUCTION-shaped text ("claim_name
+            # yourself") — Sekhmet's Piece 1 (msg 6692/6694) fixed launch_seat's own
+            # fresh-mint fallthrough the same way this fixes dispatch_dm's: identity
+            # is a fact the server already holds (office/handle/house all came off
+            # `seat_facts` above), not a re-derivation to hand a fresh session through
+            # a fallible tool call it might refuse and then route around (the Marquee
+            # specimen, one path over). `current_holder=target`: `target` IS this
+            # seat's own declared living head — the identity whose compaction seam
+            # triggered this fallback in the first place — used only as
+            # `_bind_before_spawn`'s OWN fallback (its real ancestor resolution reads
+            # the seat's lineage first, never the `holds` edge, same as launch_seat's
+            # own call).
+            bound = await _bind_before_spawn(
+                Actions(pool), target_seat=seat_id, handle=handle, house=house,
+                current_holder=target, office=office, anchor=anchor,
+                source=sender or "session")
+            boot_prompt = _bg_boot_prompt_bound(
+                office=office, anchor=anchor, handle=handle, agent=bound["agent"],
+                generation=bound["generation"])
             try:
                 await fresh_spawn(launch_cwd, name=f"[{_house_tag(house)}] {handle}",
                                   model=st.osiris_wake_model or None, prompt=boot_prompt)
@@ -2418,6 +2440,146 @@ def _launch_anchor(seat_id: str) -> str:
     return str(Path.home() / ".claude" / "jobs" / seat_id.replace(":", "-"))
 
 
+async def _bind_before_spawn(
+    actions: Actions, *, target_seat: str, handle: str, house: str | None,
+    current_holder: str | None, office: str, anchor: str, source: str,
+) -> dict[str, Any]:
+    """PIECE 1 (Thoth dispatch, msg 6692, d161a156 one layer up): mint and bind the seat's
+    next generation SERVER-SIDE, before the body exists — the identity `launch_seat` already
+    holds at prompt-construction time (office, handle, house, and everything generation math
+    needs) written as a fact instead of serialized into English and handed to a fresh
+    session to re-derive through a fallible tool call. THE LIVE SPECIMEN: Marquee's own
+    `claim_name` refused (the name was held by an unrelated lineage, seat:bdbe031e's actual
+    recorded holder) and the session's own autonomy clause — "never park on a question typed
+    into this empty room" — converted that refusal into a phantom mint: a stranger Agent
+    ("Awning"), a stray Seat, an orphan SoftwareProject. The agent behaved correctly; the
+    machinery asked it to do something that could fail and gave it no way back once it did.
+
+    ANCESTOR CASE (the ordinary one): reuses `mint_heir` outright rather than duplicating
+    its own hard-won mechanics — grave-avoidance, the succeeded_by/succeeded_from chain,
+    handle inheritance. The ancestor is resolved from THE SEAT'S OWN LINEAGE, never from
+    `current_holder` (the `holds` edge) directly (Thoth's own correction, msg 6694, measured
+    against Marquee: 11 generations of the seat's own substantive properties — handle,
+    house, intended_model — all sourced from lineage agent:38cf08a9, and exactly ONE
+    disagreeing edge, `holds`, naming an unrelated agent that built none of the rest). A
+    COLD seat's `holds` edge can go stale without the seat itself being wrong — the defect
+    is resolving generation math FROM that edge instead of walking the lineage that actually
+    built the seat. `_seat_lineage_ancestor` reads the seat's own `handle` assertion's
+    SOURCE (the property least likely to ever be written by a lineage that isn't genuinely
+    this seat's own) and walks it forward via `lineage_head` to the TRUE current generation
+    — the same succeeded_by walk fork resolution and mailbox routing already trust. Falls
+    back to `current_holder` only when the seat has no handle assertion at all (nothing
+    lineage-side to read yet — a seat still using the pre-Seat-object binding, or a launch
+    racing its own first-ever claim). Either way, `bind_holder` is called EXPLICITLY below,
+    never left to mint_heir's own `follow_binding` alone — a corrected-lineage ancestor may
+    not itself hold `target_seat` (Marquee's own 38cf08a9-xi doesn't; 226a2695-ii does), so
+    follow_binding would move nothing. This is deliberately the SAME act that corrects a
+    stale `holds` edge, sequenced to happen only when a real launch actually runs, through
+    this named verb, with the reasoning recorded on the heir — never a hand-write.
+
+    NO-ANCESTOR CASE (a seat truly never described, no handle assertion, no holder): mints
+    a bare first generation directly, under the same `agent:seat-<id>` root every pure-seat-
+    office lineage already carries (my own root, `agent:seat-af50a33e`, is one) — a
+    deterministic, collision-free identity derived from the seat itself, never invented from
+    a transcript that does not exist yet.
+
+    HOUSE, NOT GOVERNS (Thoth's own flag, msg 6694, a separate axis, not this dispatch's to
+    chase): a seat's `house` property can be stale label residue after a project fold
+    (Marquee's own case: `house`='dealer-to-fb', `governs`->'dtfb', the merged live name) —
+    `house` here is `launch_seat`'s own caller-supplied param, unchanged from before this
+    dispatch; this function does not re-derive it, on purpose, so it carries forward exactly
+    whatever staleness already existed rather than silently fixing a different bug in passing.
+
+    THE PRE-REGISTRATION IS WHAT MAKES claim_name UNNECESSARY: `save_mount(..., alive=False)`
+    seeds the launch anchor's own durable row BEFORE the process exists, so the spawned
+    session's own `mount(cwd=office, job_dir=anchor)` call re-attaches through the EXISTING
+    durable-row door (`mounts.find_mount`) instead of falling through to a fresh identity
+    resolution — the same "seated the moment you exist; a heartbeat is earned by an act,
+    never granted by a greeting" discipline `save_mount`'s own docstring already describes
+    for an heir minted at ordinary succession time, fired one step earlier than usual: before
+    the body exists, not at its first call."""
+    from src.orchestrator.agents import _generation, mint_heir
+    from src.orchestrator.mounts import save_mount
+    from src.orchestrator.seats import bind_holder
+
+    now = datetime.now(UTC)
+    ancestor = await _seat_lineage_ancestor(actions.pool, target_seat) or current_holder
+    if ancestor:
+        ancestor_oid = await actions.create_or_find_object("Agent", ancestor, source)
+        heir_id, _heir_oid = await mint_heir(
+            actions, ancestor, ancestor_oid,
+            because="launch_seat: bind-before-spawn (piece 1, msg 6692)", succession=None,
+            now=now, minting_door=anchor, upcoming_project=house)
+    else:
+        from src.parsers.base import EvidenceClass
+        from src.parsers.evidence import confidence_for
+
+        heir_id = f"agent:seat-{target_seat.removeprefix('seat:')}"
+        heir_oid = await actions.create_or_find_object("Agent", heir_id, source)
+        do = EvidenceClass.DIRECT_OBSERVATION
+        conf = confidence_for(do)
+        await actions.assert_property(
+            heir_oid, "minted_because",
+            "launch_seat: bind-before-spawn, no prior holder (piece 1, msg 6692)",
+            source, now, conf, evidence_class=do.value)
+        await actions.assert_property(heir_oid, "handle", handle, source, now, conf,
+                                      evidence_class=do.value)
+        await actions.assert_property(heir_oid, "seat_generation", "1", source, now, conf,
+                                      evidence_class=do.value)
+    # EXPLICIT, ALWAYS — never left to mint_heir's own follow_binding alone (see docstring:
+    # a corrected-lineage ancestor may not itself hold `target_seat` yet). Idempotent
+    # (bind_holder checks for an already-live identical link before writing) so this is a
+    # no-op when follow_binding already did the work, and the actual correction when it
+    # didn't.
+    await bind_holder(actions, seat_id=target_seat, agent_id=heir_id, source=source)
+    await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id, project=house,
+                     cwd=office, model=None, session_key=None, alive=False)
+    return {"agent": heir_id, "generation": _generation(heir_id)[1]}
+
+
+async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
+    """The generation to mint `_bind_before_spawn`'s heir OF — resolved from the seat's OWN
+    lineage, never from its `holds` edge (Thoth's correction, msg 6694). Reads the seat's own
+    `handle` assertion's source_id (the property least likely to ever be written by a
+    lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
+    (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
+    trust) to the TRUE current generation. None when the seat carries no handle assertion at
+    all — nothing lineage-side to read yet."""
+    source = await pool.fetchval(
+        "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
+        "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
+        "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+    if not source:
+        return None
+    from src.orchestrator.agents import _generation, lineage_head
+
+    base = _generation(str(source))[0]
+    return await lineage_head(pool, base)
+
+
+def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
+                          generation: int) -> str:
+    """PIECE 1's boot prompt: a STATEMENT, not an instruction (Thoth's acceptance criterion,
+    msg 6692 — `claim_name` disappears from this text; if it survives, the inversion did not
+    happen). The session's identity is already written (`_bind_before_spawn`, run just before
+    this); mount() re-attaches to it through the pre-registered anchor row, nothing left to
+    negotiate or re-derive. THE ONLY BOOT PROMPT NOW (Thoth dispatch 6713): the unbound
+    `_bg_boot_prompt` this function was deliberately kept separate from — dispatch_dm's own
+    fresh-heir fallback was its last caller — is gone; dispatch_dm now binds before spawn
+    the same way launch_seat does, through this function."""
+    from src.orchestrator.agents import _to_roman
+
+    label = f"{handle} {_to_roman(generation)}" if generation > 1 else handle
+    return (
+        f'You are {label}, {agent}, already bound to your seat\'s office. Call '
+        f'mount(cwd="{office}", job_dir="{anchor}") to attach — it re-earns your binding '
+        f"from the graph directly. Then inbox() for your opening brief. No one is "
+        f"watching this window: work the brief to completion, a real blocker, or a "
+        f"seam — never park on a question typed into this empty room; a genuine ask "
+        f"goes out as mail (grade='ask')."
+    )
+
+
 async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str,
 ) -> dict[str, Any] | None:
@@ -2824,25 +2986,30 @@ async def launch_seat(
                     f"is {stamped_model!r} — never silent (thread 20e4feb6)")
             return out
 
-        # IDENTITY, VIA THE SESSION'S OWN FIRST TURN, NOT ENV STAMPING (live finding,
-        # 2026-07-27, replacing the original design): `--bg` claims a PRE-FORKED spare
-        # process off a claim-socket (confirmed via `ps`/`/proc/<pid>/environ` on a real
-        # spawn — the spare's env is fixed at fork time, long before this call), so NEITHER
-        # CLAUDE_JOB_DIR NOR any OSIRIS_*-prefixed var this call sets ever reaches the
-        # claimed session — a real launch mounted anonymous (agent:<sid8>, seat=null) with
-        # every one of them stamped. `claude [options] [prompt]` DOES deliver a trailing
-        # positional prompt as the session's genuine first turn (confirmed live) — so the
-        # boot instruction rides THAT, telling the session to bind itself via mount() +
-        # claim_name(handle), the same proven, independently-tested adoption path a human
-        # follows into a fresh office (claim_name: a name matching an already-vacant seat is
-        # ADOPTED, never twinned — see mint_seat's own receipt: '...or start a session in
-        # the office and have it claim_name itself').
+        # IDENTITY IS BOUND HERE, BEFORE THE BODY EXISTS (Piece 1, Thoth dispatch msg 6692,
+        # d161a156 one layer up — replacing the prior design, which told the session to
+        # re-derive its own binding via mount()+claim_name() through its first turn). THE
+        # LIVE SPECIMEN: Marquee's own claim_name refused (the name was held by an unrelated
+        # lineage) and the session's own autonomy clause converted that refusal into a
+        # phantom mint rather than parking on the question — the agent behaved correctly,
+        # the machinery handed it a fallible re-derivation to do instead of a fact.
+        # `launch_seat` already holds everything generation math needs (office, handle,
+        # house, `current_holder` from the occupancy check above) — `_bind_before_spawn`
+        # writes that identity NOW, deterministically, server-side.
+        bound = await _bind_before_spawn(
+            actions, target_seat=target_seat, handle=handle, house=house,
+            current_holder=current_holder, office=office, anchor=anchor, source=caller)
         # THE BOOT PROMPT ANCHORS mount() AT THE OFFICE, ALWAYS — never `launch_cwd`. Identity
         # lives at the office regardless of where the process's own cwd happens to sit (#103's
         # whole point); a tree-bound seat's session boots WITH its shell cwd at tree_cwd (the
         # `spawn(launch_cwd, ...)` below) but is told to mount(cwd=office) all the same, the
-        # identical pattern every seat in this house already follows by hand.
-        boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+        # identical pattern every seat in this house already follows by hand. It is now a
+        # STATEMENT, not an instruction — claim_name does not appear (Thoth's acceptance
+        # criterion, msg 6692): mount() re-attaches to the identity `_bind_before_spawn` just
+        # wrote, through the pre-registered anchor row, nothing left to negotiate.
+        boot_prompt = _bg_boot_prompt_bound(
+            office=office, anchor=anchor, handle=handle, agent=bound["agent"],
+            generation=bound["generation"])
 
         # THE DORMANT-HISTORY CONFESSION (thread fc69b9b4, Ooblek specimen 2026-08-02): a
         # fresh mind can land on a transcript full of history it cannot read — `--bg` picks
@@ -3375,22 +3542,6 @@ async def _spawn_in_body(
 # session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
 # open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
 # task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
-
-def _bg_boot_prompt(*, office: str, anchor: str, handle: str) -> str:
-    """The harness-native lane's boot instruction (see `_spawn_claude_bg`'s own docstring for
-    why this replaces env-var identity stamping): a `--bg` session's genuine first turn tells
-    it to bind itself via the same proven mount()+claim_name() path a human follows into a
-    fresh office. Shared by `launch_seat` and `osiris launch` (task #72, thread 842aa184) —
-    one wording, never two copies to drift apart."""
-    return (
-        f'You have just been launched into your own seat\'s office. Call '
-        f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
-        f"exact name — to bind to the seat already waiting for you. Then inbox() for "
-        f"your opening brief. No one is watching this window: work the brief to "
-        f"completion, a real blocker, or a seam — never park on a question typed into "
-        f"this empty room; a genuine ask goes out as mail (grade='ask')."
-    )
-
 
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,

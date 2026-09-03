@@ -507,8 +507,15 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     assert len(spawn_calls) == 1
     assert spawn_calls[0]["repo"] == str(office)
     assert spawn_calls[0]["model"] == "claude-sonnet-5"
+    # BOUND BEFORE SPAWN (Thoth dispatch 6713, closing the hole above Khnum's own
+    # claim_name backstop, 2c65c6d): identity is written server-side before the process
+    # exists — the boot prompt is a STATEMENT ("you are already bound"), never an
+    # instruction to claim_name yourself (the Marquee specimen: a refused claim_name
+    # converted into a phantom mint by the session's own autonomy clause).
     assert f'mount(cwd="{office}"' in spawn_calls[0]["prompt"]
-    assert 'claim_name("freshbg")' in spawn_calls[0]["prompt"]
+    assert "freshbg" in spawn_calls[0]["prompt"].lower()
+    assert "already bound" in spawn_calls[0]["prompt"]
+    assert "claim_name" not in spawn_calls[0]["prompt"]
     # CONTRACT CHANGED BY THE VERB SPLIT (operator ruling 60c78788). This used to assert
     # "not resumed" — the line that explained why launch fell THROUGH its resume branch to
     # a fresh spawn. There is no such branch any more: `osiris launch` always spawns fresh,

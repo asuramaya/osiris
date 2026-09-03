@@ -3464,8 +3464,11 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
 ) -> None:
     """The halcyon-class defect, closed: a seat holder whose tail since its own last
     compaction boundary is genuinely tiny (min_tail_bytes refuses it) is not a dead end —
-    dispatch_dm boots a fresh successor at the seat's own office (the SAME fresh-mint boot
-    prompt launch_seat's own fallthrough uses) rather than leaving the mail stranded."""
+    dispatch_dm boots a fresh successor at the seat's own office. BOUND BEFORE SPAWN
+    (Thoth dispatch 6713, closing the hole above Khnum's own claim_name backstop): the
+    boot prompt is a STATEMENT, not an instruction — identity was written server-side
+    by `_bind_before_spawn` before the process exists, the same fix Sekhmet's Piece 1
+    already gave launch_seat's own fresh-mint fallthrough."""
     sense = await _lineage_holder_with_session(
         actions, tmp_path, agent_id="agent:fh0001", compacted=True)
     worker_seat, _manager_seat = await _managed_pair(
@@ -3482,6 +3485,9 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
                              from_project="osiris", to_agent=worker_seat,
                              body="please pick this up")
     msg_id = int(out["id"])
+    from src.orchestrator.seats import seat_receipt as _seat_receipt
+
+    before = await _seat_receipt(actions.pool, worker_seat)
     booted: list[dict[str, Any]] = []
 
     async def _fresh_spawn(repo: str, **kw: Any) -> None:
@@ -3501,10 +3507,19 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
     assert "seam" in d["detail"] and "/tmp/seam-test-office" in d["detail"]
     assert len(booted) == 1
     assert booted[0]["repo"] == "/tmp/seam-test-office"
-    assert "Seam-Test" in booted[0]["prompt"] and "claim_name" in booted[0]["prompt"]
+    assert "Seam-Test" in booted[0]["prompt"]
+    assert "/tmp/seam-test-office" in booted[0]["prompt"]
+    assert "claim_name" not in booted[0]["prompt"]
     row = await actions.pool.fetchrow(
         "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id)
     assert row is not None and row["mode"] == "dm-fresh-heir"
+    # THE BIND ITSELF LANDED (not just the prompt's own wording): a real heir now holds
+    # this seat, minted server-side before the fresh body ever called mount() — a
+    # DIFFERENT holder than before the dispatch, never left to a fresh session's own
+    # claim_name to establish.
+    after = await _seat_receipt(actions.pool, worker_seat)
+    assert after is not None and after.get("holder") is not None
+    assert after["holder"] != (before or {}).get("holder")
 
 
 async def test_dispatch_dm_never_mints_fresh_for_a_non_compaction_gate(
@@ -3956,11 +3971,128 @@ async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt
     assert call["repo"] == "/tmp/sobek" and call["name"] == "[OS] Sobek"
     assert "session_id" not in call  # --bg ignores it; never passed (live finding 2026-07-27)
     assert "job_dir" not in call  # env vars never reach a --bg spare either (same finding)
-    # THE BOOT PROMPT (live finding, 2026-07-27): identity rides the session's own first
-    # turn, not env stamping — it must tell the session to mount at this exact office and
-    # claim this exact handle, or a fresh launch mounts anonymous.
+    # THE BOOT PROMPT IS A STATEMENT, NOT AN INSTRUCTION (Piece 1, Thoth dispatch msg 6692,
+    # d161a156 one layer up): identity is bound SERVER-SIDE, before the body exists —
+    # `_bind_before_spawn` minted the seat's own next generation and pre-registered its
+    # anchor row, so the fresh session's own mount() call re-attaches directly. claim_name
+    # never appears — the Marquee specimen showed a fresh session asked to re-derive its
+    # own binding through that fallible call can refuse and mint a phantom instead. (The
+    # exact heir id here is `_managed_pair`'s own fixture shortcut's business — see
+    # test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage for the precise id.)
     assert "/tmp/sobek" in call["prompt"]
-    assert 'claim_name("Sobek")' in call["prompt"]
+    assert "Sobek" in call["prompt"]
+    assert "claim_name" not in call["prompt"]
+
+
+# ═══ PIECE 1's OWN UNIT (Thoth dispatch msg 6692): _bind_before_spawn writes the identity
+# before the body exists — mint_heir's mechanics for a seat with a recorded ancestor, a
+# bare first generation for one that has never been claimed, and a pre-registered
+# (alive=False) anchor row either way so the spawned session's own mount() re-attaches
+# directly instead of needing claim_name. ═══════════════════════════════════════════════
+
+async def test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage(
+    actions: Actions,
+) -> None:
+    """The ordinary case: the seat's handle-assertion source AND its `holds` edge agree on
+    the same lineage. Reuses mint_heir outright — next generation, succeeds_seat edge — and
+    the seat's holds link ends up on the heir (via the explicit bind_holder call, not left
+    to mint_heir's own follow_binding alone — see the disagreement test below for why)."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="agent:38cf08a9"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:38cf08a9", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    assert out["agent"] == "agent:38cf08a9-ii"
+    assert out["generation"] == 2
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:38cf08a9-ii"
+
+
+async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds_edge(
+    actions: Actions,
+) -> None:
+    """THE MARQUEE SPECIMEN, REPRODUCED DIRECTLY (Thoth's own correction, msg 6694,
+    measured against the real seat): a seat's `handle` assertion is sourced from ONE
+    lineage — the mind that actually built the seat — while its `holds` edge names an
+    UNRELATED agent that contributed nothing else (a corrupted/stale binding, cold means
+    'held, nobody live', not 'held by the right mind'). Resolving generation math from
+    `holds` would mint the wrong lineage's next generation while LOOKING like success (no
+    new objects minted, just the wrong ancestor) — the exact bug Thoth's own dispatch named
+    as the load-bearing requirement. The lineage wins; the stale holds edge gets corrected
+    as a byproduct of the SAME act, through the same named verb, never a hand write."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="agent:realmind"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:staleholder")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:staleholder", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    assert out["agent"] == "agent:realmind-ii"  # the LINEAGE's next gen, not staleholder's
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:realmind-ii"  # the stale edge is corrected, not left
+
+
+async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattaches(
+    actions: Actions,
+) -> None:
+    """The whole reason claim_name becomes unnecessary: the spawned session's own
+    mount(job_dir=anchor) finds THIS row waiting, agent_id already set — the same
+    'seated the moment you exist' discipline save_mount's own docstring describes,
+    fired before the process exists rather than at its first call. `alive=False`: a
+    pre-registration is not a heartbeat, and must not read as a false liveness signal."""
+    from src.orchestrator.mounts import find_mount
+
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="agent:38cf08a9"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:38cf08a9", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    rec = await find_mount(actions.pool, job_dir="/tmp/anchors/marquee")
+    assert rec is not None
+    assert rec.agent_id == out["agent"]
+    assert rec.cwd == "/tmp/marquee" and rec.project == "dealer-to-fb"
+    pulse = await actions.pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", "/tmp/anchors/marquee")
+    assert pulse is None  # alive=False: no heartbeat granted by the pre-registration itself
+
+
+async def test_bind_before_spawn_mints_a_first_generation_when_the_seat_was_never_held(
+    actions: Actions,
+) -> None:
+    """No ancestor exists — the seat has no `handle` assertion at all (nothing lineage-side
+    to read) and no `holds` edge — so this mints a bare first generation directly, under the
+    same `agent:seat-<id>` root every pure-seat-office lineage already carries."""
+    seat_id = "seat:freshling01"
+    await actions.create_or_find_object("Seat", seat_id, "test")  # bare: no handle asserted
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Freshling", house="freshhouse",
+        current_holder=None, office="/tmp/freshling",
+        anchor="/tmp/anchors/freshling", source="agent:thoth01")
+
+    assert out["agent"] == f"agent:seat-{seat_id.removeprefix('seat:')}"
+    assert out["generation"] == 1
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == out["agent"]
 
 
 async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twin(
