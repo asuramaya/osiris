@@ -229,7 +229,10 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     root = get_settings().osiris_transcripts
     if not root:
         return 0
+    from pathlib import Path
+
     from src.actions.core import Actions
+    from src.ingest.soul_store import SoulStore
     from src.ingest.telemetry import TelemetryStore
     from src.ingest.transcript_store import TranscriptStore
     from src.orchestrator.neighborhoods import census_trees
@@ -237,6 +240,13 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     # the retained-telemetry sweep rides the same observer switch (task #35): the same
     # free-deterministic class, the same spend gate, the same one-switch-one-cost law
     tel = await TelemetryStore(ctx["pool"]).backfill()
+    # the soul store rides the SAME switch too (task #51 piece 1, Lane 1 msg 6527/ruling
+    # ba329ccb): measured 89,591 real lines fleet-wide (not the ~20M a linear guess
+    # implied), migration 0050's own last_line_idx/last_hash design was built for exactly
+    # this resumable-tail shape, and this is the sibling cron this house already trusts
+    # for the identical pattern — never SessionEnd/PreCompact, per the ruling's own
+    # constraint that nothing may wedge a session's exit
+    soul = await SoulStore(ctx["pool"]).backfill(root=Path(root))
     # the disk census too (thread 5e37630b): a free walk that makes 'exists on disk'
     # a graph fact — observation only, never the watch list
     roots = [r for r in get_settings().osiris_census_roots.split(":") if r.strip()]
@@ -248,7 +258,8 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
         _log.warning("disk census refused %d malformed director%s: %s",
                      len(cs["refused"]), "y" if len(cs["refused"]) == 1 else "ies",
                      ", ".join(r["name"] for r in cs["refused"]))
-    return (sum(out.values()) if out else 0) + tel + len(cs["minted"])
+    return ((sum(out.values()) if out else 0) + tel
+            + (sum(soul.values()) if soul else 0) + len(cs["minted"]))
 
 
 async def sweep_doors(ctx: dict[str, Any]) -> int:
