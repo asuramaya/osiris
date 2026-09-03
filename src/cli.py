@@ -956,7 +956,8 @@ async def _cmd_resume_harness(
     st = settings or get_settings()
     holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
     resume_outcome = await _lineage_resume_candidate(
-        pool, holder, st, repo=launch_cwd) if holder else ["no seat holder on record"]
+        pool, holder, st, repo=launch_cwd,
+        seat_id=facts["seat_id"]) if holder else ["no seat holder on record"]
     resume_log = resume_outcome[1] if isinstance(resume_outcome, tuple) else resume_outcome
     resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
     if resume is not None:
@@ -971,8 +972,8 @@ async def _cmd_resume_harness(
         # back") — its log always ends with exactly one success entry when `resume` is
         # set, so the count of entries BEFORE it is N.
         gate, refusal = await _resume_guard(
-            pool, resume, _generation(holder)[0], seat_id=facts["seat_id"], st=st,
-            hop=len(resume_log) - 1, launch_cwd=launch_cwd)
+            pool, (resume[0], resume[1], resume[2], resume[3]), _generation(holder)[0],
+            seat_id=facts["seat_id"], st=st, hop=len(resume_log) - 1, launch_cwd=launch_cwd)
         if gate == "resident-unknown":
             # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
             # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
@@ -999,9 +1000,10 @@ async def _cmd_resume_harness(
               f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
         return 1
 
-    resumed_session_id, resumed_repo = resume[0], resume[1]
+    resumed_session_id, resumed_repo, materialized_at = resume[0], resume[1], resume[4]
+    spawn_cwd = materialized_at or resumed_repo
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
-    await resume_spawn(resumed_repo, prompt=_DM_RESUME_PROMPT,
+    await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
     print(f"osiris resume: resumed session {resumed_session_id[:8]} — "
@@ -1617,6 +1619,40 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
     return notes
 
 
+async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
+    """#108 PIECE 4 WIRING (Thoth dispatch 6547, addendum to 118a98da) — a third
+    post-migration deploy step beside casefold's and remote_url's, same shape and same
+    OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out; every other value, including unset,
+    executes) — one standing autonomy ruling (22d47acb) over one class of act, never a
+    third env var to forget. Every candidate still goes through the SAME fold_project
+    door with its own contradiction gate.
+
+    THE RECEIPT NAMES THE STANDING PROCEDURE (item 4, Thoth's own ask): a fold that
+    executes here is also the specimen that would have made dsh00001's own
+    self-service fold (2026-08-21, ruling 31e5bae1) findable in one query instead of
+    the four this lane's own scoping took — so every executed candidate's note points
+    at 31e5bae1 directly, and names the alias that grounded it, the same way
+    dsh00001's own justification named its reason on the record."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import name_alias_duplicate_candidates
+
+    execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
+    result = await name_alias_duplicate_candidates(
+        Actions(pool), evidence="osiris deploy: automatic name-alias-matched merge "
+        "(#108 piece 4, decision 118a98da/31e5bae1) — the survivor's own graph already "
+        "asserted this rename as a current name alias before this fold ran",
+        actor="osiris-deploy", execute=execute)
+    notes = [f"name-alias auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+             f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
+    for c in result["candidates"]:
+        notes.append(f"  {c['dupe']} -> {c['into']} (alias {c['alias']!r} was already "
+                     f"a current name on {c['into']} — see decision 31e5bae1 for the "
+                     "standing self-service procedure this fold follows)")
+    for s in result["skipped"]:
+        notes.append(f"  SKIPPED: {s['survivor']} alias {s['alias']!r} — {s['reason']}")
+    return notes
+
+
 MigrationState = Callable[[asyncpg.Pool, Path], Awaitable[tuple[str | None, str | None]]]
 MigrateRunner = Callable[[Path], Awaitable[None]]
 
@@ -1915,6 +1951,9 @@ async def cmd_deploy(
     (7) records the deployed HEAD (thread 489a39d0) — the ground truth the reboot-is-a-deploy
     boot guard confesses against; a raw restart or a reboot never calls this, so the ledger
     and reality staying in sync is itself evidence the deploy went through this ritual.
+    Also prints (never gates) a NOTE when any seat carries a current `anchor_cwd` outside
+    the office root alongside the correct one (ruling 23771416) — this population was
+    found by an operator hitting a broken resume, and should never be found that way again.
 
     `wait_for_health`/`wait_for_smoke` default to the REAL bounded pollers (120s/30s
     ceilings, real network round-trips against the live console/MCP) — injectable for the
@@ -1985,6 +2024,8 @@ async def cmd_deploy(
         for note in await _run_casefold_automerge(pool):
             print(note)
         for note in await _run_remote_url_automerge(pool):
+            print(note)
+        for note in await _run_name_alias_automerge(pool):
             print(note)
 
         expects_unit_install = bool(user_unit_sources(root))
@@ -2062,6 +2103,26 @@ async def cmd_deploy(
                         pool, running_head=running_head,
                         reason="false-mint-live: " + " ".join(reason_lines))
             return 1
+
+        # THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6577) — INFORMATIONAL ONLY,
+        # never gating: unlike the halcyon gate above (an architectural-safety refusal),
+        # a seat's own stray anchor_cwd is an identity-hygiene defect with no deploy-time
+        # blast radius, so this only surfaces what the standalone detector would show,
+        # armed here so the population is discovered by routine deploy traffic rather than
+        # by an operator hitting a broken `osiris resume` again (the root cause of THIS
+        # session's own specimens). `heal-seat-anchor` is the repair door, named in the note.
+        with contextlib.suppress(Exception):  # an advisory note must never crash a deploy
+            from src.actions.core import Actions
+            from src.orchestrator.identity_heal import detect_anchor_invariant_violations
+
+            anchor_findings = await detect_anchor_invariant_violations(Actions(pool))
+            both_axes = ({m["seat"] for m in anchor_findings["multi_current"]}
+                        & {r["seat"] for r in anchor_findings["outside_root"]})
+            if both_axes:
+                print(f"NOTE: anchor invariant — {len(both_axes)} seat(s) carry a current "
+                      f"anchor_cwd outside the office root ALONGSIDE the correct one: "
+                      f"{sorted(both_axes)}. `osiris heal-seat-anchor <handle> --because "
+                      "... [--apply]` repairs one seat at a time; never auto-run here.")
 
         # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) — OFF
         # by default, same law as the chaos gate below it. Runs BEFORE the chaos gate: a
@@ -2804,6 +2865,82 @@ async def cmd_correct_pin_value(
     return 0
 
 
+async def cmd_heal_seat_anchor(
+    seat_or_handle: str, *, because: str, apply: bool = False, actor: str,
+    pool: asyncpg.Pool | None = None, office_root: Path | None = None,
+) -> int:
+    """osiris heal-seat-anchor <seat> --because <reason> [--apply] — the console-script
+    door onto identity_heal.heal_seat_anchor_third_party, the SAME function the
+    heal_seat_anchor_third_party MCP tool wraps. Always the third-party door, same
+    reasoning as correct-pin-value's own console twin: a terminal has no mounted identity
+    to be self-scoped about, so this always names an EXPLICIT target and always requires
+    `--because` — THE ANCHOR INVARIANT (ruling 23771416): a seat's anchor_cwd is identity,
+    always `<office_root>/<handle>`, never wherever a session happened to be sitting.
+
+    `seat_or_handle` accepts either — a bare `seat:...` canonical passes straight through;
+    anything else resolves via `seats.seats_by_handle` (case-insensitive, house-agnostic,
+    the same lookup `osiris launch`'s own target resolution uses), refusing loudly on zero
+    or ambiguous (>1) matches rather than guessing.
+
+    `--apply` is required to actually write — dry_run=True is the default, matching every
+    other repair verb in this house (the backfill scripts' own `--apply` convention)."""
+    from src.actions.core import Actions
+    from src.orchestrator.identity_heal import heal_seat_anchor_third_party
+    from src.orchestrator.seats import seats_by_handle
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:heal-seat-anchor")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris heal-seat-anchor: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        if seat_or_handle.startswith("seat:"):
+            seat_id = seat_or_handle
+        else:
+            matches = await seats_by_handle(pool, seat_or_handle)
+            if not matches:
+                print(f"osiris heal-seat-anchor: refused — no active seat holds handle "
+                      f"{seat_or_handle!r}", file=sys.stderr)
+                return 1
+            if len(matches) > 1:
+                print(f"osiris heal-seat-anchor: refused — {seat_or_handle!r} is "
+                      f"ambiguous, {len(matches)} seats share it: {matches}. Use the "
+                      "seat's own canonical id instead.", file=sys.stderr)
+                return 1
+            seat_id = matches[0]
+        out = await heal_seat_anchor_third_party(
+            Actions(pool), seat_id=seat_id, because=because, actor=actor,
+            dry_run=not apply, office_root=office_root)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris heal-seat-anchor: refused — {out['error']}", file=sys.stderr)
+        return 1
+    if out.get("healed") is False:
+        print(f"{seat_id}: {out.get('reason', 'nothing to heal')} — target already "
+              f"{out.get('target')!r}")
+        return 0
+    verb = "healed" if apply else "would heal (dry run — pass --apply to write)"
+    print(f"{seat_id} {verb}: target={out['target']!r}")
+    for row in out.get("current_before", []):
+        print(f"  before: {row['value']!r} (source={row['source_id']}, "
+              f"observed={row['observed_at']})")
+    return 0
+
+
 # --- mint-seat -----------------------------------------------------------------------------------
 
 def _context_house(house: str | None) -> str | None:
@@ -3160,7 +3297,8 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   see the fleet         fleet, roster, boot-status, smoke
   read the record       desk, show
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
-                        merge, unmerge, fold-project, rebind-seat, correct-pin-value
+                        merge, unmerge, fold-project, rebind-seat, correct-pin-value,
+                        heal-seat-anchor
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
@@ -3504,6 +3642,27 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="why this correction is being made — never optional, "
                                     "same rule as the MCP tool")
 
+    p_heal_anchor = sub.add_parser(
+        "heal-seat-anchor", description=_d(
+            "assert THE ANCHOR INVARIANT (ruling 23771416) for one seat — anchor_cwd is "
+            "identity, always <office_root>/<handle>, never wherever a session happened "
+            "to be sitting. The same identity_heal.heal_seat_anchor_third_party the MCP "
+            "tool wraps, given an explicit target (a terminal has no mounted identity to "
+            "be self-scoped about)"),
+        epilog="example: osiris heal-seat-anchor Jesus --because "
+            "\"anchor invariant repair\" --apply")
+    p_heal_anchor.add_argument("seat", help="a claimed handle or a raw agent id — the "
+                               "seat whose anchor this heals")
+    p_heal_anchor.add_argument("--because", required=True,
+                               help="why this repair is being run — never optional, same "
+                                    "rule as the MCP tool")
+    p_heal_anchor.add_argument("--apply", action="store_true",
+                               help="actually write — default is a dry-run report, same "
+                                    "convention as every other repair verb in this house")
+    p_heal_anchor.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this repair — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
             "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
@@ -3682,6 +3841,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "correct-pin-value":
         return asyncio.run(cmd_correct_pin_value(args.seat, args.key, args.value,
                                                   args.reason))
+    if args.command == "heal-seat-anchor":
+        return asyncio.run(cmd_heal_seat_anchor(args.seat, because=args.because,
+                                                apply=args.apply, actor=args.actor))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))

@@ -136,12 +136,32 @@ CLI_ONLY_PARAMS = {
         "EXPLICIT target instead, resolved the same way rebind-seat's own console door "
         "resolves its target (resolve_handle, falling back to a raw agent id that "
         "genuinely exists) before calling the identical offices.correct_own_pin_value.",
+    ("heal-seat-anchor", "seat"): "SAME SHAPE as correct-pin-value's own entry above: "
+        "the MCP tool heal_seat_anchor is SELF-scoped (resolves the caller's own held "
+        "seat) — a terminal has no mounted identity to be self about, so the console "
+        "door always names an EXPLICIT target and calls heal_seat_anchor_THIRD_PARTY "
+        "instead (resolved via seats.seats_by_handle, refusing on zero or ambiguous "
+        "matches), ruling 23771416.",
+    ("heal-seat-anchor", "because"): "the console door always calls the THIRD-PARTY "
+        "sibling (see the 'seat' entry above), whose `because` is REQUIRED — the "
+        "self-scoped MCP tool this CLI name matches by hyphen/underscore has no "
+        "`because` param at all, same asymmetry as reconcile_seat_identity's own pair.",
+    ("heal-seat-anchor", "apply"): "the SAME dry-run/apply concept as MCP's `dry_run` "
+        "below, INVERTED and renamed to match every other repair script's own --apply "
+        "convention in this house (scripts/backfill_*.py) rather than the MCP tools' "
+        "dry_run=True-default convention — apply=False means dry_run=True. Declared "
+        "here, not reconciled: the two conventions serve different callers (a human "
+        "typing a flag vs. an agent passing a keyword) and forcing one shape onto both "
+        "would fight one of them.",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
 MCP_ONLY_PARAMS = {
     ("launch", "message"): "the CLI has no way to deliver an opening brief in one act "
         "today — a real gap, named rather than hidden, not yet built",
+    ("heal_seat_anchor", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) "
+        "is the same concept, inverted and renamed to match this house's --apply repair "
+        "convention rather than the MCP tools' own dry_run=True default.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -187,6 +207,7 @@ BINDING_VERBS = frozenset({
     "charter_for", "invalidate_works_in", "reconcile_seat_identity",
     "reconcile_seat_identity_third_party", "correct_pin_value", "create_project",
     "rename_project", "retire_project", "fork_project", "unfork_project",
+    "heal_seat_anchor", "heal_seat_anchor_third_party",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -221,6 +242,11 @@ NO_CLI_EQUIVALENT = {
     "invalidate_works_in": "not yet built — not on the jesus/chad path; not ruled out.",
     "reconcile_seat_identity": "not yet built — not on the jesus/chad path; not ruled out.",
     "reconcile_seat_identity_third_party": "not yet built — same as reconcile_seat_identity.",
+    "heal_seat_anchor_third_party": "reachable — the CLI's own `heal-seat-anchor` (matched "
+        "by name to the SELF-scoped `heal_seat_anchor` above, per that pair's own "
+        "CLI_ONLY_PARAMS entry) always calls this third-party function under the hood, "
+        "same as correct-pin-value's own console door routing through offices."
+        "correct_own_pin_value rather than exposing a second, separately-named command.",
     "create_project": "not yet built — project lifecycle verbs weren't in lane 2's scope "
         "(seat reconciliation only); a real gap, not ruled out.",
     "rename_project": "not yet built — same scoping note as create_project.",

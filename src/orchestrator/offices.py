@@ -54,6 +54,31 @@ def _default_office_root() -> Path:
     return Path(override) if override else Path.home() / ".osiris" / "seats"
 
 
+async def seat_office_target(
+    pool: asyncpg.Pool, seat_id: str, *, office_root: Path | None = None,
+) -> str | None:
+    """THE ANCHOR INVARIANT'S OWN ADDRESS (ruling 23771416, msg 6584): `<office_root>/
+    <handle>` — DERIVED, never observed, never read off a row that might drift again.
+    `heal_seat_anchor` (identity_heal.py) computes this to know what a seat's `anchor_cwd`
+    SHOULD read; a resume materializer needing a target slug to emit into (thread d161a156,
+    the operator's own "materialize, don't hunt" ruling) needs the identical derivation —
+    one function, not two independently-typed copies that could disagree the way
+    `anchor_cwd` and `tree_cwd` themselves once did.
+
+    Returns None when the seat has no handle on record — nothing to derive an office path
+    from; a caller decides for itself what "no target" means (heal_seat_anchor refuses,
+    a materializer should refuse the same way rather than guess a slug)."""
+    handle = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id="
+        "  (SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active') "
+        "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        seat_id)
+    if not handle:
+        return None
+    root = office_root or _default_office_root()
+    return str(root / handle.lower())
+
+
 def is_bare_office_root(cwd: str | Path | None) -> bool:
     """True only for the exact seat-office CONTAINER (~/.osiris/seats) — the parent of every
     seat, never a project of its own (ruling 577988ed). ONE shared check so every cwd→project
@@ -746,7 +771,8 @@ async def _establish_pure_seat_office(
         charter_file_state = "written"
     rebind = await rebind_seat(
         actions, seat_or_agent=seat_id, new_cwd=str(office), actor=actor,
-        projects_root=projects_root, claude_json=claude_json, extract=True)
+        projects_root=projects_root, claude_json=claude_json, extract=True,
+        office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
         "office_deed": "n/a — no claimed occupant yet to deed an office to",
@@ -912,7 +938,8 @@ async def establish_office(
         charter_file_state = "written"
     rebind = await rebind_seat(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
-        projects_root=projects_root, claude_json=claude_json, extract=True)
+        projects_root=projects_root, claude_json=claude_json, extract=True,
+        office_root=root)
     # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH — the
     # fourth door must survive the seat's death, and mount rows don't (SessionEnd
     # releases them; Ra's ended lineage held none, so every fresh launch at his own

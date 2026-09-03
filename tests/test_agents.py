@@ -198,6 +198,76 @@ async def test_register_agent_mount_still_heals_case_whitespace_drift(actions: A
     assert row["confidence"] > 0.8  # full self_declared confidence, not derived-tier
 
 
+async def test_register_agent_mount_never_resurrects_a_merged_husks_name(
+    actions: Actions,
+) -> None:
+    """THE SELF-REINFECTING FOLD (Thoth dispatch 6547/6568, ruling a73aafa2, the real
+    Marquee specimen): the clobber fix above downgrades a differing pin-derived name to
+    DERIVED-tier confidence rather than refusing it — right instinct, wrong mechanism,
+    since assert_property's same-source-only supersession still lands it as a NEW
+    current row that wins any recency-ordered read. Measured live: repo:dtfb's fold
+    completed 2026-08-21 at direct_observation/0.9, then a derived/0.4 "dealer-to-fb"
+    row landed ELEVEN DAYS LATER from exactly this code path — a stale .osiris pin
+    resolving through a mount, self-reinfecting on every such mount. When the incoming
+    label is PROVABLY the husk's own name (a merge record says so, not a heuristic),
+    the write must never happen at any confidence."""
+    survivor = await actions.create_or_find_object("SoftwareProject", "repo:survivorx", "test")
+    husk = await actions.create_or_find_object("SoftwareProject", "repo:huskx", "test")
+    now = datetime.now(UTC)
+    await actions.assert_property(survivor, "name", "survivorx", "disk-census", now, 0.9,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    await actions.assert_property(husk, "name", "huskx", "test", now, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await actions.pool.execute(
+        "UPDATE objects SET status='merged', merged_into=$1 WHERE id=$2", survivor, husk)
+
+    # a mount from a seat whose pin was never updated post-fold, still declaring the
+    # husk's own pre-fold name
+    ident = resolve_identity(cwd="/w/whatever", session="sess-resurrect",
+                             model="claude-fable-5", project_label="huskx")
+    await register_agent(actions, ident, actor="analyst:operator")
+
+    rows = await actions.pool.fetch(
+        "SELECT value#>>'{}' AS v, evidence_class FROM current_assertions "
+        "WHERE object_id=$1 AND name='name'", survivor)
+    values = {r["v"] for r in rows}
+    assert values == {"survivorx"}, (
+        f"the husk's own name resurfaced as a current value on the survivor: {values}")
+
+
+async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
+    actions: Actions,
+) -> None:
+    """The guard above is scoped to PROVEN-DEAD identities (a real merge record) only —
+    an ordinary rename with no fold behind it (this test's own shape, mirroring
+    test_register_agent_mount_never_clobbers_a_declared_rename above) must still fall
+    through to the existing DERIVED-tier downgrade, unchanged, never silently dropped.
+    The guard's own lookup finds no merged object matching the incoming label here, so
+    it no-ops by construction — this proves that no-op is actually silent, not a second,
+    accidental refusal."""
+    from src.orchestrator.project_identity import rename_project
+
+    ident = resolve_identity(cwd="/w/renamedx", session="sess-unrelated1",
+                             model="claude-fable-5")
+    await register_agent(actions, ident, actor="analyst:operator")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical='repo:renamedx'")
+    await rename_project(actions, project="renamedx", new_name="totally-different-name",
+                         because="operator-approved rename", actor="Thoth")
+
+    ident2 = resolve_identity(cwd="/w/renamedx", session="sess-unrelated2",
+                              model="claude-fable-5")
+    await register_agent(actions, ident2, actor="analyst:operator")
+
+    rows = await actions.pool.fetch(
+        "SELECT value#>>'{}' AS v, evidence_class FROM current_assertions "
+        "WHERE object_id=$1 AND name='name'", proj)
+    by_value = {r["v"]: r["evidence_class"] for r in rows}
+    assert by_value.get("renamedx") == EvidenceClass.DERIVED.value, (
+        "an unrelated disagreement with no merge record behind it must still be "
+        "recorded at derived-tier confidence, same as before this guard")
+
+
 # --- _resolve_or_mint_project — a case-differing pin must FIND the existing SoftwareProject,
 # never mint a twin (thread 69911d0c, Thoth dispatch 3824). NEVER lowercase-normalizes:
 # cassandra's own "Like-Us" is genuine upstream truth, so this is about matching

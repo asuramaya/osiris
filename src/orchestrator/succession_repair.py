@@ -37,9 +37,12 @@ async def unresumed_heads(
     """For every active, currently-held Seat: does its CURRENT head's own `minted_because`
     read `office-birth` (a fresh claim_name mint, never a resume), and does that
     generation's own immediate predecessor (via `succeeded_from`) still have a real,
-    still-resumable session sitting unused? Reuses `_lineage_resume_candidate` UNCHANGED,
-    called with the PREDECESSOR as `holder` — exactly reconstructing the check `osiris
-    launch`/`launch_seat` would have made at mint time, had anything asked."""
+    still-resumable session sitting unused? Reuses `_lineage_resume_candidate`, called
+    with the PREDECESSOR as `holder` — exactly reconstructing the check `osiris
+    launch`/`launch_seat` would have made at mint time, had anything asked.
+    `materialize=False` (the wire-resume-to-store rewrite, ruling d161a156/d63b2ca6):
+    this census only checks resumability, never emits a materialized transcript — this
+    module's own docstring promise, "read-only, proposes nothing, writes nothing"."""
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.succession import succession_chain
     from src.orchestrator.trigger import _lineage_resume_candidate
@@ -68,8 +71,11 @@ async def unresumed_heads(
         predecessor = chain[1]
         if not predecessor["wrote_anything"] or not predecessor["session"]:
             continue
+        # materialize=False: this module's own docstring promises "read-only, proposes
+        # nothing, writes nothing" — a census must never emit a materialized transcript.
         candidate = await _lineage_resume_candidate(
-            pool, predecessor["agent_id"], st, repo=anchor_cwd)
+            pool, predecessor["agent_id"], st, repo=anchor_cwd, seat_id=seat_id,
+            materialize=False)
         if isinstance(candidate, tuple):
             resume, log = candidate
             found.append({

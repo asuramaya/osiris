@@ -4840,6 +4840,52 @@ async def reconcile_seat_identity_third_party(
 
 
 @mcp.tool()
+async def heal_seat_anchor(dry_run: bool = True, ctx: Context | None = None) -> dict[str, Any]:
+    """SELF-HEAL your OWN seat's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416):
+    a Seat's anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session
+    happens to be sitting (Chad and Jesus each broke their own by rebinding themselves to
+    their own live cwd — `rebind_seat` no longer permits that for new seats; this tool
+    repairs a seat already corrupted before that fix). Asserts the invariant office path as
+    the SOLE current `anchor_cwd` via `Actions.assert_singular_property`, collapsing every
+    stray value in one call. REFUSES rather than guesses: no handle on record, or the
+    computed office directory does not exist on disk (never scaffolded here).
+
+    `dry_run=True` is the default; the receipt always shows `current_before` and `target`.
+    SELF-SCOPED — see `heal_seat_anchor_third_party` for another seat."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — heal_seat_anchor is a seat's own act",
+                "why": _anchorless(ctx)}
+    from src.orchestrator.seats import held_seat
+    bound = await held_seat(await _pool_get(), ident.agent_id)
+    if bound is None:
+        return {"error": f"{ident.agent_id} holds no seat — nothing to heal"}
+    from src.orchestrator.identity_heal import heal_seat_anchor as _heal
+    return await _heal(Actions(await _pool_get()), seat_id=bound["seat_id"],
+                       actor=ident.agent_id, dry_run=dry_run)
+
+
+@mcp.tool()
+async def heal_seat_anchor_third_party(
+    seat_id: str, because: str, dry_run: bool = True, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING of heal_seat_anchor — same shape as
+    reconcile_seat_identity_third_party: `seat_id` names ANY seat, `because` is REQUIRED
+    (a correction with no stated reason is the silent overwrite 719ed5b1 rules against).
+    `dry_run=True` still defaults. Otherwise identical to the self-service verb."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a correction is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.identity_heal import (
+        heal_seat_anchor_third_party as _heal_third_party,
+    )
+    return await _heal_third_party(
+        Actions(await _pool_get()), seat_id=seat_id, because=because,
+        actor=ident.agent_id, dry_run=dry_run)
+
+
+@mcp.tool()
 async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
     """THE CENSUS (thread 5126) — door onto discover_trees. One row per active
     SoftwareProject: `tree`, `path`, `watched`, `commits`, `activity`, `last_ingested_at`,

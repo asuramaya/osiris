@@ -435,6 +435,27 @@ def resumable_tail_bytes(transcript: Path) -> int:
     return resume_diagnostics(transcript)[1]
 
 
+def _verdict_from_diagnostics(
+    tail_bytes: int, tail_lines: int, *, ceiling_bytes: int, min_tail_bytes: int,
+) -> str | None:
+    """THE PURE GATE (extracted from `resume_verdict`, Khnum's wire-resume-to-store lane,
+    ruling d161a156/d63b2ca6): the same two comparisons, split out of the file-reading
+    wrapper below so a STORE-based diagnostics tuple (SoulStore.resume_diagnostics — same
+    shape, computed by paging `soul_lines` instead of reading a transcript off disk) can
+    reach the identical verdict without a second, independently-typed copy of the two
+    checks — the exact drift this house was already burned by once (eebeb1f, #136) and the
+    reason `resume_verdict` itself was unified in the first place. `resume_verdict` below
+    is now a thin file-reading wrapper over this; every existing caller's contract is
+    unchanged."""
+    if tail_bytes < min_tail_bytes:
+        return (f"found a candidate, but its tail after the last compaction boundary is "
+                f"only {tail_bytes} byte(s) ({tail_lines} line(s)) — it closed at or near "
+                f"the seam itself, with nothing real to resume into")
+    if tail_bytes > ceiling_bytes:
+        return "found a candidate, but its resumable content is over the context ceiling"
+    return None
+
+
 def resume_verdict(
     transcript: Path, *, ceiling_bytes: int, min_tail_bytes: int,
 ) -> str | None:
@@ -460,15 +481,13 @@ def resume_verdict(
     resume actually hydrates — verified live on two real specimens (72MB/103MB
     transcripts) that only 2-3% of the file, the content since the LAST compaction, is
     what a resume needs. Checked against `tail_bytes`, the SAME number the floor above
-    checks — one measurement, two-sided range, not two unrelated gates."""
+    checks — one measurement, two-sided range, not two unrelated gates.
+
+    THE TWO GATES THEMSELVES now live in `_verdict_from_diagnostics` — this function is
+    just `resume_diagnostics` (the disk read) followed by that pure check."""
     _count, tail_bytes, tail_lines = resume_diagnostics(transcript)
-    if tail_bytes < min_tail_bytes:
-        return (f"found a candidate, but its tail after the last compaction boundary is "
-                f"only {tail_bytes} byte(s) ({tail_lines} line(s)) — it closed at or near "
-                f"the seam itself, with nothing real to resume into")
-    if tail_bytes > ceiling_bytes:
-        return "found a candidate, but its resumable content is over the context ceiling"
-    return None
+    return _verdict_from_diagnostics(
+        tail_bytes, tail_lines, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
 
 
 def dormant_history_confession(

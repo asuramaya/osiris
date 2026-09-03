@@ -35,6 +35,7 @@ from src.cli import (
     cmd_deploy,
     cmd_desk,
     cmd_fold_project,
+    cmd_heal_seat_anchor,
     cmd_launch,
     cmd_merge,
     cmd_migrate,
@@ -674,10 +675,16 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     the resumed body's own post-resume visibility is `claude agents`'s job now, not
     something this function polls for."""
     from src.cli import _cmd_resume_harness
+    from src.orchestrator.offices import _default_office_root
 
     sense = await _resumable_seat(
         actions, tmp_path, handle="cliresume", agent_id="agent:cliresume01",
         anchor_cwd="/tmp/cliresume-office")
+    # the ACTUAL spawn cwd, post-inversion (ruling d161a156/d63b2ca6): the materializer
+    # emits to the seat's own DERIVED office (offices.seat_office_target), never the
+    # (possibly stale) anchor_cwd this fixture set — that's the anchor invariant's own
+    # self-healing working as designed, not a bug this test should paper over.
+    real_office = str(_default_office_root() / "cliresume")
 
     resumed: list[dict[str, Any]] = []
 
@@ -700,7 +707,7 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert out == 0
     assert len(resumed) == 1
     call = resumed[0]
-    assert call["repo"] == "/tmp/cliresume-office"          # the seat's own launch_cwd
+    assert call["repo"] == real_office          # the seat's own DERIVED office
     assert call.get("resume_session") == _RESUME_SID
     assert "job_dir" not in call                             # a resume is not a birth
     assert call.get("model") == "claude-sonnet-5"
@@ -726,10 +733,14 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     door corroborates it via the graph's own session pointer + the seat's own launch
     location, and the resume proceeds through THIS door too, not just launch_seat's."""
     from src.cli import _cmd_resume_harness
+    from src.orchestrator.offices import _default_office_root
 
     sense = await _resumable_seat_no_signed_testimony(
         actions, tmp_path, handle="clizerohop", agent_id="agent:clizerohop01",
         anchor_cwd="/tmp/clizerohop-office")
+    # see the sibling stale-holder test's own comment: post-inversion, the spawn cwd is
+    # the DERIVED office, never the (possibly stale) anchor_cwd this fixture set.
+    real_office = str(_default_office_root() / "clizerohop")
 
     resumed: list[dict[str, Any]] = []
 
@@ -746,7 +757,7 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
 
     assert out == 0
     assert len(resumed) == 1
-    assert resumed[0]["repo"] == "/tmp/clizerohop-office"
+    assert resumed[0]["repo"] == real_office
     assert resumed[0].get("resume_session") == _RESUME_SID
 
 
@@ -1439,6 +1450,61 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
                            check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [tmp_path]
     assert out == 0
+
+
+# --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6577) — informational, never gating ----
+
+async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.offices import _default_office_root
+
+    now = datetime.now(UTC)
+    office = str(_default_office_root() / "deployanchor")
+    seat = await actions.create_or_find_object("Seat", "seat:deployanchor1", "test")
+    await actions.assert_property(seat, "handle", "DeployAnchor", "console", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(seat, "anchor_cwd", office, "console", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(seat, "anchor_cwd", str(tmp_path / "rogue"), "agent:rogue",
+                                  now + timedelta(seconds=1), 0.9,
+                                  evidence_class="self_declared")
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(
+            repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+            pool=actions.pool, wait_for_health=_fake_wait_for_health,
+            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 0  # informational only — never refuses
+    assert "NOTE: anchor invariant" in buf.getvalue()
+    assert "seat:deployanchor1" in buf.getvalue()
+    assert "heal-seat-anchor" in buf.getvalue()
+
+
+async def test_cmd_deploy_prints_no_anchor_note_when_the_fleet_is_clean(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(
+            repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+            pool=actions.pool, wait_for_health=_fake_wait_for_health,
+            wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
+    assert out == 0
+    assert "NOTE: anchor invariant" not in buf.getvalue()
 
 
 # --- THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) ---------------
@@ -2301,6 +2367,75 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
     assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
 
 
+async def _name_alias_dupe(actions: Actions, survivor: str, husk: str) -> None:
+    """A minimal name-alias-matched pair — the survivor's own graph already asserts
+    "I am also called <husk>" (a DIFFERENT source than its own primary name, matching
+    the real dtfb specimen: assert_property's same-source-only supersession would
+    collapse two same-source names to one current row otherwise), and the husk carries
+    no remote_url/on_disk_path of its own."""
+    now = datetime.now(UTC)
+    survivor_id = await actions.create_or_find_object(
+        "SoftwareProject", f"repo:{survivor}", "test")
+    await actions.create_or_find_object("SoftwareProject", f"repo:{husk}", "test")
+    await actions.assert_property(survivor_id, "name", survivor, "test", now, 0.9)
+    await actions.assert_property(survivor_id, "name", husk, "test-alias-source", now, 0.9)
+
+
+async def test_cmd_deploy_name_alias_automerge_executes_by_default(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#108 piece 4 wiring (Thoth dispatch 6547): the SAME env flag as pieces 2/3 gates
+    this step too — no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE it, not just survey."""
+    monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
+    await _name_alias_dupe(actions, "deploynamea", "deploynamea-husk")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
+    text = buf.getvalue()
+    assert "name-alias auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "repo:deploynamea-husk -> repo:deploynamea" in text
+    assert "decision 31e5bae1" in text  # item 4's discoverability pointer
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploynamea-husk'")
+    assert row["status"] == "merged"
+
+
+async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "0")
+    await _name_alias_dupe(actions, "deploynameb", "deploynameb-husk")
+
+    import io
+    from contextlib import redirect_stdout
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                         pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                         wait_for_smoke=_fake_wait_for_smoke,
+                         check_whisper_probe=_fake_check_whisper_ok)
+    assert "name-alias auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+
+    row = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical='repo:deploynameb-husk'")
+    assert row["status"] == "active", "OSIRIS_CASEFOLD_AUTOMERGE=0 must never fold anything"
+
+
 # --- dev-box systemd USER units are repo-managed (thread e6fd3772 piece 3-infra) ---------------
 # `osiris deploy` installs deploy/user/*.service over ~/.config/systemd/user/ before restarting
 # — these units were previously five hand-installed files this box's own operator diverged from
@@ -3058,6 +3193,104 @@ async def test_cli_parser_accepts_correct_pin_value(actions: Actions) -> None:
     assert args.command == "correct-pin-value"
     assert (args.seat, args.key, args.value, args.reason) == (
         "Alfred", "project", "newname", "reason")
+
+
+async def test_cmd_heal_seat_anchor_dry_run_reports_without_writing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="clihealhouse", handle="CliHeal",
+                             anchor_cwd=str(office), source="console")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(tmp_path / "rogue"), "agent:rogue", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal", because="test dry run", apply=False, actor="operator",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 0
+    assert "would heal" in buf.getvalue()
+    assert str(office) in buf.getvalue()
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert len(rows) == 2  # untouched — dry run
+
+
+async def test_cmd_heal_seat_anchor_apply_writes_and_reports(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal2"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="clihealhouse2", handle="CliHeal2",
+                             anchor_cwd=str(office), source="console")
+    await actions.assert_property(
+        await actions.create_or_find_object("Seat", seat["seat_id"], "test"),
+        "anchor_cwd", str(tmp_path / "rogue2"), "agent:rogue", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal2", because="test apply", apply=True, actor="operator",
+            pool=actions.pool, office_root=tmp_path)
+    assert out == 0
+    assert "healed" in buf.getvalue()
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert [r["v"] for r in rows] == [str(office)]
+
+
+async def test_cmd_heal_seat_anchor_refuses_a_missing_reason(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.seats import ensure_seat
+
+    office = tmp_path / "cliheal3"
+    office.mkdir()
+    await ensure_seat(actions, house="clihealhouse3", handle="CliHeal3",
+                      anchor_cwd=str(office), source="console")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_heal_seat_anchor(
+            "CliHeal3", because="", apply=False, actor="operator", pool=actions.pool,
+            office_root=tmp_path)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_heal_seat_anchor(actions: Actions) -> None:
+    """argparse wiring: seat positional, --because required, --apply flag, --actor default."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["heal-seat-anchor", "Jesus", "--because", "reason"])
+    assert args.command == "heal-seat-anchor"
+    assert (args.seat, args.because, args.apply) == ("Jesus", "reason", False)
+    assert args.actor == "console"
+
+    args2 = _build_parser().parse_args(
+        ["heal-seat-anchor", "Jesus", "--because", "reason", "--apply", "--actor", "operator"])
+    assert args2.apply is True and args2.actor == "operator"
 
 
 # --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
