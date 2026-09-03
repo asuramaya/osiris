@@ -4745,3 +4745,135 @@ async def test_resolve_handle_still_resolves_an_eligible_holder(actions: Actions
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rhclean0001")
 
     assert await resolve_handle(actions, "RhClean") == "agent:rhclean0001"
+
+
+# ═══ THE ANCHOR-MIS-RESOLUTION REFUSAL GATE (Thoth dispatch 6693, porting #48's shape,
+# ruling 120fcc81, to the name-claim path) ══════════════════════════════════════════════
+# THE MARQUEE SPECIMEN: a session spawned into a seat's own office (or carrying its own
+# `--bg` job_dir anchor) asked claim_name for THAT seat's name, was correctly refused
+# (held by a different lineage), then successfully claimed a totally different, unconflicted
+# name instead — minting a stranger Agent + Seat (+ a downstream orphan SoftwareProject)
+# where the session already had a real home. These tests prove the whole call refuses,
+# not just the collided name, and that a genuine no-anchor claim is unaffected.
+
+async def _seated_object_counts(actions: Actions) -> tuple[int, int, int]:
+    """(agents, seats, projects) row counts — the acceptance test's own negative shape:
+    a mis-resolved claim must produce ZERO new objects of any of these three types."""
+    async def count(t: str) -> int:
+        return int(await actions.pool.fetchval(
+            "SELECT count(*) FROM objects WHERE type=$1 AND status='active'", t))
+    return await count("Agent"), await count("Seat"), await count("SoftwareProject")
+
+
+async def test_claim_name_refuses_the_whole_call_when_cwd_anchors_a_different_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE CWD SHAPE of the specimen: the caller's own office IS Marquee's, a different
+    lineage already holds that name, and the caller then reaches for an unrelated,
+    unconflicted name ("Awning") instead. Must refuse the WHOLE claim, zero writes —
+    never silently mint the substitute."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.offices import _default_office_root
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    office_root = _default_office_root()
+    marquee_office = str(office_root / "marquee")
+    Path(marquee_office).mkdir(parents=True, exist_ok=True)
+
+    seat = await ensure_seat(actions, house="osiris", handle="Marquee", source="test")
+    holder = await actions.create_or_find_object("Agent", "agent:mqholder1", "test")
+    await actions.assert_property(holder, "project", "osiris", "test", datetime.now(UTC), 0.9)
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:mqholder1")
+
+    stranger = "agent:mqstranger"
+    await actions.create_or_find_object("Agent", stranger, "test")
+    await mounts.save_mount(actions.pool, job_dir="/j/mqstranger", agent_id=stranger,
+                            project="osiris", cwd=marquee_office, model=None,
+                            session_key="mqstranger")
+
+    before = await _seated_object_counts(actions)
+    result = await claim_name(actions, stranger, "Awning", source=stranger)
+    after = await _seated_object_counts(actions)
+
+    assert "MIS-RESOLUTION" in result.get("error", "")
+    assert "Marquee" in result["error"] and "Awning" in result["error"]
+    assert after == before  # ZERO new Agent, Seat, or SoftwareProject objects
+
+
+async def test_claim_name_refuses_the_whole_call_when_job_dir_anchors_a_different_seat(
+    actions: Actions,
+) -> None:
+    """THE JOB_DIR SHAPE: a `--bg`-launched seat's own durable anchor
+    (trigger._launch_anchor's convention, `.../jobs/seat-<id>`) names a seat just as
+    surely as its office cwd does — the gate must catch this anchor shape too, not only
+    the cwd one."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Ferryman2", source="test")
+    seat_id = seat["seat_id"]
+    holder = await actions.create_or_find_object("Agent", "agent:fm2holder", "test")
+    await actions.assert_property(holder, "project", "osiris", "test", datetime.now(UTC), 0.9)
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:fm2holder")
+
+    stranger = "agent:fm2stranger"
+    await actions.create_or_find_object("Agent", stranger, "test")
+    job_dir = f"/home/x/.claude/jobs/{seat_id.replace(':', '-')}"
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id=stranger,
+                            project="osiris", cwd="/tmp/unrelated", model=None,
+                            session_key="fm2stranger")
+
+    before = await _seated_object_counts(actions)
+    result = await claim_name(actions, stranger, "Substitute", source=stranger)
+    after = await _seated_object_counts(actions)
+
+    assert "MIS-RESOLUTION" in result.get("error", "")
+    assert "Ferryman2" in result["error"]
+    assert after == before
+
+
+async def test_claim_name_still_allows_claiming_the_anchors_own_seat_name(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE GATE IS NARROW, NOT A BLANKET REFUSAL: a caller whose own office anchors a
+    VACANT seat may still claim that seat's own name — the ordinary self-claim path,
+    unaffected."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.offices import _default_office_root
+    from src.orchestrator.seats import ensure_seat
+
+    office_root = _default_office_root()
+    office = str(office_root / "vacantseat")
+    Path(office).mkdir(parents=True, exist_ok=True)
+    await ensure_seat(actions, house="osiris", handle="VacantSeat", source="test")
+
+    caller = "agent:vacantclaimer"
+    await actions.create_or_find_object("Agent", caller, "test")
+    await mounts.save_mount(actions.pool, job_dir="/j/vacantclaimer", agent_id=caller,
+                            project="osiris", cwd=office, model=None,
+                            session_key="vacantclaimer")
+
+    result = await claim_name(actions, caller, "VacantSeat", source=caller)
+    assert result.get("claimed") == "VacantSeat"
+    assert "error" not in result
+
+
+async def test_claim_name_unaffected_when_no_anchor_matches_any_seat(
+    actions: Actions,
+) -> None:
+    """THE THIRD STATE STAYS DISTINCT (#48's own law): a genuine visitor — no mount row
+    at all, or a cwd/job_dir that names no seat — is not caught by this gate; an
+    ordinary fresh claim still succeeds exactly as before."""
+    from src.orchestrator.agents import claim_name
+
+    caller = "agent:nomountclaimer"
+    await actions.create_or_find_object("Agent", caller, "test")
+    # deliberately NO mounts.save_mount call — no anchor at all, the common test shape
+    # every OTHER claim_name test in this file already exercises unmodified
+
+    result = await claim_name(actions, caller, "FreshName", source=caller)
+    assert result.get("claimed") == "FreshName"
+    assert "error" not in result
