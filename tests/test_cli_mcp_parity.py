@@ -19,6 +19,7 @@ edited by different people at different times for different reasons.
 from __future__ import annotations
 
 import argparse
+from typing import Any, TypedDict
 
 from src.cli import _build_parser
 
@@ -466,3 +467,376 @@ def test_the_detector_itself_catches_a_rename_without_a_declared_pair() -> None:
         cli, mcp,
         renamed_params={("widget", "handle", "widget", "target"): "test fixture"})
     assert clean == []
+
+
+# ============================================================================================
+# LANE 3B — THE GROWTH RATCHET (task #199, operator's mandate upgrade msg 6789: "make sure
+# they go in and fix all 3 problems end to end"). heal_seat_transcript shipped tonight with
+# no CLI door and no declaration anywhere — not because BINDING_VERBS's own gate above was
+# unenforced, but because heal_seat_transcript was never ADDED to the population that gate
+# walks. The first fix attempted (decision dd5b6ced, reconciled with Seshat, approved by
+# Thoth msg 6771) was an AST walk auto-deriving BINDING_VERBS's membership from five named
+# source modules (identity_heal/mounts/seats/projects/offices.py), matching MCP tool names
+# to same-named orchestrator functions. BUILT NOTHING FROM IT: reading every one of those
+# five modules directly (not grepped, not inferred) before writing the walk showed the
+# same-name/same-module premise is FALSE for roughly half of BINDING_VERBS's own 29 current
+# members — create_project/rename_project/fork_project/unfork_project live in
+# project_identity.py (not projects.py); charter_for lives in charter.py, mint_seat in
+# mintseat.py, neither of the five; charter's MCP tool delegates to set_charter (charter.py,
+# different name); sweep_seat_disk's own docstring says outright it wires TWO differently-
+# named functions (sweep_retired_office/sweep_seat_workspace, offices.py) to one MCP tool;
+# launch and vacate_seat delegate to launch_seat/vacate_dead_seat in trigger.py (a SIXTH
+# module, mismatched names both); pause_seat has no separate orchestrator function at all —
+# implemented natively inline in mcp_server.py. An AST walk of that five-module list would
+# have silently missed ~14 of 29 KNOWN verbs on day one: the identical failure shape
+# heal_seat_transcript itself demonstrates, just relocated from "verb name" to "module name."
+# Reported to Thoth (msg 6796) rather than built anyway; the operator picked the replacement
+# below directly (msg to Khnum, 2026-09-03, "B, ... what is the shape").
+#
+# BINDING-VERB-NESS IS A SEMANTIC JUDGMENT, proven above not to be safely re-derivable from
+# source structure (file location, naming convention) by any mechanism tried so far. What
+# CAN be made self-maintaining instead is narrower and does not depend on structure at all:
+# did a BRAND-NEW MCP tool ship without anyone declaring anything about it whatsoever. A
+# GROWTH RATCHET keyed on the one thing that's unambiguous — the tool's own NAME, read live
+# off mcp.list_tools(), same as every other check in this file:
+#
+#   KNOWN_TOOLS_AT_SNAPSHOT — every tool name that existed at the moment this ratchet was
+#   built (151, captured live, 2026-09-03). GRANDFATHERED, ZERO retroactive justification
+#   required for any of them — this is what avoids the hollow-by-declaration batch-backfill
+#   Thoth's own condition on the earlier design explicitly ruled out (a 112-entry table of
+#   boilerplate reasons nobody would read, #189's dark-gate failure wearing a completeness
+#   ratchet's clothes). Never edit this set to "grandfather" a tool that ships AFTER today —
+#   that defeats the ratchet; use NEW_TOOL_DECLARATIONS below instead.
+#
+#   NEW_TOOL_DECLARATIONS — every tool name that ships after the snapshot MUST appear here
+#   with a structured declaration (never free text alone — a reason string nobody is forced
+#   to make specific is exactly NO_CLI_EQUIVALENT's failure mode for a different question)
+#   covering BOTH open questions live tonight:
+#     "binding_verb": bool — is this a seat/office/project binding-mover. Checked for
+#       CONSISTENCY against live BINDING_VERBS membership below, not just declared and
+#       trusted: claiming True without adding the name to BINDING_VERBS (or vice versa)
+#       fails the gate. A True entry inherits the EXISTING BINDING_VERBS gate's own
+#       CLI-door-or-NO_CLI_EQUIVALENT requirement above — this ratchet does not duplicate
+#       that check, only forces the author to enter the population it walks.
+#     "parameterizes": str | None — Imhotep's counterweight field (msg 6801, thread 6778):
+#       the name of an existing MCP tool this one's underlying call could have been a
+#       parameter on, when one exists — checkable against tool_traffic()/a read of the
+#       candidate's own implementation, not assumed from name-matching alone (his own
+#       caught trap: retryable_ambiguous_abstentions/retry_ambiguous_abstentions LOOK like
+#       a consolidation pair and are not — one is a free unmounted read, the other requires
+#       a mounted identity even in preview mode; collapsing them would be a real behavior
+#       change hiding inside an apparent refactor).
+#     "not_parameterized_because": str | None — meaningful ONLY alongside `parameterizes`
+#       (Imhotep's own words: "it's the 'why not' justification for a real candidate that
+#       was found and rejected, not a blank-check exemption") — set without `parameterizes`
+#       fails the gate.
+#
+#   A tool retired via the meta={"deprecated": True} hidden-alias mechanism (Imhotep, commit
+#   e94158d, task #199 lane 2) is EXEMPT from needing its own declaration at all — it
+#   forwards to whatever its `use_instead` target already declares, checked live off each
+#   tool's own `meta` (a genuine field on mcp.types.Tool, confirmed live before trusting it).
+#
+# THE AUDIT THOTH ASKED FOR ("watch it fail on the current undeclared set... that red list
+# IS a deliverable... report separately from the gate itself", msg 6771/6789): since this
+# ratchet grandfathers every existing tool with zero mechanical check of binding-verb-ness
+# (the whole point — that question needs a human, proven above), there is no code-level red
+# list to run. The equivalent honest measurement is a ONE-TIME MANUAL AUDIT of the 151-tool
+# snapshot against BINDING_VERBS, done by direct reading (keyword-filtered candidates, each
+# individually read, not grep-and-trust) rather than mechanized — reported to Thoth
+# alongside this commit, not encoded here as a heuristic gate ("do not let anyone talk the
+# audience check into a heuristic", msg 6771). Found, beyond the already-known
+# heal_seat_transcript: correct_house/correct_agent_house (same family as correct_pin_value/
+# reconcile_seat_identity, already in BINDING_VERBS — these move a seat's own house stamp,
+# clearly binding-moving, currently outside the population), reconcile_merge (repairs the
+# mail/mount/thread/holder/managed_by estate a partial merge left stranded — same family as
+# merge/unmerge, NEITHER of which is in BINDING_VERBS either despite both having CLI doors
+# already), retire/retire_agent (releases a held seat on retirement, adjacent to but distinct
+# from retire_seat), fleet_reconcile (bulk mount/binding reaper, fold_agent-backed). None
+# added to BINDING_VERBS by this commit — that population change is a judgment call for
+# Thoth to make with the same care BINDING_VERBS's original 29 got, not a side effect of
+# building the ratchet that measures a DIFFERENT thing (tool-name growth, not verb
+# semantics).
+# ============================================================================================
+
+KNOWN_TOOLS_AT_SNAPSHOT: frozenset[str] = frozenset({
+    "abstained_derivations",
+    "ack_handoff",
+    "acquire_lease",
+    "aim_entity",
+    "amend_decision",
+    "amend_practice",
+    "annotate_thread",
+    "assert_project_property",
+    "attach_seat",
+    "backfill_agent_project_links",
+    "backfill_boot_alarm_commit_links",
+    "backfill_bootstrap_orphan_references",
+    "backfill_lineage_repo_links",
+    "backfill_task_sync_citation_links",
+    "bind_seat_tree",
+    "bootstrap",
+    "candidates",
+    "charter",
+    "charter_for",
+    "check_lease",
+    "claim_name",
+    "consolidate",
+    "consult_canon",
+    "context_window",
+    "correct_agent_house",
+    "correct_house",
+    "correct_pin_value",
+    "correct_thread_summary",
+    "create_project",
+    "create_room",
+    "describe",
+    "detach_seat",
+    "dismiss_brief",
+    "dispose",
+    "dossier",
+    "dossier_report",
+    "establish_office",
+    "expand_clinical_site",
+    "expand_operator",
+    "file_subagent",
+    "file_subagents",
+    "fleet",
+    "fleet_digest",
+    "fleet_reconcile",
+    "focus_object",
+    "fold_candidates",
+    "fork_project",
+    "get_console",
+    "get_decision_list",
+    "get_mail",
+    "get_schema",
+    "get_status",
+    "get_thread_list",
+    "graph_lint",
+    "graph_search",
+    "handoff_briefing",
+    "heal_seat_anchor",
+    "heal_seat_anchor_third_party",
+    "heal_seat_transcript",
+    "hold_action",
+    "hold_memory",
+    "hold_tension",
+    "identify_agent",
+    "inbox",
+    "ingest_form_d",
+    "ingest_litigation",
+    "ingest_project",
+    "ingest_project_third_party",
+    "ingest_reference",
+    "ingest_trials",
+    "invalidate_works_in",
+    "launch",
+    "lift",
+    "list_assertions",
+    "list_compositions",
+    "list_functions",
+    "list_rooms",
+    "lookup_lei",
+    "merge",
+    "mint_seat",
+    "mount",
+    "open_thread",
+    "orient",
+    "pause_seat",
+    "peer_ledger",
+    "peer_reachable",
+    "peer_seats",
+    "practices",
+    "project_identity_evidence",
+    "reap_stale_leases",
+    "rebind_seat",
+    "recall",
+    "reclassify_thread",
+    "reconcile_merge",
+    "reconcile_seat_identity",
+    "reconcile_seat_identity_third_party",
+    "record_decision",
+    "record_practice",
+    "recover_harness_exchanges",
+    "register_blind_spot",
+    "registry_census",
+    "reissue_office",
+    "release_lease",
+    "rematerialize",
+    "rename_project",
+    "rename_seat",
+    "repair_stale_current_flags",
+    "repair_stale_pile_summons",
+    "resolve_fold",
+    "resolve_thread",
+    "restore_attribution",
+    "retire",
+    "retire_agent",
+    "retire_assertion",
+    "retire_project",
+    "retire_seat",
+    "retry_ambiguous_abstentions",
+    "retryable_abstentions",
+    "retryable_ambiguous_abstentions",
+    "revert_own_pin_write",
+    "roster",
+    "run_composition",
+    "save_composition",
+    "screen_wallet",
+    "search",
+    "send",
+    "set_seat_attended",
+    "settle",
+    "smoke",
+    "stale_current_flags",
+    "stop",
+    "succession_chain",
+    "suggest_sources",
+    "sweep_seat_disk",
+    "task_sync_reconcile",
+    "tool_traffic",
+    "trace_evidence",
+    "trace_wallet",
+    "tree_ledger",
+    "triage",
+    "unfork_project",
+    "uningested_trees",
+    "unmerge",
+    "unpeer",
+    "unwire_informs_fanout",
+    "unwitnessed_spawns",
+    "vacate_seat",
+    "verify_bc_entity",
+    "wake",
+    "wake_preflight",
+    "walk_in",
+})
+
+
+class NewToolDeclaration(TypedDict, total=False):
+    binding_verb: bool
+    parameterizes: str | None
+    not_parameterized_because: str | None
+
+
+# Empty at birth — the ratchet's whole point is that this population grows only by someone
+# adding an entry here, in the same PR that adds the tool. See the block comment above for
+# what each field means.
+NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {}
+
+
+async def _live_tool_meta() -> dict[str, dict[str, Any]]:
+    """name -> its own `meta` dict (empty if none), read live off mcp.list_tools() — the
+    same source _mcp_tools() already trusts, just carrying `meta` through instead of
+    stripping it."""
+    from src import mcp_server as srv
+
+    tools = await srv.mcp.list_tools()
+    return {t.name: dict(t.meta or {}) for t in tools}
+
+
+def _find_undeclared_new_tools(
+    live_names: set[str], meta_by_name: dict[str, dict[str, Any]], *,
+    snapshot: frozenset[str] = KNOWN_TOOLS_AT_SNAPSHOT,
+    declarations: dict[str, NewToolDeclaration] = NEW_TOOL_DECLARATIONS,
+    binding_verbs: frozenset[str] = BINDING_VERBS,
+) -> list[str]:
+    """The ratchet's own core check, extracted so it can be proven against synthetic
+    fixtures rather than only exercised live (same discipline _find_problems/
+    _find_missing_cli_doors already follow). Returns one string per problem; empty means
+    every live tool is either grandfathered, deprecated, or properly declared."""
+    problems: list[str] = []
+    for name in sorted(live_names):
+        if name in snapshot:
+            continue
+        if meta_by_name.get(name, {}).get("deprecated"):
+            continue
+        if name not in declarations:
+            problems.append(
+                f"{name!r} is a NEW MCP tool (not in KNOWN_TOOLS_AT_SNAPSHOT, not "
+                f"meta={{'deprecated': True}}) with no entry in NEW_TOOL_DECLARATIONS — "
+                f"add one before shipping it (see the block comment above the snapshot)")
+            continue
+        decl = declarations[name]
+        is_binding = bool(decl.get("binding_verb", False))
+        in_binding_verbs = name in binding_verbs
+        if is_binding != in_binding_verbs:
+            problems.append(
+                f"{name!r} declares binding_verb={is_binding} but BINDING_VERBS "
+                f"membership is {in_binding_verbs} — keep the declaration and the set in "
+                f"sync (adding/removing from BINDING_VERBS is the actual judgment call; "
+                f"this only catches the two disagreeing)")
+        if decl.get("not_parameterized_because") and not decl.get("parameterizes"):
+            problems.append(
+                f"{name!r} sets not_parameterized_because without parameterizes — that "
+                f"justification only means something alongside a real candidate tool "
+                f"(Imhotep, msg 6801)")
+    return problems
+
+
+async def test_every_new_mcp_tool_declares_itself_or_is_deprecated() -> None:
+    meta_by_name = await _live_tool_meta()
+    problems = _find_undeclared_new_tools(set(meta_by_name), meta_by_name)
+    assert problems == [], (
+        "#199 Lane 3B growth ratchet: a brand-new MCP tool shipped without declaring "
+        "itself (see the block comment above KNOWN_TOOLS_AT_SNAPSHOT):\n"
+        + "\n".join(problems))
+
+
+def test_the_growth_ratchet_itself_catches_an_undeclared_new_tool() -> None:
+    live = {"brand_new_widget"}
+    meta: dict[str, dict[str, Any]] = {"brand_new_widget": {}}
+    problems = _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(), declarations={})
+    assert len(problems) == 1 and "brand_new_widget" in problems[0]
+
+    # declared, passes
+    assert _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(),
+        declarations={"brand_new_widget": {"binding_verb": False}}) == []
+
+    # deprecated (hidden alias), never needs a declaration at all
+    meta_deprecated = {"brand_new_widget": {"deprecated": True}}
+    assert _find_undeclared_new_tools(
+        live, meta_deprecated, snapshot=frozenset(), declarations={}) == []
+
+
+def test_the_growth_ratchet_catches_a_binding_verb_mismatch() -> None:
+    live = {"brand_new_seat_mover"}
+    meta: dict[str, dict[str, Any]] = {"brand_new_seat_mover": {}}
+    # declared as a binding verb but never added to BINDING_VERBS
+    problems = _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(),
+        declarations={"brand_new_seat_mover": {"binding_verb": True}},
+        binding_verbs=frozenset())
+    assert len(problems) == 1 and "binding_verb=True" in problems[0]
+    # consistent once actually added
+    assert _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(),
+        declarations={"brand_new_seat_mover": {"binding_verb": True}},
+        binding_verbs=frozenset({"brand_new_seat_mover"})) == []
+
+
+def test_the_growth_ratchet_catches_an_orphaned_not_parameterized_reason() -> None:
+    live = {"widget_v2"}
+    meta: dict[str, dict[str, Any]] = {"widget_v2": {}}
+    problems = _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(),
+        declarations={"widget_v2": {"not_parameterized_because": "orphaned"}})
+    assert len(problems) == 1 and "not_parameterized_because" in problems[0]
+    # paired with a real candidate, passes
+    assert _find_undeclared_new_tools(
+        live, meta, snapshot=frozenset(),
+        declarations={"widget_v2": {
+            "parameterizes": "widget", "not_parameterized_because": "different auth shape"
+        }}) == []
+
+
+def test_known_tools_at_snapshot_and_declarations_never_collide() -> None:
+    """The snapshot and the declarations table are two DIFFERENT eras of the same tool's
+    life — a name in both is a stale declaration nobody removed after grandfathering it in
+    (or a copy/paste into the wrong table), never a legitimate state."""
+    collision = KNOWN_TOOLS_AT_SNAPSHOT & NEW_TOOL_DECLARATIONS.keys()
+    assert collision == set(), (
+        f"{sorted(collision)} appear in BOTH KNOWN_TOOLS_AT_SNAPSHOT and "
+        f"NEW_TOOL_DECLARATIONS — a tool is grandfathered or declared, never both")
