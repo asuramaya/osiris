@@ -21,6 +21,7 @@ from src.orchestrator.agents import (
 )
 from src.orchestrator.mailbox import send_message, unread_count
 from src.orchestrator.mounts import rebind_seat
+from src.orchestrator.offices import _default_office_root
 
 NOW = datetime.now(UTC)
 
@@ -131,7 +132,7 @@ async def test_rebind_writes_the_seat_anchor_for_a_never_claimed_seat(
 
     seat = await ensure_seat(actions, house="anchorhouse", handle="Orphaned",
                              source="test")
-    new = str(tmp_path / "orphaned-office")
+    new = str(_default_office_root() / "orphaned-office")
 
     out = await rebind_seat(actions, seat_or_agent="Orphaned", new_cwd=new,
                             actor="agent:test", projects_root=tmp_path / "projects",
@@ -378,7 +379,7 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
     from src.orchestrator.seats import attach_session, ensure_seat, mint_attach_token
 
     old = str(tmp_path / "old-office")
-    new = str(tmp_path / "new-office")
+    new = str(_default_office_root() / "new-office")
     Path(old).mkdir()
     (Path(old) / ".osiris").write_text('project = "anchorhouse"\n')
     now = datetime.now(UTC)
@@ -402,6 +403,79 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
         "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
     assert anchor == new
+
+
+async def test_rebind_collapses_the_old_anchor_never_leaves_it_coexisting(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ANCHOR INVARIANT (Thoth msg 6546, ruling 12387fcc/2e05d662): rebind_seat used to
+    write anchor_cwd via assert_property, whose same-source-only supersession never
+    retires a DIFFERENT source's prior current row. When the mint's own console-sourced
+    anchor and a later self_declared rebind (a different source) both stayed is_current,
+    every LIMIT-1 read of the seat's office became a coin flip — exactly the corruption
+    found live on Jesus and Chad. assert_singular_property (this session's own mechanism,
+    ruling 1335332e) must collapse the old row, not merely outrank it by recency."""
+    from src.orchestrator.mounts import rebind_seat
+    from src.orchestrator.seats import ensure_seat
+
+    old = str(tmp_path / "old-office")
+    new = str(_default_office_root() / "new-office")
+    Path(old).mkdir()
+    (Path(old) / ".osiris").write_text('project = "anchorhouse"\n')
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves2",
+                             anchor_cwd=old, source="console")
+
+    await rebind_seat(actions, seat_or_agent=seat["seat_id"], new_cwd=new,
+                      actor="agent:different-source", projects_root=tmp_path / "projects",
+                      claude_json=tmp_path / "cj.json")
+
+    rows = await actions.pool.fetch(
+        "SELECT a.value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
+    assert [r["v"] for r in rows] == [new]
+
+
+async def test_rebind_off_office_root_moves_the_footprint_but_never_anchor_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE WRITE-PATH GUARD (ruling 23771416, msg 6563): anchor_cwd is identity, always
+    <office_root>/<handle>, never a caller-supplied path — this is the exact mechanism that
+    let Chad and Jesus break their own anchor by rebinding themselves to their own live cwd.
+    Relocating a WORK TREE (bind_seat_tree's job) still moves mounts/harness; it must never
+    touch anchor_cwd."""
+    from src.orchestrator.mounts import rebind_seat, save_mount
+    from src.orchestrator.seats import attach_session, ensure_seat, mint_attach_token
+
+    office = str(_default_office_root() / "jeeves3")
+    tree = str(tmp_path / "some-code-repo")  # deliberately OUTSIDE the office root
+    Path(office).mkdir(parents=True)
+    (Path(office) / ".osiris").write_text('project = "anchorhouse"\n')
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:jeeves3", "agent:jeeves3")
+    await actions.assert_property(a, "project", "anchorhouse", "agent:jeeves3", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/jeeves3", agent_id="agent:jeeves3",
+                     project="anchorhouse", cwd=office, model=None, session_key=None)
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves3",
+                             anchor_cwd=office, source="console")
+    token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
+    await attach_session(actions, seat_id=seat["seat_id"], token=token,
+                         job_dir="/jobs/jeeves3", agent_id="agent:jeeves3")
+
+    out = await rebind_seat(actions, seat_or_agent="agent:jeeves3", new_cwd=tree,
+                            actor="agent:jeeves3", projects_root=tmp_path / "projects",
+                            claude_json=tmp_path / "cj.json")
+
+    assert out.get("seat") == seat["seat_id"]
+    assert "anchor_cwd_skipped" in out
+    anchor = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
+    assert anchor == office  # untouched — still the office, never the tree
+    mount_cwd = await actions.pool.fetchval(
+        "SELECT cwd FROM agent_mounts WHERE agent_id='agent:jeeves3'")
+    assert mount_cwd == tree  # the footprint DID move
 
 
 # --- the resume heal (thread 39ea074c: the alfred transition test's catch) ---
