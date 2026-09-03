@@ -2477,11 +2477,10 @@ async def mint_heir(
     # A MINT NEVER LANDS ON A GRAVE (Ra's resurrection, 2026-07-17): after a same-lineage
     # fold, the next numeral may name a MERGED object — create_or_find would resurrect it
     # and the estate transfer would drag the living head's unread mail onto a corpse
-    # (witnessed: 10 unread on merged 443cd9d4-iii within the hour of its folding). The
-    # numeral walks forward until it names either nothing or something still active.
+    # (witnessed: 10 unread on merged 443cd9d4-iii within the hour of its folding).
     #
-    # A GRAVE IS ALSO A HEAL, NOT ONLY A MERGE (msg 2325, live case: John/d5c671c1-xv):
-    # a heal (husk-heal / phantom-fold) never flips objects.status away from 'active' —
+    # A GRAVE IS A HEAL, NOT ONLY A MERGE (msg 2325, live case: John/d5c671c1-xv): a heal
+    # (husk-heal / phantom-fold) never flips objects.status away from 'active' —
     # compensating events only, per constitution 3 — so a healed canonical passes the
     # status check above while still being a death in every sense that matters. Refuse to
     # reuse it (same law as #107/#117: refuse, don't widen/search) rather than silently
@@ -2492,11 +2491,27 @@ async def mint_heir(
     # heals a zero-turn phantom and returns the CORRECTED ancestor for THIS SAME mint_heir
     # call to mint against — next_generation() naturally reproduces the exact numeral it
     # just folded, and reusing it there is the fold's whole point (MINT ONCE, not MINT
-    # ZERO, ruling d3531cd8), not a resurrection. The two cases share the identical
+    # ZERO, ruling d3531cd8), not a resurrection. The two heal cases share the identical
     # false_mint/retired shape and are distinguished only by AGE: a heal still inside the
     # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS — the SAME window the fold uses
     # for its own back-to-back check, not a second one) is part of the seam being resolved
     # right now; a heal older than that — John's, 20 hours cold — is a closed one-way door.
+    #
+    # A PLAIN, NEVER-HEALED ACTIVE OBJECT IS AMBIGUOUS ON STATUS ALONE, AND STATUS ALONE
+    # USED TO DECIDE IT (Marquee's stale-numeral reuse, thread 6736/6747, Thoth's ruling
+    # verified not inherited — `test_mint_heir_never_duplicates_an_edge_the_heir_already_
+    # has` is the OTHER, legitimate half of this same shape, and any fix has to keep both
+    # true at once). Two real cases share "exists, active, never healed": a BARE STUB some
+    # earlier call already pre-seeded at this EXACT numeral for THIS SAME ancestor, waiting
+    # for THIS mint_heir call to complete it — safe, intended to be adopted — and a REAL,
+    # ALREADY-COMPLETED generation from a branch of this lineage's own history (Marquee's
+    # -xii, legitimately minted hours later by the real forward chain — and its own tip at
+    # the time, -xvi, equally real and equally not this call's to adopt). The two are told
+    # apart by whether the CANDIDATE ITSELF already carries a `succeeded_from` assertion —
+    # the one thing a genuine mint always stamps on its own heir and a bare pre-seeded stub
+    # never has, regardless of whether the stub's own successor was ever minted. A candidate
+    # that is already a real generation is never a safe mint target, tip or not — the walk
+    # steps past it, same as any other closed door.
     for _ in range(64):
         row = await actions.pool.fetchrow(
             "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
@@ -2507,8 +2522,14 @@ async def mint_heir(
                 "SELECT max(r.observed_at) FROM current_assertions r WHERE r.object_id=$1 "
                 "AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true'",
                 row["id"])
-            if healed_at is None or (now - healed_at).total_seconds() <= _SEAM_DEBOUNCE_SECS:
+            if healed_at is not None and (now - healed_at).total_seconds() <= _SEAM_DEBOUNCE_SECS:
                 break
+            if healed_at is None:
+                already_real = await actions.pool.fetchval(
+                    "SELECT 1 FROM current_assertions s WHERE s.object_id=$1 "
+                    "AND s.name='succeeded_from' LIMIT 1", row["id"])
+                if not already_real:
+                    break
         heir = next_generation(heir)
     a = await actions.create_or_find_object("Agent", heir, heir)
     do = EvidenceClass.DIRECT_OBSERVATION
