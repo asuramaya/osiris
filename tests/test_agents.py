@@ -2374,6 +2374,65 @@ async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
     assert n == 1, "no duplicate live edge minted just because the ancestor also had one"
 
 
+async def test_mint_heir_steps_past_a_numeral_someone_already_succeeded(
+    actions: Actions,
+) -> None:
+    """THE MARQUEE SPECIMEN (thread 6736/6747): an ancestor resolution can legitimately
+    land on an EARLIER generation than a lineage's real current tip (Marquee's own
+    _seat_lineage_ancestor walked to -xi while -xii..-xvi already existed, minted forward
+    hours later by the real chain). Before this fix, mint_heir's grave-avoidance loop
+    treated ANY numeral whose object was merely `status='active'` as safe to reuse,
+    identical to test_mint_heir_never_duplicates_an_edge_the_heir_already_has's legitimate
+    pre-seed shape — so a brand-new heir silently wore -xii's dead identity instead of
+    minting -xvii. The fix: a plain, never-healed active candidate is reusable only while
+    NOTHING has already succeeded it. -xii has a real successor (-xiii); a bare pre-seeded
+    stub does not — that is what tells the two apart."""
+    from src.orchestrator.agents import mint_heir, next_generation
+
+    now = datetime.now(UTC)
+    root_id = "agent:marq0000"
+    root_oid = await actions.create_or_find_object("Agent", root_id, "test")
+    # the real forward chain: root -> -ii -> -iii -> -iv, each one genuinely succeeding
+    # the last (mirroring Marquee's own -xii -> -xiii -> ... minted hours after -xi)
+    prior_id, prior_oid = root_id, root_oid
+    for _ in range(3):
+        heir_id = next_generation(prior_id)
+        heir_oid = await actions.create_or_find_object("Agent", heir_id, "test")
+        await actions.assert_property(heir_oid, "succeeded_from", prior_id, "test", now, 0.9,
+                                      evidence_class="direct_observation")
+        prior_id, prior_oid = heir_id, heir_oid
+    tip_id, tip_oid = prior_id, prior_oid  # "agent:marq0000-iv"
+    assert tip_id == "agent:marq0000-iv"
+
+    # a stale ancestor resolution hands mint_heir the ROOT again, not the real tip —
+    # the exact shape of Marquee's own bug (lineage_head resolving backward to -xi)
+    heir, heir_oid = await mint_heir(actions, root_id, root_oid,
+                                     because="launch_seat: bind-before-spawn (test)",
+                                     succession=None)
+    assert heir == "agent:marq0000-v", (
+        f"must step past every already-succeeded numeral to the true next one, got {heir!r}")
+    assert heir_oid != tip_oid, "must mint fresh, never silently adopt the existing tip either"
+
+
+async def test_mint_heir_still_takes_the_direct_next_numeral_on_a_clean_lineage(
+    actions: Actions,
+) -> None:
+    """THE NEGATIVE CONTROL for the fix above: an ordinary mint, on a lineage with nothing
+    already minted past the immediate next numeral, must still land exactly there —
+    unchanged by the succeeded-from check, which only ever fires past the FIRST hop."""
+    from src.orchestrator.agents import mint_heir
+
+    ancestor_id = "agent:clean000"
+    ancestor_oid = await actions.create_or_find_object("Agent", ancestor_id, "test")
+
+    heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
+                                     because="compaction", succession=None)
+
+    assert heir == "agent:clean000-ii"
+    assert await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", heir_oid) == "agent:clean000-ii"
+
+
 # ═══ lineage_works_in (thread 79e785d1, Lane 3 of Thoth msg 5906 — the prevention half):
 # read-only lookup `derive_or_abstain` (Lane 0, still unbuilt) will call to decide whether
 # an orphan-write's repo= is mechanically derivable at all. ═══
