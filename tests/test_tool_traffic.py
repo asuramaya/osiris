@@ -139,4 +139,8 @@ async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spot
     assert any("osiris-pulse" in s for s in out["blind_spots"])
     assert any("osiris-manager" in s for s in out["blind_spots"])
     assert any("CACHE-ONLY" in s for s in out["blind_spots"])  # task #170's own named limit
+    # #199 lane 2 (Thoth dispatch 6780/6793): the CLI itself bypasses MCP for several
+    # tools (unmerge, stop, ...) — a zero reading on one of those is not evidence of
+    # disuse, confessed here so the next reader of tool_traffic() sees it directly.
+    assert any("THE CLI ITSELF" in s and "unmerge" in s for s in out["blind_spots"])
     assert "MCP tool calls" in out["measures"]

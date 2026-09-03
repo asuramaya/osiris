@@ -214,6 +214,13 @@ _TOOL_STATS_BLIND_SPOTS = (
     "isn't cached yet — in practice, the very first call of a fresh session before mount()/"
     "orient() resolves it — is bucketed under 'unattributed' rather than paying for a "
     "reattach query just to label a telemetry row",
+    "THE CLI ITSELF (#199 lane 2, Seshat, 2026-09-03): several cmd_* functions in "
+    "src/cli.py call an orchestrator function DIRECTLY, bypassing this MCP tool entirely "
+    "— confirmed live for at least bind_seat_tree, bootstrap, establish_office, "
+    "heal_seat_anchor_third_party, rematerialize, stop, unmerge. A zero reading on any "
+    "of these is not evidence of disuse, it can be AFFIRMATIVELY MISLEADING: unmerge "
+    "reads 0 here while its CLI door is real, live traffic — the exact live proof that "
+    "cost a consolidation lane its first wrong deletion candidate",
 )
 
 
