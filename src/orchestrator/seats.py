@@ -307,14 +307,35 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
 
 async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """The seat-first half alone, shared by `resolve_project` and
-    mcp_server._resolve_project_seat_first: a SEATED agent's project is its seat's DERIVED
-    house (held_seat, sourcing from derive_house — ruling ff6148b0) — UNCONDITIONALLY, never
-    guessed from cwd. Split out so mount()'s own wrapper can call ONLY this half (its cwd
-    guess already came from resolve_identity moments earlier, in the SAME pipeline, and must
-    win untouched when this returns None — re-deriving a second, independent cwd guess here
+    mcp_server._resolve_project_seat_first: a SEATED agent's project is its seat's own
+    CHARTER when it has exactly one (a real, deliberately-declared `governs` edge —
+    ruling 1a5eaf98's own instrument) — never guessed from cwd. Falls back to the seat's
+    DERIVED house (ruling ff6148b0) only when no charter is declared, or when more than
+    one is (an ambiguity this function refuses to arbitrate, same law as everywhere else
+    in this house).
+
+    THE CHAD/JESUS SPECIMEN (operator, live, 2026-09-03): a seat's own house is its NAME,
+    not necessarily its WORK — Chad's house is "Chad" but its charter (and its office's
+    own .osiris pin, already correctly fixed) names `cdking`. The unconditional
+    house-as-project law this function used to enforce was written for the self-managed
+    case (Alfred's house IS "alfred", Thoth's IS "osiris") and silently re-corrupted
+    every OTHER seat's project back to its own name on every single mount, forever —
+    not a one-time historical artifact, a standing bug: Chad's project flipped
+    'cdking' -> 'Chad' again live tonight, two days after the anchor_cwd corruption
+    this same specimen was thought closed.
+
+    Split out so mount()'s own wrapper can call ONLY this half (its cwd guess already
+    came from resolve_identity moments earlier, in the SAME pipeline, and must win
+    untouched when this returns None — re-deriving a second, independent cwd guess here
     risks disagreeing with it, e.g. under a test's monkeypatched office root)."""
     seat = await held_seat(pool, agent_id)
-    return str(seat["house"]) if seat and seat.get("house") else None
+    if seat is None:
+        return None
+    from src.orchestrator.charter import charter_of
+    repos = await charter_of(pool, seat["seat_id"])
+    if len(repos) == 1:
+        return repos[0]
+    return str(seat["house"]) if seat.get("house") else None
 
 
 async def resolve_and_persist_seated_project(

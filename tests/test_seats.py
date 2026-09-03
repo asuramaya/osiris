@@ -1517,6 +1517,62 @@ async def test_roster_reports_chartered_repos_from_charter_of(actions: Actions) 
     assert row["chartered_repos"] == ["gestalt"]
 
 
+# --- _seated_house: charter outranks house (operator, live, 2026-09-03) -----------------
+
+async def test_seated_house_prefers_the_seats_own_charter_over_its_house_name(
+    actions: Actions,
+) -> None:
+    """THE CHAD SPECIMEN, LIVE: a seat's own house is its NAME, not necessarily its WORK.
+    Chad's house is 'Chad' but its charter (and its office's own .osiris pin) names
+    'cdking' — the operator's own explicit correction, weeks old. `_seated_house`'s old
+    law ("project is the seat's own house, unconditionally") never consulted the
+    charter at all, so it silently re-corrupted project back to 'Chad' on every single
+    mount — not a one-time historical artifact, a standing bug caught reproducing live
+    tonight, two days after the anchor_cwd corruption this same specimen was thought
+    closed."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import _seated_house, bind_holder
+
+    await _repo(actions, "cdking")
+    seat = await ensure_seat(actions, house="Chad", handle="Chad", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:chadtest1",
+                      source="test")
+    await set_charter(actions, seat["seat_id"], ["cdking"], actor="test")
+
+    assert await _seated_house(actions.pool, "agent:chadtest1") == "cdking"
+
+
+async def test_seated_house_falls_back_to_house_with_no_charter(actions: Actions) -> None:
+    """UNCHANGED BEHAVIOR for the common, self-managed case (Alfred's house IS 'alfred',
+    Thoth's IS 'osiris') — no charter declared, house wins exactly as before."""
+    from src.orchestrator.seats import _seated_house, bind_holder
+
+    seat = await ensure_seat(actions, house="osiris", handle="Housefallback1", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:housetest1",
+                      source="test")
+
+    assert await _seated_house(actions.pool, "agent:housetest1") == "osiris"
+
+
+async def test_seated_house_falls_back_to_house_on_an_ambiguous_multi_repo_charter(
+    actions: Actions,
+) -> None:
+    """A seat governing MORE than one repo has no single answer to 'what is my project'
+    — refuse to arbitrate, same law as everywhere else in this house, and fall back to
+    the house rather than guess among several."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import _seated_house, bind_holder
+
+    await _repo(actions, "sutra3")
+    await _repo(actions, "sutra4")
+    seat = await ensure_seat(actions, house="osiris", handle="Ambiguous1", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ambigtest1",
+                      source="test")
+    await set_charter(actions, seat["seat_id"], ["sutra3", "sutra4"], actor="test")
+
+    assert await _seated_house(actions.pool, "agent:ambigtest1") == "osiris"
+
+
 # --- pin_charter_agreement: the jesus/chad/marquee detector (Thoth DM 6279/6287) ---------
 
 async def test_roster_pin_charter_agreement_agree_when_pin_is_among_charter(
