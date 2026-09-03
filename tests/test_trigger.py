@@ -3956,11 +3956,102 @@ async def test_launch_defaults_to_the_harness_native_lane_with_an_honest_receipt
     assert call["repo"] == "/tmp/sobek" and call["name"] == "[OS] Sobek"
     assert "session_id" not in call  # --bg ignores it; never passed (live finding 2026-07-27)
     assert "job_dir" not in call  # env vars never reach a --bg spare either (same finding)
-    # THE BOOT PROMPT (live finding, 2026-07-27): identity rides the session's own first
-    # turn, not env stamping — it must tell the session to mount at this exact office and
-    # claim this exact handle, or a fresh launch mounts anonymous.
+    # THE BOOT PROMPT IS A STATEMENT, NOT AN INSTRUCTION (Piece 1, Thoth dispatch msg 6692,
+    # d161a156 one layer up): identity is bound SERVER-SIDE, before the body exists —
+    # `_bind_before_spawn` minted agent:hw01-ii (the heir of _managed_pair's own
+    # worker_agent="agent:hw01") and pre-registered its anchor row, so the fresh session's
+    # own mount() call re-attaches directly. claim_name never appears — the Marquee
+    # specimen showed a fresh session asked to re-derive its own binding through that
+    # fallible call can refuse and mint a phantom instead.
     assert "/tmp/sobek" in call["prompt"]
-    assert 'claim_name("Sobek")' in call["prompt"]
+    assert "agent:hw01-ii" in call["prompt"]
+    assert "Sobek" in call["prompt"]
+    assert "claim_name" not in call["prompt"]
+
+
+# ═══ PIECE 1's OWN UNIT (Thoth dispatch msg 6692): _bind_before_spawn writes the identity
+# before the body exists — mint_heir's mechanics for a seat with a recorded ancestor, a
+# bare first generation for one that has never been claimed, and a pre-registered
+# (alive=False) anchor row either way so the spawned session's own mount() re-attaches
+# directly instead of needing claim_name. ═══════════════════════════════════════════════
+
+async def test_bind_before_spawn_mints_an_heir_of_the_seats_recorded_holder(
+    actions: Actions,
+) -> None:
+    """THE MARQUEE SHAPE: a seat with a real, recorded (but not live) holder. Reuses
+    mint_heir outright — next generation, succeeds_seat edge, and (via mint_heir's own
+    follow_binding) the seat's holds link moved onto the heir, all before any process
+    exists."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9-xi")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:38cf08a9-xi", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    assert out["agent"] == "agent:38cf08a9-xii"
+    assert out["generation"] == 12
+    # the seat's holds link followed the mint onto the heir — no separate bind_holder call
+    # needed, and no stray Seat/Agent/SoftwareProject minted alongside it (the phantom shape
+    # this whole dispatch exists to close).
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:38cf08a9-xii"
+
+
+async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattaches(
+    actions: Actions,
+) -> None:
+    """The whole reason claim_name becomes unnecessary: the spawned session's own
+    mount(job_dir=anchor) finds THIS row waiting, agent_id already set — the same
+    'seated the moment you exist' discipline save_mount's own docstring describes,
+    fired before the process exists rather than at its first call. `alive=False`: a
+    pre-registration is not a heartbeat, and must not read as a false liveness signal."""
+    from src.orchestrator.mounts import find_mount
+
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9-xi")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:38cf08a9-xi", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    rec = await find_mount(actions.pool, job_dir="/tmp/anchors/marquee")
+    assert rec is not None
+    assert rec.agent_id == out["agent"]
+    assert rec.cwd == "/tmp/marquee" and rec.project == "dealer-to-fb"
+    pulse = await actions.pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", "/tmp/anchors/marquee")
+    assert pulse is None  # alive=False: no heartbeat granted by the pre-registration itself
+
+
+async def test_bind_before_spawn_mints_a_first_generation_when_the_seat_was_never_held(
+    actions: Actions,
+) -> None:
+    """No ancestor exists — mint_heir has nothing to mint an heir OF, so this mints a bare
+    first generation directly, under the same `agent:seat-<id>` root every pure-seat-office
+    lineage already carries."""
+    seat_id = (await ensure_seat(actions, house="freshhouse", handle="Freshling",
+                                 source="test"))["seat_id"]
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Freshling", house="freshhouse",
+        current_holder=None, office="/tmp/freshling",
+        anchor="/tmp/anchors/freshling", source="agent:thoth01")
+
+    assert out["agent"] == f"agent:seat-{seat_id.removeprefix('seat:')}"
+    assert out["generation"] == 1
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == out["agent"]
 
 
 async def test_launch_harness_lane_is_idempotent_returns_the_live_body_not_a_twin(
