@@ -630,12 +630,12 @@ async def claim_name(
     # to the ordinary uniqueness checks below.
     anchor = await _anchor_names_a_seat(actions.pool, agent_id)
     if anchor is not None:
-        anchor_seat_id, anchor_handle = anchor
+        mismatch_seat_id, anchor_handle = anchor
         if (bare or name).lower() != anchor_handle.lower():
             return {"error": f"MIS-RESOLUTION, NOT A STRANGER COLLISION — refusing the "
                              f"whole claim, no writes: your own anchor (the office/"
                              f"job_dir this session is actually running in) already "
-                             f"names seat {anchor_handle!r} ({anchor_seat_id}). Claiming "
+                             f"names seat {anchor_handle!r} ({mismatch_seat_id}). Claiming "
                              f"{name!r} instead would mint a stranger where you already "
                              f"have a home. If {anchor_handle!r} is genuinely yours, "
                              f"claim THAT name; if it isn't, this session's own identity "
