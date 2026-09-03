@@ -3464,8 +3464,11 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
 ) -> None:
     """The halcyon-class defect, closed: a seat holder whose tail since its own last
     compaction boundary is genuinely tiny (min_tail_bytes refuses it) is not a dead end —
-    dispatch_dm boots a fresh successor at the seat's own office (the SAME fresh-mint boot
-    prompt launch_seat's own fallthrough uses) rather than leaving the mail stranded."""
+    dispatch_dm boots a fresh successor at the seat's own office. BOUND BEFORE SPAWN
+    (Thoth dispatch 6713, closing the hole above Khnum's own claim_name backstop): the
+    boot prompt is a STATEMENT, not an instruction — identity was written server-side
+    by `_bind_before_spawn` before the process exists, the same fix Sekhmet's Piece 1
+    already gave launch_seat's own fresh-mint fallthrough."""
     sense = await _lineage_holder_with_session(
         actions, tmp_path, agent_id="agent:fh0001", compacted=True)
     worker_seat, _manager_seat = await _managed_pair(
@@ -3482,6 +3485,9 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
                              from_project="osiris", to_agent=worker_seat,
                              body="please pick this up")
     msg_id = int(out["id"])
+    from src.orchestrator.seats import seat_receipt as _seat_receipt
+
+    before = await _seat_receipt(actions.pool, worker_seat)
     booted: list[dict[str, Any]] = []
 
     async def _fresh_spawn(repo: str, **kw: Any) -> None:
@@ -3501,10 +3507,19 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
     assert "seam" in d["detail"] and "/tmp/seam-test-office" in d["detail"]
     assert len(booted) == 1
     assert booted[0]["repo"] == "/tmp/seam-test-office"
-    assert "Seam-Test" in booted[0]["prompt"] and "claim_name" in booted[0]["prompt"]
+    assert "Seam-Test" in booted[0]["prompt"]
+    assert "/tmp/seam-test-office" in booted[0]["prompt"]
+    assert "claim_name" not in booted[0]["prompt"]
     row = await actions.pool.fetchrow(
         "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id)
     assert row is not None and row["mode"] == "dm-fresh-heir"
+    # THE BIND ITSELF LANDED (not just the prompt's own wording): a real heir now holds
+    # this seat, minted server-side before the fresh body ever called mount() — a
+    # DIFFERENT holder than before the dispatch, never left to a fresh session's own
+    # claim_name to establish.
+    after = await _seat_receipt(actions.pool, worker_seat)
+    assert after is not None and after.get("holder") is not None
+    assert after["holder"] != (before or {}).get("holder")
 
 
 async def test_dispatch_dm_never_mints_fresh_for_a_non_compaction_gate(

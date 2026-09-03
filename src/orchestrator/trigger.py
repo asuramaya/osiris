@@ -1964,18 +1964,19 @@ async def dispatch_dm(
         # COMPACTION ONLY: the other gates (ceiling/no-anchor/crossed-registry/
         # resident-unknown) are each a genuine "who this even is" uncertainty, and
         # minting on top of THAT would repeat the exact stranger-over-a-live-head class
-        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location with
-        # the SAME fresh-mint boot prompt launch_seat's own fallthrough already uses —
-        # no separate carry-the-message prompt needed, `_bg_boot_prompt` already tells
-        # a fresh body to inbox() for its opening brief, and this very mail sits there
-        # addressed to the seat's own name.
+        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location.
         handle = facts.get("handle") if facts else None
         office = facts.get("anchor_cwd") if facts else None
         house = facts.get("house") if facts else None
         if (miss_gate == "compaction" and seat_id is not None and launch_cwd
                 and handle and office):
             anchor = _launch_anchor(seat_id)
-            boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=handle)
+            # THE LEDGER ROW GOES IN UNDER AN ADVISORY LOCK, BEFORE THE MINT (matching
+            # dispatch_dm's own established discipline elsewhere in this function: two
+            # dispatchers — send()'s immediate leg and a concurrent worker-tick sweep —
+            # can both reach here for one message, and only one may spend). The bind-
+            # before-spawn write below is exactly a spend (it mints a heir), so it must
+            # not run before this gate decides which dispatcher, if either, gets to.
             async with pool.acquire() as conn, conn.transaction():
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, "
@@ -1990,6 +1991,27 @@ async def dispatch_dm(
                 await conn.execute(
                     "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ($1,$2,$3,'dm-fresh-heir')", project, sender, msg_id)
+            # BOUND BEFORE SPAWN, HERE TOO (Thoth dispatch 6713, closing the hole above
+            # Khnum's own claim_name backstop, 2c65c6d): this fallback used to hand a
+            # fresh body `_bg_boot_prompt`'s INSTRUCTION-shaped text ("claim_name
+            # yourself") — Sekhmet's Piece 1 (msg 6692/6694) fixed launch_seat's own
+            # fresh-mint fallthrough the same way this fixes dispatch_dm's: identity
+            # is a fact the server already holds (office/handle/house all came off
+            # `seat_facts` above), not a re-derivation to hand a fresh session through
+            # a fallible tool call it might refuse and then route around (the Marquee
+            # specimen, one path over). `current_holder=target`: `target` IS this
+            # seat's own declared living head — the identity whose compaction seam
+            # triggered this fallback in the first place — used only as
+            # `_bind_before_spawn`'s OWN fallback (its real ancestor resolution reads
+            # the seat's lineage first, never the `holds` edge, same as launch_seat's
+            # own call).
+            bound = await _bind_before_spawn(
+                Actions(pool), target_seat=seat_id, handle=handle, house=house,
+                current_holder=target, office=office, anchor=anchor,
+                source=sender or "session")
+            boot_prompt = _bg_boot_prompt_bound(
+                office=office, anchor=anchor, handle=handle, agent=bound["agent"],
+                generation=bound["generation"])
             try:
                 await fresh_spawn(launch_cwd, name=f"[{_house_tag(house)}] {handle}",
                                   model=st.osiris_wake_model or None, prompt=boot_prompt)
@@ -2541,10 +2563,10 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
     msg 6692 — `claim_name` disappears from this text; if it survives, the inversion did not
     happen). The session's identity is already written (`_bind_before_spawn`, run just before
     this); mount() re-attaches to it through the pre-registered anchor row, nothing left to
-    negotiate or re-derive. Deliberately a SEPARATE function from `_bg_boot_prompt` rather
-    than a signature change to it — that function is still what dispatch_dm's own fresh-heir
-    fallback uses (a different call site, not in this dispatch's scope), and the two must not
-    silently drift onto one shared body neither caller fully controls."""
+    negotiate or re-derive. THE ONLY BOOT PROMPT NOW (Thoth dispatch 6713): the unbound
+    `_bg_boot_prompt` this function was deliberately kept separate from — dispatch_dm's own
+    fresh-heir fallback was its last caller — is gone; dispatch_dm now binds before spawn
+    the same way launch_seat does, through this function."""
     from src.orchestrator.agents import _to_roman
 
     label = f"{handle} {_to_roman(generation)}" if generation > 1 else handle
@@ -3520,22 +3542,6 @@ async def _spawn_in_body(
 # session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
 # open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
 # task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
-
-def _bg_boot_prompt(*, office: str, anchor: str, handle: str) -> str:
-    """The harness-native lane's boot instruction (see `_spawn_claude_bg`'s own docstring for
-    why this replaces env-var identity stamping): a `--bg` session's genuine first turn tells
-    it to bind itself via the same proven mount()+claim_name() path a human follows into a
-    fresh office. Shared by `launch_seat` and `osiris launch` (task #72, thread 842aa184) —
-    one wording, never two copies to drift apart."""
-    return (
-        f'You have just been launched into your own seat\'s office. Call '
-        f'mount(cwd="{office}", job_dir="{anchor}"), then claim_name("{handle}") — that '
-        f"exact name — to bind to the seat already waiting for you. Then inbox() for "
-        f"your opening brief. No one is watching this window: work the brief to "
-        f"completion, a real blocker, or a seam — never park on a question typed into "
-        f"this empty room; a genuine ask goes out as mail (grade='ask')."
-    )
-
 
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,

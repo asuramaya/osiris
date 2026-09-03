@@ -714,11 +714,13 @@ async def _cmd_launch_harness(
     """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
     + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
     surface — every body this creates is visible in the operator's own `claude agents` list
-    BY CONSTRUCTION. Mirrors launch_seat's harness lane exactly (same spawn/agents_json
-    primitives, same boot-prompt wording via `_bg_boot_prompt` — one wording, never two to
-    drift apart) but skips its managed_by/caller-seat gate: launch_seat's own docstring is
-    explicit that the operator is a different trust boundary and never calls it directly —
-    this function IS that boundary, same as the PTY lane below it.
+    BY CONSTRUCTION. Mirrors launch_seat's harness lane closely (same spawn/agents_json
+    primitives, same bound boot-prompt shape via `_bind_before_spawn`/
+    `_bg_boot_prompt_bound`, Thoth dispatch 6713 — a SEPARATE call site, not a shared
+    function, so the two doors were independently vulnerable to the same bug and must be
+    independently fixed) but skips its managed_by/caller-seat gate: launch_seat's own
+    docstring is explicit that the operator is a different trust boundary and never calls
+    it directly — this function IS that boundary, same as the PTY lane below it.
 
     ALWAYS FRESH, NEVER A RESUME CHECK (operator ruling 60c78788, thread bc11a2d3's
     family, 2026-09-01): this used to check the seat's last holder for a resumable
@@ -749,8 +751,10 @@ async def _cmd_launch_harness(
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
 
+    from src.actions.core import Actions
     from src.ingest.sessions import dormant_history_confession, dormant_history_note
-    from src.orchestrator.trigger import _bg_boot_prompt
+    from src.orchestrator.seats import seat_receipt
+    from src.orchestrator.trigger import _bg_boot_prompt_bound, _bind_before_spawn
 
     # BOTH SLUGS, ALWAYS (task #135/#136): office and tree_cwd are two DIFFERENT slugs by
     # design (#103) — a dormant transcript can sit under either one, so check both
@@ -764,7 +768,25 @@ async def _cmd_launch_harness(
 
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
-    boot_prompt = _bg_boot_prompt(office=office, anchor=anchor, handle=facts["handle"])
+    # BOUND BEFORE SPAWN, THIS DOOR TOO (Thoth dispatch 6713, closing the hole above
+    # Khnum's own claim_name backstop, 2c65c6d): THIS IS THE EXACT LIVE SPECIMEN —
+    # `osiris launch marquee` is the literal command that produced the Marquee phantom
+    # (Thoth msg 6692). Sekhmet's Piece 1 fixed launch_seat's own harness lane (the MCP
+    # `launch` tool); this CLI door is a SEPARATE implementation (this function's own
+    # docstring: "mirrors launch_seat's harness lane... but skips its managed_by gate")
+    # that called the same now-deleted unbound `_bg_boot_prompt` directly — an
+    # independent path to the identical bug, not covered by her fix at all. Same
+    # primitive, same reasoning: identity is a fact the server already holds (office/
+    # handle/house all came off `seat_facts` above via `_resolve_launch_target`), not a
+    # re-derivation for the fresh session to attempt through a fallible claim_name call.
+    current_holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+    bound = await _bind_before_spawn(
+        Actions(pool), target_seat=facts["seat_id"], handle=facts["handle"],
+        house=facts["house"], current_holder=current_holder, office=office,
+        anchor=anchor, source="operator")
+    boot_prompt = _bg_boot_prompt_bound(
+        office=office, anchor=anchor, handle=facts["handle"], agent=bound["agent"],
+        generation=bound["generation"])
 
     try:
         await spawn(launch_cwd, name=name, model=resolved_model, prompt=boot_prompt)
