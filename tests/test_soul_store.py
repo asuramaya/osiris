@@ -16,7 +16,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from src.actions.core import Actions
-from src.ingest.soul_store import SoulStore, _chain_hash
+from src.ingest.soul_store import (
+    SoulStore,
+    _addressable_entries,
+    _chain_hash,
+    _split_lines,
+    verify_jsonl_chain_boundary,
+)
 
 
 def _write_transcript(path: Path, lines: list[str]) -> Path:
@@ -458,6 +464,146 @@ async def test_rematerialize_mcp_tool_wraps_the_same_verb(
     assert dest.read_text() == "\n".join(lines) + "\n"
 
 
+# --- heal_seat_transcript (the jesus/chad repair, made a callable MCP door) -------------
+
+class _Ctx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+def _mount(srv: object, actions: Actions, agent_id: str, session: str) -> object:
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    ident = AgentIdentity(agent_id=agent_id, session=session, project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    return ctx
+
+
+async def test_heal_seat_transcript_refuses_without_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("someseat", ["/a.jsonl", "/b.jsonl"])
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
+async def test_heal_seat_transcript_refuses_fewer_than_two_sources(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    ctx = _mount(srv, actions, "agent:heal1", "heal1")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("someseat", ["/only-one.jsonl"], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "at least two fragments" in out["error"]
+
+
+async def test_heal_seat_transcript_dry_run_reports_clean_preflight_and_writes_nothing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines = _chained_lines(4, seed="healdry")
+    sid = "healdry0-0000-0000-0000-000000000001"  # not a real chained uuid, real filename shape
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b" / "irrelevant-name.jsonl", lines[2:])
+
+    ctx = _mount(srv, actions, "agent:heal2", "heal2")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("dryhandle", [str(a), str(b)], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert out["dry_run"] is True
+    assert "error" not in out
+    assert all(p["clean"] for p in out["preflight"])
+    assert not Path(out["office_dest"]).exists()
+
+
+async def test_heal_seat_transcript_dry_run_reports_a_refused_pair(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines_a = _chained_lines(2, seed="healrefa")
+    lines_b = _chained_lines(2, seed="healrefb")  # unrelated — not a real continuation
+    sid = "healrefa-0000-0000-0000-000000000002"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines_a)
+    b = _write_transcript(tmp_path / "b.jsonl", lines_b)
+
+    ctx = _mount(srv, actions, "agent:heal3", "heal3")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript("refusehandle", [str(a), str(b)], ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert any(not p["clean"] for p in out["preflight"])
+
+
+async def test_heal_seat_transcript_execute_requires_because(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+
+    lines = _chained_lines(4, seed="healnoreason")
+    sid = "healnorea-0000-0000-0000-00000000003"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[2:])
+
+    ctx = _mount(srv, actions, "agent:heal4", "heal4")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript(
+            "noreasonhandle", [str(a), str(b)], dry_run=False, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "because is required" in out["error"]
+
+
+async def test_heal_seat_transcript_execute_splices_and_writes_the_office_slug(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.offices import _default_office_root
+
+    lines = _chained_lines(6, seed="healexec")
+    sid = "healexec-0000-0000-0000-000000000004"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:3])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[3:])
+
+    ctx = _mount(srv, actions, "agent:heal5", "heal5")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.heal_seat_transcript(
+            "ExecHandle", [str(a), str(b)], dry_run=False, because="repair", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" not in out
+    assert out["spliced_lines"] == 6
+    assert out["verify_chain"] is True
+    dest = _default_office_root() / "exechandle" / f"{sid}.jsonl"
+    assert out["rematerialize"]["written"] == str(dest)
+    assert dest.read_bytes() == ("\n".join(lines) + "\n").encode()
+
+
 # --- raw_lines / mining_view (task #51 piece 3) -----------------------------
 
 async def test_raw_lines_matches_splitlines_of_the_source(
@@ -505,6 +651,243 @@ async def test_mining_view_none_when_never_ingested(store: SoulStore) -> None:
     assert await store.mining_view("neverseen2") is None
 
 
+# --- splice_sources / verify_jsonl_chain_boundary / rematerialize_to_disk(upto=...)
+# (thread 6483/6534/6540/6543 — the operator's injection thesis landing on a real
+# specimen: whole transcripts in, any resume point out, defaulting to latest) ------------
+
+def _chained_lines(n: int, *, seed: str, session: str = "chainsession") -> list[str]:
+    """A genuine `user`/`assistant` parentUuid chain — `_synthetic_lines`' own fixture
+    carries no uuid/parentUuid at all, the one thing this feature's own tests need.
+    Deterministic, readable uuids: f"{seed}-000...-line{i:04d}"."""
+    out = []
+    parent = None
+    for i in range(n):
+        u = f"{seed}0000-0000-0000-0000-{i:012d}"
+        ts = datetime(2026, 8, 17, 12, 0, i, tzinfo=UTC).isoformat()
+        role = "user" if i % 2 == 0 else "assistant"
+        out.append(json.dumps({
+            "type": role, "uuid": u, "parentUuid": parent, "timestamp": ts,
+            "sessionId": session, "cwd": "/some/cwd",
+            "message": {"role": role, "content": f"turn {i}"},
+        }))
+        parent = u
+    return out
+
+
+async def test_verify_jsonl_chain_boundary_clean_join(tmp_path: Path) -> None:
+    lines = _chained_lines(6, seed="clean")
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:3])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[3:])
+    assert verify_jsonl_chain_boundary(str(a), str(b)) is None
+
+
+async def test_verify_jsonl_chain_boundary_broken_join(tmp_path: Path) -> None:
+    lines_a = _chained_lines(3, seed="brokea")
+    lines_b = _chained_lines(3, seed="brokeb")  # unrelated chain, wrong parentUuid
+    a = _write_transcript(tmp_path / "a.jsonl", lines_a)
+    b = _write_transcript(tmp_path / "b.jsonl", lines_b)
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "chain broken at the join" in reason
+
+
+async def test_verify_jsonl_chain_boundary_uuid_overlap(tmp_path: Path) -> None:
+    lines = _chained_lines(4, seed="overlap")
+    a = _write_transcript(tmp_path / "a.jsonl", lines)
+    b = _write_transcript(tmp_path / "b.jsonl", lines[2:])  # shares uuids with a
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "uuid overlap" in reason
+
+
+async def test_verify_jsonl_chain_boundary_orphan_in_b(tmp_path: Path) -> None:
+    lines = _chained_lines(4, seed="orphan")
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
+    b_lines = lines[2:]
+    # corrupt B's SECOND entry's parentUuid to point at nothing real
+    d = json.loads(b_lines[1])
+    d["parentUuid"] = "no-such-uuid-anywhere"
+    b_lines[1] = json.dumps(d)
+    b = _write_transcript(tmp_path / "b.jsonl", b_lines)
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "orphan entry" in reason
+
+
+async def test_verify_jsonl_chain_boundary_refuses_a_file_with_no_uuid_bearing_entries(
+    tmp_path: Path,
+) -> None:
+    a = _write_transcript(tmp_path / "a.jsonl", _synthetic_lines(2))  # no uuid field
+    b = _write_transcript(tmp_path / "b.jsonl", _chained_lines(2, seed="lonely"))
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "no uuid-bearing entries" in reason
+
+
+async def test_verify_jsonl_chain_boundary_sees_through_an_attachment_link(
+    tmp_path: Path,
+) -> None:
+    """THE REGRESSION jesus/chad's live splice caught (thread 6483/6559/6565): the join
+    itself is genuinely chained through a `type:"attachment"` line — a real link, never a
+    valid seek target, but a link `verify_jsonl_chain_boundary` must still see through or
+    it reports a false orphan on the entry right after it."""
+    lines = _chained_lines(4, seed="attachlink")
+    # splice an attachment line, chained correctly, between B's join point and its
+    # next real entry — the exact shape found live
+    b_raw = json.loads(lines[2])
+    attach_uuid = "attachlink-attach-0000-0000-000000000000"
+    attachment = json.dumps({
+        "type": "attachment", "uuid": attach_uuid, "parentUuid": b_raw["parentUuid"],
+        "sessionId": b_raw["sessionId"],
+    })
+    # re-point the entry that used to follow directly onto the attachment instead
+    b_raw["parentUuid"] = attach_uuid
+    lines[2] = json.dumps(b_raw)
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", [attachment, *lines[2:]])
+    assert verify_jsonl_chain_boundary(str(a), str(b)) is None
+
+
+async def test_verify_jsonl_chain_boundary_still_refuses_a_real_break_through_an_attachment(
+    tmp_path: Path,
+) -> None:
+    """Widening the walk to see attachment links must not make it MORE permissive on a
+    genuine break — Thoth's own instruction (thread 6567): prove the widened verifier
+    still refuses, on the same shape the fix just legitimized."""
+    lines = _chained_lines(4, seed="attachbreak")
+    b_raw = json.loads(lines[2])
+    attachment = json.dumps({
+        "type": "attachment", "uuid": "attachbreak-attach-0000-0000-000000000000",
+        "parentUuid": b_raw["parentUuid"], "sessionId": b_raw["sessionId"],
+    })
+    # the next real entry's parentUuid points at neither the attachment NOR anything
+    # else in A or B — a genuine, unrelated break, even with an attachment link present
+    b_raw["parentUuid"] = "points-at-nothing-real-at-all"
+    lines[2] = json.dumps(b_raw)
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", [attachment, *lines[2:]])
+    reason = verify_jsonl_chain_boundary(str(a), str(b))
+    assert reason is not None and "orphan entry" in reason
+
+
+async def test_splice_sources_chains_two_files_into_one(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE BUG THIS FUNCTION EXISTS TO FIX (caught before shipping the wrong claim that
+    two ingest_path calls would chain automatically): ingest_path's own `since` offset
+    slices into THIS file's own line list, silently under-ingesting a second, different
+    source. splice_sources must ingest every line of every source."""
+    lines = _chained_lines(10, seed="splicehap")
+    a = _write_transcript(tmp_path / "a.jsonl", lines[:4])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[4:])
+
+    n = await store.splice_sources("splicedsid", [str(a), str(b)])
+    assert n == 10
+    rows = await store.pool.fetch(
+        "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
+        "AND anchor_sid='splicedsid' ORDER BY line_idx")
+    assert [bytes(r["raw_line"]).decode() for r in rows] == lines
+    assert [r["line_idx"] for r in rows] == list(range(10))
+    assert await store.verify_chain("splicedsid") is True
+
+    dest = tmp_path / "reassembled.jsonl"
+    receipt = await store.rematerialize_to_disk("splicedsid", dest=str(dest))
+    assert "error" not in receipt
+    assert dest.read_bytes() == ("\n".join(lines) + "\n").encode()
+
+
+async def test_splice_sources_refuses_and_writes_nothing_on_a_broken_pair(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines_a = _chained_lines(3, seed="refusea")
+    lines_b = _chained_lines(3, seed="refuseb")  # not a real continuation of A
+    a = _write_transcript(tmp_path / "a.jsonl", lines_a)
+    b = _write_transcript(tmp_path / "b.jsonl", lines_b)
+
+    with pytest.raises(ValueError, match="splice_sources refused"):
+        await store.splice_sources("refusedsid", [str(a), str(b)])
+    rows = await store.pool.fetch(
+        "SELECT count(*) AS n FROM soul_lines WHERE anchor_sid='refusedsid'")
+    assert rows[0]["n"] == 0  # nothing written — the refusal is atomic, not partial
+
+
+async def test_splice_sources_verify_false_bypasses_the_check(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """An explicit opt-out for a caller that already verified continuity itself moments
+    earlier — still writes the chain, even though the pair alone wouldn't pass."""
+    lines_a = _chained_lines(2, seed="skipa")
+    lines_b = _chained_lines(2, seed="skipb")
+    a = _write_transcript(tmp_path / "a.jsonl", lines_a)
+    b = _write_transcript(tmp_path / "b.jsonl", lines_b)
+    n = await store.splice_sources("skipverifysid", [str(a), str(b)], verify=False)
+    assert n == 4
+
+
+async def test_rematerialize_to_disk_upto_emits_a_genuine_prefix_and_confesses(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _chained_lines(6, seed="seekconf")
+    source = _write_transcript(tmp_path / "s.jsonl", lines)
+    await store.ingest_path(str(source), "seekconfsid")
+
+    verified_lines, broken = await store._verified_lines("seekconfsid")
+    assert broken is None
+    addressable = _addressable_entries(verified_lines)
+    seek_uuid = addressable[2][1]  # not the latest — a genuine mid-chain seek
+
+    dest = tmp_path / "seek.jsonl"
+    receipt = await store.rematerialize_to_disk("seekconfsid", dest=str(dest), upto=seek_uuid)
+    assert "error" not in receipt
+    assert receipt["seek"] == seek_uuid
+    assert receipt["withheld_entries"] == 3
+
+    out_lines = _split_lines(dest.read_bytes())
+    # the emitted content is a genuine prefix of the full chain, PLUS one confession line
+    assert out_lines[:3] == [line.encode() for line in lines[:3]]
+    assert len(out_lines) == 4
+    confession = json.loads(out_lines[-1])
+    assert confession["isMeta"] is True
+    assert confession["parentUuid"] == seek_uuid
+    assert "3 later entries" in confession["message"]["content"]
+
+
+async def test_rematerialize_to_disk_upto_none_is_unchanged_full_emission(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _chained_lines(4, seed="nofilt")
+    source = _write_transcript(tmp_path / "s.jsonl", lines)
+    await store.ingest_path(str(source), "nofiltsid")
+    dest = tmp_path / "out.jsonl"
+    receipt = await store.rematerialize_to_disk("nofiltsid", dest=str(dest))
+    assert "seek" not in receipt
+    assert dest.read_bytes() == ("\n".join(lines) + "\n").encode()
+
+
+async def test_rematerialize_to_disk_upto_confess_false_omits_the_confession_line(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _chained_lines(4, seed="noconf")
+    source = _write_transcript(tmp_path / "s.jsonl", lines)
+    await store.ingest_path(str(source), "noconfsid")
+    verified_lines, _ = await store._verified_lines("noconfsid")
+    seek_uuid = _addressable_entries(verified_lines)[0][1]
+
+    dest = tmp_path / "out.jsonl"
+    receipt = await store.rematerialize_to_disk(
+        "noconfsid", dest=str(dest), upto=seek_uuid, confess=False)
+    assert receipt["withheld_entries"] == 3
+    assert dest.read_bytes() == (lines[0] + "\n").encode()  # the bare prefix, no extra line
+
+
+async def test_rematerialize_to_disk_upto_refuses_an_unknown_uuid(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _chained_lines(3, seed="badseek")
+    source = _write_transcript(tmp_path / "s.jsonl", lines)
+    await store.ingest_path(str(source), "badseeksid")
+
+    dest = tmp_path / "out.jsonl"
+    receipt = await store.rematerialize_to_disk(
+        "badseeksid", dest=str(dest), upto="not-a-real-uuid")
+    assert "error" in receipt and "matches no user/assistant entry" in receipt["error"]
+    assert not dest.exists()
 # --- backfill (task #51 piece 1, Lane 1 msg 6527/ruling ba329ccb) -----------
 
 async def test_backfill_discovers_and_ingests_every_real_session(

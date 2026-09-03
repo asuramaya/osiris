@@ -717,7 +717,13 @@ def _tool_chars(t: Any) -> int:
 # convention, same driver (scripts/reconcile_tool_contract_ceiling.py's own
 # `_DEFAULT_CONSTANTS` now reconciles both in one pass) — a ratchet with two numbers needs
 # both of them findable by name, not one.
-TOOL_CONTRACT_EXPECTED_COUNT = 150  # MEASURED against the merged tree, 2026-08-29.
+# 148 -> 149 (2026-09-02, Khnum, thread 6483/6559/6567/6576, Thoth's own dispatch "build
+# the MCP door, treat it as required not optional"): new tool heal_seat_transcript —
+# splice_sources + rematerialize_to_disk(upto=None) as a callable repair verb, the
+# jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
+# function directly. A genuinely new capability (dry_run default, because required on
+# execute, same shape sweep_seat_disk's own door already established), not padding.
+TOOL_CONTRACT_EXPECTED_COUNT = 151
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -784,13 +790,27 @@ TOOL_CONTRACT_CEILING_CHARS = 205497
 # new capability, not padding. Trimmed both new docstrings once under the category rule
 # before raising.
 TOOL_CONTRACT_CEILING_CHARS = 206209
+# 206,209 -> 208,607 (measured exact). Tool count 148 -> 149 (2026-09-02, Khnum, thread
+# 6483/6559/6567/6576): new tool heal_seat_transcript (see the count changelog above) —
+# a genuinely new capability, not padding.
 # 206,209 -> 208,053 (measured exact). Tool count 148 -> 150 (2026-09-02, Sekhmet, ruling
 # 23771416): two new tools, heal_seat_anchor + heal_seat_anchor_third_party — self-service
 # and third-party repair for THE ANCHOR INVARIANT (anchor_cwd is identity, always
 # <office_root>/<handle>, corrupted live on Chad/Jesus/henry/Marquee by rebind_seat's own
 # now-closed write-path gap). A genuinely new capability, not padding. Trimmed both new
 # docstrings once under the category rule before raising.
-TOOL_CONTRACT_CEILING_CHARS = 208053
+TOOL_CONTRACT_CEILING_CHARS = 202871
+# 202,871 -> 210,451 (measured exact). Tool count unchanged at 151 (2026-09-03, Khnum,
+# the khnum-splice-seek/main reconciliation, ruling d161a156's own coordination cost):
+# the merge driver correctly declined to add the two branches' own ceiling deltas
+# together (msg 6620's own gate_hook log: "never the larger of the two") and left the
+# ceiling at the shared ancestor's value, 202871, for a human/agent to re-measure
+# against the REAL merged tree rather than guess a sum — both heal_seat_transcript
+# (this branch) and heal_seat_anchor/heal_seat_anchor_third_party (Sekhmet's,
+# already in main) are genuinely present in the tool count (151, already correctly
+# 3-way-reconciled) but their combined char cost was never actually measured together
+# until now. Measured fresh, not summed.
+TOOL_CONTRACT_CEILING_CHARS = 210451
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
