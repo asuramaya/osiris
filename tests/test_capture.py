@@ -44,6 +44,7 @@ from src.orchestrator.capture import (
     record_hook_failure,
     record_tension,
     resolve_thread,
+    resolve_threads_bulk,
     thread_notes,
 )
 from src.orchestrator.compositions import _props, run_composition, seed_default_compositions
@@ -463,6 +464,107 @@ async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -
 
 async def test_resolve_thread_returns_none_when_nothing_matches(actions: Actions) -> None:
     assert await resolve_thread(actions, "no such thread anywhere") is None
+
+
+async def test_resolve_threads_bulk_dry_run_previews_without_writing(
+    actions: Actions,
+) -> None:
+    t1 = await open_thread(actions, "bulk-close specimen one")
+    t2 = await open_thread(actions, "bulk-close specimen two")
+    out = await resolve_threads_bulk(
+        actions, [str(t1), str(t2)], because="test sweep", dry_run=True)
+    assert out["ok"] is True
+    assert out["dry_run"] is True
+    assert out["count"] == 2
+    refs = {row["ref"] for row in out["would_close"]}
+    assert refs == {str(t1), str(t2)}
+    assert all(row["already_resolved"] is False for row in out["would_close"])
+    # nothing written — still open
+    assert await _thread_resolved_in_test_helper(actions, t1) is None
+    assert await _thread_resolved_in_test_helper(actions, t2) is None
+
+
+async def test_resolve_threads_bulk_apply_closes_all_under_one_shared_because(
+    actions: Actions,
+) -> None:
+    t1 = await open_thread(actions, "bulk-close specimen three")
+    t2 = await open_thread(actions, "bulk-close specimen four")
+    out = await resolve_threads_bulk(
+        actions, [str(t1), str(t2)], because="stale, owner lineage retired",
+        artifact="decision:deadbeefcafe", dry_run=False)
+    assert out["ok"] is True
+    assert out["dry_run"] is False
+    assert sorted(out["closed"]) == sorted([str(t1)[:8], str(t2)[:8]])
+    for tid in (t1, t2):
+        assert await _thread_resolved_in_test_helper(actions, tid) is not None
+        because = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='resolved_because'", tid)
+        assert because == "stale, owner lineage retired"
+
+
+async def test_resolve_threads_bulk_refuses_whole_batch_on_an_unresolved_ref(
+    actions: Actions,
+) -> None:
+    """REFUSE-WHOLE-RUN (Thoth dispatch 6865, same posture as _retire_handoff_backlog): one
+    bad ref must not silently close the good ones alongside it."""
+    t1 = await open_thread(actions, "bulk-close specimen five, resolvable")
+    out = await resolve_threads_bulk(
+        actions, [str(t1), "no such thread anywhere, ever"],
+        because="test sweep", dry_run=False)
+    assert out["ok"] is False
+    assert "no such thread anywhere, ever" in out["unresolved"]
+    # the good ref was NOT closed either — the whole batch refused
+    assert await _thread_resolved_in_test_helper(actions, t1) is None
+
+
+async def test_resolve_threads_bulk_refuses_on_a_duplicate_ref_collision(
+    actions: Actions,
+) -> None:
+    t1 = await open_thread(actions, "bulk-close specimen six, targeted twice")
+    out = await resolve_threads_bulk(
+        actions, [str(t1), str(t1)[:8]], because="test sweep", dry_run=False)
+    assert out["ok"] is False
+    assert out["duplicates"] and out["duplicates"][0]["also"] == str(t1)[:8]
+    assert await _thread_resolved_in_test_helper(actions, t1) is None
+
+
+async def test_resolve_threads_bulk_refuses_without_a_because() -> None:
+    out = await resolve_threads_bulk(None, ["irrelevant"], because="")  # type: ignore[arg-type]
+    assert out == {"ok": False, "reason": "because is mandatory for a batch close"}
+
+
+async def test_resolve_threads_bulk_refuses_an_empty_ref_list(actions: Actions) -> None:
+    out = await resolve_threads_bulk(actions, [], because="test sweep")
+    assert out == {"ok": False, "reason": "empty ref list — nothing to do"}
+
+
+async def _thread_resolved_in_test_helper(actions: Actions, tid: object) -> str | None:
+    from src.orchestrator.capture import _thread_resolved_in
+
+    return await _thread_resolved_in(actions.pool, tid)  # type: ignore[arg-type]
+
+
+async def test_mcp_resolve_thread_dispatches_a_list_ref_to_the_bulk_door(
+    actions: Actions,
+) -> None:
+    """The MCP tool's own list-vs-str branch (Thoth dispatch 6865, #203 mechanism) — a
+    single string ref still takes the original single-thread path untouched; a list
+    reaches resolve_threads_bulk instead of the single-ref `_find_thread`."""
+    from src import mcp_server as srv
+
+    t1 = await open_thread(actions, "mcp bulk-close dispatch specimen one")
+    t2 = await open_thread(actions, "mcp bulk-close dispatch specimen two")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread(
+            [str(t1), str(t2)], because="mcp dispatch test", dry_run=True)
+    finally:
+        srv._pool = saved_pool
+    assert out["ok"] is True
+    assert out["dry_run"] is True
+    assert out["count"] == 2
 
 
 async def test_resolve_by_a_different_agent_than_the_opener_still_supersedes(

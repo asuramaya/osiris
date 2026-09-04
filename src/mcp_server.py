@@ -7033,11 +7033,12 @@ async def open_thread(
 
 @mcp.tool()
 async def resolve_thread(
-    ref: str, because: str | None = None, artifact: str | None = None,
+    ref: str | list[str], because: str | None = None, artifact: str | None = None,
+    dry_run: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Close a THREAD — `ref` is its UUID or a summary substring; `because` is a short
     WHY, not a completion essay. Event-sourced, never deleted: auditable and reversible.
     `artifact` points at what actually closed it (a commit hash, decision id, file:line)
@@ -7046,7 +7047,16 @@ async def resolve_thread(
 
     Re-resolving is allowed: `ref` matches by identity, not status, so a second call on
     an already-resolved thread attaches a later, more specific closure witness — latest
-    wins, earlier reasoning stays in history. The receipt names it when this happens."""
+    wins, earlier reasoning stays in history. The receipt names it when this happens.
+
+    A LIST of refs closes a BATCH (#203, decision 880ffe79): `because` becomes mandatory,
+    `dry_run=True` previews without writing, and the whole batch refuses if any ref does
+    not resolve to exactly one thread. See `capture.resolve_threads_bulk`."""
+    if isinstance(ref, list):
+        pool = await _pool_get()
+        return await capture.resolve_threads_bulk(
+            Actions(pool), ref, because=because or "", artifact=artifact, dry_run=dry_run,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
     pool = await _pool_get()
     probe_tid = await capture._find_thread(pool, ref)
     was_already_resolved = (

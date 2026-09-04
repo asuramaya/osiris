@@ -935,7 +935,7 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # branches' deltas, so a human/agent re-measures against the REAL merged tree instead of
 # trusting the arithmetic. Tool count 115 -> 116 (one new tool, `resume`, landed on main
 # independently of this branch).
-TOOL_CONTRACT_CEILING_CHARS = 202871
+
 # 202,871 -> 133,436 (measured exact). Tool count unchanged at 116 (2026-09-04, Imhotep,
 # operator's own priority: "make context bloating a priority, one turn in you're at 25%"
 # — Thoth dispatch 6872, task #129's ~32K-token schema-load measurement). THE
@@ -951,16 +951,16 @@ TOOL_CONTRACT_CEILING_CHARS = 202871
 # stated target (under 60K aggregate) — the top ~40 tools were the highest-leverage cut;
 # the remaining ~76 model-facing tools average a few hundred chars each and would need a
 # second wave to close the rest of the gap. Reported honestly, not padded toward a number.
-TOOL_CONTRACT_CEILING_CHARS = 133436
+
 # 133,436 -> 132,810 (measured exact). Tool count 116 -> 115 (2026-09-04, Imhotep, task
 # #199 lane 2, retirement wave 2 — see the count changelog above): uningested_trees
 # hidden, same commit as the docstring diet per Thoth's own instruction.
-TOOL_CONTRACT_CEILING_CHARS = 132810
+
 # 132,810 -> 133,746 (merge of sekhmet-receipt-diet onto imhotep-docstring-diet, 2026-09-04):
 # four opt-in params (want_prior_art/want_listener on send, want_prior_art on inbox,
 # want_co_agents/want_held_work on mount) add inputSchema + a one-line note each — the
 # params exist to SHRINK receipts; +936 schema chars buys ~32% off every send/inbox call.
-TOOL_CONTRACT_CEILING_CHARS = 133746
+
 # 133,746 -> 129,145 (2026-09-04, Imhotep, task #199 lane 2, docstring diet wave 2,
 # Thoth dispatch 6886): trimmed record_decision/send/mount/open_thread/settle (per-
 # parameter prose -> compact tables, per Thoth's own instruction) plus ~25 more of the
@@ -974,6 +974,12 @@ TOOL_CONTRACT_CEILING_CHARS = 133746
 # (want_blind_spots on orient) adds inputSchema + a one-line docstring note — measured
 # to buy a 31.4% cut (1324 -> 908 bytes) on the seven-blind-spot fixture in
 # tests/test_receipt_diet.py, same trade as the prior raise above.
+# 210,451 -> 210,891 (measured exact). Tool count unchanged at 151 (2026-09-04, Seshat, #203
+# mechanism ruling 880ffe79/decision 46ee0083, Thoth dispatch 6865): resolve_thread's own
+# `ref` widened to accept a LIST (batch-close under one shared because/artifact, refuse-
+# whole-run on any bad ref) plus a new `dry_run` param — a genuinely new capability (the
+# operator's own "closing 1000+ obligations" mechanism), not padding. Docstring trimmed
+# once under the category rule before raising.
 TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
