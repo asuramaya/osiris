@@ -725,7 +725,81 @@ def _tool_chars(t: Any) -> int:
 # execute, same shape sweep_seat_disk's own door already established), not padding.
 # 151 -> 152 (2026-09-03, Khnum, task #199 lane 3C, ruling 41a41437): new tool `resume` —
 # see the char ceiling's own changelog above for the full account.
-TOOL_CONTRACT_EXPECTED_COUNT = 152
+# 121 -> 115 (2026-09-03, Imhotep, task #199 lane 2, thread 6854, Thoth dispatch: families
+# wave, rebased onto main 049ff59). Two genuine consolidations, both with the same-real-
+# call-shared test applied first, not just a matching name prefix:
+# (1) abstained_derivations/retryable_abstentions/retryable_ambiguous_abstentions (3 -> 1):
+# all three query the SAME derivation_abstained_<link_type> population in capture.py with
+# an IDENTICAL (pool, link_type, limit) signature, differing only in which structural SQL
+# subset they filter to — a genuine shared call. abstained_derivations gained `scope=
+# "all"|"retryable"|"retryable_ambiguous"` (default "all", backward compatible); the two
+# narrower names are now hidden aliases. retry_ambiguous_abstentions (the WRITE half,
+# dry_run/because/mutates) stays separate — a different action, not a view, never folded in.
+# (2) 5 backfill_* tools -> 1 `backfill(target=...)`: NOT a shared-call consolidation like
+# (1) — each of the five repairs a structurally different defect class in its own module,
+# no common orchestrator function underneath. Named honestly as a genuine dispatch table in
+# its own docstring rather than dressed up as a merge, since the wire shape (dry_run
+# default True, because required to write, idempotent) was close enough to unify without
+# creating a misleading contract. backfill_agent_project_links kept its OWN original
+# signature as the deprecated alias (explicit actor, no ctx/because) rather than routed
+# through the shared dispatcher — the new primary derives actor from mounted identity
+# instead, a deliberate behavior change not safe to impose on the old name's callers.
+#
+# DECLINED, with reasons, rather than swept into a false family for the count alone:
+# backfill_* families were the ONLY "family" from Thoth's dispatch actually built this
+# wave; the other three named populations were examined and declined:
+# - correct_*/reconcile_* remainder (correct_house, correct_pin_value,
+#   correct_thread_summary): three genuinely different targets (a seat's own house, a
+#   seat's own pin file, any Thread's summary) with three different param shapes and two
+#   different auth scopes (self-only vs any-ref) — a false family by prefix alone.
+# - list_* (list_assertions, list_compositions, list_functions, list_rooms): four
+#   unrelated domains with INCOMPATIBLE RETURN TYPES (dict, list[dict], list[str],
+#   list[dict]) as well as incompatible params (ref+name vs none) — forcing these into one
+#   tool would produce an incoherent output contract, not just an unusual input one.
+# - peer_*/unpeer: already resolved by the retirement wave (peer_ledger/peer_reachable/
+#   unpeer already hidden); peer_seats is the sole remaining live primitive and has no
+#   sibling left to consolidate against.
+# 147 -> 121 (2026-09-03, Imhotep, task #199 lane 2, thread 6822, Thoth dispatch: retirement
+# wave 1, operator's own stated goal "folding mcp slop from 100+ down to a few dozen"): 26
+# tools hidden via the same meta={"deprecated": True} mechanism as the earlier consolidation
+# pairs, but with no `use_instead` — these have no replacement, they were simply unused (off
+# Seshat's own measured list, decision 9a202c73/81b7112d: zero MCP traffic across the full
+# 3-week mcp_tool_stats history, old enough to judge, no CLI/daemon/slash-command bypass
+# found by direct grep of src/orchestrator/console.py, pulse.py, workers/arq_worker.py,
+# src/manager, cli.py, and ~/.claude/commands/*.md). Still fully callable via call_tool, per
+# the mechanism's whole point — this is a visibility shrink, not a deletion. Held back from
+# this cut, with reasons, rather than swept blind: fork_project (Seshat's list predates its
+# own consolidation into the surviving primary tool of the fork/unfork pair — deprecating it
+# now would have hidden the CURRENT primary, not a dead tool), unfork_project (already hidden
+# from the prior wave, no action needed), acquire_lease/check_lease/release_lease (a coherent
+# locking primitive family — reap_stale_leases, its automatic backstop, is a confirmed live
+# daemon caller per 81b7112d, so hiding the manual acquire/check/release doors would strand
+# the only agent-facing way to participate in a mechanism the daemon still depends on),
+# consolidate/resolve_fold (Constitution item 1's own review-gated identity-merge execution
+# doors — hiding the door that actually performs a reviewed fold is a different risk class
+# than hiding a genuinely orphaned leaf tool), retire (an active, explicitly-flagged STUB per
+# the seat skill's own doc — "do not hand-write around it" — entangling it with this wave
+# would conflate two different pieces of unfinished work). SEVEN MORE caught and reverted
+# only after a first pass and a full local test run: attach_seat, detach_seat,
+# invalidate_works_in, pause_seat, rename_seat, set_seat_attended, walk_in are all in
+# tests/test_cli_mcp_parity.py's own BINDING_VERBS set (Thoth dispatch 6438, Khnum's lane-2
+# seat-reconciliation scoping) with a NO_CLI_EQUIVALENT reason of "not yet built — not on the
+# jesus/chad path; not ruled out" — a DIFFERENT gate already tracks their missing CLI door as
+# a live, deliberate gap, and that gate reads absence-from-list_tools() as "stale entry
+# (deleted/renamed)", not "hidden but still real." Hiding them would have made a true gap
+# read as resolved. test_every_binding_verb_has_a_cli_door_or_declares_why_not caught this
+# live (watched fail, not assumed) before it landed.
+# 150 -> 147 (2026-09-03, Imhotep, task #199 lane 2, thread 6778/6788, operator mandate
+# upgrade — "fix all 3 problems end to end"): unfork_project, reconcile_seat_identity_
+# third_party, and ingest_project_third_party retired the same way heal_seat_anchor_
+# third_party was — hidden, deprecated aliases of fork_project(direction="unfork"),
+# reconcile_seat_identity(seat_id=...), and ingest_project(because=...) respectively.
+# Three more shrinks in the same shape as the first.
+# 151 -> 150 (2026-09-03, Imhotep, task #199 lane 2, thread 6778): heal_seat_anchor_third_
+# party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
+# own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
+# recorded, not a rename or a merge-reconciliation artifact.
+TOOL_CONTRACT_EXPECTED_COUNT = 116
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -821,8 +895,32 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # padding — launch's own docstring shrank in the same commit (its resume-era paragraphs
 # moved to resume's docstring rather than being duplicated), so this is the net cost of
 # ONE new tool, not two tools' worth of prose.
-TOOL_CONTRACT_CEILING_CHARS = 212749
+# 210,451 -> 209,867 (measured exact). Tool count 151 -> 150 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6778 — the six-pair consolidation's proof): heal_seat_anchor_third_
+# party retired as a hidden alias (BoundedMCP.list_tools now filters any tool registered
+# with meta={"deprecated": True}, still fully callable via call_tool — see mcp_server.py's
+# own docstring on the override), its body sharing heal_seat_anchor's own new
+# `seat_id=None` (self) / `seat_id=<seat>` (third-party, `because` required) parameter
+# instead of a second implementation. FIRST SHRINK either ratchet has recorded: one fewer
+# tool AND fewer total chars in the same change, not one traded for the other — the
+# mechanism this lane exists to prove.
 
+# 209,867 -> 208,349 (measured exact). Tool count 150 -> 147 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6778/6788): three more hidden-alias retirements in the same wave
+# as the count changelog above — see there for the full list. Second shrink in a row,
+# same mechanism, not a fluke.
+
+# 208,349 -> 186,392 (measured exact). Tool count 147 -> 121 (2026-09-03, Imhotep, task #199
+# lane 2, thread 6822, retirement wave 1 — see the count changelog above for the full list,
+# the held-back exceptions, and the 7 caught by test_cli_mcp_parity.py's own BINDING_VERBS
+# gate and reverted before this measurement). Largest single-wave drop either ratchet has
+# recorded: 26 tools hidden from list_tools() in one pass, all genuinely unused rather than
+# merged into a surviving sibling.
+
+# 186,392 -> 181,493 (measured exact). Tool count 121 -> 115 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6854, families wave — see the count changelog above for the full
+# breakdown and the three declined families).
+TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

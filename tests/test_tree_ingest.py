@@ -98,6 +98,56 @@ async def test_alarm_tick_is_dark_by_default_and_sends_nothing(actions: Actions)
     assert out == {"enabled": False, "alarmed": []}
 
 
+# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2, thread 6778/6788): the MCP tool
+# ingest_project gained `because` (blank/omitted = self-service, given = third-party
+# shape) and ingest_project_third_party is now a hidden, deprecated alias forwarding to
+# the same shared body. WATCHED FAIL BEFORE THIS CHANGE: `srv.ingest_project(project=...,
+# because="x")` silently ignored `because` entirely (it wasn't a parameter yet) and ran
+# self-service — the receipt never carried a `because` field. ═══════════════════════════
+
+class _McpCtx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_consolidated_ingest_project_because_param_takes_the_third_party_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    repo = _git_repo(tmp_path)
+    await _project_with_path(actions, "repo:mcpingest1", str(repo))
+
+    ident = AgentIdentity(agent_id="agent:mcpingester", session="mcping1", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _McpCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.ingest_project(
+            project="mcpingest1", dry_run=True, because="coordinator dry-run", ctx=ctx)
+        assert out["because"] == "coordinator dry-run"
+        assert out["commits_would_ingest"] == 1
+
+        via_deprecated = await srv.ingest_project_third_party(
+            project="mcpingest1", because="legacy caller", dry_run=True, ctx=ctx)
+        assert via_deprecated["because"] == "legacy caller"
+        assert via_deprecated["commits_would_ingest"] == 1
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+
+    listed = {t.name for t in await srv.mcp.list_tools()}
+    assert "ingest_project_third_party" not in listed
+    assert "ingest_project" in listed
+    assert srv.mcp._tool_manager.get_tool("ingest_project_third_party") is not None
+
+
 async def test_alarm_tick_mails_the_owning_seat_when_enabled(actions: Actions) -> None:
     proj = await actions.create_or_find_object("SoftwareProject", "repo:blindtree", "git")
     await actions.assert_property(proj, "on_disk_path", "/home/x/code/blindtree",

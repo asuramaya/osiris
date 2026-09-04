@@ -56,6 +56,9 @@ from src.ontology.resolution import (
 from src.ontology.schema import catalog as ontology_catalog
 from src.orchestrator.cobrowse import cobrowse_open
 from src.orchestrator.compositions import (
+    create_room as _create_room,
+)
+from src.orchestrator.compositions import (
     list_compositions,
     object_items,
     run_composition,
@@ -257,14 +260,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         ]
 
     @app.post("/rooms")
-    async def create_room(
+    async def create_room_route(
         body: RoomBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, str]:
-        rid = await p.fetchval(
-            "INSERT INTO rooms (name, config) VALUES ($1,$2) "
-            "ON CONFLICT (name) DO UPDATE SET config=EXCLUDED.config RETURNING id",
-            body.name, body.config,
-        )
+        """Routed through orchestrator.compositions.create_room (Seshat's #203 console
+        grep, msg 6859) — this file's own module docstring claims "mutations stay in the
+        Actions layer... read-only plus a couple of analyst decisions", and this route
+        was an undeclared third mutation, inlining its own duplicate INSERT instead of
+        the one function every other room-creating caller (the MCP tool, the CLI) already
+        shares. Same SQL, now one copy."""
+        rid = await _create_room(p, body.name, body.config)
         return {"id": str(rid), "name": body.name}
 
     @app.get("/search")

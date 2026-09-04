@@ -24,6 +24,7 @@ import asyncpg
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
+from mcp.types import Tool as MCPTool
 
 from src import memprofile
 from src.actions.core import Actions
@@ -131,6 +132,23 @@ class BoundedMCP(FastMCP):
             return tool.fn_metadata.convert_result(fit(result, tool=name))
         finally:
             _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000)
+
+    async def list_tools(self) -> list[MCPTool]:
+        """HIDDEN ALIASES (task #199 lane 2, thread 6778 — the consolidation-without-an-
+        outage mechanism): a tool registered with `meta={"deprecated": True, ...}` is
+        DROPPED from the listing a model ever sees, but stays fully in `self._tools` —
+        `call_tool` above resolves it directly off that dict, never off this method's own
+        output, so a live caller (including a sleeping one whose compiled standing orders
+        still name the old verb) keeps working at its next turn with zero code path
+        change. This is the thing plain shim-forwarding alone cannot give you: shrinking
+        the model-visible SURFACE (this list, and the char/count ratchets in
+        test_tool_contract_diet.py that measure exactly this) and the DUPLICATED CODE
+        (the old name's body is nothing but a one-line forward) in the same change,
+        instead of trading one for the other. Vanilla FastMCP has no such notion —
+        `list_tools`/`call_tool` share one undifferentiated registry — so this overrides
+        the SAME public seam `call_tool` above already overrides, no monkey-patch of
+        anything private."""
+        return [t for t in await super().list_tools() if not (t.meta or {}).get("deprecated")]
 
 
 # TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
@@ -1227,28 +1245,44 @@ async def recall(ref: str, kind: str | None = None) -> dict[str, Any]:
 
 # --- collect (federate a base) ----------------------------------------------
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def aim_entity(name: str) -> dict[str, Any]:
     """Resolve a name on Wikidata and ingest the entity + relationships + official
     social accounts; the broadest first pull for a company or person."""
     return await wikidata_aim(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_form_d(name: str) -> dict[str, Any]:
     """SEC Form D: a private company's financing rounds — officers, amounts, and the
     feeder SPVs that fund it (linked into the graph)."""
     return await aim_form_d(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def expand_operator(name: str) -> dict[str, Any]:
     """Pull a repeat player's thread: every Form D mentioning this operator → their
     whole portfolio, exposing the co-investment network."""
     return await expand_filings(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def lookup_lei(name: str) -> dict[str, int]:
     """GLEIF global LEI registry (keyless): the entity's Legal Entity Identifier,
     jurisdiction, status, and corporate ownership parents (direct + ultimate). The LEI
@@ -1256,7 +1290,11 @@ async def lookup_lei(name: str) -> dict[str, int]:
     return await aim_gleif(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def verify_bc_entity(name: str) -> dict[str, int]:
     """Canadian (British Columbia) corporate registry via OrgBook BC (keyless): pull a
     company/partnership — or a whole family name like 'Brilliant Phoenix' — with its BC
@@ -1265,14 +1303,22 @@ async def verify_bc_entity(name: str) -> dict[str, int]:
     return await aim_orgbook(Actions(await _pool_get()), name)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_trials(sponsor: str) -> dict[str, int]:
     """ClinicalTrials.gov: a sponsor's registered human trials — status, sites
     (facilities), named investigators."""
     return await aim_trials(Actions(await _pool_get()), sponsor)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]:
     """Court records (CourtListener): lawsuits & enforcement actions naming this
     entity — dockets, parties, judges. opinions=True searches case law instead of
@@ -1280,7 +1326,11 @@ async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]
     return await aim_litigation(Actions(await _pool_get()), name, kind="o" if opinions else "r")
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[str, Any]:
     """Trace an EVM crypto address on-chain (Etherscan): its top counterparties, native
     balance, token flow, and contract/token identity — graded as ledger ground truth.
@@ -1288,7 +1338,11 @@ async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[s
     return await aim_address(Actions(await _pool_get()), address, chain_id=chain_id, top=top)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     """Screen a traced EVM address against the federated sanctions base: is the
     address — or any of its counterparties — an OFAC-listed wallet? Returns the
@@ -1307,7 +1361,11 @@ async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     return await screen_against_sanctions(pool, uuid.UUID(str(oid)))
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def expand_clinical_site(facility: str) -> dict[str, int]:
     """The trials at a clinical SITE — revealing which other sponsors use it."""
     return await expand_facility(Actions(await _pool_get()), facility)
@@ -1376,7 +1434,11 @@ async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     return {"ref": ref, "chain": chain} if chain else {"error": f"no agent matches {ref!r}"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def dossier_report(object_ref: str) -> str:
     """The deliverable: a provenance-annotated Markdown dossier for an entity —
     identity, financing, litigation, footprint discrepancy, co-investment — with every
@@ -1445,7 +1507,11 @@ async def handoff_briefing(
 
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def create_room(name: str) -> dict[str, str]:
     """Create a ROOM — a saved STANCE the operator switches between (journalist / broker /
     engineer). A Room scopes WORK ARTIFACTS (cases + compositions) to a beat, never the
@@ -1500,7 +1566,11 @@ async def save_composition(
 
 # --- the shared console (real-time Claude↔front sync) -----------------------
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def get_console() -> dict[str, Any]:
     """What the operator is looking at RIGHT NOW — the shared cursor (room / composition /
     view / focused object). The front end is the conversation, so read this first to see
@@ -1508,7 +1578,11 @@ async def get_console() -> dict[str, Any]:
     return await _get_console(await _pool_get())
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str, Any]:
     """Focus an object (UUID or name) on the operator's LIVE screen — drives the console so
     they see what you're looking at. Returns the object's identity + properties so you can
@@ -4589,7 +4663,11 @@ async def unmerge(dupe: str, because: str, execute: bool = False,
                           actor=ident.agent_id, execute=execute)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> dict[str, Any]:
     """Accepts an ALREADY-MERGED `dupe` and re-points whatever mail/mount/thread/holder/
     managed_by/edge estate is still aimed at it, WITHOUT re-performing the merge —
@@ -4668,7 +4746,92 @@ async def unwire_informs_fanout(
         dry_run=dry_run, because=because)
 
 
+_BACKFILL_TARGETS = frozenset({
+    "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
+    "lineage_repo_links", "agent_project_links",
+})
+
+
+async def _backfill_impl(
+    target: str, dry_run: bool, because: str | None, only_bases: list[str] | None,
+    ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared dispatch (task #199 lane 2, families wave, thread 6854): five repair verbs
+    with near-identical wire shape (dry_run default True, because required to write,
+    idempotent, mount-gated) but NO shared orchestrator call — each fixes a structurally
+    different defect class in its own module. Unlike abstained_derivations's own
+    consolidation (one real underlying query, three filters), this is a genuine dispatch
+    table, named as such rather than dressed up as a merge. `target` selects which."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if target == "bootstrap_orphan_references":
+        from src.ingest.reference import (
+            backfill_bootstrap_orphan_references as _f_orphan_refs,
+        )
+        return await _f_orphan_refs(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "boot_alarm_commit_links":
+        from src.orchestrator.capture import backfill_boot_alarm_commit_links as _f_boot_alarm
+        return await _f_boot_alarm(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "task_sync_citation_links":
+        from src.orchestrator.task_sync import (
+            backfill_task_sync_citation_links as _f_task_sync,
+        )
+        return await _f_task_sync(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "lineage_repo_links":
+        from src.orchestrator.capture import backfill_lineage_repo_links as _f_lineage
+        return await _f_lineage(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "agent_project_links":
+        from src.orchestrator.agents import backfill_agent_project_links as _f_agent_links
+        return await _f_agent_links(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run,
+            only_bases=set(only_bases) if only_bases else None)
+    return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
+
+
 @mcp.tool()
+async def backfill(
+    target: str, dry_run: bool = True, because: str | None = None,
+    only_bases: list[str] | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb, parameterized over WHICH defect class (task #199 lane 2, families
+    wave): five formerly-separate tools, one per structurally distinct backfill, now one
+    door selected by `target` — a genuine dispatch, not a claim that the underlying
+    repairs share logic (they don't; see each target's own history below). DRY RUN IS
+    THE DEFAULT for every target; `dry_run=False` REQUIRES a non-blank `because` (except
+    `agent_project_links`, which predates that convention and has none). All five are
+    idempotent.
+
+    `target=`:
+    - "bootstrap_orphan_references": the bootstrap_project door-gap repair (decision
+      49231693/adde094b) — links a zero-live-link, `source_id='ref:osiris'`-stamped
+      Reference to the active SoftwareProject its own canonical prefix names.
+    - "boot_alarm_commit_links": links a zero-live-link `UNREVIEWED BOOT` alarm Thread to
+      the Commit its own summary cites by sha, via derive_or_abstain.
+    - "task_sync_citation_links": links a zero-live-link task_sync obligation Thread to
+      the Thread its own summary names, via task_sync.parse_thread_citations.
+    - "lineage_repo_links": links a zero-live-link Decision/Thread authored by a real
+      Agent lineage to its project, re-running the same rung-3 lineage-wide works_in
+      lookup a new write already gets.
+    - "agent_project_links": moves works_in/governs off an off-head Agent generation onto
+      its living lineage head (thread 20af2c95); the one target taking `only_bases` to
+      scope a write to specific lineages instead of every off-head agent in scope."""
+    if target not in _BACKFILL_TARGETS:
+        return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
+    return await _backfill_impl(target, dry_run, because, only_bases, ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='bootstrap_orphan_references')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_bootstrap_orphan_references(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4687,15 +4850,7 @@ async def backfill_bootstrap_orphan_references(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Links land
     evidence_class DERIVED. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.ingest.reference import (
-        backfill_bootstrap_orphan_references as _backfill_bootstrap_orphan_references,
-    )
-    return await _backfill_bootstrap_orphan_references(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("bootstrap_orphan_references", dry_run, because, None, ctx)
 
 
 @mcp.tool()
@@ -4724,7 +4879,11 @@ async def repair_stale_pile_summons(
         Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='boot_alarm_commit_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_boot_alarm_commit_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4737,18 +4896,14 @@ async def backfill_boot_alarm_commit_links(
     connectivity it actually has.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.capture import (
-        backfill_boot_alarm_commit_links as _backfill_boot_alarm_commit_links,
-    )
-    return await _backfill_boot_alarm_commit_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("boot_alarm_commit_links", dry_run, because, None, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='task_sync_citation_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_task_sync_citation_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4761,18 +4916,14 @@ async def backfill_task_sync_citation_links(
     Thread; anything else abstains durably with a distinct reason and the candidate set kept.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.task_sync import (
-        backfill_task_sync_citation_links as _backfill_task_sync_citation_links,
-    )
-    return await _backfill_task_sync_citation_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("task_sync_citation_links", dry_run, because, None, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='lineage_repo_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_lineage_repo_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4785,15 +4936,7 @@ async def backfill_lineage_repo_links(
     abstains durably via derive_or_abstain, candidate set kept, never a guess (a0339e16).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.capture import (
-        backfill_lineage_repo_links as _backfill_lineage_repo_links,
-    )
-    return await _backfill_lineage_repo_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("lineage_repo_links", dry_run, because, None, ctx)
 
 
 @mcp.tool()
@@ -4816,108 +4959,134 @@ async def recover_harness_exchanges(
     return await _recover(await _pool_get(), anchor_sid, dry_run=dry_run, because=because)
 
 
-@mcp.tool()
-async def reconcile_seat_identity(ctx: Context | None = None) -> dict[str, Any]:
-    """SELF-HEAL your OWN seat's identity (fe8ec7ff mechanism 3, operator ruling df646654:
-    self-healing over manual cleanup) — the self-service replacement for #157's own repair,
-    which used to need an operator-authorized retire_assertion call per stale row. Heals a
-    cross-source CONTRADICTION (more than one current value from different sources) on
-    exactly two properties, both single-valued by nature and never generalised: your Seat's
-    `house` and your own Agent's `project`. Newest-declared-wins, the same tiebreak the read
-    path already applies — this only makes that rule stick instead of leaving the loser
-    sitting beside the winner forever, both technically "current". Reversible: every healed
-    row's own id is in the receipt, same as any retire_assertion call.
-
-    SELF-SCOPED, like correct_house — always your OWN held seat and your OWN agent identity,
-    never an argument naming someone else's. No sign-off required: this is exactly the class
-    of repair the operator ruled no agent should ever need to escalate for."""
+async def _reconcile_seat_identity_impl(
+    seat_id: str | None, agent_id: str | None, because: str | None, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `reconcile_seat_identity` (self OR third-party) and its
+    deprecated alias `reconcile_seat_identity_third_party` (task #199 lane 2, thread
+    6778/6788). `seat_id=None` heals the CALLER's own held seat and own agent identity,
+    `because` unused. `seat_id=<any seat>` is the third-party path — `agent_id`
+    optional (omitted heals `house` alone), `because` REQUIRED (a correction with no
+    stated reason is the silent overwrite 719ed5b1 rules against, not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — reconcile_seat_identity is a seat's own act",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.seats import held_seat
-    bound = await held_seat(await _pool_get(), ident.agent_id)
-    if bound is None:
-        return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
-    from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
-    return await _reconcile(Actions(await _pool_get()), seat_id=bound["seat_id"],
-                            agent_id=ident.agent_id, actor=ident.agent_id)
-
-
-@mcp.tool()
-async def reconcile_seat_identity_third_party(
-    seat_id: str, because: str, agent_id: str | None = None,
-    ctx: Context | None = None,
-) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of reconcile_seat_identity (decision f78b41c8's own gap:
-    mechanism 3 shipped self-service-only, and #157's population — four OTHER seats' stale
-    house/project rows — cannot be reached by a verb that always resolves its target from
-    the caller's own held seat). NOT self-scoped, on purpose — mirrors resync_seat_house_
-    third_party's own precedent exactly: `seat_id`/`agent_id` name ANY seat/agent, never
-    only your own; `because` is REQUIRED (a correction with no stated reason is the silent
-    overwrite 719ed5b1 rules against, not a fix); does NOT check caller authority beyond
-    being mounted — same as correct_agent_house and resync_seat_house_third_party, callers
-    are responsible for the authorization this docstring cannot enforce.
-
-    OTHERWISE IDENTICAL to the self-service verb — same heal_contradicting_property
-    mechanism, same two properties (house/project, never generalised), same reversibility,
-    the SAME graph writes for the same row. `agent_id` omitted heals `house` alone."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if seat_id is None:
+        from src.orchestrator.seats import held_seat
+        bound = await held_seat(pool, ident.agent_id)
+        if bound is None:
+            return {"error": f"{ident.agent_id} holds no seat — nothing to reconcile"}
+        from src.orchestrator.identity_heal import reconcile_seat_identity as _reconcile
+        return await _reconcile(Actions(pool), seat_id=bound["seat_id"],
+                                agent_id=ident.agent_id, actor=ident.agent_id)
     from src.orchestrator.identity_heal import (
         reconcile_seat_identity_third_party as _reconcile_third_party,
     )
     return await _reconcile_third_party(
-        Actions(await _pool_get()), seat_id=seat_id, agent_id=agent_id, because=because,
+        Actions(pool), seat_id=seat_id, agent_id=agent_id, because=because or "",
         actor=ident.agent_id)
 
 
 @mcp.tool()
-async def heal_seat_anchor(dry_run: bool = True, ctx: Context | None = None) -> dict[str, Any]:
-    """SELF-HEAL your OWN seat's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416):
-    a Seat's anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session
-    happens to be sitting (Chad and Jesus each broke their own by rebinding themselves to
-    their own live cwd — `rebind_seat` no longer permits that for new seats; this tool
-    repairs a seat already corrupted before that fix). Asserts the invariant office path as
-    the SOLE current `anchor_cwd` via `Actions.assert_singular_property`, collapsing every
-    stray value in one call. REFUSES rather than guesses: no handle on record, or the
-    computed office directory does not exist on disk (never scaffolded here).
+async def reconcile_seat_identity(
+    seat_id: str | None = None, agent_id: str | None = None, because: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """HEAL a seat's identity (fe8ec7ff mechanism 3, operator ruling df646654: self-healing
+    over manual cleanup). Heals a cross-source CONTRADICTION (more than one current value
+    from different sources) on exactly two properties, both single-valued by nature and
+    never generalised: a Seat's `house` and its holder Agent's `project`. Newest-declared-
+    wins, the same tiebreak the read path already applies. Reversible: every healed row's
+    own id is in the receipt, same as any retire_assertion call.
 
-    `dry_run=True` is the default; the receipt always shows `current_before` and `target`.
-    SELF-SCOPED — see `heal_seat_anchor_third_party` for another seat."""
+    `seat_id=None` (default) heals THE CALLER's own held seat, own agent identity,
+    `because` unused. `seat_id=<any seat>` heals a THIRD PARTY's — `agent_id` optional
+    (omitted heals `house` alone), `because` REQUIRED (task #199 lane 2, thread
+    6778/6788 — one verb, was two: `reconcile_seat_identity_third_party` now forwards
+    here, hidden from listing, still callable, retired once traffic shows it silent).
+    Does NOT check caller authority beyond being mounted on the third-party path — same
+    as correct_agent_house, callers are responsible for the authorization this docstring
+    cannot enforce."""
+    return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
+
+
+@mcp.tool(meta={"deprecated": True, "use_instead": "reconcile_seat_identity",
+                "since": "task #199 lane 2, thread 6778/6788"})
+async def reconcile_seat_identity_third_party(
+    seat_id: str, because: str, agent_id: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares reconcile_seat_identity's own _reconcile_seat_identity_impl body —
+    nothing duplicated. Kept only so a live or sleeping caller whose standing orders
+    still name this verb is not broken at its next turn; remove once tool_traffic()
+    shows it silent."""
+    return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
+
+
+async def _heal_seat_anchor_impl(
+    seat_id: str | None, because: str | None, dry_run: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind both `heal_seat_anchor` (self OR third-party, by whether
+    `seat_id` is given) and its deprecated alias `heal_seat_anchor_third_party` — a plain
+    helper, never itself an `@mcp.tool()`, so the two names share this instead of each
+    re-implementing it (task #199 lane 2, thread 6778, the six-pair consolidation's proof).
+    `seat_id=None` heals the CALLER's own held seat, `because` optional; `seat_id=<any
+    seat>` heals a THIRD PARTY's, `because` REQUIRED (a correction with no stated reason
+    is the silent overwrite 719ed5b1 rules against, not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — heal_seat_anchor is a seat's own act",
                 "why": _anchorless(ctx)}
-    from src.orchestrator.seats import held_seat
-    bound = await held_seat(await _pool_get(), ident.agent_id)
-    if bound is None:
-        return {"error": f"{ident.agent_id} holds no seat — nothing to heal"}
+    if seat_id is None:
+        from src.orchestrator.seats import held_seat
+        bound = await held_seat(await _pool_get(), ident.agent_id)
+        if bound is None:
+            return {"error": f"{ident.agent_id} holds no seat — nothing to heal"}
+        seat_id = bound["seat_id"]
+    else:
+        because = (because or "").strip()
+        if not because:
+            return {"error": "a correction with no reason is exactly the silent overwrite "
+                             "719ed5b1 rules against — refusing"}
     from src.orchestrator.identity_heal import heal_seat_anchor as _heal
-    return await _heal(Actions(await _pool_get()), seat_id=bound["seat_id"],
+    return await _heal(Actions(await _pool_get()), seat_id=seat_id, because=because,
                        actor=ident.agent_id, dry_run=dry_run)
 
 
 @mcp.tool()
+async def heal_seat_anchor(
+    seat_id: str | None = None, because: str | None = None, dry_run: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """HEAL A SEAT's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416): a Seat's
+    anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session happens
+    to be sitting. Asserts the invariant office path as the SOLE current `anchor_cwd`,
+    collapsing every stray value. REFUSES rather than guesses: no handle on record, or the
+    office directory does not exist on disk.
+
+    `seat_id=None` (default) heals the CALLER's own held seat, `because` optional;
+    `seat_id=<any seat>` heals a third party's, `because` REQUIRED (task #199 lane 2,
+    thread 6778 — one verb, was two: `heal_seat_anchor_third_party` now forwards here,
+    hidden from listing, still callable, retired once traffic shows it silent).
+
+    `dry_run=True` is the default; the receipt shows `current_before` and `target`."""
+    return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
+
+
+@mcp.tool(meta={"deprecated": True, "use_instead": "heal_seat_anchor",
+                "since": "task #199 lane 2, thread 6778"})
 async def heal_seat_anchor_third_party(
     seat_id: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING of heal_seat_anchor — same shape as
-    reconcile_seat_identity_third_party: `seat_id` names ANY seat, `because` is REQUIRED
-    (a correction with no stated reason is the silent overwrite 719ed5b1 rules against).
-    `dry_run=True` still defaults. Otherwise identical to the self-service verb."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.identity_heal import (
-        heal_seat_anchor_third_party as _heal_third_party,
-    )
-    return await _heal_third_party(
-        Actions(await _pool_get()), seat_id=seat_id, because=because,
-        actor=ident.agent_id, dry_run=dry_run)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable (BoundedMCP.list_tools's filter, call_tool's own registry lookup bypasses
+    it). Shares `heal_seat_anchor`'s own `_heal_seat_anchor_impl` body — nothing
+    duplicated. Kept only so a live or sleeping caller whose standing orders still name
+    this verb is not broken at its next turn; remove once tool_traffic() shows it silent."""
+    return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
 @mcp.tool()
@@ -4937,43 +5106,72 @@ async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
     return {"count": len(rows), "trees": rows}
 
 
+async def _ingest_project_impl(
+    project: str | None, because: str | None, dry_run: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `ingest_project` and its deprecated alias `ingest_project_
+    third_party` (task #199 lane 2, thread 6778/6788). `because` blank/omitted is the
+    self-service shape (`project` omitted resolves to the caller's own mounted pin);
+    `because` given routes through the third-party orchestrator function instead, which
+    stamps it onto the receipt — the orchestrator layer already IS this same split
+    (ingest_project_third_party's own body is nothing but a because-required check
+    wrapping a call to ingest_project), this only removes the second MCP-layer copy of
+    that check."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — ingest_project is a seat's own act",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    because = (because or "").strip()
+    if because:
+        from src.orchestrator.tree_ingest import (
+            ingest_project_third_party as _ingest_third_party,
+        )
+        if not project:
+            return {"error": "a third-party ingest needs an explicit project — nothing "
+                             "to resolve a pin against on someone else's behalf"}
+        return await _ingest_third_party(Actions(pool), project=project, because=because,
+                                         dry_run=dry_run, actor=ident.agent_id)
+    target = project or ident.project
+    if not target:
+        return {"error": "no project given and none pinned — mount with a project, or pass "
+                         "one explicitly with a because for the third-party shape instead"}
+    from src.orchestrator.tree_ingest import ingest_project as _ingest_project
+    return await _ingest_project(Actions(pool), project=target, dry_run=dry_run,
+                                 actor=ident.agent_id)
+
+
 @mcp.tool()
 async def ingest_project(
-    project: str | None = None, dry_run: bool = True, ctx: Context | None = None,
+    project: str | None = None, dry_run: bool = True, because: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """SELF-SERVICE (thread 5126) — land YOUR OWN project's git history and close the
     threads it witnesses, one call, same authority shape as reconcile_seat_identity.
     `project` omitted resolves to your mounted pin; refuses cleanly if none is pinned.
     `dry_run=True` (default) writes NOTHING — the receipt names what would land (commits
     on disk vs already graphed) plus a closure preview over what's already graphed.
-    `dry_run=False` actually ingests, then closes."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — ingest_project is a seat's own act",
-                "why": _anchorless(ctx)}
-    target = project or ident.project
-    if not target:
-        return {"error": "no project given and none pinned — mount with a project, or pass "
-                         "one explicitly for ingest_project_third_party instead"}
-    from src.orchestrator.tree_ingest import ingest_project as _ingest_project
-    return await _ingest_project(Actions(await _pool_get()), project=target, dry_run=dry_run,
-                                 actor=ident.agent_id)
+    `dry_run=False` actually ingests, then closes.
+
+    `because=<reason>` (task #199 lane 2, thread 6778/6788 — one verb, was two) is the
+    THIRD-PARTY shape instead: `project` becomes required (no pin to fall back on for
+    someone else's tree), the reason lands on the receipt, does not check caller
+    authority beyond being mounted. The old name, `ingest_project_third_party`, still
+    works — it now forwards here — but no longer appears in a model's own tool list."""
+    return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={"deprecated": True, "use_instead": "ingest_project(because=...)",
+                "since": "task #199 lane 2, thread 6778/6788"})
 async def ingest_project_third_party(
     project: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THIRD-PARTY SIBLING of ingest_project — same shape as reconcile_seat_identity_
-    third_party: `project` names ANY tree; `because` is REQUIRED (empty refuses); does not
-    check caller authority beyond being mounted. Otherwise identical, same receipt."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — an ingest is a mind's act, and the graph must know "
-                         "whose", "why": _anchorless(ctx)}
-    from src.orchestrator.tree_ingest import ingest_project_third_party as _ingest_third_party
-    return await _ingest_third_party(Actions(await _pool_get()), project=project,
-                                     because=because, dry_run=dry_run, actor=ident.agent_id)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares ingest_project's own _ingest_project_impl body — nothing
+    duplicated. Kept only so a live or sleeping caller whose standing orders still name
+    this verb is not broken at its next turn; remove once tool_traffic() shows it
+    silent."""
+    return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
 @mcp.tool()
@@ -5247,9 +5445,36 @@ async def rename_project(project: str, new_name: str, because: str,
     return out
 
 
+async def _fork_project_impl(
+    project: str, fork_into: str, because: str, direction: str, ctx: Context | None,
+) -> dict[str, Any]:
+    """The one body behind `fork_project` (both directions, by `direction`) and its
+    deprecated alias `unfork_project` — a plain helper, never itself an `@mcp.tool()`
+    (task #199 lane 2, thread 6778/6788, the six-pair consolidation). `direction="fork"`
+    (default) declares the pair; `direction="unfork"` reverses it — same verb, its own
+    inverse, Thoth's own named shape for this pair."""
+    if direction not in ("fork", "unfork"):
+        return {"error": f"direction must be 'fork' or 'unfork', got {direction!r}"}
+    verb = "a fork" if direction == "fork" else "an unfork"
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": f"mount first — {verb} is a deliberate act on the record",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if direction == "fork":
+        from src.orchestrator.project_identity import fork_project as _fork_project
+        return await _fork_project(Actions(pool), project=project, fork_into=fork_into,
+                                   because=because, actor=ident.agent_id)
+    from src.orchestrator.project_identity import unfork_project as _unfork_project
+    return await _unfork_project(Actions(pool), project=project, fork_into=fork_into,
+                                 because=because, actor=ident.agent_id)
+
+
 @mcp.tool()
-async def fork_project(project: str, fork_into: str, because: str,
-                       ctx: Context | None = None) -> dict[str, Any]:
+async def fork_project(
+    project: str, fork_into: str, because: str, direction: str = "fork",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """Declare TWO already-active SoftwareProjects a FORK pair — John's own redmonth/
     ballgem shape (decision 58597670): `fork_into` is the successor, naming `project` as
     its ancestor via one `forked_from` edge (heir -> ancestor, same direction convention
@@ -5260,35 +5485,30 @@ async def fork_project(project: str, fork_into: str, because: str,
     project_identity_evidence itself; read that report BEFORE calling this, then name
     both sides explicitly.
 
-    Refuses LOUDLY on: a blank `because`; `project`==`fork_into`; either ref ambiguous or
-    unresolved; either not an ACTIVE SoftwareProject; a live `forked_from` edge already
-    connecting this exact pair (idempotent refusal, never a duplicate mint)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a fork is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import fork_project as _fork_project
-    return await _fork_project(Actions(await _pool_get()), project=project,
-                               fork_into=fork_into, because=because, actor=ident.agent_id)
+    `direction="unfork"` (task #199 lane 2, thread 6778/6788 — one verb, was two)
+    reverses instead: invalidates the live `forked_from` edge. REVERSIBILITY PROVEN, not
+    claimed — since a fork never moves any estate, there is nothing to move back either,
+    the whole reversal is this one healed edge, by design. The old name,
+    `unfork_project`, still works — it now forwards here — but no longer appears in a
+    model's own tool list.
+
+    Refuses LOUDLY on: a blank `because`; `project`==`fork_into` (fork direction only);
+    either ref ambiguous or unresolved; either not an ACTIVE SoftwareProject (fork); a
+    live `forked_from` edge already connecting this exact pair (fork, idempotent refusal)
+    or no such live edge (unfork)."""
+    return await _fork_project_impl(project, fork_into, because, direction, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={"deprecated": True, "use_instead": "fork_project(direction='unfork')",
+                "since": "task #199 lane 2, thread 6778/6788"})
 async def unfork_project(project: str, fork_into: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Invalidate a live `forked_from` edge — the compensating-event complement to
-    fork_project. REVERSIBILITY PROVEN, not claimed: since fork_project never moves any
-    estate, there is nothing to move back either — the whole reversal is this one healed
-    edge, by design.
-
-    Refuses LOUDLY on: a blank `because`; either ref unresolved to a SoftwareProject; or
-    no active `forked_from` edge from `fork_into` to `project`."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — an unfork is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import unfork_project as _unfork_project
-    return await _unfork_project(Actions(await _pool_get()), project=project,
-                                 fork_into=fork_into, because=because, actor=ident.agent_id)
+    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
+    callable. Forwards to `fork_project(direction="unfork")`, the same verb
+    parameterized. Kept only so a live or sleeping caller whose standing orders still
+    name this verb is not broken at its next turn; remove once tool_traffic() shows it
+    silent."""
+    return await _fork_project_impl(project, fork_into, because, "unfork", ctx)
 
 
 @mcp.tool()
@@ -5352,7 +5572,11 @@ async def peer_seats(seat_a: str, seat_b: str, because: str,
                              actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def unpeer(seat_a: str, seat_b: str, because: str,
                  ctx: Context | None = None) -> dict[str, Any]:
     """Invalidate an active peer_of bond between two Seats — the compensating-event
@@ -5370,7 +5594,11 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
                          actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_action(holder: str, held: str, act: str, because: str, hours: float = 24,
                       ctx: Context | None = None) -> dict[str, Any]:
     """Mint a mutual HOLD (task #76 item 4a, spec e6636c7e) — a peer's power to say HOLD on
@@ -5395,7 +5623,11 @@ async def hold_action(holder: str, held: str, act: str, because: str, hours: flo
                               because=because, hours=hours, actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def peer_reachable(seat_id: str) -> list[str]:
     """Every seat a search for `seat_id`'s own queue should also cover (task #76 item 5b,
     spec e6636c7e's "the pair faces the tree through both peers") — DISCOVERABILITY ONLY,
@@ -5409,7 +5641,11 @@ async def peer_reachable(seat_id: str) -> list[str]:
     return await _peer_reachable(pool, seat_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
     """The pair's shared reciprocity ledger (task #76 item 3, spec e6636c7e) — every OPEN
     thread owned by EITHER seat, oldest first, as one resumable list. Zero new storage:
@@ -5517,7 +5753,11 @@ async def invalidate_works_in(stale_project: str, because: str,
     return result
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
@@ -5560,7 +5800,11 @@ async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                                override_live=override_live)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='agent_project_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_agent_project_links(
     actor: str, dry_run: bool = True, only_bases: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -5572,7 +5816,12 @@ async def backfill_agent_project_links(
     to which living head — no write. `dry_run=False` writes via the same
     `move_agent_project_links` the write-side fix already uses. `only_bases` scopes a
     write to specific lineages; omitted, every off-head agent in scope moves. Executing
-    the write is the operator's own call, same class as #150's repairs."""
+    the write is the operator's own call, same class as #150's repairs.
+
+    KEPT AT ITS ORIGINAL SIGNATURE (explicit `actor`, no ctx/because) rather than routed
+    through the new dispatcher's shared body — the new `backfill(target='agent_project_
+    links', ...)` derives actor from the caller's mounted identity instead, a deliberate
+    behavior change not safe to impose on this deprecated name's existing callers."""
     from src.orchestrator.agents import backfill_agent_project_links as _backfill
     return await _backfill(Actions(await _pool_get()), actor=actor, dry_run=dry_run,
                            only_bases=set(only_bases) if only_bases else None)
@@ -5592,18 +5841,54 @@ async def list_assertions(ref: str, name: str) -> dict[str, Any]:
     return await _list_assertions(Actions(await _pool_get()), ref=ref, name=name)
 
 
+async def _abstained_derivations_impl(
+    scope: str, link_type: str | None, limit: int,
+) -> dict[str, Any]:
+    """Shared body (task #199 lane 2, families wave, thread 6854): all three READ-ONLY
+    views below query the SAME `derivation_abstained_<link_type>` population in
+    capture.py, differing only in which structural SQL subset they filter to — a
+    genuine shared call, not a cosmetic dispatch. `scope` picks the population:
+    "all" (every live abstention, capture.abstained_derivations), "retryable" (the
+    zero-candidate subset, safe to re-attempt as time passes), "retryable_ambiguous"
+    (the 2+-candidate subset reduced by elimination alone to exactly one survivor)."""
+    pool = await _pool_get()
+    if scope == "retryable":
+        return await capture.retryable_abstentions(pool, link_type, limit=limit)
+    if scope == "retryable_ambiguous":
+        return await capture.retryable_ambiguous_abstentions(pool, link_type, limit=limit)
+    return await capture.abstained_derivations(pool, link_type, limit=limit)
+
+
 @mcp.tool()
-async def abstained_derivations(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
+async def abstained_derivations(
+    link_type: str | None = None, limit: int = 100, scope: str = "all",
+) -> dict[str, Any]:
     """READ-ONLY. Every `derive_or_abstain` refusal, `from_id` and every candidate already
     resolved to (type, summary) — a caller gets the shortlist as it stands now, never bare
     uuids to re-look-up itself. `link_type=None` pools every lane; pass one (e.g.
     `in_repo`) to scope to that namespaced `derivation_abstained_<link_type>` property
     only — never a mixed soup unless asked. `count` is the true total (never capped);
-    `sample` is bounded by `limit`, newest-abstained first."""
-    return await capture.abstained_derivations(await _pool_get(), link_type, limit=limit)
+    `sample` is bounded by `limit`, newest-abstained first.
+
+    `scope` narrows WHICH abstentions, structurally (SQL, never a post-fetch filter a
+    caller could widen): "all" (default, every live abstention) | "retryable" (the
+    zero-candidate subset — nothing found YET, which time can change; oldest first) |
+    "retryable_ambiguous" (the 2+-candidate subset whose original set has, by
+    elimination alone — a merge, a retire, an invalidation, never a fresh re-derivation
+    — shrunk to exactly one `status='active'` survivor; adds `surviving_candidate`,
+    `original_candidate_count` per row and a top-level `eliminated_to_zero` count for
+    the different, zero-survivor population, visibility only, never folded into
+    `count`/`sample`). Neither retryable scope re-attempts anything — see
+    retry_ambiguous_abstentions for the one write half both retryable scopes name a
+    target for."""
+    return await _abstained_derivations_impl(scope, link_type, limit)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "abstained_derivations(scope='retryable')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def retryable_abstentions(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
     """READ-ONLY. The zero-candidate SUBSET of abstained_derivations, structurally —
     filtered in SQL, not by a condition a caller could widen. A zero-candidate abstention
@@ -5611,10 +5896,14 @@ async def retryable_abstentions(link_type: str | None = None, limit: int = 100) 
     genuine ambiguity time cannot resolve, and never appears here. Oldest-abstained first
     — names which objects are safe to re-attempt; does not re-attempt them. Re-run your
     own lane's lookup on each and call derive_or_abstain(..., retried=True) yourself."""
-    return await capture.retryable_abstentions(await _pool_get(), link_type, limit=limit)
+    return await _abstained_derivations_impl("retryable", link_type, limit)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "abstained_derivations(scope='retryable_ambiguous')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def retryable_ambiguous_abstentions(
     link_type: str | None = None, limit: int = 100,
 ) -> dict[str, Any]:
@@ -5627,8 +5916,7 @@ async def retryable_ambiguous_abstentions(
     population whose every candidate is now gone — real, but nothing to retry-mint from,
     never folded into `count`/`sample`. Oldest-abstained first; names what's safe to
     retry, never retries it. See retry_ambiguous_abstentions for the write half."""
-    return await capture.retryable_ambiguous_abstentions(
-        await _pool_get(), link_type, limit=limit)
+    return await _abstained_derivations_impl("retryable_ambiguous", link_type, limit)
 
 
 @mcp.tool()
@@ -5797,7 +6085,11 @@ async def reissue_office(
                                  because=because, actor=ident.agent_id, adopt=adopt)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
     """File ONE ephemeral subagent under its spawner (ruling 0f76458c — a hand is never a
     first-class fleet member). Attributes it to its spawner (an existing spawned_by edge, or
@@ -5836,7 +6128,11 @@ async def file_subagents(project: str | None = None, dry_run: bool = True,
                                  dry_run=dry_run, actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def unwitnessed_spawns(agent_id: str | None = None,
                              ctx: Context | None = None) -> dict[str, Any]:
     """THE SELF-AUDIT (obligation cabfb4b2, Ptah VII's rotten-apple report): every LIVE
@@ -5958,7 +6254,11 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
                             actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
@@ -8275,7 +8575,11 @@ async def reclassify_thread(
     return out
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_tension(
     pole_a: str, pole_b: str, lean: str | None = None, why: str | None = None,
     repo: str | None = None, subagent_id: str | None = None,
@@ -8323,7 +8627,11 @@ async def register_blind_spot(
             "note": "held per (project, surface); orient() speaks it to every session here"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def hold_memory(
     body: str, summary: str | None = None, repo: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
@@ -8350,7 +8658,11 @@ async def hold_memory(
     return {"kept": str(r), "as": "reflection — remembered, never actionable"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+})
 async def task_sync_reconcile(
     tasks: list[dict[str, Any]], write: bool = False, thread_kind_field: str = "task",
 ) -> dict[str, Any]:

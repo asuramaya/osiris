@@ -137,16 +137,6 @@ CLI_ONLY_PARAMS = {
         "EXPLICIT target instead, resolved the same way rebind-seat's own console door "
         "resolves its target (resolve_handle, falling back to a raw agent id that "
         "genuinely exists) before calling the identical offices.correct_own_pin_value.",
-    ("heal-seat-anchor", "seat"): "SAME SHAPE as correct-pin-value's own entry above: "
-        "the MCP tool heal_seat_anchor is SELF-scoped (resolves the caller's own held "
-        "seat) — a terminal has no mounted identity to be self about, so the console "
-        "door always names an EXPLICIT target and calls heal_seat_anchor_THIRD_PARTY "
-        "instead (resolved via seats.seats_by_handle, refusing on zero or ambiguous "
-        "matches), ruling 23771416.",
-    ("heal-seat-anchor", "because"): "the console door always calls the THIRD-PARTY "
-        "sibling (see the 'seat' entry above), whose `because` is REQUIRED — the "
-        "self-scoped MCP tool this CLI name matches by hyphen/underscore has no "
-        "`because` param at all, same asymmetry as reconcile_seat_identity's own pair.",
     ("heal-seat-anchor", "apply"): "the SAME dry-run/apply concept as MCP's `dry_run` "
         "below, INVERTED and renamed to match every other repair script's own --apply "
         "convention in this house (scripts/backfill_*.py) rather than the MCP tools' "
@@ -189,6 +179,16 @@ RENAMED_PARAMS = {
         "exactly (both entries above), and deliberately so: resume is launch's own sibling "
         "verb now, split from it by the same ruling (60c78788/41a41437); the pair must "
         "read identically at the terminal for the same reason stop/launch already do",
+    ("heal-seat-anchor", "seat", "heal_seat_anchor", "seat_id"):
+        "the same seat reference, two names — same shape as charter-for/seat above. "
+        "heal_seat_anchor was consolidated (task #199 lane 2, thread 6778): it now takes "
+        "an optional `seat_id` covering what heal_seat_anchor_third_party's own `seat_id` "
+        "used to (that name is now a hidden, deprecated alias forwarding here, dropped "
+        "from list_tools() but still callable — see mcp_server.py's BoundedMCP.list_tools "
+        "override). The CLI door (`osiris heal-seat-anchor <seat> --because`) still "
+        "calls identity_heal.heal_seat_anchor_third_party directly, unchanged and "
+        "unaffected by the MCP-layer consolidation; its own `seat` param maps to this "
+        "same `seat_id`, not yet reconciled by name.",
 }
 
 # LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
@@ -213,15 +213,19 @@ BINDING_VERBS = frozenset({
     "vacate_seat", "retire_seat", "rebind_seat", "bind_seat_tree", "sweep_seat_disk",
     "rename_seat", "set_seat_attended", "reissue_office", "establish_office", "charter",
     "charter_for", "invalidate_works_in", "reconcile_seat_identity",
-    "reconcile_seat_identity_third_party", "correct_pin_value", "create_project",
-    "rename_project", "retire_project", "fork_project", "unfork_project",
-    "heal_seat_anchor", "heal_seat_anchor_third_party",
+    "correct_pin_value", "create_project",
+    "rename_project", "retire_project", "fork_project",
+    "heal_seat_anchor",
     # ADDED per Thoth ruling on decision 6283c51a's own audit (msg 6823): "a verb that
     # writes holds, house, handle, managed_by or a merge estate moves a binding by
     # definition; 'adjacent to' is not a category." merge/unmerge were the STALE-LIST
     # finding named in that same ruling — both already have CLI doors and simply were
     # never added to the population that credits them for it.
-    "correct_house", "correct_agent_house", "reconcile_merge", "retire", "retire_agent",
+    # correct_agent_house + reconcile_merge were HIDDEN by retirement wave 1 (f38e135,
+    # zero traffic) — still callable as deprecated aliases, dropped from list_tools().
+    # This gate reads list_tools(), so they read as "stale entry" until Seshat's
+    # d232cb3 (raw-ToolManager existence check) lands; re-add them then, not before.
+    "correct_house", "retire", "retire_agent",
     "fleet_reconcile", "heal_seat_transcript", "merge", "unmerge",
     # `resume` (task #199 lane 3C, ruling 41a41437) — a brand-new tool tonight, already
     # declared in NEW_TOOL_DECLARATIONS below, not grandfathered in the snapshot.
@@ -259,18 +263,11 @@ NO_CLI_EQUIVALENT = {
     "establish_office": "not yet built — not on the jesus/chad path; not ruled out.",
     "invalidate_works_in": "not yet built — not on the jesus/chad path; not ruled out.",
     "reconcile_seat_identity": "not yet built — not on the jesus/chad path; not ruled out.",
-    "reconcile_seat_identity_third_party": "not yet built — same as reconcile_seat_identity.",
-    "heal_seat_anchor_third_party": "reachable — the CLI's own `heal-seat-anchor` (matched "
-        "by name to the SELF-scoped `heal_seat_anchor` above, per that pair's own "
-        "CLI_ONLY_PARAMS entry) always calls this third-party function under the hood, "
-        "same as correct-pin-value's own console door routing through offices."
-        "correct_own_pin_value rather than exposing a second, separately-named command.",
     "create_project": "not yet built — project lifecycle verbs weren't in lane 2's scope "
         "(seat reconciliation only); a real gap, not ruled out.",
     "rename_project": "not yet built — same scoping note as create_project.",
     "retire_project": "not yet built — same scoping note as create_project.",
     "fork_project": "not yet built — same scoping note as create_project.",
-    "unfork_project": "not yet built — same scoping note as create_project.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
     # binding by definition"). merge/unmerge (also added to BINDING_VERBS above) already
@@ -280,10 +277,6 @@ NO_CLI_EQUIVALENT = {
         "the target seat from the CALLING agent's own mounted identity — a raw terminal "
         "holds no such identity to be self about. correct_agent_house (the third-party, "
         "explicit-target form) is the real gap; see its own entry below.",
-    "correct_agent_house": "not yet built — a real gap, found by the #199 lane 3B audit "
-        "rather than any prior scoping; not ruled out.",
-    "reconcile_merge": "not yet built — a real gap, found by the #199 lane 3B audit; "
-        "not ruled out.",
     "retire": "self-scoped by design (same shape as charter/correct_house above): it "
         "marks THIS mounted session retired off the caller's own identity — a raw "
         "terminal has no mounted session of that kind to retire. retire_agent (the "
@@ -763,6 +756,10 @@ class NewToolDeclaration(TypedDict, total=False):
 # what each field means.
 NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     "resume": {"binding_verb": True},
+    # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
+    # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
+    # names, which stay callable as hidden deprecated aliases.
+    "backfill": {"binding_verb": False, "parameterizes": "backfill_agent_project_links"},
 }
 
 
