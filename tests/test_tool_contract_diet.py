@@ -799,7 +799,16 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 118
+# 110 -> 108 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): retire_seat/
+# retire_project/retire_agent folded into retire_object(kind=...) (-3, +1 new tool).
+# 111 -> 110 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): attach_seat/
+# detach_seat folded into seat_edge(action=...).
+# 114 -> 111 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): acquire_lease/
+# release_lease/check_lease/reap_stale_leases folded into lease(action=...).
+# 117 -> 114 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): resolve_thread/
+# annotate_thread/correct_thread_summary/reclassify_thread folded into thread_action
+# (action=...) — one door, four hidden deprecated aliases forwarding to it.
+TOOL_CONTRACT_EXPECTED_COUNT = 109
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1030,7 +1039,38 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # genuinely new tool, resync_seat_house -- the MCP door onto seats.resync_seat_house_
 # third_party (existed, unreached until the six-seat house repair needed it). A real
 # capability, not bloat.
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# STALE POST-MERGE VALUE CAUGHT AND FIXED (2026-09-04, Imhotep): this constant had
+# regressed to 202,871 -- a merge driver declined to sum two branches' own deltas and
+# left the ceiling at a shared ancestor's stale value, the exact recurring class Khnum
+# and this seat have both hit before (see the changelog entries above this one for the
+# same pattern). Re-measured against the real merged tree rather than trusted: 116,137,
+# matching this comment's own claim exactly.
+
+# 116,137 -> 113,757 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987, operator's
+# relaxed dispatch-shape rule): resolve_thread/annotate_thread/correct_thread_summary/
+# reclassify_thread folded into thread_action(action=...) -- one door, four actions,
+# all four kept as hidden deprecated aliases forwarding to the shared _thread_action_
+# impl body (no logic duplicated, no behavior changed -- resolve_thread's own batch
+# mode and dry_run=True default carried over unchanged). Tool count 117 -> 114 (-3).
+
+# 113,757 -> 112,621 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): acquire_
+# lease/release_lease/check_lease/reap_stale_leases folded into lease(action=...) —
+# same shape as the thread_action fold above, four hidden deprecated aliases.
+
+# 112,621 -> 112,241 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): attach_
+# seat/detach_seat folded into seat_edge(action=...), both kept as hidden deprecated
+# aliases. No CLI door for either name before or after (NO_CLI_EQUIVALENT retargeted).
+
+# 112,241 -> 111,966 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): retire_
+# seat/retire_project/retire_agent folded into retire_object(kind=...), all three kept
+# as hidden deprecated aliases. Self-scoped retire() and retire_assertion deliberately
+# excluded (decision 1ddf8e1c) — different auth shape / unrelated param shape.
+# 111,966 -> 113,162 (2026-09-04, Thoth, merge of sekhmet-orient-diet + imhotep-wave3-
+# family-folds): the same stale-ancestor merge artifact Imhotep named above landed AGAIN
+# on this merge (both branches' deltas, ancestor value kept); re-measured against the
+# merged tree: 113,162 = wave 3's 111,966 + resync_seat_house (Sekhmet, ruling 68fba2e4's
+# repair door) + list_unfiled_threads' carry. Pinned to the measurement, not summed.
+TOOL_CONTRACT_CEILING_CHARS = 113162
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

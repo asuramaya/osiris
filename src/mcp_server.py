@@ -5063,20 +5063,78 @@ async def revert_own_pin_write(ctx: Context | None = None) -> dict[str, Any]:
     return await _revert_own_pin_write(pool, ident.agent_id)
 
 
-@mcp.tool()
-async def retire_seat(seat_id: str, reason: str = "",
-                      ctx: Context | None = None) -> dict[str, Any]:
-    """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge
-    target. DISTINCT from retire() (that one retires a live agent's own session/turn;
-    this retires the ROLE ITSELF). Refuses on an unknown or already-inactive seat, or an
-    ACTIVE holder — transfer or let it vacate first."""
+async def _retire_object_impl(
+    kind: str, target: str, *, because: str, override_live: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `retire_object` and its three hidden single-purpose aliases
+    (retire_seat/retire_project/retire_agent) — one code path, four names. Each kind
+    below is copied verbatim from what was that alias's own top-level function body
+    before the fold. Deliberately does NOT cover self-scoped `retire()` (no target
+    param, different auth shape entirely) or `retire_assertion` (a genuinely unrelated
+    5-field shape, not a target+reason act) — see the wave-3 proposal (decision
+    1ddf8e1c) for why those two stay out."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — retiring a seat is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.seats import retire_seat as _retire_seat
-    return await _retire_seat(Actions(await _pool_get()), seat_id, reason=reason,
-                              actor=ident.agent_id)
+        return {"error": f"mount first — retiring {'a' if kind != 'agent' else 'an'} "
+                         f"{kind} is a deliberate act on the record", "why": _anchorless(ctx)}
+    if kind == "seat":
+        from src.orchestrator.seats import retire_seat as _retire_seat
+        return await _retire_seat(Actions(await _pool_get()), target, reason=because,
+                                  actor=ident.agent_id)
+    if kind == "project":
+        from src.orchestrator.projects import retire_project as _retire_project
+        return await _retire_project(Actions(await _pool_get()), project=target,
+                                     actor=ident.agent_id, because=because)
+    if kind == "agent":
+        from src.orchestrator.agents import retire_agent as _retire_agent
+        return await _retire_agent(Actions(await _pool_get()), agent_id=target,
+                                   actor=ident.agent_id, because=because,
+                                   override_live=override_live)
+    return {"error": f"unknown kind {kind!r} — one of seat/project/agent"}
+
+
+@mcp.tool()
+async def retire_object(
+    kind: str, target: str, because: str = "", override_live: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Third-party retirement of a named Seat/SoftwareProject/Agent — one door, three
+    `kind`s, never a fourth. DISTINCT from self-scoped `retire()` (no target param,
+    retires the CALLING agent's own live session/turn) and from `retire_assertion` (a
+    cross-source supersede, an unrelated shape) — neither folds into this door.
+
+    `kind='seat'` — mark a Seat permanently CLOSED: a genuinely dead role, no successor,
+    no merge target. Refuses on an unknown or already-inactive seat, or an ACTIVE
+    holder — transfer or let it vacate first.
+
+    `kind='project'` — retire a dead SoftwareProject stub, status flip to 'retired' via
+    a compensating event, never a DELETE. `target` resolves to a SoftwareProject ONLY
+    (UUID, 8-char short id, canonical `repo:<name>`, or its `name` property) — never a
+    Seat or Agent of the same name. Refuses LOUDLY on: blank `because`; an unresolved or
+    already-non-active project; any commit recorded against it; any open Thread pointing
+    in; or a mount seen against it within the last 15 minutes.
+
+    `kind='agent'` — third-party Agent retirement. Stamps retired/retired_by/retired_
+    because, flips objects.status. Not self-scoped or manager-gated — any caller may
+    name any target; `actor` is attribution, not authority. ALWAYS releases the target's
+    held seat and mount rows on success. Refuses LOUDLY on: blank `because`; an unknown/
+    non-active agent; a target that reads LIVE (seen within 15 min) unless
+    `override_live=True`. `override_live` is ignored for the other two kinds."""
+    return await _retire_object_impl(
+        kind, target, because=because, override_live=override_live, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='seat')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
+async def retire_seat(seat_id: str, reason: str = "",
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='seat')."""
+    return await _retire_object_impl(
+        "seat", seat_id, because=reason, override_live=False, ctx=ctx)
 
 
 @mcp.tool()
@@ -5135,26 +5193,17 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
                                   actor=ident.agent_id, because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='project')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def retire_project(project: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Retire a dead SoftwareProject stub (msg 1675, the stub cull) — status flip to
-    'retired' via a compensating event, never a DELETE. `project` resolves to a
-    SoftwareProject ONLY (UUID, 8-char short id, canonical `repo:<name>`, or its `name`
-    property) — never a Seat or Agent of the same name, even for a name like 'seshat' or
-    'ra' that also happens to be a seat's handle.
-
-    Refuses LOUDLY on: blank `because`; an unresolved or already-non-active project; any
-    commit recorded against it; any open Thread pointing in (`in_repo`, status='active');
-    or a mount seen against it within the last 15 minutes (live signal — this verb never
-    evicts a project actually in use)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — retiring a project is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
-    from src.orchestrator.projects import retire_project as _retire_project
-    return await _retire_project(Actions(await _pool_get()), project=project,
-                                 actor=ident.agent_id, because=because)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='project')."""
+    return await _retire_object_impl(
+        "project", project, because=because, override_live=False, ctx=ctx)
 
 
 @mcp.tool()
@@ -5448,48 +5497,75 @@ async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
     return await _peer_ledger(pool, seat_a, seat_b)
 
 
-@mcp.tool()
-async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
-    (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
-    BY HAVING NO MANAGER (derive_role: 'worker' if a manager exists else 'coordinator'), so
-    this REMOVES the edge, never repoints it — a fresh manager, if one is ever assigned, is
-    a separate act.
-
-    Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active managed_by
-    edge out of it (nothing to detach)."""
+async def _seat_edge_impl(
+    action: str, worker: str, *, manager: str | None, because: str, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `seat_edge` and its two hidden single-purpose aliases (attach_
+    seat/detach_seat) — one code path, three names. Each action below is copied
+    verbatim from what was that alias's own top-level function body before the fold."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — detaching a seat from its manager is a deliberate "
+        return {"error": f"mount first — {action}ing a seat's manager is a deliberate "
                          "act on the record", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import detach_seat as _detach
-    return await _detach(Actions(await _pool_get()), seat, because=because,
-                         actor=ident.agent_id)
+    if action == "detach":
+        from src.orchestrator.seats import detach_seat as _detach
+        return await _detach(Actions(await _pool_get()), worker, because=because,
+                             actor=ident.agent_id)
+    if action == "attach":
+        assert manager is not None
+        from src.orchestrator.seats import attach_seat as _attach
+        return await _attach(Actions(await _pool_get()), worker, manager, evidence=because,
+                             actor=ident.agent_id)
+    return {"error": f"unknown action {action!r} — one of attach/detach"}
 
 
 @mcp.tool()
+async def seat_edge(
+    action: str, worker: str, manager: str | None = None, because: str = "",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Create or remove a managed_by edge — one door, two `action`s, never a third.
+
+    `action='attach'` — create it. `manager` required. managed_by is created in exactly
+    two other places in the whole codebase (mint_seat's birth-time edge, fold_seat's
+    re-point) — every seat that predates mint_seat, was adopted, or lost its edge to a
+    detach nobody re-pointed has had no path back except raw SQL until this. Refuses
+    LOUDLY on: blank `because` (the evidence); either seat unknown/inactive; `worker ==
+    manager`; or an already-active managed_by edge out of `worker` — this is a CREATE,
+    never a silent repoint (`action='detach'` first, then attach, if that's what's
+    meant).
+
+    `action='detach'` — remove it. A COORDINATOR IS DEFINED BY HAVING NO MANAGER
+    (derive_role: 'worker' if a manager exists else 'coordinator'), so this REMOVES the
+    edge, never repoints it — a fresh manager, if one is ever assigned, is a separate
+    act. Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active
+    managed_by edge out of it (nothing to detach). `manager` is ignored for this
+    action."""
+    return await _seat_edge_impl(action, worker, manager=manager, because=because, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat_edge(action='detach')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
+async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat_edge(action='detach')."""
+    return await _seat_edge_impl("detach", seat, manager=None, because=because, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat_edge(action='attach')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def attach_seat(
     worker: str, manager: str, evidence: str, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Create a managed_by edge — the mirror of detach_seat, and the other half of the
-    toolkit hole named at thread fad0dc14. managed_by is created in exactly two places in
-    the whole codebase (mint_seat's birth-time edge, fold_seat's re-point) — every seat
-    that predates mint_seat, was adopted, or lost its edge to a detach nobody re-pointed
-    has had no path back except raw SQL until this. Confirmed live: 30 active seats, 23
-    with no managed_by edge at all — an absent edge raises no error, it just renders as an
-    empty chart, which is why nobody noticed you could not attach even after #99 built the
-    way to detach.
-
-    Refuses LOUDLY on: blank `evidence`; either seat unknown/inactive; `worker == manager`;
-    or an already-active managed_by edge out of `worker` — this is a CREATE, never a silent
-    repoint (detach_seat first, then attach, if that's what's meant)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — attaching a seat to a manager is a deliberate "
-                         "act on the record", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import attach_seat as _attach
-    return await _attach(Actions(await _pool_get()), worker, manager, evidence=evidence,
-                         actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat_edge(action='attach')."""
+    return await _seat_edge_impl("attach", worker, manager=manager, because=evidence, ctx=ctx)
 
 
 @mcp.tool()
@@ -5620,25 +5696,17 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
                                       actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='agent')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Third-party retirement — complements self-scoped retire() (no target param).
-    Stamps retired/retired_by/retired_because, flips objects.status. Not self-scoped or
-    manager-gated — any caller may name any target; `actor` is attribution, not
-    authority.
-
-    ALWAYS releases the target's held seat and mount rows on success. Refuses LOUDLY on:
-    blank `because`; an unknown/non-active agent; a target that reads LIVE (seen within
-    15 min) unless `override_live=True`."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — retiring an agent is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
-    from src.orchestrator.agents import retire_agent as _retire_agent
-    return await _retire_agent(Actions(await _pool_get()), agent_id=agent_id,
-                               actor=ident.agent_id, because=because,
-                               override_live=override_live)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='agent')."""
+    return await _retire_object_impl(
+        "agent", agent_id, because=because, override_live=override_live, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -7203,7 +7271,150 @@ async def open_thread(
     return out
 
 
+async def _thread_action_impl(
+    ref: str | list[str], action: str, *, because: str | None, artifact: str | None,
+    dry_run: bool, note: str | None, corrected_summary: str | None, kind: str | None,
+    owner: str | None, arc: str | None, ctx: Context | None,
+    subagent_id: str | None, subagent_type: str | None,
+) -> dict[str, Any]:
+    """Shared body behind `thread_action` and its four hidden single-purpose aliases
+    (resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread) — one
+    code path, five names. Each action below is copied verbatim from what was that
+    alias's own top-level function body before the fold; nothing about resolve_thread's
+    own batch mode or its dry_run=True default changed in the move (the exact shape
+    Seshat's own incident needed preserved, msg 6987)."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    if action == "resolve":
+        if isinstance(ref, list):
+            return await capture.resolve_threads_bulk(
+                Actions(pool), ref, because=because or "", artifact=artifact,
+                dry_run=dry_run, source=actor)
+        probe_tid = await capture._find_thread(pool, ref)
+        was_already_resolved = (
+            probe_tid is not None
+            and await capture._thread_resolved_in(pool, probe_tid) is not None)
+        tid = await capture.resolve_thread(
+            Actions(pool), ref, because=because, artifact=artifact, source=actor)
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        out: dict[str, Any] = {"id": str(tid), "status": "resolved"}
+        if was_already_resolved:
+            out["note"] = ("this thread was already resolved before this call — "
+                           "because/resolved_artifact now reflect THIS call's own text, "
+                           "not the original close; earlier reasoning is still readable "
+                           "in the graph's history, not overwritten there, just not what "
+                           "a current-value read shows anymore")
+        if artifact:
+            out["artifact"] = f"{artifact} — kept as resolved_artifact"
+            target = await pool.fetchrow(
+                "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+                "WHERE l.from_id=$1 AND l.type='resolved_by' LIMIT 1", tid)
+            out["resolved_by"] = (
+                f"{target['type']} {target['canonical']} — the strong closure witness"
+                if target is not None else
+                "none — the artifact did not resolve to a graph object (a file:line or "
+                "an unmatched pointer); resolved_artifact still carries it as text, and "
+                "a closed_by edge to the resolving agent was minted instead — the weak "
+                "witness, still traversable, just not naming a specific commit/decision"
+            )
+        return out
+    if action == "annotate":
+        assert isinstance(ref, str)
+        assert note is not None
+        try:
+            tid = await capture.annotate_thread(Actions(pool), ref, note, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+    if action == "correct_summary":
+        assert isinstance(ref, str)
+        assert corrected_summary is not None
+        try:
+            tid = await capture.correct_thread_summary(
+                Actions(pool), ref, corrected_summary, because=because, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        out = {"id": str(tid), "corrected_summary": corrected_summary.strip(),
+               "status": "corrected"}
+        if because:
+            out["because"] = because.strip()
+        return out
+    if action == "reclassify":
+        assert isinstance(ref, str)
+        assert kind is not None
+        t = await capture.reclassify_thread(
+            Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
+            source=actor)
+        if t is None:
+            return {"error": f"no thread matched {ref!r}"}
+        out = {"id": str(t), "kind": kind,
+               "status": "open (unchanged — reclassified, not resolved)"}
+        if arc:
+            if await capture.arc_in_scope_for_thread(pool, t):
+                out["arc"] = arc
+            else:
+                rows = await pool.fetch(
+                    "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+                    "WHERE l.from_id=$1 AND l.type='in_repo'", t)
+                label = ", ".join(r["canonical"] for r in rows) or "(no project)"
+                out["arc"] = capture._arc_out_of_scope_note(label)
+        return out
+    return {"error": f"unknown action {action!r} — one of resolve/annotate/"
+                     "correct_summary/reclassify"}
+
+
 @mcp.tool()
+async def thread_action(
+    ref: str | list[str], action: str, because: str | None = None,
+    artifact: str | None = None, dry_run: bool = True, note: str | None = None,
+    corrected_summary: str | None = None, kind: str | None = None,
+    owner: str | None = None, arc: str | None = None,
+    subagent_id: str | None = None,
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None
+) -> dict[str, Any]:
+    """Act on an existing THREAD — one door, four `action`s, never a fifth (open_thread
+    stays separate: it MINTS, this only acts on what already exists).
+
+    `action='resolve'` — close it. `because` is a short WHY, not a completion essay.
+    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
+    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
+    mints too. Re-resolving is allowed (latest closure witness wins, earlier reasoning
+    stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79): `because`
+    becomes mandatory, `dry_run` DEFAULTS TRUE and previews without writing — pass
+    `dry_run=False` explicitly to actually close the batch — and the whole batch refuses
+    if any ref does not resolve to exactly one thread.
+
+    `action='annotate'` — add `note` WITHOUT closing it or touching `summary`/`status`;
+    each call appends independently, never supersedes an earlier note.
+
+    `action='correct_summary'` — replace the headline in place via `corrected_summary`
+    (`summary` itself, the dedup key, is never touched); re-calling supersedes the prior
+    correction rather than piling up notes. `because` optional.
+
+    `action='reclassify'` — set `kind` ('obligation'/'question'/'task') WITHOUT changing
+    status (untouched is not resolved) — `because` records your judgment, `owner`
+    optionally claims it in the same act, `arc` backfills open_thread's own closed
+    taxonomy onto an already-open thread (osiris-scoped, dropped and named elsewhere).
+
+    `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a list only
+    for `action='resolve'`'s own batch mode)."""
+    return await _thread_action_impl(
+        ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
+        corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='resolve')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def resolve_thread(
     ref: str | list[str], because: str | None = None, artifact: str | None = None,
     dry_run: bool = True,
@@ -7211,83 +7422,31 @@ async def resolve_thread(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Close a THREAD — `ref` is its UUID or a summary substring; `because` is a short
-    WHY, not a completion essay. Event-sourced, never deleted: auditable and reversible.
-    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
-    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
-    mints too, confirmed in the receipt.
-
-    Re-resolving is allowed: `ref` matches by identity, not status, so a second call on
-    an already-resolved thread attaches a later, more specific closure witness — latest
-    wins, earlier reasoning stays in history. The receipt names it when this happens.
-
-    A LIST of refs closes a BATCH (#203, decision 880ffe79): `because` becomes mandatory,
-    `dry_run` DEFAULTS TRUE and previews without writing — pass `dry_run=False` explicitly
-    to actually close the batch — and the whole batch refuses if any ref does not resolve
-    to exactly one thread. See `capture.resolve_threads_bulk`."""
-    if isinstance(ref, list):
-        pool = await _pool_get()
-        return await capture.resolve_threads_bulk(
-            Actions(pool), ref, because=because or "", artifact=artifact, dry_run=dry_run,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    pool = await _pool_get()
-    probe_tid = await capture._find_thread(pool, ref)
-    was_already_resolved = (
-        probe_tid is not None
-        and await capture._thread_resolved_in(pool, probe_tid) is not None)
-    tid = await capture.resolve_thread(
-        Actions(pool), ref, because=because, artifact=artifact,
-        source=await _actor_for(ctx, subagent_id, subagent_type)
-    )
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    out = {"id": str(tid), "status": "resolved"}
-    if was_already_resolved:
-        out["note"] = ("this thread was already resolved before this call — "
-                       "because/resolved_artifact now reflect THIS call's own text, "
-                       "not the original close; earlier reasoning is still readable in "
-                       "the graph's history, not overwritten there, just not what a "
-                       "current-value read shows anymore")
-    if artifact:
-        out["artifact"] = f"{artifact} — kept as resolved_artifact"
-        target = await pool.fetchrow(
-            "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
-            "WHERE l.from_id=$1 AND l.type='resolved_by' LIMIT 1", tid)
-        out["resolved_by"] = (
-            f"{target['type']} {target['canonical']} — the strong closure witness"
-            if target is not None else
-            "none — the artifact did not resolve to a graph object (a file:line or an "
-            "unmatched pointer); resolved_artifact still carries it as text, and a "
-            "closed_by edge to the resolving agent was minted instead — the weak "
-            "witness, still traversable, just not naming a specific commit/decision"
-        )
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='resolve')."""
+    return await _thread_action_impl(
+        ref, "resolve", because=because, artifact=artifact, dry_run=dry_run, note=None,
+        corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='annotate')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def annotate_thread(
     ref: str, note: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Add to a THREAD's record WITHOUT closing it — the fifth door (#116: `resolve_thread`
-    closes; `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `ref` is
-    a Thread UUID, canonical, short-id prefix, or summary substring, matched regardless of
-    the thread's own status — an annotated thread stays exactly as open, resolved, or
-    deferred as it was before the call. Each call appends independently (never supersedes an
-    earlier note, never touches `summary`/`status`); nothing here revises anything. A caller
-    who means "the earlier understanding was wrong" wants a different verb (open a fresh
-    thread, or fold the correction into whatever answers this one)."""
-    pool = await _pool_get()
-    try:
-        tid = await capture.annotate_thread(
-            Actions(pool), ref, note,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    except ValueError as e:
-        return {"error": str(e)}
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='annotate')."""
+    out = await _thread_action_impl(
+        ref, "annotate", because=None, artifact=None, dry_run=True, note=note,
+        corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+    return out
 
 
 @mcp.tool()
@@ -7337,32 +7496,22 @@ async def heal_seat_transcript(
                        because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='correct_summary')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def correct_thread_summary(
     ref: str, corrected_summary: str, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Correct a THREAD's own headline in place — for when the earlier understanding was
-    wrong, distinct from annotate_thread. `summary` itself is never touched (it's
-    open_thread's own dedup key); `corrected_summary` is an ordinary property, so
-    re-calling this supersedes the prior correction rather than piling up notes.
-    `because` (optional) names why. recall(ref) shows both the correction and the
-    untouched original `summary` in one call. Returns {"error": ...} when `ref` matches
-    nothing."""
-    pool = await _pool_get()
-    try:
-        tid = await capture.correct_thread_summary(
-            Actions(pool), ref, corrected_summary, because=because,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    except ValueError as e:
-        return {"error": str(e)}
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    out = {"id": str(tid), "corrected_summary": corrected_summary.strip(), "status": "corrected"}
-    if because:
-        out["because"] = because.strip()
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='correct_summary')."""
+    return await _thread_action_impl(
+        ref, "correct_summary", because=because, artifact=None, dry_run=True, note=None,
+        corrected_summary=corrected_summary, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
 @mcp.tool()
@@ -7417,91 +7566,145 @@ async def amend_practice(
     return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
 
 
+async def _lease_impl(
+    action: str, resource_id: str, *, holder: str | None, older_than_secs: int | None,
+    ctx: Context | None, subagent_id: str | None, subagent_type: str | None,
+) -> dict[str, Any]:
+    """Shared body behind `lease` and its four hidden single-purpose aliases (acquire_
+    lease/release_lease/check_lease/reap_stale_leases) — one code path, five names. Each
+    action below is copied verbatim from what was that alias's own top-level function
+    body before the fold."""
+    pool = await _pool_get()
+    if action == "acquire":
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        try:
+            result = await resource_lease.acquire(
+                Actions(pool), resource_id, holder or actor, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        out: dict[str, Any] = {
+            "resource_id": result.resource_id, "acquired": result.acquired,
+            "holder": result.holder, "held_since": result.acquired_at.isoformat(),
+            "thread_id": str(result.thread_id),
+        }
+        if not result.acquired:
+            out["note"] = (f"already held by {result.holder} since "
+                           f"{result.acquired_at.isoformat()} — no new claim minted")
+        return out
+    if action == "release":
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        released = await resource_lease.release(pool, resource_id, actor)
+        return {"resource_id": resource_id, "released": released}
+    if action == "check":
+        held = await resource_lease.current_holder(pool, resource_id)
+        if held is None:
+            return {"resource_id": resource_id, "held": False}
+        return {
+            "resource_id": resource_id, "held": True, "holder": held["holder"],
+            "held_since": held["acquired_at"].isoformat(),
+            "thread_id": str(held["thread_id"]),
+        }
+    if action == "reap":
+        try:
+            n = await resource_lease.reap_stale(
+                pool, older_than_secs=older_than_secs or 3600)
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"reaped": n, "older_than_secs": older_than_secs or 3600}
+    return {"error": f"unknown action {action!r} — one of acquire/release/check/reap"}
+
+
 @mcp.tool()
+async def lease(
+    action: str, resource_id: str = "", holder: str | None = None,
+    older_than_secs: int | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Coordinate over any genuinely SHARED, non-isolable resource by an EXACT id
+    (`deploy`, `docker-daemon`, the live server) — not a working tree, which has no
+    contention to coordinate. `resource_id` is convention, not a closed vocabulary.
+    Four `action`s, never a fifth.
+
+    `action='acquire'` — claim it, matched by equality, backed by a real DB uniqueness
+    constraint, never a race (unlike open_thread(assignee=)'s fuzzy prose match).
+    `holder` defaults to your own mounted identity; pass one to claim on another's
+    behalf. A refusal names who holds it and since when. No renewed TTL — `release` is
+    the primary end path; `reap` is the crash/compaction backstop, not the norm.
+
+    `action='release'` — free a resource YOU hold. Only the ACTUAL holder's own release
+    frees it, never a different agent's, even by name — no `holder` param here, the
+    identity checked is always the caller's own resolved actor. `released: false` for
+    BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
+    never errors; `check` first if you need to tell the two apart.
+
+    `action='check'` — read-only: who holds it right now, or that it's free. Never
+    claims, never mints, never leases anything.
+
+    `action='reap'` — recover leases nobody released (a crash, a compaction, a dropped
+    session) — the active-claim constraint would otherwise wedge that `resource_id`
+    FOREVER. The backstop, not the norm (a 5-min cron already runs this). `older_than_
+    secs` defaults 3600 (agent-work-paced, not machine-paced), 60s floor enforced
+    (below it force-releases every held lease fleet-wide at once), refused loudly."""
+    return await _lease_impl(
+        action, resource_id, holder=holder, older_than_secs=older_than_secs, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='acquire')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def acquire_lease(
     resource_id: str, holder: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Claim any genuinely SHARED, non-isolable resource by an EXACT id (`deploy`,
-    `docker-daemon`, the live server) — not a working tree, which has no contention to
-    coordinate. Matched by equality, backed by a real DB uniqueness constraint, never a
-    race (unlike open_thread(assignee=)'s fuzzy prose match). `resource_id` is
-    convention, not a closed vocabulary.
-
-    `holder` defaults to your own mounted identity; pass one to claim on another's
-    behalf. A refusal names who holds it and since when. No renewed TTL — explicit
-    release_lease is the primary path; reap_stale_leases is the crash/compaction
-    backstop (a 5-min cron), not the norm."""
-    pool = await _pool_get()
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    try:
-        result = await resource_lease.acquire(
-            Actions(pool), resource_id, holder or actor, source=actor)
-    except ValueError as e:
-        return {"error": str(e)}
-    out: dict[str, Any] = {
-        "resource_id": result.resource_id, "acquired": result.acquired,
-        "holder": result.holder, "held_since": result.acquired_at.isoformat(),
-        "thread_id": str(result.thread_id),
-    }
-    if not result.acquired:
-        out["note"] = (f"already held by {result.holder} since "
-                       f"{result.acquired_at.isoformat()} — no new claim minted")
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='acquire')."""
+    return await _lease_impl(
+        "acquire", resource_id, holder=holder, older_than_secs=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='release')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def release_lease(
     resource_id: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Release a resource YOU hold — only the ACTUAL holder's own release call frees it,
-    never a different agent's, even by name, ENFORCED: unlike `acquire_lease`'s deliberate
-    `holder` latitude ("claim on another's behalf"), this verb takes no `holder` param —
-    the identity checked is always the caller's own resolved `actor`. `released: false`
-    for BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
-    never errors to raise; check `check_lease` first if you need to tell the two apart."""
-    pool = await _pool_get()
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    released = await resource_lease.release(pool, resource_id, actor)
-    return {"resource_id": resource_id, "released": released}
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='release')."""
+    return await _lease_impl(
+        "release", resource_id, holder=None, older_than_secs=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='check')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def check_lease(resource_id: str) -> dict[str, Any]:
-    """Read-only: who holds `resource_id` right now, or that it's free. Never claims,
-    never mints, never leases anything — a glance before deciding whether `acquire_lease`
-    is even worth calling."""
-    pool = await _pool_get()
-    held = await resource_lease.current_holder(pool, resource_id)
-    if held is None:
-        return {"resource_id": resource_id, "held": False}
-    return {
-        "resource_id": resource_id, "held": True, "holder": held["holder"],
-        "held_since": held["acquired_at"].isoformat(), "thread_id": str(held["thread_id"]),
-    }
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='check')."""
+    return await _lease_impl(
+        "check", resource_id, holder=None, older_than_secs=None, ctx=None,
+        subagent_id=None, subagent_type=None)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='reap')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
-    """Recover leases nobody released — a crash, a compaction, a dropped session. The
-    active-claim constraint would otherwise wedge that `resource_id` FOREVER, the same risk
-    `reap_stale_runs` names for `helper_runs`. This is the BACKSTOP, not the norm —
-    `release_lease` is how a lease is meant to end; call this directly only when you
-    suspect a stale claim right now and don't want to wait for the cron's next tick (every
-    5 minutes, arq_worker.reap_leases, mirroring `reap_runs`'s own wiring for helper_runs).
-    An hour's default is deliberately looser than helper_runs' 900s — a resource
-    lease here is agent-work-paced (a whole session touching a file), not machine-paced.
-    `older_than_secs` has a 60s floor (below it force-releases every held lease fleet-wide
-    at once), refused loudly."""
-    pool = await _pool_get()
-    try:
-        n = await resource_lease.reap_stale(pool, older_than_secs=older_than_secs)
-    except ValueError as e:
-        return {"error": str(e)}
-    return {"reaped": n, "older_than_secs": older_than_secs}
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='reap')."""
+    return await _lease_impl(
+        "reap", "", holder=None, older_than_secs=older_than_secs, ctx=None,
+        subagent_id=None, subagent_type=None)
 
 
 async def _retire_stale_handoffs(
@@ -8130,39 +8333,22 @@ async def settle(
     return out
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='reclassify')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def reclassify_thread(
     ref: str, kind: str, because: str | None = None, owner: str | None = None,
     arc: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Triage a thread WITHOUT changing its status (untouched is not resolved). You read
-    it and judged what it IS: `kind='obligation'` adopts it as real owed work,
-    `kind='question'` demotes it back to a question, `kind='task'` marks ordinary work.
-    `ref` is a UUID, short id, or summary substring; `because` records your judgment,
-    outranking the miner's guess. Use resolve_thread instead when the work is done or
-    moot. `owner` optionally claims the thread in the same act.
-
-    `arc` backfills `open_thread`'s own closed taxonomy onto an already-open thread
-    (open_thread's near-duplicate path can't set it on an existing one). Osiris-scoped:
-    dropped and named, never refused, outside osiris."""
-    pool = await _pool_get()
-    t = await capture.reclassify_thread(
-        Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
-        source=await _actor_for(ctx, subagent_id, subagent_type))
-    if t is None:
-        return {"error": f"no thread matched {ref!r}"}
-    out = {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
-    if arc:
-        if await capture.arc_in_scope_for_thread(pool, t):
-            out["arc"] = arc
-        else:
-            rows = await pool.fetch(
-                "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
-                "WHERE l.from_id=$1 AND l.type='in_repo'", t)
-            label = ", ".join(r["canonical"] for r in rows) or "(no project)"
-            out["arc"] = capture._arc_out_of_scope_note(label)
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='reclassify')."""
+    return await _thread_action_impl(
+        ref, "reclassify", because=because, artifact=None, dry_run=True, note=None,
+        corrected_summary=None, kind=kind, owner=owner, arc=arc, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
 @mcp.tool(meta={

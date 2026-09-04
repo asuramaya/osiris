@@ -68,6 +68,14 @@ NO_MCP_EQUIVALENT = {
     "reconcile-merge": "NOT actually MCP-less — same hidden-alias shape as "
         "correct-agent-house's own entry directly above; reconcile_merge carries the "
         "identical deprecated meta from the same retirement wave (#204).",
+    "annotate-thread": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; annotate_thread carries meta="
+        "{'deprecated': True} from the #202 wave-3 thread_action fold, still fully "
+        "callable, its own CLI door untouched by the fold.",
+    "retire-agent": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; retire_agent carries meta="
+        "{'deprecated': True} from the #202 wave-3 retire_object fold, still fully "
+        "callable, its own CLI door untouched by the fold.",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -219,12 +227,16 @@ RENAMED_PARAMS = {
         "calls identity_heal.heal_seat_anchor_third_party directly, unchanged and "
         "unaffected by the MCP-layer consolidation; its own `seat` param maps to this "
         "same `seat_id`, not yet reconciled by name.",
-    ("retire-agent", "seat", "retire_agent", "agent_id"):
+    ("retire-agent", "seat", "retire_object", "target"):
         "the same agent reference, two names — same shape as charter-for/seat and "
         "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
         "for the same reason every other third-party-target repair door in this file "
-        "does — a human types a handle far more often than a raw agent:... id — while "
-        "the MCP tool keeps `agent_id`, its own long-standing name).",
+        "does — a human types a handle far more often than a raw agent:... id). Retargeted "
+        "from retire_agent to retire_object/target (#202 wave 3): retire_agent is now "
+        "hidden (meta={'deprecated': True}), the CLI door still calls agents.retire_agent "
+        "directly, unchanged and unaffected by the MCP-layer fold — same reasoning as "
+        "heal-seat-anchor's own entry above, this comparison just needs a LIVE mcp name "
+        "to check itself against.",
     ("heal-seat-transcript", "seat", "heal_seat_transcript", "handle"):
         "the same seat reference, two names — the CLI positional is named `seat` to "
         "match every other third-party-target door in this file; the MCP tool's own "
@@ -278,6 +290,14 @@ BINDING_VERBS = frozenset({
     # ruling's six-seat repair) — writes Seat.house third-party, the same 6823 rule
     # correct_house/correct_agent_house were added under two lines up.
     "resync_seat_house",
+    # `seat_edge` (#202 wave 3, Thoth dispatch 6987) — attach_seat/detach_seat folded
+    # into one door; still writes managed_by, same binding-mover status the two hidden
+    # aliases already carried.
+    "seat_edge",
+    # `retire_object` (#202 wave 3, Thoth dispatch 6987) — retire_seat/retire_project/
+    # retire_agent folded into one door; flips objects.status the same way each of the
+    # three hidden aliases already did.
+    "retire_object",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -300,6 +320,9 @@ NO_CLI_EQUIVALENT = {
     "attach_seat": "not yet built — a real gap named by Khnum's lane-2 scoping (msg 6463): "
         "not on the jesus/chad reconciliation path his dispatch scoped him to.",
     "detach_seat": "not yet built — same scoping note as attach_seat.",
+    "seat_edge": "not yet built — the #202 wave-3 fold (msg 6987) of attach_seat/"
+        "detach_seat inherits the same CLI gap, unrenamed; not on any dispatch's own "
+        "scope to close.",
     "pause_seat": "not yet built — not on the jesus/chad path; not ruled out.",
     "vacate_seat": "not yet built — not on the jesus/chad path; not ruled out.",
     "retire_seat": "not yet built at the RAW CLI layer — already reachable indirectly via "
@@ -320,6 +343,10 @@ NO_CLI_EQUIVALENT = {
         "(seat reconciliation only); a real gap, not ruled out.",
     "rename_project": "not yet built — same scoping note as create_project.",
     "retire_project": "not yet built — same scoping note as create_project.",
+    "retire_object": "not yet built — the #202 wave-3 fold (msg 6987) of retire_seat/"
+        "retire_project/retire_agent inherits the same CLI gap two of the three "
+        "already carried (retire_agent's own CLI door stays a direct third-party "
+        "act, untouched by the fold, not routed through this new door).",
     "fork_project": "not yet built — same scoping note as create_project.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
@@ -883,6 +910,26 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # unreached until decision 68fba2e4's own six-seat repair task needed it). Writes
     # Seat.house third-party, same family as correct_house/correct_agent_house.
     "resync_seat_house": {"binding_verb": True},
+    # thread_action(action=...) — #202 wave 3 (Thoth dispatch 6987, operator's relaxed
+    # dispatch-shape rule): resolve_thread/annotate_thread/correct_thread_summary/
+    # reclassify_thread folded into one door, all four kept as hidden deprecated
+    # aliases forwarding to the shared _thread_action_impl. Not a binding-mover (acts
+    # on Thread objects only). Parameterizes resolve_thread, the largest of the four.
+    "thread_action": {"binding_verb": False, "parameterizes": "resolve_thread"},
+    # lease(action=...) — #202 wave 3 (same dispatch, same commit shape as thread_
+    # action above): acquire_lease/release_lease/check_lease/reap_stale_leases folded
+    # into one door, all four kept as hidden deprecated aliases. Not a binding-mover
+    # (coordinates over an arbitrary shared resource, never seat/project state).
+    "lease": {"binding_verb": False, "parameterizes": "acquire_lease"},
+    # seat_edge(action=...) — #202 wave 3: attach_seat/detach_seat folded into one
+    # door, both kept as hidden deprecated aliases. Writes managed_by — a binding-
+    # mover, same as the two hidden aliases already were in BINDING_VERBS above.
+    "seat_edge": {"binding_verb": True, "parameterizes": "attach_seat"},
+    # retire_object(kind=...) — #202 wave 3: retire_seat/retire_project/retire_agent
+    # folded into one door, all three kept as hidden deprecated aliases. self-scoped
+    # retire() and retire_assertion deliberately excluded (see the wave-3 proposal,
+    # decision 1ddf8e1c) — different auth shape / genuinely unrelated param shape.
+    "retire_object": {"binding_verb": True, "parameterizes": "retire_seat"},
 }
 
 
