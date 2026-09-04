@@ -880,6 +880,11 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # aliases forwarding to the shared _thread_action_impl. Not a binding-mover (acts
     # on Thread objects only). Parameterizes resolve_thread, the largest of the four.
     "thread_action": {"binding_verb": False, "parameterizes": "resolve_thread"},
+    # lease(action=...) — #202 wave 3 (same dispatch, same commit shape as thread_
+    # action above): acquire_lease/release_lease/check_lease/reap_stale_leases folded
+    # into one door, all four kept as hidden deprecated aliases. Not a binding-mover
+    # (coordinates over an arbitrary shared resource, never seat/project state).
+    "lease": {"binding_verb": False, "parameterizes": "acquire_lease"},
 }
 
 

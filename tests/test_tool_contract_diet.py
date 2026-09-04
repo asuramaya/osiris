@@ -799,7 +799,9 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 114
+TOOL_CONTRACT_EXPECTED_COUNT = 111
+# 114 -> 111 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): acquire_lease/
+# release_lease/check_lease/reap_stale_leases folded into lease(action=...).
 # 117 -> 114 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): resolve_thread/
 # annotate_thread/correct_thread_summary/reclassify_thread folded into thread_action
 # (action=...) — one door, four hidden deprecated aliases forwarding to it.
@@ -1040,6 +1042,10 @@ TOOL_CONTRACT_CEILING_CHARS = 116137
 # impl body (no logic duplicated, no behavior changed -- resolve_thread's own batch
 # mode and dry_run=True default carried over unchanged). Tool count 117 -> 114 (-3).
 TOOL_CONTRACT_CEILING_CHARS = 113757
+# 113,757 -> 112,621 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): acquire_
+# lease/release_lease/check_lease/reap_stale_leases folded into lease(action=...) —
+# same shape as the thread_action fold above, four hidden deprecated aliases.
+TOOL_CONTRACT_CEILING_CHARS = 112621
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

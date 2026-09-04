@@ -7473,91 +7473,145 @@ async def amend_practice(
     return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
 
 
+async def _lease_impl(
+    action: str, resource_id: str, *, holder: str | None, older_than_secs: int | None,
+    ctx: Context | None, subagent_id: str | None, subagent_type: str | None,
+) -> dict[str, Any]:
+    """Shared body behind `lease` and its four hidden single-purpose aliases (acquire_
+    lease/release_lease/check_lease/reap_stale_leases) — one code path, five names. Each
+    action below is copied verbatim from what was that alias's own top-level function
+    body before the fold."""
+    pool = await _pool_get()
+    if action == "acquire":
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        try:
+            result = await resource_lease.acquire(
+                Actions(pool), resource_id, holder or actor, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        out: dict[str, Any] = {
+            "resource_id": result.resource_id, "acquired": result.acquired,
+            "holder": result.holder, "held_since": result.acquired_at.isoformat(),
+            "thread_id": str(result.thread_id),
+        }
+        if not result.acquired:
+            out["note"] = (f"already held by {result.holder} since "
+                           f"{result.acquired_at.isoformat()} — no new claim minted")
+        return out
+    if action == "release":
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        released = await resource_lease.release(pool, resource_id, actor)
+        return {"resource_id": resource_id, "released": released}
+    if action == "check":
+        held = await resource_lease.current_holder(pool, resource_id)
+        if held is None:
+            return {"resource_id": resource_id, "held": False}
+        return {
+            "resource_id": resource_id, "held": True, "holder": held["holder"],
+            "held_since": held["acquired_at"].isoformat(),
+            "thread_id": str(held["thread_id"]),
+        }
+    if action == "reap":
+        try:
+            n = await resource_lease.reap_stale(
+                pool, older_than_secs=older_than_secs or 3600)
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"reaped": n, "older_than_secs": older_than_secs or 3600}
+    return {"error": f"unknown action {action!r} — one of acquire/release/check/reap"}
+
+
 @mcp.tool()
+async def lease(
+    action: str, resource_id: str = "", holder: str | None = None,
+    older_than_secs: int | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Coordinate over any genuinely SHARED, non-isolable resource by an EXACT id
+    (`deploy`, `docker-daemon`, the live server) — not a working tree, which has no
+    contention to coordinate. `resource_id` is convention, not a closed vocabulary.
+    Four `action`s, never a fifth.
+
+    `action='acquire'` — claim it, matched by equality, backed by a real DB uniqueness
+    constraint, never a race (unlike open_thread(assignee=)'s fuzzy prose match).
+    `holder` defaults to your own mounted identity; pass one to claim on another's
+    behalf. A refusal names who holds it and since when. No renewed TTL — `release` is
+    the primary end path; `reap` is the crash/compaction backstop, not the norm.
+
+    `action='release'` — free a resource YOU hold. Only the ACTUAL holder's own release
+    frees it, never a different agent's, even by name — no `holder` param here, the
+    identity checked is always the caller's own resolved actor. `released: false` for
+    BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
+    never errors; `check` first if you need to tell the two apart.
+
+    `action='check'` — read-only: who holds it right now, or that it's free. Never
+    claims, never mints, never leases anything.
+
+    `action='reap'` — recover leases nobody released (a crash, a compaction, a dropped
+    session) — the active-claim constraint would otherwise wedge that `resource_id`
+    FOREVER. The backstop, not the norm (a 5-min cron already runs this). `older_than_
+    secs` defaults 3600 (agent-work-paced, not machine-paced), 60s floor enforced
+    (below it force-releases every held lease fleet-wide at once), refused loudly."""
+    return await _lease_impl(
+        action, resource_id, holder=holder, older_than_secs=older_than_secs, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='acquire')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def acquire_lease(
     resource_id: str, holder: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Claim any genuinely SHARED, non-isolable resource by an EXACT id (`deploy`,
-    `docker-daemon`, the live server) — not a working tree, which has no contention to
-    coordinate. Matched by equality, backed by a real DB uniqueness constraint, never a
-    race (unlike open_thread(assignee=)'s fuzzy prose match). `resource_id` is
-    convention, not a closed vocabulary.
-
-    `holder` defaults to your own mounted identity; pass one to claim on another's
-    behalf. A refusal names who holds it and since when. No renewed TTL — explicit
-    release_lease is the primary path; reap_stale_leases is the crash/compaction
-    backstop (a 5-min cron), not the norm."""
-    pool = await _pool_get()
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    try:
-        result = await resource_lease.acquire(
-            Actions(pool), resource_id, holder or actor, source=actor)
-    except ValueError as e:
-        return {"error": str(e)}
-    out: dict[str, Any] = {
-        "resource_id": result.resource_id, "acquired": result.acquired,
-        "holder": result.holder, "held_since": result.acquired_at.isoformat(),
-        "thread_id": str(result.thread_id),
-    }
-    if not result.acquired:
-        out["note"] = (f"already held by {result.holder} since "
-                       f"{result.acquired_at.isoformat()} — no new claim minted")
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='acquire')."""
+    return await _lease_impl(
+        "acquire", resource_id, holder=holder, older_than_secs=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='release')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def release_lease(
     resource_id: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Release a resource YOU hold — only the ACTUAL holder's own release call frees it,
-    never a different agent's, even by name, ENFORCED: unlike `acquire_lease`'s deliberate
-    `holder` latitude ("claim on another's behalf"), this verb takes no `holder` param —
-    the identity checked is always the caller's own resolved `actor`. `released: false`
-    for BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
-    never errors to raise; check `check_lease` first if you need to tell the two apart."""
-    pool = await _pool_get()
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    released = await resource_lease.release(pool, resource_id, actor)
-    return {"resource_id": resource_id, "released": released}
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='release')."""
+    return await _lease_impl(
+        "release", resource_id, holder=None, older_than_secs=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='check')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def check_lease(resource_id: str) -> dict[str, Any]:
-    """Read-only: who holds `resource_id` right now, or that it's free. Never claims,
-    never mints, never leases anything — a glance before deciding whether `acquire_lease`
-    is even worth calling."""
-    pool = await _pool_get()
-    held = await resource_lease.current_holder(pool, resource_id)
-    if held is None:
-        return {"resource_id": resource_id, "held": False}
-    return {
-        "resource_id": resource_id, "held": True, "holder": held["holder"],
-        "held_since": held["acquired_at"].isoformat(), "thread_id": str(held["thread_id"]),
-    }
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='check')."""
+    return await _lease_impl(
+        "check", resource_id, holder=None, older_than_secs=None, ctx=None,
+        subagent_id=None, subagent_type=None)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "lease(action='reap')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
-    """Recover leases nobody released — a crash, a compaction, a dropped session. The
-    active-claim constraint would otherwise wedge that `resource_id` FOREVER, the same risk
-    `reap_stale_runs` names for `helper_runs`. This is the BACKSTOP, not the norm —
-    `release_lease` is how a lease is meant to end; call this directly only when you
-    suspect a stale claim right now and don't want to wait for the cron's next tick (every
-    5 minutes, arq_worker.reap_leases, mirroring `reap_runs`'s own wiring for helper_runs).
-    An hour's default is deliberately looser than helper_runs' 900s — a resource
-    lease here is agent-work-paced (a whole session touching a file), not machine-paced.
-    `older_than_secs` has a 60s floor (below it force-releases every held lease fleet-wide
-    at once), refused loudly."""
-    pool = await _pool_get()
-    try:
-        n = await resource_lease.reap_stale(pool, older_than_secs=older_than_secs)
-    except ValueError as e:
-        return {"error": str(e)}
-    return {"reaped": n, "older_than_secs": older_than_secs}
+    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='reap')."""
+    return await _lease_impl(
+        "reap", "", holder=None, older_than_secs=older_than_secs, ctx=None,
+        subagent_id=None, subagent_type=None)
 
 
 async def _retire_stale_handoffs(
