@@ -532,17 +532,15 @@ _pool: asyncpg.Pool | None = None
 
 @mcp.tool()
 async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
-    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE (task #167, caller attribution task #170) —
-    call count + total/avg wall-clock time, newest-cost-first, cut two ways: `persisted`/
-    `current_unflushed_window` by TOOL (summed across callers — the original #167 question),
-    `persisted_by_caller`/`current_unflushed_by_caller` by CALLER (summed across tools — the
-    #170 question this table couldn't answer before: is a tool's cost concentrated in one
-    caller or spread across many). `persisted` reads flushed 60s windows from `mcp_tool_stats`
-    going back `window_minutes`; the `current_unflushed_*` pair is the live in-memory counters
-    since the last flush — may be a partial window. Failures count too (BoundedMCP.call_tool
-    times/counts in a try/finally), so a broken tool doesn't read as cheap. `blind_spots`
-    names what this can never see — read it before trusting a total, including the caller
-    cut's own cache-only limitation."""
+    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE — call count + total/avg wall-clock time,
+    newest-cost-first, cut two ways: `persisted`/`current_unflushed_window` by TOOL
+    (summed across callers), `persisted_by_caller`/`current_unflushed_by_caller` by
+    CALLER (summed across tools — is a tool's cost concentrated in one caller or spread
+    across many). `persisted` reads flushed 60s windows from `mcp_tool_stats` going
+    back `window_minutes`; the `current_unflushed_*` pair is the live in-memory
+    counters since the last flush — may be a partial window. Failures count too, so a
+    broken tool doesn't read as cheap. `blind_spots` names what this can never see —
+    read it before trusting a total."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
     tool_rows = await pool.fetch(
@@ -1080,19 +1078,18 @@ async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None)
 @mcp.tool()
 async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
                      offset: int = 0) -> dict[str, Any]:
-    """The graph audits ITSELF — report-only, never writes. Checks: contradiction
-    (near-tie multi-source winners), laundering (a fact above its origin grade), lineage
-    integrity (succession cycles, dangling heirs, false mints), orphan links (into merged/
-    retired objects), stale obligations (older than `stale_days`), attribution anomalies
-    (unregistered writer ids), phantom twins, parallel lives, duplicate works_in,
-    peer-silent (no mail in `stale_days` between an active peer_of pair — a proxy, not
-    proof), held-past-deadline. Findings are testimony to judge, never auto-applied; heal
-    with compensating events, never DELETE.
+    """The graph audits ITSELF — report-only, never writes. Checks: contradiction,
+    laundering (a fact above its origin grade), lineage integrity (succession cycles,
+    dangling heirs, false mints), orphan links, stale obligations (older than
+    `stale_days`), attribution anomalies, phantom twins, parallel lives, duplicate
+    works_in, peer-silent (no mail in `stale_days` between an active peer_of pair — a
+    proxy, not proof), held-past-deadline. Findings are testimony to judge, never
+    auto-applied; heal with compensating events, never DELETE.
 
-    Each check lists only its first 50 findings by default (`counts` has the true total).
-    Pass `check` (a `counts` key or a finding's own `check` field) to page one check's
-    full set via `limit`/`offset`; omitting it is a no-op. `counts_by_severity`/`severity`
-    separate info-grade history from warn/error damage."""
+    Each check lists only its first 50 findings by default (`counts` has the true
+    total). Pass `check` (a `counts` key or a finding's own `check` field) to page one
+    check's full set via `limit`/`offset`. `counts_by_severity`/`severity` separate
+    info-grade history from warn/error damage."""
     pool = await _pool_get()
     args: dict[str, Any] = {"stale_days": stale_days}
     if check is not None:
@@ -1113,19 +1110,18 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
                  offset: int = 0) -> list[dict[str, Any]]:
     """Judge the object set itself. Read-only, no writes. `mode`:
 
-    'census' (default) — one row per (type, status): n, orphans (zero live links), thin
-    (1-2), median/max links, born, last_touch. The what-exists-and-how-healthy overview.
+    'census' (default) — one row per (type, status): n, orphans, thin (1-2 links),
+    median/max links, born, last_touch.
 
-    'buckets' — `object_type` required. One row per object of that type+status, each
-    exactly one bucket, by priority: contradicted (a property with 2+ live, non-
-    superseding values — marks, never resolves) > duplicate_suspect (case-folded basename
-    collision) > bulk_import (`cohort_min`+ objects born the same second with an identical
-    link fingerprint) > orphan > hub (>=95th-pct links, floor 10) > stale (untouched past
-    `stale_days`) > thin > normal. Every in-scope object is listed, not just flagged ones.
-    `limit`/`offset` page it (default 200/0, capped 2000).
+    'buckets' — `object_type` required. One row per object, exactly one bucket, by
+    priority: contradicted (2+ live non-superseding values) > duplicate_suspect
+    (case-folded basename collision) > bulk_import (`cohort_min`+ objects born the same
+    second, identical link fingerprint) > orphan > hub (>=95th-pct links, floor 10) >
+    stale (untouched past `stale_days`) > thin > normal. Every in-scope object is
+    listed, not just flagged ones. `limit`/`offset` page it (default 200/0, capped 2000).
 
-    `object_type='Type'` — a different bucket set for Type rows: undescribed (blank
-    description) > no_label_rule (kind='object' only, blank label_field) > normal."""
+    `object_type='Type'` — Type rows instead: undescribed > no_label_rule
+    (kind='object', blank label_field) > normal."""
     pool = await _pool_get()
     args: dict[str, Any] = {"mode": mode}
     if object_type is not None:
@@ -1402,18 +1398,14 @@ async def dossier(object_ref: str) -> dict[str, Any]:
 @mcp.tool()
 async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     """An agent's succession lineage, one entry per generation walked backward:
-    {agent_id, generation, minted_because, wrote_anything, session}. The bounded chain read
-    task #64 (ruling ad19a779) named as missing — dossier() only gives one hop, so
-    answering "for generations xxiv/xxv/xxvi: succeeded_from + minted_because for each"
-    used to cost one dossier() call per hop; this is one call. `ref` accepts anything
+    {agent_id, generation, minted_because, wrote_anything, session}. dossier() only
+    gives one hop; this walks the whole chain in one call. `ref` accepts anything
     dossier does (UUID, short id, canonical, name). Stops at a root (no predecessor) or
-    `max_hops` (default 10) — never widens into an unbounded search. `session` (7fa4b599)
-    is each generation's own mount()-asserted harness session id, the transcript filename's
-    stem — answers "which transcript is which generation's" without guessing from mtime.
-    Complementary to, not a replacement for, `nearest_handoff_ancestor` (agents.py, backing
-    orient()'s own succession-note block): that JUMPS to the nearest ancestor with a real
-    handoff for orient()'s internal use; this WALKS and reports every hop for a caller
-    asking to see the whole chain."""
+    `max_hops` (default 10) — never widens into an unbounded search. `session` is each
+    generation's own mount()-asserted harness session id, the transcript filename's
+    stem. Complementary to `nearest_handoff_ancestor` (backing orient()'s own
+    succession-note block), which jumps to the nearest handoff ancestor rather than
+    walking every hop."""
     pool = await _pool_get()
     chain = await comp_succession.succession_chain(pool, ref, max_hops=max_hops)
     return {"ref": ref, "chain": chain} if chain else {"error": f"no agent matches {ref!r}"}
@@ -1911,25 +1903,20 @@ async def mount(
     ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
-    Pass your working directory `cwd` (names your project). For `job_dir`, pass a DURABLE
-    ANCHOR your harness gave you at session start. In Claude Code this is
-    `~/.claude/jobs/<id>`; in DSH (DeepSeek Harness) it's derived from the workspace slug.
-    Without an anchor you still mount, but a reconnect splits your identity. Registers an
-    Agent object (works_in your project, acts_for the principal) and attributes every
-    decision/thread you record to `agent:<you>` instead of the shared `session` bucket.
-    Then call orient(). ALREADY MOUNTED (the whisper said so)? Skip this — orient() for
-    bearings and proceed; re-mounting is only for after an MCP bounce, with your anchor.
+    `cwd`=your working directory (names your project). `job_dir`=a DURABLE ANCHOR from
+    your harness (Claude Code: `~/.claude/jobs/<id>`; DSH: derived from the workspace
+    slug) — without it you still mount, but a reconnect splits your identity. Registers
+    an Agent (works_in your project, acts_for the principal) and attributes your
+    decisions/threads to `agent:<you>` instead of the shared `session` bucket. Then call
+    orient(). Already mounted? Skip this; re-mount only after an MCP bounce, with your
+    anchor.
 
-    `verbose=True` restores guidance prose (co-agent etiquette, next-step reminders) that
-    terse mode (default) drops — structured facts survive either way.
-
-    `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they rebind
-    a revisited tab or background-job fork to its existing soul instead of minting a
-    stranger, and `transcript_path` also feeds model resolution directly when the job_dir
-    search would land on a stub or nothing.
-
-    `want_co_agents`/`want_held_work` (default False) return the full lists; by default only
-    `co_agents_count`/`held_work_count` are carried (context-bloat priority, msg 6870)."""
+    `verbose=True` restores guidance prose (co-agent etiquette, next-step reminders)
+    that terse mode (default) drops — structured facts survive either way.
+    `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they
+    rebind a revisited tab or background-job fork to its existing soul instead of
+    minting a stranger. `want_co_agents`/`want_held_work` return the full lists;
+    default is counts only."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2587,20 +2574,15 @@ async def pause_seat(paused: bool = True, target: str | None = None, reason: str
 @mcp.tool()
 async def candidates(project: str | None = None, limit: int = 50,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """THE PILE THIS SEAT MUST JUDGE — the miner's guesses about YOUR project, unread by any mind.
+    """THE PILE THIS SEAT MUST JUDGE — the miner's guesses about YOUR project, unread by
+    any mind. The session-miner reads transcripts and proposes loose ends it thinks
+    somebody forgot; it is right roughly one in ten. These are NOT duties. Read them,
+    then dispose(): admit what is real (it becomes YOURS — self-declared, owned,
+    permanently safe) and drop the rest with a reason. Nobody else has standing to
+    judge your project's pile.
 
-    The session-miner reads transcripts and proposes loose ends it thinks somebody forgot. It is
-    RIGHT about one in ten (measured: 26 of 264 on this very project). The other nine are
-    work-steps git already has, echoes it minted twice, or questions that were answered forty
-    minutes later in the same conversation — and every one of them was riding the wall wearing
-    the authority of a promise nobody made.
-
-    These are NOT duties. Read them, then dispose(): admit what is real (it becomes YOURS —
-    self-declared, owned, permanently safe) and drop the rest with a reason. Nobody else has
-    standing to judge your project's pile; that is why it is still here.
-
-    Report-only. Reading costs nothing and commits nothing. Oldest first — triage drains from
-    the bottom."""
+    Report-only. Reading costs nothing and commits nothing. Oldest first — triage
+    drains from the bottom."""
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     return await dispose_seam.candidates(await _pool_get(), project=proj, limit=limit)
@@ -3370,18 +3352,16 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
 
 @mcp.tool()
 async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dict[str, Any]:
-    """The MEMBRANE — the operator's window into the autonomous fleet. The return path made
-    visible: results and accountability flowing back UP. Surfaces ROSTER + health (which
-    identities resolved cleanly), ACTIVITY (what agents decided/opened in your name — not the
-    miner's backfill), the DANGER map (model swaps — the harness's silent demotions), LAUNDERING
-    (credence flags where a relay carried a fact above its origin grade), and SPEND (what the
-    inference seam burned — metered honestly).
+    """The MEMBRANE — the operator's window into the autonomous fleet. Surfaces ROSTER +
+    health (which identities resolved cleanly), ACTIVITY (what agents decided/opened
+    in your name, not the miner's backfill), the DANGER map (model swaps — the
+    harness's silent demotions), LAUNDERING (credence flags where a relay carried a
+    fact above its origin grade), and SPEND (metered honestly).
 
-    `hours` given → an ad-hoc rolling window (last N hours). `hours=None` (the default) → WATERMARK
-    MODE: 'what's new since I last looked', from the stored operator watermark (24h fallback the
-    first time). Glancing is a PEEK — it never moves the watermark. Pass `mark_seen=True` when you
-    are done reading to advance it to now, so the next glance starts here. Ideal after onboarding a
-    batch of agents: read (peek), act, then mark_seen to draw the line."""
+    `hours` given → an ad-hoc rolling window. `hours=None` (default) → WATERMARK MODE:
+    'what's new since I last looked', from the stored operator watermark (24h fallback
+    the first time). Glancing is a PEEK — it never moves the watermark. Pass
+    `mark_seen=True` when done reading to advance it to now."""
     pool = await _pool_get()
     since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
     dg = await digest.fleet_digest(Actions(pool), since=since, mark_seen=mark_seen,
@@ -3740,24 +3720,20 @@ async def registry_census() -> dict[str, Any]:
 async def roster(repo: str | None = None) -> dict[str, Any]:
     """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
 
-    `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — cold means
-    held but nobody live THIS INSTANT, not vacant), `chartered_repos` (governs links),
-    `pin` (a live read of the seat's own .osiris, declared/unset/unreadable), and
-    `anchor_cwd`/`tree_cwd`/`live_cwd` kept separate — a live holder's mount cwd can differ
-    from both with nothing wrong. `pin.triage_bucket` reuses `triage`'s own bucket
-    (contradicted/duplicate_suspect/orphan/hub/stale/thin/normal), or "no-such-project"
-    when the pin names something that isn't real.
+    `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — held but
+    nobody live THIS INSTANT), `chartered_repos` (governs links), `pin` (a live read of
+    the seat's .osiris, declared/unset/unreadable), and `anchor_cwd`/`tree_cwd`/
+    `live_cwd` kept separate — a live holder's mount cwd can differ from both with
+    nothing wrong. `pin.triage_bucket` reuses `triage`'s own bucket, or
+    "no-such-project" when the pin names something unreal.
 
-    `repo=<name>` answers "who owns this": a seat matches if its charter OR pin names the
-    repo. Two matches is `governed` when the charter-seat actually manages the pin-seat
-    (normal, not a warning) else `conflict`, never silently picked. Zero matches is
-    `no-match` (not a claim of no owner) — paired with `near_misses`, a case/separator-
-    insensitive pass that names what was found without promoting it.
+    `repo=<name>` answers "who owns this": a seat matches if its charter OR pin names
+    the repo. Two matches is `governed` when the charter-seat manages the pin-seat
+    (normal) else `conflict`, never silently picked. Zero matches is `no-match` (not a
+    claim of no owner), paired with `near_misses`.
 
-    Neither `chartered_repos` nor `pin` is certified canonical — a name resolving to a
-    real project proves the object exists, not that it's the current/correct name.
-    `caveats` in every response names this function's own blind spots. Full incident
-    history: consult_canon('roster')."""
+    Neither `chartered_repos` nor `pin` is certified canonical. `caveats` in every
+    response names this function's own blind spots. consult_canon('roster') for more."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
     return await _roster(pool, repo=repo)
@@ -3768,22 +3744,18 @@ async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, An
     """THE PIN-VS-GRAPH DISAGREEMENT REPORT. Read-only, fleet-wide, two sections.
 
     `project_ledger` — every active SoftwareProject, each carrying `phantom_verdict`:
-    test-fixture (known deliberate name) | declared (a seat pin or Seat-origin governs
-    edge claims it — Agent-origin edges never count) | phantom-suspect (name matches a
-    generic path-segment list, nothing declares it — mechanical, weaker than a hand
-    verdict) | undetermined (a real disagreement, no confident call). `limit`/`offset`
-    page it (default 200/0, capped 2000).
+    test-fixture | declared (a seat pin or Seat-origin governs edge claims it) |
+    phantom-suspect (name matches a generic path-segment list, nothing declares it) |
+    undetermined (a real disagreement, no confident call). `limit`/`offset` page it
+    (default 200/0, capped 2000).
 
-    `live_cwd_ledger` — today's agent_mounts only (evicts old rows; a phantom whose
-    session already ended shows only in project_ledger). Each cwd: `directory_exists`
-    (checked before the pin is trusted — a deleted office can otherwise read its parent's
-    pin as its own), `resolved_today` vs `graph_believes`, and an `agreement` verdict:
-    no-graph-yet / ghost (office gone, graph still believes something) / graph-only
-    (the bare seats container, refuses resolution by design) / match / partial-match /
-    mismatch (the live misresolution risk).
+    `live_cwd_ledger` — today's agent_mounts only. Each cwd: `directory_exists`
+    (checked before the pin is trusted), `resolved_today` vs `graph_believes`, and an
+    `agreement` verdict: no-graph-yet / ghost / graph-only / match / partial-match /
+    mismatch.
 
     `caveats` names what this instrument cannot see. READ-ONLY: reports disagreements,
-    never repairs, folds, or merges. Full history: consult_canon('tree_ledger')."""
+    never repairs, folds, or merges. consult_canon('tree_ledger') for more."""
     pool = await _pool_get()
     from src.orchestrator.seats import tree_ledger as _tree_ledger
     return await _tree_ledger(pool, limit=limit if limit is not None else 200, offset=offset)
@@ -3804,19 +3776,19 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     `reply_to=<id>` answers a message (routes by channel, joins the thread) and settles it.
     At-least-once, deduped. For durable knowledge use record_decision/open_thread instead.
 
-    `desk` triages an operator brief: 'decision' | 'hands' | 'fyi'. `grade` triages project
-    mail: 'ask' (named in the recipient's unread count) | 'fyi' (an ack settles it) —
-    ungraded is never guessed. The receipt's `dispatch` names what actually happened on
-    delivery: queued/poked/resumed/woke, or a brake mode naming why nobody was reached. A
-    DM's receipt echoes `dm_to`/`seat`/`lineage_head` — compare against a stale address
-    before trusting "sent"; `require_seat=True` refuses outright on an unclaimed target.
+    `desk` triages an operator brief: 'decision' | 'hands' | 'fyi'. `grade` triages
+    project mail: 'ask' (named in the recipient's unread count) | 'fyi' (an ack settles
+    it) — ungraded is never guessed. `dispatch` in the receipt names what happened on
+    delivery: queued/poked/resumed/woke, or a brake mode naming why nobody was reached.
+    A DM's receipt echoes `dm_to`/`seat`/`lineage_head` — compare against a stale
+    address before trusting "sent"; `require_seat=True` refuses on an unclaimed target.
     `threads` transfers ownership of existing Thread(s) to a DM's addressee in the same
-    act (exact ref only, never inferred from `body`) — `threads_stamped` names what moved.
-    A DM or graded 'ask' runs the same prior-art search record_decision does, surfaced on
-    both your receipt and the delivered message.
+    act (exact ref only, never inferred from `body`) — `threads_stamped` names what
+    moved. A DM or graded 'ask' runs the same prior-art search record_decision does,
+    surfaced on both your receipt and the delivered message.
 
-    `want_prior_art`/`want_listener` (default False) return the full prior_art list and the
-    listener block; by default a one-line `prior_art_flag` only (context-bloat priority, 6870)."""
+    `want_prior_art`/`want_listener` return the full prior_art list and listener block;
+    default is a one-line `prior_art_flag` only."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -4051,21 +4023,21 @@ async def launch(target: str, message: str = "", model: str | None = None,
     """Give a seat a fresh BODY (wake() is the speak-verb for a body that already exists).
     Downward-only — you may only body a seat you MANAGE. Creates a new session, never
     injects into an existing one. Default substrate is a harness-native `claude --bg`
-    background session (self-binds via its own first turn: mount() then claim_name); the
-    old PTY-broker lane survives only as an explicit fallback
-    (`osiris_launch_substrate`).
+    background session (self-binds via its own first turn: mount() then claim_name);
+    the old PTY-broker lane survives only as an explicit fallback
+    (`osiris_launch_substrate`). No operator override param, deliberately: the
+    operator's real hand stays out-of-band.
 
     Idempotent — a live body already holding the seat is returned, never twinned.
-    `message` delivers as the opening brief, but only on the `launched` path (dropped,
-    unsent, on `already-live` — use wake() instead). No operator override parameter,
-    deliberately: the operator's real hand stays out-of-band.
+    `message` delivers as the opening brief, only on the `launched` path (dropped on
+    `already-live` — use wake() instead).
 
     `body_exists` (window created) and `can_receive` (independently confirmed live) are
-    separate — a fresh spawn usually returns body_exists=true, can_receive=false for a few
-    seconds; `detail` says how to confirm. `status`: launched | already-live |
-    manager-cold (PTY fallback's daemon down) | refused-not-your-worker |
-    refused-no-office/-no-handle | refused-spawn (see `detail`). `dormant_history`, when
-    present, discloses a substantial pre-existing transcript at the target cwd."""
+    separate — a fresh spawn usually returns body_exists=true, can_receive=false for a
+    few seconds; `detail` says how to confirm. `status`: launched | already-live |
+    manager-cold | refused-not-your-worker | refused-no-office/-no-handle |
+    refused-spawn (see `detail`). `dormant_history`, when present, discloses a
+    substantial pre-existing transcript at the target cwd."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "
@@ -4138,8 +4110,8 @@ async def inbox(project: str | None = None, peek: bool = False,
     Check after mount()/compaction. THE OPERATOR'S DESK IS DIFFERENT: glance with peek
     only, settle only at the human's explicit word.
 
-    `want_prior_art=True` returns each message's full prior_art list; by default only a
-    `prior_art_count` (context-bloat priority, msg 6870)."""
+    `want_prior_art=True` returns each message's full prior_art list; default is a
+    `prior_art_count` only."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -4281,19 +4253,17 @@ async def charter(repos: list[str] | None = None, ctx: Context | None = None) ->
 @mcp.tool()
 async def charter_for(seat_id: str, repos: list[str], because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of `charter()`,
-    never a widening of it: `charter()` stays self-declaration only, which is what makes the
-    STRANGER case work with no operator in the loop at all. This is for a seat that cannot
-    yet speak for itself — the operator's own model: a seat may declare its own charter, its
-    manager may declare for it, and the operator is every seat's ultimate manager, so no
-    seat is ever authority-less.
+    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of
+    `charter()`, never a widening of it: `charter()` stays self-declaration only. For a
+    seat that cannot yet speak for itself: a seat may declare its own charter, its
+    manager may declare for it, and the operator is every seat's ultimate manager, so
+    no seat is ever authority-less.
 
     ENFORCED, not just documented: the caller must be `seat_id`'s manager (the live
-    `managed_by` edge) or an operator actor — refuses loudly otherwise, naming both who the
-    caller resolved to and who the seat's actual manager is. `because` is required
-    (testimony). Blind to any pre-existing Agent-origin `governs` edges the target seat may
-    still carry from before charter's Seat-keyed re-key — see charter.py's own docstring for
-    exactly what that does and does not make safe."""
+    `managed_by` edge) or an operator actor — refuses loudly otherwise, naming both who
+    the caller resolved to and who the seat's actual manager is. `because` is required.
+    Blind to any pre-existing Agent-origin `governs` edges the target seat may still
+    carry from before charter's Seat-keyed re-key — see charter.py's own docstring."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a charter declared for another seat is a mind's "
@@ -4308,19 +4278,18 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       force: bool = False, because: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
     """Move a seat's anchor cwd, preserving identity, lineage, attribution, and mail.
-    `seat` accepts a claimed name, a raw agent id, or an unclaimed seat's own handle —
-    an unclaimed seat resolves off the Seat record alone (no mount rows, no lineage yet).
-    Otherwise: writes/refreshes `.osiris` at `new_cwd` (project label unchanged), re-points
-    the whole lineage's mount rows, stamps the move, carries harness metadata so resume
+    `seat` accepts a claimed name, a raw agent id, or an unclaimed seat's own handle.
+    Writes/refreshes `.osiris` at `new_cwd` (project label unchanged), re-points the
+    whole lineage's mount rows, stamps the move, carries harness metadata so resume
     survives it. Mints nothing new; refuses on a name matching neither agent nor seat.
 
     `extract=True`: the seat leaves a SHARED cwd taking only its own lineage's
-    transcripts — co-resident history stays, the old path remains live. Use it whenever
-    other minds also work there. Live cached identities are patched in place so a
-    same-session orient() right after sees the new anchor without a fresh mount().
+    transcripts — co-resident history stays, the old path remains live. Live cached
+    identities are patched in place so a same-session orient() sees the new anchor
+    without a fresh mount().
 
-    LIVENESS GUARD: self stays open; rebinding a different lineage's live target refuses
-    by default — `force=True` + `because` overrides."""
+    LIVENESS GUARD: self stays open; rebinding a different lineage's live target
+    refuses by default — `force=True` + `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
@@ -4459,17 +4428,15 @@ async def unwire_informs_fanout(
     project: str = "osiris", dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the pre-fix `_wire_informs` cross-join (thread 5156, root cause of
-    the repo:? specimen, decision ca091c4b): `ingest_canon` used to fan every Reference
-    out to EVERY active SoftwareProject fleet-wide instead of just the one it grounds —
-    measured live, 1037 of 1054 informs edges were pure noise. Fixed going forward
-    (src/ingest/reference.py); this repairs the historical damage.
+    """Repair verb for the pre-fix `_wire_informs` cross-join: `ingest_canon` used to fan
+    every Reference out to EVERY active SoftwareProject fleet-wide instead of just the
+    one it grounds. Fixed going forward (src/ingest/reference.py); this repairs the
+    historical damage.
 
-    Finds every live `informs` edge stamped with the fan-out's own source_id whose target
-    is NOT `project` (default "osiris", the module's only real caller) — never touches an
-    informs edge asserted by anything else. DRY RUN IS THE DEFAULT: returns the plan
-    without writing. `dry_run=False` REQUIRES a non-blank `because` (invalidating ~1000
-    edges is a deliberate act on the record, never silent). Idempotent."""
+    Finds every live `informs` edge stamped with the fan-out's own source_id whose
+    target is NOT `project` (default "osiris", the module's only real caller) — never
+    touches an informs edge asserted by anything else. DRY RUN IS THE DEFAULT. `dry_run
+    =False` REQUIRES a non-blank `because`. Idempotent."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — an unwire is a mind's act, and the graph must "
@@ -4775,16 +4742,14 @@ async def heal_seat_anchor(
     seat_id: str | None = None, because: str | None = None, dry_run: bool = True,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """HEAL A SEAT's `anchor_cwd` against THE ANCHOR INVARIANT (ruling 23771416): a Seat's
-    anchor is IDENTITY, always `<office_root>/<handle>`, never wherever a session happens
-    to be sitting. Asserts the invariant office path as the SOLE current `anchor_cwd`,
-    collapsing every stray value. REFUSES rather than guesses: no handle on record, or the
-    office directory does not exist on disk.
+    """HEAL A SEAT's `anchor_cwd` against THE ANCHOR INVARIANT: a Seat's anchor is
+    IDENTITY, always `<office_root>/<handle>`, never wherever a session happens to be
+    sitting. Asserts the invariant office path as the SOLE current `anchor_cwd`,
+    collapsing every stray value. REFUSES rather than guesses: no handle on record, or
+    the office directory does not exist on disk.
 
     `seat_id=None` (default) heals the CALLER's own held seat, `because` optional;
-    `seat_id=<any seat>` heals a third party's, `because` REQUIRED (task #199 lane 2,
-    thread 6778 — one verb, was two: `heal_seat_anchor_third_party` now forwards here,
-    hidden from listing, still callable, retired once traffic shows it silent).
+    `seat_id=<any seat>` heals a third party's, `because` REQUIRED.
 
     `dry_run=True` is the default; the receipt shows `current_before` and `target`."""
     return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
@@ -4872,11 +4837,9 @@ async def ingest_project(
     on disk vs already graphed) plus a closure preview over what's already graphed.
     `dry_run=False` actually ingests, then closes.
 
-    `because=<reason>` (task #199 lane 2, thread 6778/6788 — one verb, was two) is the
-    THIRD-PARTY shape instead: `project` becomes required (no pin to fall back on for
-    someone else's tree), the reason lands on the receipt, does not check caller
-    authority beyond being mounted. The old name, `ingest_project_third_party`, still
-    works — it now forwards here — but no longer appears in a model's own tool list."""
+    `because=<reason>` is the THIRD-PARTY shape instead: `project` becomes required (no
+    pin to fall back on for someone else's tree), the reason lands on the receipt,
+    does not check caller authority beyond being mounted."""
     return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
@@ -6133,32 +6096,35 @@ async def record_decision(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Write back a decision (ruling|reset|override|rejection|choice) so its WHY persists.
-    `rationale`=reasoning, `repo`=project it's filed under, `grounds`=References it rests
-    on, `protocol`=exact invocation to rerun rather than re-derive.
+    `rationale`=reasoning, `repo`=project, `grounds`=refs it rests on, `protocol`=exact
+    invocation to rerun.
 
-    Graph-editing params take a UUID/canonical/short-id ONLY, never free text, and each
-    resolves independently in a list (a miss is reported, never fatal — except a single
-    string target, which errors the whole call if unmatched): `supersedes` buries an
-    earlier decision under this one; `resolves` closes the Thread(s) this settles;
-    `obsoletes` kills a named Superstition (quote the words agents inherit); `confirms`/
-    `refutes` witness or disprove a Practice; `implements` executes a standing Decision
-    (parent stays alive); `rediscovers`/`narrows`/`cites` link without burying anything —
-    an independent re-arrival, a scope bound, and an added facet, respectively; `bears_on`
-    speaks to an open Thread without settling it (use `resolves` to actually close one).
+    Graph-editing params: UUID/canonical/short-id only, never free text. List forms
+    resolve each ref independently (a miss is reported, not fatal); a single string
+    target errors the whole call if unmatched.
+      supersedes   bury an earlier decision under this one
+      resolves     close the Thread(s) this settles
+      obsoletes    kill a named Superstition (quote the words agents inherit)
+      confirms     witness a Practice
+      refutes      disprove a Practice
+      implements   execute a standing Decision (parent stays alive)
+      rediscovers  independent re-arrival at an earlier decision
+      narrows      scope-bound an earlier decision
+      cites        add a facet to an earlier decision
+      bears_on     speak to an open Thread without closing it
     `ack_prior_art=True` records a dismissed prior_art_flag instead of a silent shrug.
-    `unlinked_because` lets a real reason through declare-or-refuse's link-kind gate.
-    Full per-parameter disambiguation: consult_canon('record_decision').
-    `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
-    confirming your text is now the CURRENT value (a different assertion can silently win
-    the tie-break on the same object despite a success response). A `false` entry names
-    itself in `content_landed_note` and points at amend_decision.
-    ANY ERROR ON THIS CALL — including a dropped connection or a timeout with NO response
-    at all — IS SAFE TO RETRY WITH THE SAME `summary`: the same failure string covers
-    both "written, you just didn't hear back" and "never written," and a caller cannot
-    tell them apart without this guarantee. This call is idempotent on `summary`: an
-    exact rewrite reuses the same decision, and — when `repo` is given — so does a
-    near-duplicate reword of it (`reused_existing_decision` in the receipt names when
-    that happened). Retrying never mints a twin."""
+    `unlinked_because` supplies a real reason through declare-or-refuse's link-kind gate.
+    consult_canon('record_decision') for more.
+
+    `content_landed`: present when `rationale`/`protocol` was passed — a read-back
+    confirming your text is the CURRENT value (a later write can silently win the
+    tie-break). `false` → see `content_landed_note` and amend_decision.
+
+    Any error on this call, including a dropped connection or a timeout with no
+    response, is SAFE TO RETRY with the same `summary` — idempotent (an exact rewrite,
+    or with `repo` given a near-duplicate reword, reuses the same decision;
+    `reused_existing_decision` in the receipt names when that happened). Retrying
+    never mints a twin."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     grounded: list[dict[str, str]] = []
@@ -6829,21 +6795,21 @@ async def open_thread(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Open a THREAD — an unresolved question or next step for the next session to pick up.
-    Surfaces in run_composition('briefing'). `repo` files it under a project. Idempotent on
-    the summary, and on a near-duplicate too (`deduped`/`dedup_scope` name a twin among this
-    project's own OPEN threads instead of minting one). A genuinely new thread gets
+    Surfaces in run_composition('briefing'). `repo` files it under a project. Idempotent
+    on the summary and on a near-duplicate (`deduped`/`dedup_scope` name the twin among
+    this project's own OPEN threads instead of minting one). A genuinely new thread gets
     `prior_art`/`prior_art_flag` — a standing Decision/Practice/Thread that may already
     cover this ground, surfacing only, never a refusal.
 
-    `kind='obligation'` marks a duty minted by an action. `owner` says whose move it is
-    ('operator', 'agent:<id>', a project name, or unowned = anyone). `assignee` leases a
-    single-assignee obligation to one build; a near-duplicate then surfaces `leased_to`
-    instead of deduping silently. `arc` sorts into the roadmap taxonomy (osiris-scoped
-    only). `resolves` closes a predecessor thread this one supersedes — same UUID/
-    canonical/short-id-only strictness as record_decision's own `resolves`. `branch`/
-    `files_touched` mark held work; `colliding_work` names any open collision.
-    `unlinked_because` mirrors record_decision's own hatch. Full detail:
-    consult_canon('open_thread')."""
+    `kind='obligation'` marks a duty minted by an action. `owner`=whose move it is
+    ('operator', 'agent:<id>', a project name, or unowned = anyone). `assignee` leases
+    a single-assignee obligation to one build; a near-duplicate then surfaces
+    `leased_to` instead of deduping silently. `arc` sorts into the roadmap taxonomy
+    (osiris-scoped only). `resolves` closes a predecessor thread this one supersedes —
+    same UUID/canonical/short-id-only strictness as record_decision's `resolves`.
+    `branch`/`files_touched` mark held work; `colliding_work` names any open collision.
+    `unlinked_because` mirrors record_decision's own hatch. consult_canon('open_thread')
+    for more."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
@@ -7019,15 +6985,14 @@ async def resolve_thread(
     ctx: Context | None = None
 ) -> dict[str, str]:
     """Close a THREAD — `ref` is its UUID or a summary substring; `because` is a short
-    WHY, not a completion essay. Event-sourced, never deleted, so the close is auditable
-    and reversible. `artifact` points at what actually closed it (a commit hash, decision
-    id, file:line) — kept as `resolved_artifact`; when it names a graph object a
-    `resolved_by` edge mints too, confirmed (or its absence explained) in the receipt.
+    WHY, not a completion essay. Event-sourced, never deleted: auditable and reversible.
+    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
+    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
+    mints too, confirmed in the receipt.
 
-    Re-resolving is allowed, not refused: `ref` matches by identity, never status, so a
-    second call on an already-resolved thread attaches a later, more specific closure
-    witness — because/resolved_artifact become this call's own text, latest wins, earlier
-    reasoning stays in history. The receipt names it when this happens."""
+    Re-resolving is allowed: `ref` matches by identity, not status, so a second call on
+    an already-resolved thread attaches a later, more specific closure witness — latest
+    wins, earlier reasoning stays in history. The receipt names it when this happens."""
     pool = await _pool_get()
     probe_tid = await capture._find_thread(pool, ref)
     was_already_resolved = (
@@ -7114,19 +7079,18 @@ async def heal_seat_transcript(
 ) -> dict[str, Any]:
     """Splice a seat's session, fragmented across multiple project slugs by a mid-session
     cwd move, back into ONE file at its own office slug. `handle` names the seat whose
-    office the result lands at. `source_paths` are the original fragments, IN CHAIN ORDER
-    (oldest first) — the session uuid and 8-char anchor_sid are both derived from
+    office the result lands at. `source_paths` are the original fragments, IN CHAIN
+    ORDER (oldest first) — the session uuid and 8-char anchor_sid derive from
     `source_paths[0]`'s own filename.
 
-    Every guard is splice_sources' own: `verify_jsonl_chain_boundary` runs on every
-    consecutive pair before anything is touched, refusing a false "same session" or a
-    genuinely separate session sharing only a directory.
+    `verify_jsonl_chain_boundary` runs on every consecutive pair before anything is
+    touched, refusing a false "same session" or a genuinely separate session sharing
+    only a directory.
 
-    `dry_run=True` (default) runs the same preflight, reports clean/refused per pair and
-    where the result would land — nothing written. `dry_run=False` requires `because`
-    and performs the real splice + rematerialize. Never touches a Seat row, anchor_cwd,
-    or any source transcript — the anchor-repoint half is heal_seat_anchor, a different
-    door."""
+    `dry_run=True` (default) reports clean/refused per pair and where the result would
+    land — nothing written. `dry_run=False` requires `because` and performs the real
+    splice + rematerialize. Never touches a Seat row, anchor_cwd, or any source
+    transcript — the anchor-repoint half is heal_seat_anchor, a different door."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a transcript heal is a deliberate act on the record",
@@ -7585,13 +7549,12 @@ async def ack_handoff(
     naming the id. `ref` is the id orient()'s succession_note or recall() gave you,
     resolved strictly (never a free-text guess). Tries Thread then Decision.
 
-    Refuses rather than guesses: unresolvable ref, already-acknowledged/not-a-handoff, or
-    caller outside the handoff author's own lineage (checked via a succeeded_from
-    edge-walk — a mistaken ack from another lineage would permanently retire someone
-    else's live handoff). Per-object not per-reader (first ack wins, retires for
-    everyone); final, not a lease. Never deleted — recall()/search() still see it. Also
-    resolves a Thread-shaped handoff's own `status`; `resolved` is always False for a
-    Decision (no status to resolve)."""
+    Refuses rather than guesses: unresolvable ref, already-acknowledged/not-a-handoff,
+    or caller outside the handoff author's own lineage (a mistaken ack from another
+    lineage would permanently retire someone else's live handoff). Per-object not
+    per-reader (first ack wins, retires for everyone); final, not a lease. Never
+    deleted — recall()/search() still see it. Also resolves a Thread-shaped handoff's
+    `status`; always False for a Decision (no status to resolve)."""
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -7658,15 +7621,12 @@ async def settle(
     A bad item in `decisions`/`threads_open` never sinks the rest of the batch — it lands
     in `rejected` (kind/summary/error) and `complete` reads False, but everything else
     still writes. `is_handoff: true` on an item mints a structured marker your successor's
-    orient() finds directly (no 160-char cap); retires only when they call
-    ack_handoff(ref=...), not on your next write.
+    orient() finds directly; retires on their ack_handoff(ref=...), not your next write.
 
     `repo_path` names your code repo for the git-status box (`uncommitted_git_files`) —
-    your mounted cwd is checked only as a fallback and is usually the wrong directory for
-    a seat-office agent. A decision's `resolves=` and a same-call `threads_resolve` item
-    naming the same thread get the closure edge wired automatically if the latter has no
-    `artifact` of its own — conservative, no prose matching. Full mechanism:
-    consult_canon('settle')."""
+    your mounted cwd is checked only as a fallback, usually wrong for a seat-office
+    agent. A decision's `resolves=` and a same-call `threads_resolve` item naming the
+    same thread get the closure edge wired automatically. consult_canon('settle')."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "

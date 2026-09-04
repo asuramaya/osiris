@@ -961,6 +961,16 @@ TOOL_CONTRACT_CEILING_CHARS = 132810
 # want_co_agents/want_held_work on mount) add inputSchema + a one-line note each — the
 # params exist to SHRINK receipts; +936 schema chars buys ~32% off every send/inbox call.
 TOOL_CONTRACT_CEILING_CHARS = 133746
+# 133,746 -> 129,145 (2026-09-04, Imhotep, task #199 lane 2, docstring diet wave 2,
+# Thoth dispatch 6886): trimmed record_decision/send/mount/open_thread/settle (per-
+# parameter prose -> compact tables, per Thoth's own instruction) plus ~25 more of the
+# remaining ~75 tools where WHY-prose (ruling ids, incident narrative) still had room to
+# cut. NOT the operator's 60K target, and short of even this wave's own 5K ask on the
+# top-5 alone — most of the remaining tools were already lean from wave 1 or are
+# genuinely dense contract (refusal-condition lists, per-parameter disambiguation) that
+# Thoth's own msg 6886 named as correctly kept whole. Diminishing returns confirmed a
+# second time; reported honestly rather than padded toward the number.
+TOOL_CONTRACT_CEILING_CHARS = 129145
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
