@@ -5519,7 +5519,10 @@ async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
     try:
         out = await rd_tool("a decision with a weak prior-art hit", kind="decision",
                             ack_prior_art=True, ctx=ctx)
-        assert out["prior_art"] == weak_hit  # the hit IS in the receipt
+        # RECEIPT DIET (msg 6871): record_decision's own prior_art is slimmed to
+        # {id,type,summary} — grade/via are dropped, not echoed back.
+        assert out["prior_art"] == [{"id": "deadbeef", "type": "Decision",
+                                     "summary": "a weakly-related hit"}]  # the hit IS in it
         assert "prior_art_flag" not in out   # but not strong enough to flag
         assert out["prior_art_acknowledged"] == (
             "1 prior-art hit(s) found but none strong enough to flag — "

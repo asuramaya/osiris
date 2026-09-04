@@ -389,9 +389,11 @@ async def test_send_nags_on_an_unhedged_assertion_but_never_gates_the_send(
         actions: Actions) -> None:
     """The dispatch version of measurement_smell (thread 02e0ab9c, Thoth XC's own three
     specimens as the acceptance test, msg 6189): a flat, unhedged claim about code/system
-    behavior gets an advisory `assertion_nag` on the receipt, never a refusal — the
-    message sends either way, same discipline record_decision's protocol_nag already
-    uses. A genuine hedge, or a plain status report, gets no nag at all."""
+    behavior gets an advisory `assertion` code in the receipt's `nags` list, never a
+    refusal — the message sends either way, same discipline record_decision's own
+    `protocol` nag uses (both collapsed to short codes, msg 6871 receipt diet;
+    describe('nags:assertion') for the full text). A genuine hedge, or a plain status
+    report, gets no nag at all."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
 
@@ -421,22 +423,22 @@ async def test_send_nags_on_an_unhedged_assertion_but_never_gates_the_send(
             "obsoletes is the untested hole, mirror tests/test_capture.py:5478",
         )):
             out = await srv.send(f"{body} #{i}", to_agent=held, ctx=ctx)
-            assert "assertion_nag" in out, body
+            assert "assertion" in out.get("nags", []), body
 
         # a genuine hedge does not nag
         hedged = await srv.send(
             "I verified only the denominator, reproduce it yourself", to_agent=held, ctx=ctx)
-        assert "assertion_nag" not in hedged
+        assert "assertion" not in hedged.get("nags", [])
 
         # a plain status report does not nag
         status = await srv.send(
             "Merged, deployed, main is 087e51d, 4110 tests passed", to_agent=held, ctx=ctx)
-        assert "assertion_nag" not in status
+        assert "assertion" not in status.get("nags", [])
 
         # never a gate — a nagged message still sends and is readable
         nagged = await srv.send(
             "the check only ever reads the newest edge", to_agent=held, ctx=ctx)
-        assert "assertion_nag" in nagged
+        assert "assertion" in nagged.get("nags", [])
         assert await actions.pool.fetchval(
             "SELECT 1 FROM fleet_messages WHERE id=$1", nagged["sent"]) == 1
     finally:
@@ -478,20 +480,20 @@ async def test_send_recognizes_a_fresh_recheck_as_a_hedge(actions: Actions) -> N
         rechecked = await srv.send(
             "so I went and grepped. settle.py:288 is what produces the closure_coverage "
             "line every /settle prints.", to_agent=held, ctx=ctx)
-        assert "assertion_nag" not in rechecked
+        assert "assertion" not in rechecked.get("nags", [])
 
         # msg 6219-shaped: same re-check, different phrasing — must NOT nag
         rechecked2 = await srv.send(
             "I grepped after the nag fired on me — the primitive would have cost us a "
             "rebuild if I had not caught it.", to_agent=held, ctx=ctx)
-        assert "assertion_nag" not in rechecked2
+        assert "assertion" not in rechecked2.get("nags", [])
 
         # the confirmed TRUE positive shape survives: no re-check language of the
         # sender's own, still an unhedged behavioral claim
         still_fires = await srv.send(
             "the property pair was chosen BY DESIGN, no link-retraction primitive needed",
             to_agent=held, ctx=ctx)
-        assert "assertion_nag" in still_fires
+        assert "assertion" in still_fires.get("nags", [])
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
