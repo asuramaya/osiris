@@ -723,7 +723,9 @@ def _tool_chars(t: Any) -> int:
 # jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
 # function directly. A genuinely new capability (dry_run default, because required on
 # execute, same shape sweep_seat_disk's own door already established), not padding.
-TOOL_CONTRACT_EXPECTED_COUNT = 151
+# 151 -> 152 (2026-09-03, Khnum, task #199 lane 3C, ruling 41a41437): new tool `resume` —
+# see the char ceiling's own changelog above for the full account.
+TOOL_CONTRACT_EXPECTED_COUNT = 152
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -811,6 +813,16 @@ TOOL_CONTRACT_CEILING_CHARS = 202871
 # 3-way-reconciled) but their combined char cost was never actually measured together
 # until now. Measured fresh, not summed.
 TOOL_CONTRACT_CEILING_CHARS = 210451
+# 210,451 -> 212,749 (measured exact). Tool count 151 -> 152 (2026-09-03, Khnum, task #199
+# lane 3C, ruling 41a41437): ONE new tool, `resume` — launch's former automatic resume-or-
+# fresh branch split into its own agent-facing verb, mirroring the CLI's own already-ruled
+# launch/resume split (60c78788) exactly. A genuinely new capability (a manager can now
+# resume its own worker's dormant session directly, not only via the CLI door), not
+# padding — launch's own docstring shrank in the same commit (its resume-era paragraphs
+# moved to resume's docstring rather than being duplicated), so this is the net cost of
+# ONE new tool, not two tools' worth of prose.
+TOOL_CONTRACT_CEILING_CHARS = 212749
+
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -2989,7 +2989,7 @@ async def test_178_acceptance_replays_the_incident_shape_neither_door_mints_a_st
     launch_receipt = await trigger_module.launch_seat(
         actions, caller="agent:hm-incident178", target=worker_seat, substrate="harness",
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom, resume_spawn=_boom, agents_json=listing)
+        spawn=_boom, agents_json=listing)
     assert launch_receipt["status"] == "already-live"
     assert launch_receipt["body_exists"] is True
 
@@ -3794,7 +3794,7 @@ async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupi
 
     d = await trigger_module.launch_seat(
         actions, caller="agent:occm01", target=worker_seat,
-        spawn=_boom, resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+        spawn=_boom, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "refused-occupied"
     assert d["holder"] == "agent:occ01"
@@ -4287,10 +4287,10 @@ async def test_launch_harness_lane_can_receive_true_when_the_session_comes_up_li
 
     assert d["status"] == "launched"
     assert d["body_exists"] is True and d["can_receive"] is True
-    # THE RECEIPT NAMES THE RESUME DECISION EVERY TIME (Thoth msg 3691) — no bare "body
-    # created and live" anymore; a holder with no session on record says so, then "; live".
-    assert d["detail"].startswith("booted fresh") and d["detail"].endswith("; live")
-    assert d["resume_check"] == ["gen None: minted but never mounted, no session to check"]
+    # NO RESUME DECISION TO NAME ANYMORE (ruling 41a41437): launch never walks the
+    # lineage now, so the receipt is the plain "body created and live" — no resume_check.
+    assert d["detail"] == "body created and live"
+    assert "resume_check" not in d
 
 
 async def test_launch_harness_lane_reports_refused_spawn_when_claude_bg_fails(
@@ -4508,14 +4508,11 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    async def _boom(*a: Any, **kw: Any) -> None:
-        raise AssertionError("a resumable holder must never be minted fresh")
-
-    d = await trigger_module.launch_seat(
+    d = await trigger_module.resume_seat(
         actions, caller="agent:hm-resume", target=worker_seat,
-        message="pick up where you left off", substrate="harness",
+        message="pick up where you left off",
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -4581,14 +4578,11 @@ async def test_launch_harness_lane_resumes_a_zero_hop_candidate_with_no_signed_t
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    async def _boom(*a: Any, **kw: Any) -> None:
-        raise AssertionError("a graph-corroborated zero-hop candidate must never be minted")
-
-    d = await trigger_module.launch_seat(
+    d = await trigger_module.resume_seat(
         actions, caller="agent:hm-ferry", target=worker_seat,
-        message="pick it back up", substrate="harness",
+        message="pick it back up",
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -4629,14 +4623,10 @@ async def test_zero_hop_graph_door_never_fires_one_hop_back(
     async def _boom_resume(*a: Any, **kw: Any) -> None:
         raise AssertionError("one hop back must never clear the graph door")
 
-    async def _boom_spawn(*a: Any, **kw: Any) -> None:
-        raise AssertionError("resident-unknown must refuse the whole launch (ef88e2bb), "
-                             "never fall through to a fresh mint")
-
-    d = await trigger_module.launch_seat(
-        actions, caller="agent:hm-ferry2", target=worker_seat, substrate="harness",
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-ferry2", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom_spawn, resume_spawn=_boom_resume,
+        resume_spawn=_boom_resume,
         agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "refused-resume-unknown"
@@ -4668,48 +4658,71 @@ async def test_launch_harness_lane_walks_past_a_zero_turn_generation(
         "succeeded_from", "agent:seat-zt", "test", NOW, 0.9,
         evidence_class="self_declared")  # minted, never mounted — no seat_generation/session
     await _office(actions, worker_seat, "/tmp/zeroturn-test")
-    spawned: list[dict[str, Any]] = []
     resumed: list[dict[str, Any]] = []
 
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    d = await trigger_module.launch_seat(
-        actions, caller="agent:hm-zt", target=worker_seat, substrate="harness",
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-zt", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_fake_spawn(spawned), resume_spawn=_resume_spawn,
+        resume_spawn=_resume_spawn,
         agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
-    assert spawned == []  # never minted fresh
     assert len(resumed) == 1 and resumed[0].get("resume_session") == FULL_SID
     assert d["resume_check"][0] == "gen None: minted but never mounted, no session to check"
     assert "resumable, 1 hop(s) back" in d["resume_check"][1]
 
 
-async def test_launch_harness_lane_falls_through_to_mint_when_nothing_is_resumable(
+async def test_launch_harness_lane_always_mints_fresh_even_when_nothing_was_ever_mounted(
     actions: Actions,
 ) -> None:
-    """The ordinary case (no prior mount at all) must still mint fresh exactly as before this
-    lane existed — the resume check is a first look, never a hard gate that could strand a
-    launch when nothing is there to continue."""
+    """The ordinary case (no prior mount at all) mints fresh — unconditionally now (ruling
+    41a41437, task #199 lane 3C): launch no longer runs a resume check of its own at all,
+    so there is nothing left to "fall through" from. The sibling refusal case (resume_seat
+    refuses rather than falling through to a mint when nothing is resumable) lives right
+    after this one, on the function that now owns that decision."""
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:hw-fresh", manager_agent="agent:hm-fresh",
         worker_handle="Fresh-Test", house="osiris")
     await _office(actions, worker_seat, "/tmp/fresh-test")
     spawned: list[dict[str, Any]] = []
 
-    async def _boom(*a: Any, **kw: Any) -> None:
-        raise AssertionError("nothing resumable exists — resume_spawn must never be called")
-
     d = await trigger_module.launch_seat(
         actions, caller="agent:hm-fresh", target=worker_seat, substrate="harness",
         settings=_settings(enabled=True, sense=""),
-        spawn=_fake_spawn(spawned), resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and "mode" not in d
     assert len(spawned) == 1
+    assert "resume_check" not in d  # no resume decision was ever made to name
+
+
+async def test_resume_seat_refuses_rather_than_falling_through_when_nothing_is_resumable(
+    actions: Actions,
+) -> None:
+    """THE ONE DELIBERATE BEHAVIOR CHANGE from launch_seat's former combined lane (ruling
+    41a41437): resume answers exactly one question, and "nothing to resume" is a real
+    answer to it — never an invitation to mint fresh instead, mirroring the CLI's own
+    _cmd_resume_harness precedent exactly ("never falls through to a fresh mint")."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw-fresh2", manager_agent="agent:hm-fresh2",
+        worker_handle="Fresh-Test-2", house="osiris")
+    await _office(actions, worker_seat, "/tmp/fresh-test-2")
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("nothing resumable exists — resume_spawn must never be called")
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-fresh2", target=worker_seat,
+        settings=_settings(enabled=True, sense=""),
+        resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-nothing-to-resume"
+    assert d["body_exists"] is False and d["can_receive"] is False
+    assert "resume_check" in d
 
 
 async def test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_not_a_refusal(
@@ -4737,13 +4750,10 @@ async def test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
-    async def _boom_spawn(*a: Any, **kw: Any) -> None:
-        raise AssertionError("a zero-hop graph-corroborated candidate must never be minted")
-
-    d = await trigger_module.launch_seat(
-        actions, caller="agent:hm-unk", target=worker_seat, substrate="harness",
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-unk", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense)),
-        spawn=_boom_spawn, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -4924,34 +4934,36 @@ async def test_lineage_resume_candidate_refuses_a_hop_with_only_a_truncated_stub
     assert any("truncated" in line or "synthetic" in line for line in outcome)
 
 
-async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
+async def test_resume_seat_refuses_a_tail_closed_at_the_seam(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """#156's rebuild (2026-08-09, the operator's own correction): the floor still refuses
-    a transcript whose tail since its last compaction is genuinely tiny — the seam-itself
-    case, the operator's own "rare special case" — falling through to mint fresh exactly
-    like the no-history case. The receipt still NAMES the refusal with real numbers, not a
-    silent fall-through. (Compacting once and then doing real work is now RESUMED, not
-    refused — see the sibling test right after this one; the fixture here deliberately
-    leaves only 16 raw bytes after the boundary, well under the floor set below.)"""
+    """#156's rebuild (2026-08-09, the operator's own correction), re-homed to resume_seat
+    (ruling 41a41437, task #199 lane 3C — the one deliberate behavior change: this used to
+    fall through to a fresh mint on launch_seat's old combined lane; resume now REFUSES
+    instead, never falls through, matching resume_seat's own new contract): the floor
+    still refuses a transcript whose tail since its last compaction is genuinely tiny —
+    the seam-itself case, the operator's own "rare special case." The receipt still NAMES
+    the refusal with real numbers, not a silent one. (Compacting once and then doing real
+    work IS resumed — see the sibling test right after this one; the fixture here
+    deliberately leaves only 16 raw bytes after the boundary, well under the floor set
+    below.)"""
     sense = await _lineage_holder_with_session(
         actions, tmp_path, agent_id="agent:abcd1234", compacted=True)
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:abcd1234", manager_agent="agent:hm-compact",
         worker_handle="Compacted-Test", house="osiris")
     await _office(actions, worker_seat, "/tmp/compacted-test")
-    spawned: list[dict[str, Any]] = []
 
     async def _boom(*a: Any, **kw: Any) -> None:
         raise AssertionError("a tail closed at the seam itself must never be resumed")
 
-    d = await trigger_module.launch_seat(
-        actions, caller="agent:hm-compact", target=worker_seat, substrate="harness",
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-compact", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1000),
-        spawn=_fake_spawn(spawned), resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_boom, agents_json=_fake_agents_json([[]]))
 
-    assert d["status"] == "launched" and "mode" not in d
-    assert len(spawned) == 1
+    assert d["status"] == "refused-nothing-to-resume"
+    assert d["body_exists"] is False and d["can_receive"] is False
     # THE REFUSAL IS NAMED, NOT SILENT: the receipt carries which generation, its size, and
     # the specific gate that fired — a human reads one line instead of re-deriving it.
     assert len(d["resume_check"]) == 1
@@ -4961,11 +4973,11 @@ async def test_launch_harness_lane_never_resumes_a_tail_closed_at_the_seam(
     assert "min_tail_bytes=1000" in d["detail"]
 
 
-async def test_launch_harness_lane_resumes_a_compacted_transcript_with_real_tail_work(
+async def test_resume_seat_resumes_a_compacted_transcript_with_real_tail_work(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The sibling and the whole point of #156's rebuild: a holder whose transcript
-    compacted once but carries real work since that boundary IS resumed, not minted fresh
+    compacted once but carries real work since that boundary IS resumed, not refused
     — sekhmet's own live specimen (12 compactions, 4.07MB of real work after the last
     one), in miniature."""
     sense = await _lineage_holder_with_session(
@@ -4979,13 +4991,10 @@ async def test_launch_harness_lane_resumes_a_compacted_transcript_with_real_tail
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append(kw)
 
-    async def _boom(*a: Any, **kw: Any) -> None:
-        raise AssertionError("a tail with real post-compaction work must never mint fresh")
-
-    d = await trigger_module.launch_seat(
-        actions, caller="agent:hm-compact-2", target=worker_seat, substrate="harness",
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-compact-2", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1),
-        spawn=_boom, resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
 
     assert d["status"] == "launched" and d.get("mode") == "resumed"
     assert resumed and resumed[0].get("resume_session") == FULL_SID
