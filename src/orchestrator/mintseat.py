@@ -52,6 +52,7 @@ from src.orchestrator.boot_compiler import compile_managed_body, template_versio
 from src.orchestrator.charter import charter_of
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _default_office_root
 from src.orchestrator.seats import (
+    _FOUNDER_SOURCE_PREFIX,
     _OPERATOR_ACTORS,
     bind_seat_tree,
     ensure_seat,
@@ -518,12 +519,30 @@ async def found_seat(
             return {"error": f"near-miss twin refused: living seat {near!r} normalizes to "
                              f"the same name as {handle!r} — pass the exact handle {near!r} "
                              "to work with it, or choose a distinct one"}
+        # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation
+        # e6ac651d, seats.py's own _FOUNDER_SOURCE_PREFIX docstring): the handle
+        # assertion's source is what _seat_lineage_ancestor later trusts as this
+        # seat's own founding lineage — `actor` is who ran `osiris new`, and two
+        # DIFFERENT seats founded under the SAME --actor used to share that source,
+        # so the second seat's first launch silently inherited the first seat's own
+        # live generation. `handle` is globally unique (claim_name enforces it), so
+        # prefixing it makes a source no other seat can ever carry — this always
+        # resolves to "no ancestor yet", the fresh `agent:seat-<id>` root every
+        # never-launched seat is supposed to get, regardless of how many other seats
+        # this same actor has founded before or since.
         seat_result = await ensure_seat(
-            actions, house=handle, handle=handle, source=actor, anchor_cwd=str(office_path))
+            actions, house=handle, handle=handle,
+            source=f"{_FOUNDER_SOURCE_PREFIX}{handle}", anchor_cwd=str(office_path))
         if "error" in seat_result:
             return seat_result
         worker_seat_id = seat_result["seat_id"]
         seat_minted = bool(seat_result["minted"])
+        if seat_minted:
+            _founder_obj = await actions.create_or_find_object(
+                "Seat", worker_seat_id, actor)
+            await actions.assert_property(
+                _founder_obj, "founded_by", actor, actor, datetime.now(UTC), _CONF,
+                evidence_class=_EC)
 
     workspace.mkdir(parents=True, exist_ok=True)
     workspace_pin = workspace / ".osiris"

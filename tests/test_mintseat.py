@@ -671,6 +671,49 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
     assert "osiris launch Henry" in out["next_step"]
 
 
+async def test_found_seat_stamps_a_per_seat_founder_source_not_the_shared_actor(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
+    two seats founded under the SAME --actor used to carry that actor's own id as the
+    source on BOTH seats' `handle` assertions — the exact property
+    `_seat_lineage_ancestor` (trigger.py) later trusts as each seat's own founding
+    lineage, so the second seat's first launch silently walked the actor's live
+    lineage forward and adopted whatever generation it found there (measured live in
+    the resume_seat acceptance test: seat 3 inherited seat 2's own dormant session).
+    Each seat must get its OWN, seat-unique source instead — `handle` is globally
+    unique, so `_FOUNDER_SOURCE_PREFIX + handle` can never collide across seats no
+    matter how many times the same actor founds one. `actor` survives only as a
+    separate `founded_by` ATTRIBUTION property, never as anything lineage-shaped."""
+    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX
+
+    out_a = await found_seat(actions, handle="Lineagea", path=str(tmp_path / "wsa"),
+                             actor="khnum", office_root=tmp_path / "seatsa")
+    out_b = await found_seat(actions, handle="Lineageb", path=str(tmp_path / "wsb"),
+                             actor="khnum", office_root=tmp_path / "seatsb")
+
+    async def _handle_source(seat_id: str) -> str:
+        return await actions.pool.fetchval(
+            "SELECT h.source_id FROM current_assertions h JOIN objects o "
+            "ON o.id=h.object_id WHERE o.canonical=$1 AND o.type='Seat' "
+            "AND h.name='handle' ORDER BY h.confidence DESC, h.observed_at DESC "
+            "LIMIT 1", seat_id)
+
+    source_a = await _handle_source(out_a["seat_id"])
+    source_b = await _handle_source(out_b["seat_id"])
+    assert source_a == f"{_FOUNDER_SOURCE_PREFIX}Lineagea"
+    assert source_b == f"{_FOUNDER_SOURCE_PREFIX}Lineageb"
+    assert source_a != source_b  # the whole point: never shared across seats
+
+    async def _founded_by(seat_id: str) -> str:
+        return await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+            "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='founded_by'", seat_id)
+
+    assert await _founded_by(out_a["seat_id"]) == "khnum"
+    assert await _founded_by(out_b["seat_id"]) == "khnum"  # attribution, kept, just inert
+
+
 async def test_found_seat_leaves_project_unset_and_defaults_path_to_home_code(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

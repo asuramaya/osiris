@@ -4122,6 +4122,89 @@ async def test_bind_before_spawn_never_treats_a_console_established_handle_as_an
     assert phantom is None  # nothing minted from the CLI actor label at all
 
 
+async def test_bind_before_spawn_never_chains_two_self_managed_seats_under_the_same_actor(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE REGRESSION FOR e6ac651d/004cc8d8 item 4, REPRODUCED AT THE MECHANISM THAT
+    ACTUALLY CAUSES IT: two seats founded via found_seat under the SAME --actor used
+    to carry that actor's own id as the source on BOTH seats' `handle` assertions —
+    `_seat_lineage_ancestor` treated it as each seat's own founding lineage, so seat
+    B's FIRST launch walked seat A's own live lineage forward (via lineage_head) and
+    chained B's fresh mint onto A's chain — the corruption `_lineage_resume_candidate`
+    then surfaces AT RESUME TIME (walking B's own holder backward through
+    succeeded_from lands on A's real session; measured live in the resume_seat
+    acceptance test: a synthetic seat 3 inherited seat 2's own dormant session, both
+    founded `--actor khnum`). found_seat's own per-seat founder source (seats.py's
+    `_FOUNDER_SOURCE_PREFIX`) fixes this at the root: both seats always mint a bare,
+    independent `agent:seat-<id>` root, never an heir of anyone else's lineage — so
+    resume(B) can never continue A, because nothing ever chained them together."""
+    from src.orchestrator.mintseat import found_seat
+
+    seat_a = (await found_seat(actions, handle="Lineage-A", path=str(tmp_path / "wsa"),
+                               actor="khnum", office_root=tmp_path / "seatsa"))["seat_id"]
+    seat_b = (await found_seat(actions, handle="Lineage-B", path=str(tmp_path / "wsb"),
+                               actor="khnum", office_root=tmp_path / "seatsb"))["seat_id"]
+
+    out_a = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_a, handle="Lineage-A", house="Lineage-A",
+        current_holder=None, office="/tmp/lineage-a", anchor="/tmp/anchors/lineage-a",
+        source="agent:thoth01")
+    out_b = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_b, handle="Lineage-B", house="Lineage-B",
+        current_holder=None, office="/tmp/lineage-b", anchor="/tmp/anchors/lineage-b",
+        source="agent:thoth01")
+
+    # THE ROOT FIX: each seat mints its OWN bare first generation, never an heir of
+    # the other (or of the shared actor) — the exact "agent:seat-<id>" shape the
+    # NO-ANCESTOR case already uses for a seat truly never described.
+    assert out_a["agent"] == f"agent:seat-{seat_a.removeprefix('seat:')}"
+    assert out_b["agent"] == f"agent:seat-{seat_b.removeprefix('seat:')}"
+    assert out_a["agent"] != out_b["agent"]
+
+    succeeded_from_b = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='succeeded_from'",
+        out_b["agent"])
+    assert succeeded_from_b is None  # B is a fresh root, never an heir of A's lineage
+
+    row_a = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_a)
+    row_b = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_b)
+    assert row_a["canonical"] == out_a["agent"]
+    assert row_b["canonical"] == out_b["agent"]
+    assert row_a["canonical"] != row_b["canonical"]  # resume(B) can never continue A
+
+
+async def test_bind_before_spawn_still_chains_a_relaunch_of_the_same_self_managed_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE NEGATIVE CONTROL: the fix above must not turn EVERY relaunch into a fresh
+    root — a seat's own SECOND generation still chains from its OWN first, exactly as
+    before, via the same `current_holder` fallback a seat with no handle assertion at
+    all already relies on (the founder-prefixed source is excluded unconditionally,
+    same as `_OPERATOR_ACTORS`, so this path was already proven safe there)."""
+    from src.orchestrator.mintseat import found_seat
+
+    seat_id = (await found_seat(actions, handle="Lineage-C", path=str(tmp_path / "wsc"),
+                                actor="khnum", office_root=tmp_path / "seatsc"))["seat_id"]
+
+    first = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Lineage-C", house="Lineage-C",
+        current_holder=None, office="/tmp/lineage-c", anchor="/tmp/anchors/lineage-c",
+        source="agent:thoth01")
+    second = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Lineage-C", house="Lineage-C",
+        current_holder=first["agent"], office="/tmp/lineage-c",
+        anchor="/tmp/anchors/lineage-c", source="agent:thoth01")
+
+    assert second["agent"] == f"{first['agent']}-ii"
+
+
 async def test_bind_before_spawn_pre_registers_the_anchor_row_so_mount_reattaches(
     actions: Actions,
 ) -> None:
