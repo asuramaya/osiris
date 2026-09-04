@@ -2946,11 +2946,28 @@ async def cmd_correct_pin_value(
         print(f"osiris correct-pin-value: refused — {out['error']}", file=sys.stderr)
         return 1
     if not out.get("written"):
-        print(f"already {value!r} — nothing written (old_value={out.get('old_value')!r})")
-        return 0
-    print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
-          f"{out['old_value']!r} -> {out['new_value']!r}")
-    print(f"  path: {out['path']}  backup: {out['backup']}")
+        print(f"office: already {value!r} — nothing written (old_value={out.get('old_value')!r})")
+    else:
+        print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
+              f"{out['old_value']!r} -> {out['new_value']!r}")
+        print(f"  path: {out['path']}  backup: {out['backup']}")
+    # THE OFFICE-ONLY EARLY RETURN WAS A REAL BUG (found live, Jesus's own workspace pin,
+    # 2026-09-04): correct_own_pin_value ALWAYS checks/corrects the anchor and workspace
+    # copies too (ruling b30e2b38/thread 6483-6504), regardless of whether the office copy
+    # itself needed a write -- a caller whose office was already correct but whose second or
+    # third copy genuinely got corrected used to see "already X -- nothing written" with no
+    # mention the write happened. Report each present copy separately, every time.
+    for copy in ("anchor", "workspace"):
+        detail = out.get(copy)
+        if detail is None:
+            continue
+        if detail.get("error"):
+            print(f"{copy}: refused — {detail['error']}")
+        elif detail.get("corrected"):
+            print(f"{copy}: corrected — path: {detail['path']}")
+        else:
+            print(f"{copy}: already {value!r} — nothing written "
+                  f"(old_value={detail.get('old_value')!r})")
     return 0
 
 
