@@ -5857,3 +5857,12 @@ async def test_stop_seat_falls_back_to_the_lineages_own_graph_sessions(
     assert d["status"] == "stopped"
     assert d["pid"] == 5252 and d["holder"] == "agent:stop06-ii"
     assert killed == [5252]
+
+
+def test_job_id_anchors_on_the_innermost_jobs_component():
+    """A job dir nested under another job's tree names the INNER job (ffa482c0)."""
+    from src.ingest.sessions import _job_id
+
+    assert _job_id("/home/u/.claude/jobs/outer111/tmp/x/jobs/inner222") == "inner222"
+    assert _job_id("/home/u/.claude/jobs/outer111") == "outer111"
+    assert _job_id(None) is None

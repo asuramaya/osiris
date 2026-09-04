@@ -317,7 +317,11 @@ def _job_id(job_dir: str | None) -> str | None:
         return None
     parts = Path(job_dir).parts
     if "jobs" in parts:
-        i = parts.index("jobs")
+        # The INNERMOST `jobs` names the job. A job dir nested under another job's own
+        # tree (a gate run with TMPDIR=~/.claude/jobs/<outer>/tmp spawning
+        # .../jobs/<inner>) resolved to <outer> when this took the first hit — the
+        # wrong identity anchor, silently (held-work ffa482c0, measured 2026-09-04).
+        i = len(parts) - 1 - parts[::-1].index("jobs")
         if i + 1 < len(parts):
             return parts[i + 1]
     if "sessions" in parts:
