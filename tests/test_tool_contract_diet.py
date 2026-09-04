@@ -799,7 +799,14 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 116
+TOOL_CONTRACT_EXPECTED_COUNT = 115
+# 116 -> 115 (2026-09-04, Imhotep, task #199 lane 2, retirement wave 2, Thoth dispatch
+# 6872/6876, operator-accepted null result): uningested_trees hidden — zero MCP traffic,
+# no CLI/daemon/slash bypass, and its automated companion uningested_trees_alarm_tick
+# already covers the same ground proactively. The other 25 candidates from the wave-2
+# proposal (decision 36433427) stand as a KEEP finding, not touched — see that decision
+# for the full per-tool reasoning; Thoth's own verdict: record it as the standing "the
+# tail is load-bearing" finding so nobody dispatches a third retirement pool against it.
 # 146 -> 147 (2026-09-01/02, Imhotep, thread 6272): sweep_seat_disk, the disk-half wrapper
 # over sweep_retired_office/sweep_seat_workspace — see the ceiling's own changelog above.
 # 147 -> 148 (2026-09-02, Imhotep, ruling b30e2b38): revert_own_pin_write, the self-scoped
@@ -920,7 +927,35 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # 186,392 -> 181,493 (measured exact). Tool count 121 -> 115 (2026-09-03, Imhotep, task
 # #199 lane 2, thread 6854, families wave — see the count changelog above for the full
 # breakdown and the three declined families).
+# STALE RECONCILIATION, RE-MEASURED (2026-09-03/04, Imhotep, task #199 docstring-diet wave,
+# Thoth dispatch 6872, thread 6854): tonight's multi-branch merge (Khnum's launch/resume
+# split + resume's own new tool, Sekhmet's rebind_seat holder=, the BINDING_VERBS raw-
+# registry fix) left this ceiling reconciled back to the shared ancestor's stale 202871,
+# same class as Khnum's own earlier note above — a driver correctly declines to sum two
+# branches' deltas, so a human/agent re-measures against the REAL merged tree instead of
+# trusting the arithmetic. Tool count 115 -> 116 (one new tool, `resume`, landed on main
+# independently of this branch).
 TOOL_CONTRACT_CEILING_CHARS = 202871
+# 202,871 -> 133,436 (measured exact). Tool count unchanged at 116 (2026-09-04, Imhotep,
+# operator's own priority: "make context bloating a priority, one turn in you're at 25%"
+# — Thoth dispatch 6872, task #129's ~32K-token schema-load measurement). THE
+# DOCSTRING-DIET WAVE: rewrote ~40 of the highest-cost tool docstrings (record_decision,
+# open_thread, settle, send, mount, fleet, tree_ledger, roster, launch/resume, triage,
+# graph_lint, wake, rebind_seat, ack_handoff, dispose, acquire_lease, merge, and more) to
+# a lean contract — what it does, the params that matter, one line on refusal — moving
+# incident history, ruling ids, and multi-paragraph rationale out of the live docstring
+# and into the graph (consult_canon pointers added where the cut material still matters).
+# No parameter, refusal condition, or receipt field was dropped — only the WHY-it-exists
+# prose, which a caller does not need at call time to use a tool correctly. Full suite
+# verified green after (not a docstring-only change nobody re-ran). NOT the operator's
+# stated target (under 60K aggregate) — the top ~40 tools were the highest-leverage cut;
+# the remaining ~76 model-facing tools average a few hundred chars each and would need a
+# second wave to close the rest of the gap. Reported honestly, not padded toward a number.
+TOOL_CONTRACT_CEILING_CHARS = 133436
+# 133,436 -> 132,810 (measured exact). Tool count 116 -> 115 (2026-09-04, Imhotep, task
+# #199 lane 2, retirement wave 2 — see the count changelog above): uningested_trees
+# hidden, same commit as the docstring diet per Thoth's own instruction.
+TOOL_CONTRACT_CEILING_CHARS = 132810
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

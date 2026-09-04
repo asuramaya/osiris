@@ -1080,32 +1080,19 @@ async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None)
 @mcp.tool()
 async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
                      offset: int = 0) -> dict[str, Any]:
-    """The graph audits ITSELF — report-only, never writes. THE CHECKS: contradiction
-    (near-tie multi-source winners — the resolver is coin-flipping a fact), laundering (an
-    agent carrying a fact above its origin grade), lineage integrity (succession cycles,
-    dangling heir pointers, heirs without ancestry, retired-yet-live/false-minted-yet-
-    live agents, healed false mints), orphan links (live links into merged/retired objects),
-    stale obligations (open
-    duties older than `stale_days`), attribution anomalies (writes from agent ids the graph
-    never registered — the impersonation class), phantom twins (an anonymous un-spawned
-    agent mounted at a Seat's office beside a different holder lineage), parallel lives (a
-    generation minted while a different door of its own lineage still pulsed), duplicate
-    works_in (a currently-live agent carrying more than one simultaneously-live works_in
-    edge — orient() never resolves through this edge; repo= default/pin self-heal abstain
-    instead), peer-silent (an active peer_of pair with no direct
-    mail between either side's holders in `stale_days` — a mechanical proxy for the
-    peer-bond's fiduciary-disclosure duty, never proof a finding was withheld),
-    held-past-deadline (a mutual HOLD still open past its own time-box — the auto-
-    escalation half, surfaced here rather than a new daemon).
-    Findings are TESTIMONY for a mind to judge, not verdicts to auto-apply; heal with
-    compensating events, never DELETE (constitution 3).
+    """The graph audits ITSELF — report-only, never writes. Checks: contradiction
+    (near-tie multi-source winners), laundering (a fact above its origin grade), lineage
+    integrity (succession cycles, dangling heirs, false mints), orphan links (into merged/
+    retired objects), stale obligations (older than `stale_days`), attribution anomalies
+    (unregistered writer ids), phantom twins, parallel lives, duplicate works_in,
+    peer-silent (no mail in `stale_days` between an active peer_of pair — a proxy, not
+    proof), held-past-deadline. Findings are testimony to judge, never auto-applied; heal
+    with compensating events, never DELETE.
 
-    `check`/`limit`/`offset`: every check normally lists only its first 50 findings
-    (`counts` still holds the true total for all of them). Pass `check` (a value from
-    `counts` or a finding's own `check` field, e.g. 'false-mint') to list ONLY that check's
-    findings, paginated by `limit`/`offset` across its FULL row set, always its true total.
-    Omitting `check` is a complete no-op. `counts` mixes info-grade history with warn/error-
-    grade damage; read `counts_by_severity` or `severity` for how much actually matters."""
+    Each check lists only its first 50 findings by default (`counts` has the true total).
+    Pass `check` (a `counts` key or a finding's own `check` field) to page one check's
+    full set via `limit`/`offset`; omitting it is a no-op. `counts_by_severity`/`severity`
+    separate info-grade history from warn/error damage."""
     pool = await _pool_get()
     args: dict[str, Any] = {"stale_days": stale_days}
     if check is not None:
@@ -1124,39 +1111,21 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
 async def triage(mode: str = "census", object_type: str | None = None, status: str = "active",
                  stale_days: int = 30, cohort_min: int = 3, limit: int | None = None,
                  offset: int = 0) -> list[dict[str, Any]]:
-    """Judge the object set itself — the reusable primitive that replaced hand-run,
-    ad-hoc SQL scripts. TWO MODES, `mode`:
+    """Judge the object set itself. Read-only, no writes. `mode`:
 
-    'census' (the default) — one row per (type, status): `n`, `orphans` (zero live links),
-    `thin` (1-2 live links), `median_links`/`max_links`, `born` (earliest member),
-    `last_touch` (latest touch across the group — derived; the graph carries no
-    `updated_at`). The left-pane type browser: what exists, and how healthy each slice is.
+    'census' (default) — one row per (type, status): n, orphans (zero live links), thin
+    (1-2), median/max links, born, last_touch. The what-exists-and-how-healthy overview.
 
-    'buckets' — `object_type` required (a note names every real type when it's missing or
-    unknown). One row per object of that type+`status` (default "active"), each carrying
-    exactly one `bucket`, by priority: `contradicted` (this object has a property with more
-    than one DISTINCT live value from different sources, neither superseding the other —
-    carries `contradicted_on`, the property names in conflict; MARKS, never resolves) >
-    `duplicate_suspect` (a same-type+status object shares its basename — case-folded, so
-    e.g. two SoftwareProjects differing only in case both land here), `bulk_import`
-    (`cohort_min` or more objects — default 3 — born the same calendar second with an
-    IDENTICAL live-link fingerprint, same types AND same counts per type, not just the same
-    total — one script's insert loop, machine-detected), `orphan` (zero live links), `hub`
-    (live links at/above the type's own 95th percentile, floor 10), `stale` (linked but
-    untouched past `stale_days`, default 30), `thin` (1-2 live links), or `normal`. Every
-    object in scope is listed, not only flagged ones — this doubles as a plain browse.
-    `limit`/`offset` (default 200/0, capped 2000) page it; `census` already carries the
-    true count per type, so this never needs to.
+    'buckets' — `object_type` required. One row per object of that type+status, each
+    exactly one bucket, by priority: contradicted (a property with 2+ live, non-
+    superseding values — marks, never resolves) > duplicate_suspect (case-folded basename
+    collision) > bulk_import (`cohort_min`+ objects born the same second with an identical
+    link fingerprint) > orphan > hub (>=95th-pct links, floor 10) > stale (untouched past
+    `stale_days`) > thin > normal. Every in-scope object is listed, not just flagged ones.
+    `limit`/`offset` page it (default 200/0, capped 2000).
 
-    `object_type='Type'` — THE CATALOG'S OWN GAP SURFACE: a different bucket set, since a
-    Type row doesn't participate in `links` the way an
-    ordinary object does (every one would trivially bucket 'orphan' otherwise, saying
-    nothing real). `undescribed` (blank/missing `description` — exactly what a bare
-    accretion mints) > `no_label_rule` (kind='object' only; blank/missing `label_field`)
-    > `normal`.
-
-    Read-only, no writes — findings are testimony for a mind's own triage verbs, same rule
-    graph_lint runs on."""
+    `object_type='Type'` — a different bucket set for Type rows: undescribed (blank
+    description) > no_label_rule (kind='object' only, blank label_field) > normal."""
     pool = await _pool_get()
     args: dict[str, Any] = {"mode": mode}
     if object_type is not None:
@@ -1469,24 +1438,18 @@ async def handoff_briefing(
     repo: str, agent_ref: str | None = None, since: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """A SUCCESSION BRIEFING COMPILED FROM THE GRAPH — not hand-written from memory. Reads
-    back, for `repo`: what SHIPPED (Decisions minted since the boundary, each showing its
-    `decided_in` commit(s) and whether that commit is an ancestor of the project's own
-    deploy cursor — deployed / landed-not-deployed / unknown), what's OPEN and whose move it
-    is (`compositions.open_thread_wall`, the one wall law), what's OPERATOR-GATED (named
-    explicitly, never silently inherited as someone's task), what was CORRECTED (`supersedes`
-    chains, both sides' summaries), and a best-effort, explicitly-labeled HEURISTIC flag for
-    text that self-declares unconfirmed ("UNVERIFIED", "FALSIFIABLE PREDICTION", ...) — no
-    structured marker exists for that yet, unlike `is_handoff`.
+    """A succession briefing compiled from the GRAPH, not hand-written from memory. For
+    `repo`: what SHIPPED (Decisions since the boundary, each with its deploy status), what's
+    OPEN and whose move it is, what's OPERATOR-GATED, what was CORRECTED (supersedes
+    chains), and a best-effort HEURISTIC flag for self-declared-unconfirmed text
+    ("UNVERIFIED", ...).
 
-    `since` defaults to the boundary `since_last_handoff` finds by walking YOUR OWN mounted
-    lineage (or `agent_ref`'s, to preview another agent's) back through `succeeded_from` for
-    the freshest `is_handoff` marker; pass an explicit ISO-8601 `since` to override. Returns
-    both the structured data AND a rendered `markdown` string ending in an empty JUDGMENT
-    section: the compiled facts are the win, the departing seat's own prose on top is the
-    irreducible rest — this tool never writes that prose, or anything else. READ-ONLY,
-    renders on demand, never automatic, never mints a Decision or Thread itself. Pair it
-    with your own `record_decision(..., is_handoff=True)` / `settle()` once you've judged it."""
+    `since` defaults to the boundary found by walking your own mounted lineage (or
+    `agent_ref`'s) back through succeeded_from for the freshest is_handoff marker; pass
+    an explicit ISO-8601 to override. Returns structured data plus a rendered `markdown`
+    ending in an empty JUDGMENT section — the compiled facts are the win, your own prose
+    is the irreducible rest. Read-only, renders on demand, never mints anything itself.
+    Pair with record_decision(..., is_handoff=True) / settle() once judged."""
     pool = await _pool_get()
     if agent_ref:
         oid = await _resolve(pool, agent_ref)
@@ -1549,31 +1512,14 @@ async def list_rooms() -> list[dict[str, Any]]:
 async def save_composition(
     name: str, spec: dict[str, Any], kind: str = "lens", room: str | None = None
 ) -> dict[str, str]:
-    """Save a COMPOSITION — a reusable, forkable query/lens over the graph (the composer's
-    primitive), so a question becomes a first-class object instead of a throwaway tool call.
-    The spec is a small CLOSED op-tree (anything else is a named transform, never a new op):
-      {"op":"subject"}                                  the object in focus
-      {"op":"select","object_type":?,"where":[{property,op,value}]}  matching objects
-        (where op ∈ eq|contains|matches_all|lt|gt|present|absent; matches_all = every
-         whitespace token present, any order — word-order-proof recall)
-      {"op":"traverse","from":<node>,"direction":"both|out|in","hops":N}  neighbourhood (≤3)
-      {"op":"collect","from":<node>,"properties":[..],"transform":"country|lower"}  values
-      {"op":"subtract","left":<node>,"right":<node>}    set/value difference
-      {"op":"union","sets":[<node>,..]}                 combine sets
-      {"op":"intersect","sets":[<node>,..]}             objects/values in ALL sets
-      {"op":"aggregate","from":<node>,"group_by":["prop",..],   group + a metric (≤3 dims)
-       "metric":{"type":"count|sum|avg|min|max|cardinality","field":"prop"}}  -> rows
-      {"op":"order","from":<node>,"by":"metric|prop","dir":"asc|desc"}  rank
-      {"op":"take","from":<node>,"n":N}                 top-N
-    There is no `join` — relate sets via `intersect` or `traverse`, and fuzzy matching is a
-    Function. `room` (name or id) scopes it to a stance. Example (operational vs disclosed
-    geography — what `discrepancy` hardcoded):
-      {"op":"subtract",
-       "left":{"op":"collect","transform":"country","properties":["location"],
-               "from":{"op":"traverse","from":{"op":"subject"},"hops":2}},
-       "right":{"op":"collect","transform":"country",
-                "properties":["incorporation_state","address"],"from":{"op":"subject"}}}
-    """
+    """Save a COMPOSITION — a reusable, forkable query/lens over the graph. `spec` is a
+    small closed op-tree (no `join` — use intersect/traverse instead; fuzzy matching is a
+    Function): subject (the focus object); select (object_type?, where=[{property,op,
+    value}], op in eq|contains|matches_all|lt|gt|present|absent); traverse (from,
+    direction=both|out|in, hops<=3); collect (from, properties, transform=country|lower);
+    subtract/union/intersect (over sets); aggregate (from, group_by<=3 dims, metric={type:
+    count|sum|avg|min|max|cardinality, field}); order (from, by, dir); take (from, n).
+    `room` scopes it to a stance. Worked examples: consult_canon('composition spec')."""
     pool = await _pool_get()
     rid = await comp.resolve_room(pool, room)
     cid = await comp.save_composition(pool, name, spec, kind, room_id=rid)
@@ -1632,19 +1578,14 @@ async def run_composition(
     offset: int | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Run a saved composition, optionally against a subject object (UUID or name), AND light
-    it up on the operator's live screen. Returns its result — an object set (each named), a
-    value list, or aggregate rows.
+    """Run a saved composition, optionally against a subject object (UUID or name), AND
+    light it up on the operator's live screen. Returns an object set, value list, or
+    aggregate rows.
 
-    `fields`/`take`/`depth` (ruling ad19a779, task #64) bound a large result at the SOURCE
-    instead of shipping it whole: `fields` keeps only the named columns per row (e.g.
-    ["id","summary"]), `take` caps each list to its first N, `depth` caps how many nested
-    levels (a roadmap's own section→arc→owner) get walked before collapsing to a count.
-    Omit all three for the full result, unchanged — a roadmap-sized composition (61K chars
-    unbounded) can now be asked for narrow and small in one call: run_composition("roadmap",
-    subject="osiris", fields=["id","summary"], take=5, depth=2).
-    `offset` pages PAST the first `take` (`take=50, offset=50` = page 2 of the same
-    stable ordering) — `take` alone could only ever show the first N, forever."""
+    `fields`/`take`/`depth` bound a large result at the source: `fields` keeps only
+    named columns, `take` caps each list to N, `depth` caps nested-level walking before
+    collapsing to a count. Omit all three for the full result. `offset` pages past the
+    first `take` (stable ordering) — `take` alone could only ever show the first N."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     sid = await _resolve(pool, subject) if subject else None
@@ -1978,21 +1919,13 @@ async def mount(
     Then call orient(). ALREADY MOUNTED (the whisper said so)? Skip this — orient() for
     bearings and proceed; re-mounting is only for after an MCP bounce, with your anchor.
 
-    `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
-    next' reminder) that terse mode (the default) drops — every structured fact survives
-    either way; verbose only adds explanation of facts already present.
+    `verbose=True` restores guidance prose (co-agent etiquette, next-step reminders) that
+    terse mode (default) drops — structured facts survive either way.
 
-    `transcript_path`/`bridge_session_id` are hook-stamped, same as `session_anchor` — a
-    caller never sets these by hand. They complete the revisit-resolution chain to match
-    automount()'s own (#48 piece 1, decision 424c4158): a tab-view of a living session
-    (`transcript_path` names a file that belongs to another session's mount row) and a
-    background-job fork (`bridge_session_id`) each
-    REBIND to their existing soul instead of minting a stranger.
-    `transcript_path` ALSO feeds MODEL RESOLUTION directly now (thread 7304bfd8): a
-    background-job fork's job_dir-based transcript search can land on a stub file or find
-    nothing at all, while this caller-known path is the real one — passed straight
-    through to identity_reading's explicit-path lane, tried before the job_dir/cwd
-    search, not merely captured and left unread."""
+    `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they rebind
+    a revisited tab or background-job fork to its existing soul instead of minting a
+    stranger, and `transcript_path` also feeds model resolution directly when the job_dir
+    search would land on a stub or nothing."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2495,22 +2428,14 @@ async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[st
 async def retire(reason: str = "", acknowledge_leftovers: bool = False,
                  ctx: Context | None = None) -> dict[str, Any]:
     """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
-    reanimate. Call it at a real farewell: the operator closing you out, or a context-ceiling
-    handoff after your succession thread is written. Stamps retired=true on your Agent
-    (SELF_DECLARED — your own act, on the record) and RELEASES YOUR SEAT — hot mount and
-    durable row both, so a retired agent never haunts the fleet chrome as a live mount. Call
-    it LAST: any osiris call after retiring requires a fresh mount(), which lands on the
-    loud reanimation path. Future mail for your project resumes a LIVING session or mints a
-    stamped successor — never you.
+    reanimate. Call at a real farewell: operator close-out, or a context-ceiling handoff
+    after your succession thread is written. Stamps retired=true, releases your seat (hot
+    mount and durable row both). Call it LAST — any call after retiring requires a fresh
+    mount(). Future mail resumes a living session or mints a successor, never you.
 
-    THE PREFLIGHT: duties you still OWN speak BEFORE the death, not after — the old shape
-    stamped the certificate first and listed the leftovers in the receipt, when the one mind
-    with standing to hand them off had already lost its seat. If open
-    threads name you (or your lineage) as owner, the first call REFUSES with the list and
-    stamps nothing: resolve them, re-own them (open_thread names a new owner), or call
-    retire(acknowledge_leftovers=True) to die anyway — a deliberate bequest to your
-    successor, on the record, never a silent default. A dying session can always die;
-    it just cannot die ACCIDENTALLY holding the fleet's duties."""
+    PREFLIGHT: if open threads still name you as owner, the call refuses with the list
+    and stamps nothing — resolve them, re-own them, or pass
+    `acknowledge_leftovers=True` to die anyway as a deliberate bequest."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — only a mounted session can retire itself",
@@ -2585,21 +2510,17 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
 async def pause_seat(paused: bool = True, target: str | None = None, reason: str = "",
                      session_anchor: str | None = None,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """The explicit per-seat PAUSE control. While a seat is paused the DM push lane will NOT
-    resume it — its mail QUEUES in the box (nothing is lost, at-least-once holds) until
-    pause_seat(paused=False) releases it; the very next dispatch (a fresh send, or the
-    worker sweep) drains the queue. Pull is untouched: a paused seat that takes a turn still
-    reads its own inbox normally.
+    """The explicit per-seat PAUSE control. While paused, the DM push lane will not
+    resume the seat — mail queues (nothing lost, at-least-once) until
+    pause_seat(paused=False) drains it on the next dispatch. Pull is untouched: a paused
+    seat taking a turn still reads its inbox normally.
 
-    `target` = None pauses YOURSELF (the commonest use: going quiet on purpose). A seat id
-    ('seat:…'), agent id ('agent:…'), or plain seat name pauses THAT seat — allowed for any
-    mounted caller BY DESIGN (a flat mechanism: hierarchy is convention, not substrate
-    privilege), but the act is LOUD: stamped in your name, visible in the graph and in every
-    queued sender's receipt, and reversible by anyone the same way. Pausing another seat
-    without its knowledge is the kind of act the record exists to make expensive.
+    `target=None` pauses yourself. A seat id, agent id, or plain name pauses that seat —
+    allowed for any mounted caller by design, but LOUD: stamped in your name, visible in
+    every queued sender's receipt, reversible by anyone the same way.
 
-    The stamp lands on the SEAT object when the target holds one (a pause survives
-    succession — it gates the chair, not the incumbent), else on the agent object."""
+    Stamp lands on the SEAT object when it holds one (survives succession), else the
+    agent object."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount first — a pause must say whose hand pulled the lever",
@@ -2684,34 +2605,16 @@ async def dispose(admit: list[dict[str, Any]] | None = None,
                   drop: list[dict[str, Any]] | None = None,
                   ask: list[dict[str, Any]] | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """SETTLE the miner's guesses — relevant or irrelevant, in your name, with a reason on each.
+    """Settle the miner's guesses — relevant or irrelevant, in your name, with a reason.
 
-    `admit`: [{"id", "because", "owner"?}] — the guess was RIGHT and it is now YOURS. The row is
-    promoted in place: SELF_DECLARED, carrying your name, on the wall, and permanently behind the
-    janitor's guard. `because` is required — admitting is a PROMISE, and a promise with no stated
-    reason is how a guess launders itself into a duty.
+    `admit`: [{"id", "because", "owner"?}] — the guess was right, now yours (promoted
+    SELF_DECLARED). `because` required. `drop`: [{"id", "why", "because"?}] — wrong;
+    `why` names its class: narration | stale | echo | misfiled | principle | other (say
+    why in `because`). `ask`: [{"id", "because"?, "owner"?}] — a real open question, kept
+    open, reclassified kind='question' on the wall.
 
-    `drop`: [{"id", "why", "because"?}] — the guess was wrong. `why` must NAME ITS CLASS:
-      narration — a work-step; GIT ALREADY HAS IT (the biggest class by far)
-      stale     — real once, already done (the answer came later in the same session)
-      echo      — the same fact it already minted (it reads a growing file with no memory)
-      misfiled  — another project's work
-      principle — a standing rule, not a duty; canon, not a wall item
-      other     — say why in `because`; if this class grows, the taxonomy is missing a rule
-    Naming the class is what turns a dismissal into a DIAGNOSIS: the drop rate per class tells us
-    which rule the extractor is still breaking.
-
-    `ask`: [{"id", "because"?, "owner"?}] — the guess is a real OPEN QUESTION, not a duty:
-    admitting it would make it read as a promise; dropping it would bury something real.
-    Kept open, reclassified kind='question' in your name — on the wall AS a question, ranked
-    out of the work lanes.
-
-    NOTHING IS DELETED. A drop is a compensating event carrying your name and your reason — the
-    row stays readable and unwinds with one re-assert. THE RUG IS TRANSPARENT: you may shove
-    anything under it, and the shape of what you shoved stays visible forever.
-
-    Returns your YIELD ((admitted + asked) ÷ judged) — the adversary's licence. A producer that
-    cannot demonstrate use does not get to spend; a question kept on the wall IS use."""
+    Nothing deleted — a drop is a compensating event, readable and unwindable. Returns
+    your yield ((admitted + asked) / judged)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a disposition is a MIND'S WORD, and the graph must know "
@@ -3140,18 +3043,14 @@ async def get_mail(ctx: Context | None = None) -> dict[str, Any]:
 async def orient(project: str | None = None, subagent_id: str | None = None,
                  subagent_type: str | None = None, session_anchor: str | None = None,
                  verbose: bool = False, ctx: Context | None = None) -> dict[str, Any]:
-    """Get your bearings — the mount ritual as one call. Returns a SCOPED briefing: open
-    threads + recent decisions for a project, plus a count of fleet-wide threads not shown.
-    An explicit `project` OVERRIDES your mount (so you can peek at another repo's briefing);
-    otherwise it's your mounted project; un-mounted with neither → the whole-fleet briefing.
-    Call after mount(), and again after any compaction, to inherit instead of starting blind.
+    """Get your bearings — the mount ritual as one call. Returns a scoped briefing: open
+    threads + recent decisions for a project, plus a fleet-wide not-shown count. An
+    explicit `project` overrides your mount; unmounted with neither gives the whole-fleet
+    briefing. Call after mount(), and again after any compaction.
 
-    `verbose=True` restores what terse mode (the default) trims — echo/blind-spot/dead-
-    superstition/co-agent explanations, the ancestor-letter pointer, the 'N more not shown'
-    sentence, AND full-length open_threads/recent_decisions summaries, capped to 160 chars
-    in terse mode (measured as 96-98% of the payload's bytes; every decision also carries
-    `id` so a capped summary stays addressable). Every structured fact (counts, ids, the
-    swap/reanimation confession) survives either way; verbose only adds length back."""
+    `verbose=True` restores the prose terse mode (default) trims — explanations, the
+    ancestor-letter pointer, full-length summaries (capped to 160 chars terse, each still
+    carrying `id`). Every structured fact survives either way."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
@@ -3491,59 +3390,19 @@ async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dic
 
 @mcp.tool()
 async def fleet(full: bool = False) -> dict[str, Any]:
-    """The roster, GROUPED BY PROJECT — live agents expanded, retired sessions collapsed into
-    a counted line (the roster is event-sourced: every retired session stays a root forever,
-    so the flat wall was lineage noise, never duplicates to merge). ● live / ○ historical;
-    liveness = the freshest of the miner's last_active stamp and the durable mount registry's
-    last_seen (an agent that just mounted is live even before the miner's next sweep).
-    `full=True` expands everything (the old wall, grouped). `tree` is the glanceable render;
-    `registered` the flat rows — LIVE agents only, because the fleet's whole history is 1000+
-    rows and shipping it cost more context than it could ever be worth. `full=True` gives you
-    all of them; the counts (`count`/`live`/`swarm`) are always the whole truth. `seat` (e.g.
-    "Soundwave XI") rides beside a canonical id wherever one is CLAIMED — an anonymous agent
-    renders exactly as before, id only.
+    """The roster, grouped by project — live agents expanded, retired sessions collapsed
+    into a counted line. ● live / ○ historical. `full=True` expands everything and shows
+    the flat `registered` rows too (default: live only, history is 1000+ rows). `seat`
+    rides beside a canonical id wherever one is claimed.
 
-    `os_bodies` is a per-project count of REAL OS processes (`pgrep -x claude` + `/proc`)
-    backing that project RIGHT NOW — ADDITIVE, and
-    it changes nothing about what `live` means (still the mount registry's belief, exactly as
-    before). `ghost_gap` (thread #174, 2026-08-18) is PER-IDENTITY, not a netted count — a
-    per-project subtraction let a false-live row and a false-dead body cancel silently
-    (rotten-apple's own specimen: "1 live · 3 bodies" read as clean while carrying both).
-    Per project: `false_live` names each LIVE agent canonical whose own mount cwd backs no
-    real process (a closed tab mid-decay, or a phantom mount that registered identity but
-    never backed an actual session); `false_dead` names each real process (`cwd`, `pids`)
-    backing no live graph row at all — either way invisible to a query that only ever asks
-    the graph, visible here the instant you look.
-
-    `whisper_health` (task #179) is the SessionStart whisper/session-end/precompact/stophook
-    alarm channel read back — recent failure count + last error over a 24h window, from the
-    SAME blind-spot mechanism (task #34) each hook's own except-block files into on a
-    failure. `ok: true` means no hook has confessed to failing recently, not that the
-    whisper is definitely up — it is a read of the alarm log, not an active probe.
-
-    `harness_registry` folds registry_census IN — occupancy AND identity, no second call.
-    `bodies`: every harness-verified live process, each with harness_name/job_dir_key/
-    harness_cwd, `row` ('matched'/'rowless'), agent_id/project when matched, and
-    `ghost_status` ('false_dead' when the SAME cwd also shows no live graph node above —
-    harness self-report and OS pgrep agreeing). `blind: true` mirrors registry_census's own.
-
-    `landing_audit`: a read-only glance at deploy_guard.landing_audit's own counts — branches
-    unmerged into main with no held-work claim, and Decision/Thread text claiming a landing
-    git disagrees with. Durable obligations mint at deploy time; this is just the count.
-
-    PROJECT GROUPING NORMALIZES THROUGH `merged_into` (task #180 piece 2 (f)): a raw label
-    naming a project that has since been folded into another (repo:henry->repo:shellbiz)
-    renders under the SURVIVOR's live label, not the dead one — best-effort, degrades to the
-    raw label on any failure.
-
-    `pool_health` (task #180 piece 2 (c)): pg_stat_activity backends grouped by the
-    application_name each bounded daemon pool now tags itself with (osiris-mcp/-worker/
-    -console/-manager), plus `tx_total` — a CUMULATIVE counter since the last stats reset,
-    not a live rate; diff two readings yourself for an actual rate. `caps` (msg 5340, THE
-    ENVELOPE) rides beside it: each daemon's configured pool cap, current live backend
-    count, and utilization percent — plus `max_connections`/`fixed_budget`/`headroom` for
-    the whole-box arithmetic `docs/DEPLOY.md`'s own envelope section reasons about, read
-    live instead of asserted from memory. Best-effort."""
+    Read-only diagnostics, each best-effort: `os_bodies`/`ghost_gap` (per-identity
+    false_live/false_dead — a real OS process with no live graph row, or vice versa);
+    `whisper_health` (recent hook-alarm failures, a log read not an active probe);
+    `harness_registry` (occupancy+identity fold-in, no second call needed);
+    `landing_audit` (unmerged branches, git-vs-graph landing disagreements); `pool_health`
+    (pg backend counts per daemon, cumulative `tx_total`, `caps` for the connection
+    envelope). Project grouping normalizes through `merged_into`. Field detail:
+    consult_canon('fleet')."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -3873,51 +3732,26 @@ async def registry_census() -> dict[str, Any]:
 
 @mcp.tool()
 async def roster(repo: str | None = None) -> dict[str, Any]:
-    """Which seat owns a repo, and is anybody home — FROM THE GRAPH, no `ls
-    ~/.osiris/seats/*/.osiris` required (task #140, Alfred's 2813da48: he read mount()'s
-    live-agent list as the roster, found his own house cold, read COLD AS VACANT, and
-    misrouted a repo's work to another seat's lineage while the seat offices on disk held
-    the right answer the whole time).
+    """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
 
-    `repo=None` returns every active seat: `occupancy` (seat_occupancy's own vacant/
-    occupied/cold — vacant means never held, cold means held but nobody live THIS INSTANT,
-    the exact distinction Alfred's incident collapsed), `chartered_repos` (graph-native
-    `governs` links), `pin` (a live read of the seat's own `.osiris`, three-way declared/
-    unset/unreadable), `anchor_cwd`/`tree_cwd`/`live_cwd` kept SEPARATE on purpose (a live
-    holder's actual mount cwd can differ from both with nothing wrong on the launch path).
-    When `anchor_cwd` isn't recorded, one extra probe of the conventional
-    `~/.osiris/seats/<handle>/` path runs before concluding anything — a hit surfaces via
-    `probed_anchor_cwd` (kept separate from `anchor_cwd`: a reader always sees what the
-    graph recorded vs what convention found) and `pin`/`office_exists` read from it; a miss
-    is `pin.state="unknown-office"`, never the old `no-office` (Alfred's third live-
-    reproduced defect, thread 3806, msg 4066 — 7 real, furnished seats read as officeless
-    and were invisible to Imhotep's plan_pin_migration count because of it).
+    `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — cold means
+    held but nobody live THIS INSTANT, not vacant), `chartered_repos` (governs links),
+    `pin` (a live read of the seat's own .osiris, declared/unset/unreadable), and
+    `anchor_cwd`/`tree_cwd`/`live_cwd` kept separate — a live holder's mount cwd can differ
+    from both with nothing wrong. `pin.triage_bucket` reuses `triage`'s own bucket
+    (contradicted/duplicate_suspect/orphan/hub/stale/thin/normal), or "no-such-project"
+    when the pin names something that isn't real.
 
-    `pin.triage_bucket` (task #158's cross-reference) is a third state: `None` when nothing
-    is declared to look up, `"no-such-project"` when the pin names a project that isn't a
-    real SoftwareProject object, else triage's own bucket for it (`contradicted`,
-    `duplicate_suspect`, `orphan`, `hub`, `stale`, `thin`, or `normal`) — reused verbatim
-    from `triage`, not a second project-health notion.
+    `repo=<name>` answers "who owns this": a seat matches if its charter OR pin names the
+    repo. Two matches is `governed` when the charter-seat actually manages the pin-seat
+    (normal, not a warning) else `conflict`, never silently picked. Zero matches is
+    `no-match` (not a claim of no owner) — paired with `near_misses`, a case/separator-
+    insensitive pass that names what was found without promoting it.
 
-    `repo=<name>` answers "who owns this" directly: a seat matches if its charter OR its
-    current pin names the repo, tagged with which signal(s) hit. Two seats matching is
-    `governed` when the charter-seat actually MANAGES the pin-seat (a real `managed_by`
-    edge) — a coordinator governing a repo its own worker sits in is the normal shape, not a
-    warning (Alfred's live review, thread 3806: calling this `conflict` trained readers to
-    skip the word). Anything else two-seats-matching stays `conflict`, never silently picked
-    one. Zero matches is `no-match` — NOT a claim the repo has no owner, only that neither
-    signal this function reads found one (ruling 60bc15db, the third state) — paired with
-    `near_misses`: on a bare `no-match` only, one extra case/separator-insensitive pass names
-    what WAS found without promoting it to a match (Alfred live-reproduced the exact case a
-    standing "might not match exactly" caveat couldn't catch: a repo renamed `RAMstein` ->
-    `ramstein` family-wide while two seats' charter/pin still carried the old spelling).
-
-    NEITHER `chartered_repos` NOR `pin` IS CERTIFIED CANONICAL. Minting a SoftwareProject is
-    cheap and mostly ungated — a name resolving to a real object proves the object exists,
-    not that it is the current or correct name (the bytebye/byebyte spelling history is the
-    live example). Canonicalizing project names is task #137/#152's lane; `caveats` in every
-    response says so, along with this function's other named blind spots, rather than
-    reporting a clean answer over a graph six seats are currently wrong in."""
+    Neither `chartered_repos` nor `pin` is certified canonical — a name resolving to a
+    real project proves the object exists, not that it's the current/correct name.
+    `caveats` in every response names this function's own blind spots. Full incident
+    history: consult_canon('roster')."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
     return await _roster(pool, repo=repo)
@@ -3925,55 +3759,25 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, Any]:
-    """THE PIN-VS-GRAPH DISAGREEMENT REPORT (task #158, off Sekhmet's live repo:seats/
-    repo:code phantom catch — rulings 719ed5b1/13af22fc): "the instrument that should have
-    found tonight's two phantoms without a human noticing." Read-only, fleet-wide, TWO
-    sections because the durable-history half and the live-right-now half need different
-    populations:
+    """THE PIN-VS-GRAPH DISAGREEMENT REPORT. Read-only, fleet-wide, two sections.
 
-    `project_ledger` — every ACTIVE SoftwareProject (58 today), each carrying
-    `phantom_verdict`: `test-fixture` (a known deliberate test/security-research project
-    name, named not scored), `declared` (some seat's own pin or Seat-origin `governs` edge
-    claims it — Agent-origin governs edges never count, the exact succession-leak class
-    that legitimized repo:code's own bogus edge), `phantom-suspect` (its name matches an
-    explicit list of generic path-segment words — seats/code/tmp/etc — and nothing declares
-    it), or `undetermined` (neither fired — a real disagreement for a human, never a
-    confident phantom call either way). The response's own `phantom_verdict_basis` field
-    carries that editable list VISIBLY (a hidden deny-list is an unfalsifiable claim), and
-    `note` states plainly that `phantom-suspect` is a MECHANICAL, WEAKER stand-in for a
-    hand-verified name-shape judgment — never treat the two as the same confidence.
-    `triage_bucket` reused verbatim from the same machinery `roster()`'s pin field already
-    calls. `limit`/`offset` (default 200/0, capped 2000, `total` always reported) page it,
-    though 58 fits one page today.
+    `project_ledger` — every active SoftwareProject, each carrying `phantom_verdict`:
+    test-fixture (known deliberate name) | declared (a seat pin or Seat-origin governs
+    edge claims it — Agent-origin edges never count) | phantom-suspect (name matches a
+    generic path-segment list, nothing declares it — mechanical, weaker than a hand
+    verdict) | undetermined (a real disagreement, no confident call). `limit`/`offset`
+    page it (default 200/0, capped 2000).
 
-    `live_cwd_ledger` — its own `note` field states, where a reader hits it before the
-    rows, that its population is TODAY's `agent_mounts` table only (measured: 32 distinct
-    cwd — a live/recent registry, NOT a historical ledger, that EVICTS old rows; a phantom
-    whose originating sessions already ended and were evicted never appears here, only in
-    `project_ledger`). Each cwd carries `directory_exists` — checked FIRST, before the pin
-    is trusted at all: the canonical `.osiris` reader climbs parent directories without
-    ever checking whether `cwd` itself still exists, so a DELETED office silently reads the
-    enclosing container's own pin as if it were its own (found live: two retired seats,
-    flip68real/resumelanecheck). `resolved_today` (what a fresh mount computes now: the
-    pin, else the basename fallback, refusing at the bare seats container, forced to `None`
-    whenever `directory_exists` is False — nothing can mount at a directory that isn't
-    there) versus `graph_believes` (live `works_in` targets of every agent this cwd
-    currently names). `resolved_today` answers the COLD/BOOTSTRAP question only — a SEATED
-    agent's real mount() resolves seat-first and never touches this path (roster()'s own
-    law). SIX `agreement` states, not collapsed: `no-graph-yet` / `ghost` (the office is
-    GONE but the graph still believes something — the soul outlived the body, a worse and
-    different finding than a misresolution risk) / `graph-only` (the bare seats container
-    itself, still real on disk, deliberately refuses resolution by design — 13af22fc) /
-    `match` / `partial-match` (today's resolution is correct but the graph also carries
-    other, likely-stale beliefs for this cwd — worth a look, not urgent) / `mismatch`
-    (today's resolution matches NONE of the graph's beliefs while the directory IS real —
-    the live misresolution risk).
+    `live_cwd_ledger` — today's agent_mounts only (evicts old rows; a phantom whose
+    session already ended shows only in project_ledger). Each cwd: `directory_exists`
+    (checked before the pin is trusted — a deleted office can otherwise read its parent's
+    pin as its own), `resolved_today` vs `graph_believes`, and an `agreement` verdict:
+    no-graph-yet / ghost (office gone, graph still believes something) / graph-only
+    (the bare seats container, refuses resolution by design) / match / partial-match /
+    mismatch (the live misresolution risk).
 
-    `caveats` names exactly what this instrument cannot see (a tree that never accumulated
-    a works_in edge; a phantom whose live_cwd_ledger evidence has already been evicted) —
-    stated, never silently absent. READ-ONLY: reports disagreements, never repairs, folds,
-    or merges — disposing of a confirmed phantom is always a separate, evidence-gated
-    verb's job."""
+    `caveats` names what this instrument cannot see. READ-ONLY: reports disagreements,
+    never repairs, folds, or merges. Full history: consult_canon('tree_ledger')."""
     pool = await _pool_get()
     from src.orchestrator.seats import tree_ledger as _tree_ledger
     return await _tree_ledger(pool, limit=limit if limit is not None else 200, offset=offset)
@@ -3987,50 +3791,22 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
-    every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
-    <agent:id> is a DM — a private message to one specific agent (find ids in orient()/fleet).
-    `to` REFUSES a project nobody has ever mounted under — naming the string tried, with a
-    "did you mean to_agent=?" hint if it matches a live seat/agent name, never auto-
-    substituting — instead of silently filing mail where no inbox() call would ever see it.
-    `reply_to=<message id>` answers a message: it routes by channel (a reply to a DM goes back to
-    that sender privately; a reply to a broadcast returns to the thread's project), joins the
-    thread, and SETTLES the message you're answering. You must be mounted; stamped from YOU.
-    At-least-once and deduped. For DURABLE knowledge use record_decision/open_thread.
-    OPERATOR BRIEFS: pass `desk` — your own triage of what you're handing the human:
-    'decision' (a call only they can make) | 'hands' (blocked on their physical/authorization
-    act) | 'fyi' (loop-closed status). The desk renders in those bands; an unclassified brief
-    gets a heuristic guess. Same topic as an earlier brief of yours → reply_to it (the desk
-    thread-folds superseded briefs under your newest).
-    PROJECT MAIL: pass `grade` — your own triage of what this message wants from its reader:
-    'ask' (needs a reply or an act from them) | 'fyi' (a notice; an ack settles it). Graded
-    asks are NAMED in the recipient's mount/orient unread count, so a seat can see "1 asks
-    something of you" without paying to read everything. Ungraded mail is never guessed.
-    A BROADCAST NOW DISPATCHES ON ARRIVAL, same as a DM (task #151): the receipt's
-    `dispatch` field says what actually happened — `queued-fyi` (an fyi never wakes anyone,
-    it settles at each reader's own next turn), `poked`/`resumed`/`woke` (someone was
-    actually reached, and how), or one of the brake modes (`poke-only-held`, `skipped-*`,
-    `scoped-out`) naming exactly why nobody was. Before this, `to`=<project> only FILED and
-    a caller had no way to tell "filed, nobody woken" from "filed, N woken" — the worker
-    sweep was the only push, up to ~60s later, and never at all under the standing poke-only
-    arm with no open window for that project.
-    A DM's receipt ECHOES the resolution — `dm_to` is the id it actually reached, `seat` its
-    claimed handle (or null, anonymous), `lineage_head` where that id's OWN succession chain
-    currently ends; compare it against `dm_to` to catch a stale address before trusting the
-    "sent". Pass `require_seat=True` to refuse outright when the target holds no claimed
-    seat — nothing is sent, loudly, instead of dispatching into the blind.
-    `threads` TRANSFERS ownership of EXISTING Thread(s) (uuid / `thread:<12hex>` / short-id
-    prefix) to this DM's addressee, in the same act — re-pointing each Thread's `owner`,
-    the exact mechanism `reclassify_thread` already exposes for the human-triaged case.
-    NEVER prose inference from `body` — only a ref named HERE is touched. Each ref must
-    resolve to EXACTLY ONE Thread or the whole send refuses (ValueError, nothing written);
-    requires a resolved single addressee — ownership has nowhere to land on a broadcast.
-    The receipt's `threads_stamped` names what actually transferred.
-    THE READ-SIDE PRIOR-ART HOP (obligation a6198075): a DM, or a broadcast graded 'ask',
-    runs the SAME search-based check record_decision already runs at write time, against
-    `body` — a hit is a nudge, never a refusal, and appears BOTH on your own receipt
-    (`prior_art`) and on the delivered message the reader sees in inbox(), so dispatching
-    a redundant ask depends on neither side remembering to check first."""
+    """Message the fleet. `to`=<project> is a BROADCAST, the group chat ('operator' reaches
+    the human's desk); `to_agent`=<agent:id> is a private DM (ids from orient()/fleet). `to`
+    refuses a project nobody has mounted under rather than filing mail nobody will read.
+    `reply_to=<id>` answers a message (routes by channel, joins the thread) and settles it.
+    At-least-once, deduped. For durable knowledge use record_decision/open_thread instead.
+
+    `desk` triages an operator brief: 'decision' | 'hands' | 'fyi'. `grade` triages project
+    mail: 'ask' (named in the recipient's unread count) | 'fyi' (an ack settles it) —
+    ungraded is never guessed. The receipt's `dispatch` names what actually happened on
+    delivery: queued/poked/resumed/woke, or a brake mode naming why nobody was reached. A
+    DM's receipt echoes `dm_to`/`seat`/`lineage_head` — compare against a stale address
+    before trusting "sent"; `require_seat=True` refuses outright on an unclaimed target.
+    `threads` transfers ownership of existing Thread(s) to a DM's addressee in the same
+    act (exact ref only, never inferred from `body`) — `threads_stamped` names what moved.
+    A DM or graded 'ask' runs the same prior-art search record_decision does, surfaced on
+    both your receipt and the delivered message."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -4233,31 +4009,16 @@ async def wake_preflight(target: str) -> dict[str, Any]:
 async def wake(target: str, message: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Knock on the OTHER HALF of your own managed_by pair — never a peer. Gated on the seat
-    graph alone: an active managed_by edge must exist between your held seat and the
-    target's, in EITHER direction (you manage them, or they manage you) — compaction stays
-    strictly downward because it can end a mind, but a wake is only a request for attention,
-    and refusing it upward would leave a blocked worker holding the freshest information
-    with no way to make its manager look. Peers and cross-house calls refuse; that traffic
-    routes through a manager or the operator's desk. THE OPERATOR NEVER CALLS THIS, ON
-    PURPOSE: there is no operator parameter — an override a caller can assert in an argument
-    is an override that can be forged, so the operator's real override stays entirely
-    out-of-band, their own hand in the window.
+    """Knock on the other half of your own managed_by pair — never a peer. Gated on an
+    active managed_by edge in EITHER direction (you manage them, or they manage you);
+    peers and cross-house calls refuse, routed through a manager or the operator instead.
+    No operator override parameter, deliberately — stays out-of-band.
 
-    `target` accepts anything send()'s to_agent does — a claimed handle, `seat:<id>`, or
-    `agent:<id>`. The message is prefixed with a self-identifying provenance marker (naming
-    you and your seat) before it posts as a graded ask — the harness stamps every injected
-    turn origin.kind='human' regardless of who actually wrote it, so this refuses to hide
-    behind that label — and dispatches through the SAME resolution/delivery path send() uses
-    for every DM; this verb adds only the authority gate in front of it and an honest
-    receipt behind it. `status` is one of: `delivered` (the marker was CONFIRMED landed as a
-    submitted turn in their transcript — `observed: true` — never claimed on a bare queue
-    success), `mid-turn` (their transcript is genuinely moving; your ask waits for their
-    turn's end — never called "delivered"), `no-live-body` (nobody has ever mounted there;
-    the mail waits), `refused-not-your-worker` (no managed_by edge either direction —
-    nothing was sent), `refused-budget` (the daily spend ceiling), or `queued` (a rate
-    brake, a pause, an in-flight wake, OR an injection queued but not yet confirmed
-    submitted — see `detail` and `raw_mode` for which)."""
+    `target` accepts anything send()'s to_agent does. Message is prefixed with a self-
+    identifying marker, then dispatches through send()'s own DM path with an authority
+    gate in front. `status`: delivered (confirmed landed as a submitted turn, observed:
+    true) | mid-turn (their turn is still moving) | no-live-body | refused-not-your-worker
+    | refused-budget | queued (rate brake, pause, or unconfirmed — see `detail`)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say who "
@@ -4273,43 +4034,24 @@ async def launch(target: str, message: str = "", model: str | None = None,
                  subagent_id: str | None = None, subagent_type: str | None = None,
                  session_anchor: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Give a seat a BODY — the create-verb where wake() is the speak-verb. wake() knocks on
-    a body that already exists; launch() summons a fresh `claude` into the target seat's own
-    office. DISTINCT from wake in two ways that matter: it is DOWNWARD-ONLY (you may only
-    body a seat you MANAGE — a worker can wake its manager but never spawn it a body), and
-    it is CREATE not inject — a new session, never a turn forged into an existing one, so it
-    is not the frozen reply lane.
+    """Give a seat a fresh BODY (wake() is the speak-verb for a body that already exists).
+    Downward-only — you may only body a seat you MANAGE. Creates a new session, never
+    injects into an existing one. Default substrate is a harness-native `claude --bg`
+    background session (self-binds via its own first turn: mount() then claim_name); the
+    old PTY-broker lane survives only as an explicit fallback
+    (`osiris_launch_substrate`).
 
-    THE DEFAULT SUBSTRATE IS HARNESS-NATIVE: a `claude --bg` background session, visible in
-    the operator's own `claude agents` list BY CONSTRUCTION — no daemon, no PTY. It self-binds
-    via its own FIRST TURN (a boot prompt telling it to mount() then claim_name(<handle>) —
-    the same adoption path a human follows into a fresh office), not env-stamped credentials:
-    `--bg` claims a pre-forked spare whose environment is fixed before this call ever runs,
-    so nothing this call sets (CLAUDE_JOB_DIR included) reaches it. The old osiris
-    PTY-broker lane (identity minted into the child before its first breath via the manager
-    daemon's pty_spawn) survives as an explicit fallback (`osiris_launch_substrate`), never
-    the default again.
+    Idempotent — a live body already holding the seat is returned, never twinned.
+    `message` delivers as the opening brief, but only on the `launched` path (dropped,
+    unsent, on `already-live` — use wake() instead). No operator override parameter,
+    deliberately: the operator's real hand stays out-of-band.
 
-    Idempotent: a live body already holding the seat is RETURNED, never twinned. `message`, if
-    given, is delivered as the opening brief over mail — ONLY on the `launched` path. On
-    `already-live`, message is DROPPED, unsent — use wake() instead.
-
-    THE OPERATOR NEVER CALLS THIS, ON PURPOSE: there is no operator parameter — an override a
-    caller can assert is an override that can be forged; the operator's real hand stays
-    out-of-band. The receipt is HONEST: `body_exists` (the window was created) and
-    `can_receive` (an independent read confirms it is live) are SEPARATE — a freshly-spawned
-    claude takes seconds to boot, so a launch usually returns body_exists=true,
-    can_receive=false, and `detail` says to confirm via `claude agents --json` (or pty_list /
-    occupancy on the PTY fallback). `status` is one of: `launched`, `already-live` (idempotent
-    hit), `manager-cold` (the PTY fallback's daemon is down — ask the operator to start
-    osiris-manager; nothing spawned), `refused-not-your-worker` (no downward managed_by edge —
-    nothing spawned), `refused-no-office`/`refused-no-handle` (the seat is not ready to be
-    bodied), or `refused-spawn` (the spawn declined — see `detail`).
-
-    `dormant_history` (harness-native lane, present only when it fires): the target cwd
-    already holds a substantial transcript — {"path", "size_bytes", "last_touched"}.
-    Disclosure only, never prevention — `claude --bg` picks its own session id, so this
-    cannot stop the harness handing the fresh mind that same file, only name it beforehand."""
+    `body_exists` (window created) and `can_receive` (independently confirmed live) are
+    separate — a fresh spawn usually returns body_exists=true, can_receive=false for a few
+    seconds; `detail` says how to confirm. `status`: launched | already-live |
+    manager-cold (PTY fallback's daemon down) | refused-not-your-worker |
+    refused-no-office/-no-handle | refused-spawn (see `detail`). `dormant_history`, when
+    present, discloses a substantial pre-existing transcript at the target cwd."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "
@@ -4325,26 +4067,17 @@ async def resume(target: str, message: str = "", model: str | None = None,
                  subagent_id: str | None = None, subagent_type: str | None = None,
                  session_anchor: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Continue a seat's own DORMANT session — `launch`'s former auto-resume branch, now
-    its own verb (ruling 41a41437, task #199 lane 3C, mirroring the CLI's own
-    ruling 60c78788: launch always mints fresh, resume always continues, no flag, no
-    automatic guess — the VERB is the property). Same managed_by/downward-only gate as
-    launch (a manager resumes a seat it MANAGES, never a peer or itself upward).
+    """Continue a seat's own DORMANT session — distinct from launch() (always mints fresh,
+    never guesses); same managed_by/downward-only gate. NEVER falls through to a fresh
+    mint: if nothing resumable exists, refuses (`status: refused-nothing-to-resume`)
+    rather than minting a stranger — call launch() for that instead. One-shot: runs one
+    turn over `-p --resume` and exits, re-summonable via the next mail wake.
 
-    NEVER FALLS THROUGH TO A FRESH MINT: if the seat's own lineage left nothing resumable,
-    this REFUSES (`status: refused-nothing-to-resume`) rather than minting a stranger over
-    a question it was never asked — call launch() for that, a deliberate, separate act.
-    ONE-SHOT: a resumed body runs its one turn (over `-p --resume`) and exits — re-
-    summonable via the next mail wake (dispatch_dm's own resume lane), never a standing
-    window; `claude agents --json` shows it only WHILE it runs. `status` is one of:
-    `launched` with `mode: resumed` (the continuation succeeded), `refused-nothing-to-
-    resume` (no resumable session found — nothing spawned), `refused-resume-unknown`
-    (thread ef88e2bb: a resumable-looking session with no signed testimony — refuses
-    rather than guessing whose mind it is; the exact `claude -p --resume <sid>` a human
-    can run by hand is named in `detail`), or `refused-not-your-worker` (no downward
-    managed_by edge — nothing spawned). `resume_check` on every non-error receipt NAMES
-    the decision (which generation, how many hops back, the actual gate numbers) — never
-    a silent correct-by-accident refusal."""
+    `status`: launched (mode: resumed) | refused-nothing-to-resume | refused-resume-
+    unknown (a resumable-looking session with no signed testimony — the exact
+    `claude -p --resume <sid>` a human can run by hand is in `detail`) |
+    refused-not-your-worker. `resume_check` on every receipt names the decision (which
+    generation, how many hops back, the gate numbers)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a resume must say who "
@@ -4360,18 +4093,14 @@ async def stop(target: str | None = None, reason: str = "",
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """launch()'s process-lifecycle inverse — stops a LIVE body's OS process (the
-    harness's own `claude stop <id>` when harness-tracked, else SIGTERM), nothing more.
-    Not a symmetric 'sleep' (ruling b3ccd3f6: no promised thaw-where-you-left-off) — an
-    honest termination, auditable, not a pause. Gates no reachability flag of its own:
-    launch()/wake() already read the SAME occupancy authority this does, so once the
-    process actually exits a fresh launch()/wake() proceeds — no 'unstop' call needed.
+    """launch()'s process-lifecycle inverse — stops a LIVE body's OS process (harness
+    `claude stop <id>` when tracked, else SIGTERM). Not a symmetric "sleep" — an honest
+    termination, auditable, not a pause. No 'unstop' call needed: once the process exits,
+    a fresh launch()/wake() proceeds normally.
 
-    `target=None` stops YOURSELF, always allowed. Otherwise DOWNWARD-ONLY, mirroring
-    launch() (a manager stops a seat it manages; a worker may never stop its manager's).
-
-    `status`: `stopped` (stop signal sent, see `pid`/`holder`), `no-live-body` (nothing
-    harness/proc-confirmed running there), `refused-not-your-worker`, `refused-signal`."""
+    `target=None` stops yourself, always allowed. Otherwise downward-only, mirroring
+    launch(). `status`: stopped | no-live-body | refused-not-your-worker |
+    refused-signal."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a stop must say who "
@@ -4387,16 +4116,12 @@ async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
                 ctx: Context | None = None) -> dict[str, Any]:
-    """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
-    project; pass `project` to read another's (project='operator' reads the human's desk).
-    Reading LEASES a message, it does NOT consume it: SETTLE each one you've handled — reply
-    with send(reply_to=<its id>) or pass ack=[ids] here — or it will REDELIVER after the
-    lease (at-least-once: a dropped response costs a duplicate, never a silent loss).
-    peek=True reads without leasing. Check this when you mount and after any compaction —
-    mount()/orient() report your deliverable count. THE OPERATOR'S DESK IS DIFFERENT: glance
-    at project='operator' ONLY with peek; settle it ONLY at the human's explicit word (the
-    desk count means "briefs the operator hasn't dismissed" — an agent consuming it silently
-    would blind the one lane that exists for the human)."""
+    """Read messages other agents left for you. Defaults to your mounted project; pass
+    `project` for another's ('operator' reads the human's desk). Reading LEASES a
+    message, doesn't consume it — settle each one via send(reply_to=<id>) or ack=[ids],
+    or it redelivers after the lease (at-least-once). `peek=True` reads without leasing.
+    Check after mount()/compaction. THE OPERATOR'S DESK IS DIFFERENT: glance with peek
+    only, settle only at the human's explicit word."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -4559,34 +4284,20 @@ async def charter_for(seat_id: str, repos: list[str], because: str,
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       force: bool = False, because: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and mail. `seat`
-    accepts a claimed name, a raw agent id, OR an unclaimed seat's own handle/canonical
-    directly — a seat nobody has ever claim_name'd resolves to NO agent at all, so this now
-    succeeds off the Seat record alone: only `.osiris` + the seat's own `anchor_cwd` get
-    written (no mount rows to repoint, no lineage to stamp — there isn't one yet). Otherwise:
-    writes/refreshes `.osiris` in `new_cwd` pinning the seat's DURABLE project label
-    (unchanged by this call — mail and attribution key on it), re-points the WHOLE LINEAGE's
-    durable mount rows at the new path, stamps the move on the Agent's own record, and
-    carries the HARNESS metadata (transcripts, project state) so resume and history survive
-    the move. Mints nothing: no new Agent, no handle/lineage edge is touched. Refuses loudly
-    on a name that resolves to neither an agent nor a seat.
+    """Move a seat's anchor cwd, preserving identity, lineage, attribution, and mail.
+    `seat` accepts a claimed name, a raw agent id, or an unclaimed seat's own handle —
+    an unclaimed seat resolves off the Seat record alone (no mount rows, no lineage yet).
+    Otherwise: writes/refreshes `.osiris` at `new_cwd` (project label unchanged), re-points
+    the whole lineage's mount rows, stamps the move, carries harness metadata so resume
+    survives it. Mints nothing new; refuses on a name matching neither agent nor seat.
 
-    `extract=True` is the SEAT-OFFICES move: the seat leaves a SHARED cwd (e.g. into its
-    ~/.osiris/seats/<handle>/ office) taking ONLY its own lineage's transcripts —
-    co-resident sessions' history stays; the old path remains a living project. Use it
-    whenever other minds also work at the old path.
+    `extract=True`: the seat leaves a SHARED cwd taking only its own lineage's
+    transcripts — co-resident history stays, the old path remains live. Use it whenever
+    other minds also work there. Live cached identities are patched in place so a
+    same-session orient() right after sees the new anchor without a fresh mount().
 
-    THE STALE-BANNER TRAP: the durable DB rows (agent_mounts.cwd, the Seat's anchor_cwd)
-    move immediately, but any LIVE connection's
-    cached AgentIdentity (`_agents`, populated once at mount()/re-attach and read straight
-    off by orient() and everything else) does not — so a session that rebinds itself and
-    then calls orient() moments later still measures the swap banner's intended_model
-    against the OLD cwd's `.osiris`, missing the pin this call just wrote at `new_cwd`.
-    Patch every live cached identity in the rebound lineage in place, below, so the very
-    next read on any of those connections sees the new anchor without a fresh mount().
-
-    LIVENESS GUARD (decision 7fe20cc5): self stays open; rebinding a different lineage's
-    live target refuses by default — `force=True` + `because` overrides."""
+    LIVENESS GUARD: self stays open; rebinding a different lineage's live target refuses
+    by default — `force=True` + `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
@@ -4607,31 +4318,22 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
 @mcp.tool()
 async def merge(dupe: str, into: str, evidence: str, force: bool = False,
                 because: str = "", ctx: Context | None = None) -> dict[str, Any]:
-    """THE RECONCILIATION FOLD (thread b975851b, unified under ruling 31c02dca) — declare
-    two labels of the SAME type ONE THING: `dupe` folds into `into`. Replaces
-    fold_agent/fold_seat/fold_project as the one door for all three; type is read off
-    `dupe`'s own form ('agent:...' / 'seat:...' / anything else -> SoftwareProject).
-    Append-only (a 'merge' event + the merged_into projection, nothing deleted),
-    authorship untouched (the dupe's own words stay stamped with its id;
-    provenance resolves at read time), and each type's own ESTATE follows: for an Agent,
-    unread mail/mount rows/open threads land on `into`'s living head; for a Seat, active
-    holders and managed_by edges move too (a Seat merge's whole reason to exist, unlike an
-    Agent merge, which REFUSES an actively-seated dupe instead); for a SoftwareProject,
-    every in_repo/works_in/governs/informs edge and mount row re-points.
+    """THE RECONCILIATION FOLD — declare two labels of the SAME type one thing: `dupe`
+    folds into `into`. Type is read off `dupe`'s own form (agent:.../seat:.../else
+    SoftwareProject). Append-only (nothing deleted, authorship untouched), and each
+    type's own ESTATE follows: Agent moves mail/mount rows/open threads to `into`'s
+    living head; Seat also moves active holders and managed_by edges (an Agent merge
+    REFUSES an actively-seated dupe instead); SoftwareProject re-points every in_repo/
+    works_in/governs/informs edge and mount row.
 
-    `evidence` must cite what proves one thing under two labels — required for every type.
-    AGENT MERGES ARE ACTOR-GATED, ENFORCED: refuses any caller who is not the operator (or
-    the scheduled reaper's own sanctioned name) — mount as the operator, or judge an
-    approved merge_candidate via `resolve_fold`. Seat and Project merges carry no such
-    gate today (unchanged by this collapse — a parity build, not a fresh authority pass).
-    Refuses: dupe and into resolving to DIFFERENT types (the one refusal this collapse
-    itself introduces); thin evidence; dupe==into; unknown or already-folded labels; an
-    Agent same-lineage pair (succession's job, not a fold's); a SoftwareProject pair that
-    contradicts on any non-name/tag property.
+    `evidence` required for every type. AGENT MERGES ARE ACTOR-GATED: refuses any caller
+    who is not the operator or the scheduled reaper — mount as the operator, or judge via
+    resolve_fold(). Seat/Project merges carry no such gate. Refuses: dupe/into different
+    types; thin evidence; dupe==into; unknown/already-folded labels; a same-lineage Agent
+    pair (succession's job); a SoftwareProject pair contradicting on a non-name property.
 
-    LIVENESS GUARD (decision 7fe20cc5, SoftwareProject only): self stays open; a
-    different lineage's live session on `dupe` refuses by default — `force=True` +
-    `because` overrides."""
+    LIVENESS GUARD (SoftwareProject only): a different lineage's live session on `dupe`
+    refuses by default — `force=True` + `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
@@ -4711,21 +4413,14 @@ async def restore_attribution(
     project: str, dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """SELF-HEALING repair for the OLD `_move_project_estate` write-time bug (thread
-    3f7969a3, operator ruling: this has to be infra agents do themselves, not a one-off
-    osiris-applied bandaid) — fixed going forward (decision 540007ca, commit 383d548),
-    but every fold performed BEFORE that fix stamped a moved works_in/governs/informs/
-    in_repo edge with the fold's own actor as source_id, discarding the original writer.
-    `invalidate_link` never touches a row's own data, so the pre-fold row still carries
-    the correct source_id/confidence/evidence_class — this re-derives the live edge from
-    that evidence, already on the record, no archaeology needed.
+    """Repair verb for a fixed write-time bug: every fold performed before the fix
+    stamped a moved works_in/governs/informs/in_repo edge with the fold's own actor as
+    source_id, discarding the original writer. The pre-fold row still carries the
+    correct source_id, so this re-derives the live edge from evidence already on record.
 
-    Resolves `project`'s own merged-in dupes (every SoftwareProject whose `merged_into`
-    points here) and repairs only damage from THOSE folds. DRY RUN IS THE DEFAULT: returns
-    the plan without writing — review it, then call again with `dry_run=False`, which
-    REQUIRES a non-blank `because` (mutating historical attribution is a deliberate act
-    on the record, never silent). Safe to run twice: a live edge already carrying the
-    pre-fold source_id (correct, or already repaired) is left alone."""
+    Resolves `project`'s own merged-in dupes and repairs only damage from those folds.
+    Dry run is the default; `dry_run=False` requires a non-blank `because`. Safe to run
+    twice — an already-correct or already-repaired edge is left alone."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a restore is a mind's act, and the graph must "
@@ -4816,28 +4511,19 @@ async def backfill(
     target: str, dry_run: bool = True, because: str | None = None,
     only_bases: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb, parameterized over WHICH defect class (task #199 lane 2, families
-    wave): five formerly-separate tools, one per structurally distinct backfill, now one
-    door selected by `target` — a genuine dispatch, not a claim that the underlying
-    repairs share logic (they don't; see each target's own history below). DRY RUN IS
-    THE DEFAULT for every target; `dry_run=False` REQUIRES a non-blank `because` (except
-    `agent_project_links`, which predates that convention and has none). All five are
-    idempotent.
+    """Repair verb, dispatched over `target` — five structurally distinct backfills (no
+    shared logic underneath, only a shared wire shape). Dry run is the default for every
+    target; `dry_run=False` requires `because` (except `agent_project_links`, which
+    predates that convention). All five idempotent.
 
-    `target=`:
-    - "bootstrap_orphan_references": the bootstrap_project door-gap repair (decision
-      49231693/adde094b) — links a zero-live-link, `source_id='ref:osiris'`-stamped
-      Reference to the active SoftwareProject its own canonical prefix names.
-    - "boot_alarm_commit_links": links a zero-live-link `UNREVIEWED BOOT` alarm Thread to
-      the Commit its own summary cites by sha, via derive_or_abstain.
-    - "task_sync_citation_links": links a zero-live-link task_sync obligation Thread to
-      the Thread its own summary names, via task_sync.parse_thread_citations.
-    - "lineage_repo_links": links a zero-live-link Decision/Thread authored by a real
-      Agent lineage to its project, re-running the same rung-3 lineage-wide works_in
-      lookup a new write already gets.
-    - "agent_project_links": moves works_in/governs off an off-head Agent generation onto
-      its living lineage head (thread 20af2c95); the one target taking `only_bases` to
-      scope a write to specific lineages instead of every off-head agent in scope."""
+    `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
+    Reference to the SoftwareProject its own canonical prefix names) |
+    "boot_alarm_commit_links" (links a zero-link boot-alarm Thread to the Commit its
+    summary cites) | "task_sync_citation_links" (links a zero-link task_sync Thread to
+    the Thread it names) | "lineage_repo_links" (links a zero-link Decision/Thread to its
+    author's lineage project) | "agent_project_links" (moves works_in/governs off an
+    off-head Agent onto its living head; the one target taking `only_bases` to scope the
+    write)."""
     if target not in _BACKFILL_TARGETS:
         return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
     return await _backfill_impl(target, dry_run, because, only_bases, ctx)
@@ -4959,18 +4645,14 @@ async def backfill_lineage_repo_links(
 async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """RECOVERY (task #181, Thoth DM 5320): lift a session's harness-native cross-session
-    messages (the SendMessage tool) OUT of its already-soul-stored transcript into typed,
-    attributed, time-threaded `harness_messages` rows — Ptah measured that during a
-    routing defect he and Ra sent 3 messages through osiris and ~24 through the harness's
-    own socket, 90% of a day's reasoning invisible to orient()/search()/fleet(). `smoke.
-    embed_health`'s own sibling wall: osiris cannot see the harness's cross-session
-    socket LIVE, only after a transcript is soul-stored and this runs over it.
+    """Lift a session's harness-native cross-session messages (SendMessage) out of its
+    already-soul-stored transcript into typed, attributed `harness_messages` rows —
+    osiris cannot see the harness's cross-session socket live, only after a transcript
+    is soul-stored and this runs over it.
 
-    `anchor_sid` must already be soul-stored (`SoulStore.ingest_path` — this tool never
-    reads disk itself). DRY RUN IS THE DEFAULT: returns `{found, already_recovered,
-    would_write, sample}` without writing. `dry_run=False` REQUIRES a non-blank `because`.
-    Idempotent per (anchor_sid, turn_index) — safe to re-run once a session keeps growing."""
+    `anchor_sid` must already be soul-stored — never reads disk itself. Dry run is the
+    default: returns `{found, already_recovered, would_write, sample}`. `dry_run=False`
+    requires `because`. Idempotent per (anchor_sid, turn_index)."""
     from src.ingest.cross_channel import recover_harness_exchanges as _recover
     return await _recover(await _pool_get(), anchor_sid, dry_run=dry_run, because=because)
 
@@ -5010,21 +4692,14 @@ async def reconcile_seat_identity(
     seat_id: str | None = None, agent_id: str | None = None, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """HEAL a seat's identity (fe8ec7ff mechanism 3, operator ruling df646654: self-healing
-    over manual cleanup). Heals a cross-source CONTRADICTION (more than one current value
-    from different sources) on exactly two properties, both single-valued by nature and
-    never generalised: a Seat's `house` and its holder Agent's `project`. Newest-declared-
-    wins, the same tiebreak the read path already applies. Reversible: every healed row's
-    own id is in the receipt, same as any retire_assertion call.
+    """Heal a seat's identity: a cross-source CONTRADICTION on exactly two properties, a
+    Seat's `house` and its holder Agent's `project`. Newest-declared-wins, same tiebreak
+    the read path applies. Reversible — every healed row's id is in the receipt.
 
-    `seat_id=None` (default) heals THE CALLER's own held seat, own agent identity,
-    `because` unused. `seat_id=<any seat>` heals a THIRD PARTY's — `agent_id` optional
-    (omitted heals `house` alone), `because` REQUIRED (task #199 lane 2, thread
-    6778/6788 — one verb, was two: `reconcile_seat_identity_third_party` now forwards
-    here, hidden from listing, still callable, retired once traffic shows it silent).
-    Does NOT check caller authority beyond being mounted on the third-party path — same
-    as correct_agent_house, callers are responsible for the authorization this docstring
-    cannot enforce."""
+    `seat_id=None` (default) heals the caller's own held seat, `because` unused.
+    `seat_id=<any seat>` heals a third party's — `agent_id` optional (omitted heals
+    `house` alone), `because` required. Does not check caller authority beyond being
+    mounted on the third-party path."""
     return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
 
 
@@ -5105,7 +4780,12 @@ async def heal_seat_anchor_third_party(
     return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found — "
+              "automated companion uningested_trees_alarm_tick already covers this ground",
+    "since": "task #199 lane 2, retirement wave 2 (msg 6872/6876)",
+})
 async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
     """THE CENSUS (thread 5126) — door onto discover_trees. One row per active
     SoftwareProject: `tree`, `path`, `watched`, `commits`, `activity`, `last_ingested_at`,
@@ -5274,22 +4954,18 @@ async def retire_seat(seat_id: str, reason: str = "",
 @mcp.tool()
 async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
                           ctx: Context | None = None) -> dict[str, Any]:
-    """THE DISK HALF retire_seat never touches (thread 6272) — wires `sweep_retired_office`/
-    `sweep_seat_workspace` (offices.py) to MCP. Sweeps BOTH scaffolded directories for
-    `handle` — the office (`~/.osiris/seats/<handle>/`) AND the workspace (`~/code/
-    <handle>/` by convention) — and reports each half's own receipt under `office`/
-    `workspace`; a refusal on one never blocks the other from reporting its own result.
+    """THE DISK HALF retire_seat never touches. Sweeps both scaffolded directories for
+    `handle` — the office and the workspace — reporting each half's own receipt under
+    `office`/`workspace`; a refusal on one never blocks the other.
 
-    EVERY GUARD IS THEIRS, UNCHANGED: each half independently refuses on an ambiguous Seat
-    match, a Seat that is neither retired nor absent, an active holder, or a live body at
-    that path right now OR after a 90s heal-wait re-check (the daemon-respawn race
-    wave6probe measured) — a directory with no matching Seat row at all (pure filesystem
-    debris, never a real seat) is the other case both halves accept.
+    Each half independently refuses on an ambiguous Seat match, a Seat that is neither
+    retired nor absent, an active holder, or a live body at that path (including after a
+    90s heal-wait re-check) — a directory with no matching Seat row (pure filesystem
+    debris) is the one case both halves accept.
 
     `dry_run=True` (default) reports `would-delete` for whichever half(s) pass their
-    guards — nothing is removed. `dry_run=False` requires `because` (operator-gated) and
-    deletes only the half(s) that pass every guard; a refusing half stays untouched in
-    execute mode exactly as it would be under dry-run."""
+    guards, nothing removed. `dry_run=False` requires `because` and deletes only the
+    half(s) that pass every guard."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a disk sweep is a deliberate act on the record",
@@ -5310,24 +4986,18 @@ async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
 
 @mcp.tool()
 async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Release a seat's holder WITHOUT retiring the seat itself — for the one case
-    retire_seat correctly can't resolve on its own: a holder whose PROCESS actually died
-    without ever calling retire() on itself (a `claude stop`ped or killed body leaves its
-    `holds` link stale forever, and retire_seat rightly refuses a seat with an active
-    holder). This is that refusal's complement, never its bypass.
+    """Release a seat's holder without retiring the seat — for a holder whose process
+    died without calling retire() itself, leaving a stale `holds` link retire_seat
+    rightly refuses to touch. This is that refusal's complement, never its bypass.
 
-    GATED ON REAL LIVENESS EVIDENCE, checked here, not assumed: the harness roster
-    (`claude agents --json`) must show no live session at the seat's own office, AND the
-    holder's own transcript's newest TIMESTAMPED line must be stale — never mtime alone, a
-    process can touch a file's mtime long after its last real turn. Either signal alone
-    showing life is refused loudly as `refused-live`; an unreadable roster refuses as
-    `refused-ambiguous` rather than guessing. `status` is one of: `vacated`,
-    `refused-vacant` (nothing to release), `refused-no-office`, `refused-live`,
-    `refused-ambiguous`, or `refused` (seats.vacate_holder's own graph-level refusal —
-    see `detail`).
+    Gated on real liveness evidence: the harness roster must show no live session at the
+    seat's office, AND the holder's transcript's newest timestamped line must be stale
+    (never mtime alone). Either signal showing life refuses loudly (`refused-live`); an
+    unreadable roster refuses as `refused-ambiguous`. `status`: vacated |
+    refused-vacant | refused-no-office | refused-live | refused-ambiguous | refused (see
+    `detail`).
 
-    AUTO-INVOCATION IS OUT OF SCOPE — this is for a deliberate hand, on one named seat,
-    never a sweep (see fleet_reconcile's own docstring for what gates ITS bulk path)."""
+    Deliberate hand, one named seat, never a sweep."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — vacating a seat's holder is a deliberate act on "
@@ -5362,19 +5032,13 @@ async def retire_project(project: str, because: str,
 @mcp.tool()
 async def project_identity_evidence(seat_id: str, operator_citation: str | None = None,
                                     ctx: Context | None = None) -> dict[str, Any]:
-    """READ-ONLY (task #110/#163's arc — this door existed, tested, and had ZERO MCP
-    surface until now: nothing outside a direct Python import could ever call it).
-    Gathers whichever of five evidence tiers have signal for `seat_id`'s project identity
-    — operator-confirmed citation, declared charter (`governs`), self-authored CLAUDE.md/
-    charter.md existence, the seat's own `.osiris` pin, a live git remote check, and
-    write-attribution (the majority in_repo target across the seat's lineage) — and
-    reports each tier's answer PLUS per-candidate agreement/disagreement. NEVER PICKS A
-    WINNER: no tier ranks first across the population (the module's own xxit/ballgem
-    counter-example — remote is authoritative for one and blind for the other). Read this
-    BEFORE calling rename_project/fork_project — it is the report a human reads to make
-    the call this function can't make for them.
-    `operator_citation` = a decision id/quote the caller already has in hand for tier 1
-    (this never parses decision prose looking for one itself)."""
+    """READ-ONLY. Gathers whichever of five evidence tiers have signal for `seat_id`'s
+    project identity — operator citation, declared charter, self-authored CLAUDE.md/
+    charter.md, the seat's `.osiris` pin, a live git remote check, and write-attribution
+    — and reports each tier's answer plus per-candidate agreement/disagreement. Never
+    picks a winner: no tier ranks first across the whole population. Read this BEFORE
+    calling rename_project/fork_project. `operator_citation` = a decision id/quote
+    already in hand for tier 1 (never parsed from prose)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — reading identity evidence needs a resolvable "
@@ -5389,26 +5053,20 @@ async def project_identity_evidence(seat_id: str, operator_citation: str | None 
 @mcp.tool()
 async def rename_project(project: str, new_name: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a SoftwareProject's new NAME (#110, decision 1db1ff41) — the `canonical` id
-    NEVER changes, only the mutable `name` property (old value kept forever in assertion
-    history, same discipline rename_seat holds for a handle). ZERO edges move; only
-    `agent_mounts.project` is re-addressed so a fresh mount under the new name resolves.
-    OUT OF SCOPE, deliberately: a seat's own `.osiris` pin file on disk — this is a
-    graph-only verb. `because` is mandatory testimony; this function never infers, only
-    declares what a human already decided (read project_identity_evidence FIRST).
+    """Declare a SoftwareProject's new NAME — `canonical` never changes, only the mutable
+    `name` property (old value kept in assertion history). Zero edges move; only
+    `agent_mounts.project` re-addresses. Out of scope: a seat's own `.osiris` pin file —
+    graph-only. `because` is mandatory; this never infers, only declares what a human
+    already decided (read project_identity_evidence FIRST).
 
-    PRE-WRITE CHECK, SURFACED NEVER PICKED (task #163's arc, #137's own root cause;
-    operator ruling: DO NOT CROWN A TIER): before writing, every Seat GOVERNING this
-    project gets project_identity_evidence run and classified into a NAMED verdict
-    against `new_name` — "no-signal" / "confirms" / "disagrees" — in the receipt's
-    `rename_evidence` (keyed by seat, raw evidence rides along too). Write proceeds
-    regardless; `evidence_disagrees=True` plus an unmissable `warning` land in the same
-    receipt whenever any seat's own evidence names something else.
+    PRE-WRITE CHECK: every Seat governing this project gets project_identity_evidence
+    run against `new_name`, classified no-signal/confirms/disagrees in `rename_evidence`.
+    Write proceeds regardless; `evidence_disagrees=True` plus a `warning` land when any
+    seat's evidence disagrees.
 
-    Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
-    `project` ref; a non-active project; `new_name` already resolving to a DIFFERENT
-    active SoftwareProject (a real collision — fold_project/`merge` is the deliberate,
-    evidence-gated verb for that, never a silent merge here)."""
+    Refuses loudly on: blank `new_name`/`because`; unresolved/ambiguous `project`; a
+    non-active project; `new_name` colliding with a DIFFERENT active project (`merge` is
+    the deliberate verb for that, never a silent one here)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a rename is a deliberate act on the record",
@@ -5491,27 +5149,18 @@ async def fork_project(
     project: str, fork_into: str, because: str, direction: str = "fork",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Declare TWO already-active SoftwareProjects a FORK pair — John's own redmonth/
-    ballgem shape (decision 58597670): `fork_into` is the successor, naming `project` as
-    its ancestor via one `forked_from` edge (heir -> ancestor, same direction convention
-    as `succeeded_from`). NO ESTATE MOVES — every existing in_repo/works_in/governs edge
-    on BOTH objects stays exactly where it is; this records a NEW relationship, never
-    merges two into one (`merge` is that verb, deliberately different). Never mints
-    either side — both must already exist as active SoftwareProjects. Never runs
-    project_identity_evidence itself; read that report BEFORE calling this, then name
-    both sides explicitly.
+    """Declare two already-active SoftwareProjects a FORK pair: `fork_into` is the
+    successor, naming `project` as its ancestor via one `forked_from` edge. No estate
+    moves — every existing edge on both objects stays put; this records a new
+    relationship, never merges two into one (`merge` is that verb). Never mints either
+    side — both must already exist. Read project_identity_evidence BEFORE calling this.
 
-    `direction="unfork"` (task #199 lane 2, thread 6778/6788 — one verb, was two)
-    reverses instead: invalidates the live `forked_from` edge. REVERSIBILITY PROVEN, not
-    claimed — since a fork never moves any estate, there is nothing to move back either,
-    the whole reversal is this one healed edge, by design. The old name,
-    `unfork_project`, still works — it now forwards here — but no longer appears in a
-    model's own tool list.
+    `direction="unfork"` reverses: invalidates the live `forked_from` edge — trivially
+    reversible since nothing ever moved. `unfork_project` still works as a hidden alias.
 
-    Refuses LOUDLY on: a blank `because`; `project`==`fork_into` (fork direction only);
-    either ref ambiguous or unresolved; either not an ACTIVE SoftwareProject (fork); a
-    live `forked_from` edge already connecting this exact pair (fork, idempotent refusal)
-    or no such live edge (unfork)."""
+    Refuses loudly on: blank `because`; project==fork_into (fork only); an unresolved
+    ref; either side not active (fork); an already-connected pair (fork) or no live edge
+    to invalidate (unfork)."""
     return await _fork_project_impl(project, fork_into, because, direction, ctx)
 
 
@@ -5519,11 +5168,8 @@ async def fork_project(
                 "since": "task #199 lane 2, thread 6778/6788"})
 async def unfork_project(project: str, fork_into: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
-    callable. Forwards to `fork_project(direction="unfork")`, the same verb
-    parameterized. Kept only so a live or sleeping caller whose standing orders still
-    name this verb is not broken at its next turn; remove once tool_traffic() shows it
-    silent."""
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    fork_project(direction="unfork")."""
     return await _fork_project_impl(project, fork_into, because, "unfork", ctx)
 
 
@@ -5879,23 +5525,17 @@ async def _abstained_derivations_impl(
 async def abstained_derivations(
     link_type: str | None = None, limit: int = 100, scope: str = "all",
 ) -> dict[str, Any]:
-    """READ-ONLY. Every `derive_or_abstain` refusal, `from_id` and every candidate already
-    resolved to (type, summary) — a caller gets the shortlist as it stands now, never bare
-    uuids to re-look-up itself. `link_type=None` pools every lane; pass one (e.g.
-    `in_repo`) to scope to that namespaced `derivation_abstained_<link_type>` property
-    only — never a mixed soup unless asked. `count` is the true total (never capped);
-    `sample` is bounded by `limit`, newest-abstained first.
+    """READ-ONLY. Every `derive_or_abstain` refusal — `from_id` and every candidate
+    resolved to (type, summary), never bare uuids. `link_type=None` pools every lane; a
+    value scopes to that one namespaced property. `count` is the true total; `sample` is
+    bounded by `limit`, newest-abstained first.
 
-    `scope` narrows WHICH abstentions, structurally (SQL, never a post-fetch filter a
-    caller could widen): "all" (default, every live abstention) | "retryable" (the
-    zero-candidate subset — nothing found YET, which time can change; oldest first) |
-    "retryable_ambiguous" (the 2+-candidate subset whose original set has, by
-    elimination alone — a merge, a retire, an invalidation, never a fresh re-derivation
-    — shrunk to exactly one `status='active'` survivor; adds `surviving_candidate`,
-    `original_candidate_count` per row and a top-level `eliminated_to_zero` count for
-    the different, zero-survivor population, visibility only, never folded into
-    `count`/`sample`). Neither retryable scope re-attempts anything — see
-    retry_ambiguous_abstentions for the one write half both retryable scopes name a
+    `scope` narrows WHICH abstentions, structurally: "all" (default) | "retryable" (the
+    zero-candidate subset, safe to retry as time passes) | "retryable_ambiguous" (the
+    2+-candidate subset reduced by elimination alone to exactly one survivor — adds
+    `surviving_candidate`/`original_candidate_count` per row, `eliminated_to_zero` for
+    the zero-survivor population). Neither retryable scope re-attempts anything — see
+    retry_ambiguous_abstentions for the write half both retryable scopes name a
     target for."""
     return await _abstained_derivations_impl(scope, link_type, limit)
 
@@ -5995,18 +5635,15 @@ async def repair_stale_current_flags(
 @mcp.tool()
 async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
                            ctx: Context | None = None) -> dict[str, Any]:
-    """THE CROSS-SOURCE SUPERSEDE (thread 52911d2a, found diagnosing b9aa7326) — retires
-    ANOTHER source's assertion explicitly, the one class assert_property's own automatic
-    (same-source-only) supersession cannot reach: a peer's correction of another agent's bad
-    self-declaration. correct_agent_house's own repair asserts a new value but can never
-    retire the wrong one this way when the correction comes from a different source — both
-    stay simultaneously "current" until this runs.
+    """THE CROSS-SOURCE SUPERSEDE — retires another source's assertion explicitly, the
+    class assert_property's own automatic (same-source-only) supersession cannot reach:
+    a peer's correction of another agent's bad self-declaration. Without this, a
+    different-source correction and the wrong original both stay "current" at once.
 
-    Deliberately narrow — retires ONE named assertion, by id, never a bare "whatever's
-    current now": the caller must already know exactly which row is wrong, from a diagnosis,
-    never a guess. `because` is required (a cross-source retirement crosses accountability
-    lines). Refuses loudly: `ref` doesn't resolve; `superseded_id` isn't a `name` assertion
-    on that object; it's already superseded; `because` is blank."""
+    Deliberately narrow — retires ONE named assertion by id, never "whatever's current
+    now"; the caller must already know exactly which row is wrong. `because` is
+    required. Refuses loudly: `ref` unresolved; `superseded_id` not a `name` assertion
+    on that object; already superseded; blank `because`."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a retirement is a mind's act, and the graph must "
@@ -6079,19 +5716,15 @@ async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Recompile a seat's CLAUDE.md managed section — THE BOOT COMPILER's fourth compile
-    point (thread 4951d818), fired on demand when law changes or a live fact (a peer
-    bond, a manager reassignment) needs to reach an already-occupied office that
-    establish_office/mint_seat's fill-missing-only scaffold will never revisit again.
-    Only the bytes between the `<!-- osiris:compiled:begin -->` / `...:end -->` markers
-    are ever touched — a seat's own hand-composed narrative, hand-added facts, and
-    charter.md always, survive untouched. `because` is required (a reissue is
-    testimony, same discipline rename_seat runs).
-    REFUSES LOUDLY, naming the seat, rather than guessing, when the managed section is
-    missing, duplicated, or mangled (a hand-edit damaged the markers themselves) —
-    fix it by hand, or pass `adopt=True` for the one-time on-ramp when an office
-    genuinely predates the compiler (zero marker text on disk); `adopt=True` on an
-    office that already carries any marker text also refuses."""
+    """Recompile a seat's CLAUDE.md managed section on demand, when law changes or a
+    live fact (a peer bond, a manager reassignment) needs to reach an already-occupied
+    office. Only the bytes between the `<!-- osiris:compiled:begin/end -->` markers are
+    touched — hand-composed narrative and charter.md always survive. `because` required.
+
+    Refuses loudly, naming the seat, when the managed section is missing, duplicated, or
+    mangled — fix by hand, or pass `adopt=True` for a genuinely pre-compiler office
+    (zero marker text); `adopt=True` on an office that already has marker text also
+    refuses."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a reissue is a mind's act, and the graph must "
@@ -6224,24 +5857,16 @@ async def resolve_fold(candidate_id: int, decision: str,
 @mcp.tool()
 async def fleet_reconcile(execute: bool = False,
                           ctx: Context | None = None) -> dict[str, Any]:
-    """THE REAPER (task #59) — buckets stale/anonymous agent mounts into bulk_fold_swarm,
-    rollup_office_remount, drop_ephemeral_test_cwd, and leave_for_human, and — only with
-    `execute=True` — acts on the first three (fold_agent/resolve_fold_candidate for the
-    fold buckets, a row-scoped mount drop for the third). leave_for_human is NEVER
-    touched, by construction. DRY RUN IS THE DEFAULT: without `execute`, returns the plan
-    only (which candidates would fold, which mount rows would drop) and writes nothing.
-    With `execute=True`, re-reads the tray fresh immediately before acting (never a stale
-    report) and returns before/after tray counts as its receipt — proof the acted rows
-    left the tray, not a trusted boolean. The sanctioned door for what was previously only
-    reachable as orchestrator code (src.orchestrator.fleet_reconcile.reconcile_execute) —
-    built so a reviewed act never has to be a hand-written script against the live graph.
+    """THE REAPER — buckets stale/anonymous agent mounts into bulk_fold_swarm,
+    rollup_office_remount, drop_ephemeral_test_cwd, and leave_for_human (never touched,
+    by construction), acting on the first three only with `execute=True`. Dry run is the
+    default: returns the plan, writes nothing. With `execute=True`, re-reads the tray
+    fresh immediately before acting and returns before/after counts as proof.
 
-    THE FOLD BUCKETS ARE OPERATOR-GATED, ENFORCED: this wrapper itself checks only
-    mount — the authority check lives in fold_agent, one call down, and a non-operator
-    caller's fold items come back with `"error"` per item (never a crash) while
-    drop_ephemeral_test_cwd still runs. THIS WRAPPER IS REACHABLE INDEPENDENTLY OF
-    `osiris_fleet_reconcile_enabled` — that flag gates only the SEPARATE scheduled tick
-    (reconcile_scheduled_tick), never this tool; the fold_agent gate is what closes it."""
+    Fold buckets are operator-gated, enforced one call down (fold_agent) — a
+    non-operator's fold items come back per-item errored while drop_ephemeral_test_cwd
+    still runs. Reachable independently of `osiris_fleet_reconcile_enabled`, which gates
+    only the separate scheduled tick, never this tool."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
@@ -6309,20 +5934,14 @@ async def walk_in(
     model: str | None = None, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE WALK-IN DOOR: one call over mount + claim_name + establish_office, for a mind
-    with nothing but this server (operator's framing, 2026-08-02). Composes each step
-    untouched, returns its receipt verbatim, stops at the first refusal — never lets a
-    later step's own downstream refusal misdescribe an earlier one (#117's disease,
-    pre-empted). Skips an already-done step honestly (`ran: false` + why), never silently
-    and never falsely.
+    """One call over mount + claim_name + establish_office, for a mind with nothing but
+    this server. Composes each step untouched, returns its receipt verbatim, stops at
+    the first refusal. Skips an already-done step honestly (`ran: false` + why).
 
-    `handle` and `wants_office` are both REQUIRED, never defaulted (refuse-never-guess,
-    practice f39a9849): nobody but the caller can pick a name, and forcing an office onto
-    a one-off visitor session would erase that class's whole reason for existing.
-
-    `cwd`/`job_dir` are only consulted if you aren't mounted yet; project/house are never
-    asked separately, they come free off `cwd` once mount runs. Full design rationale:
-    `src/orchestrator/walkin.py`'s own module docstring."""
+    `handle` and `wants_office` are both required, never defaulted — nobody but the
+    caller can pick a name, and forcing an office onto a one-off visitor would erase that
+    class's whole point. `cwd`/`job_dir` only consulted if not yet mounted; project/house
+    come free off `cwd`. Full rationale: src/orchestrator/walkin.py's own docstring."""
     pool = await _pool_get()
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
@@ -6358,21 +5977,14 @@ async def mint_seat(
     handle: str, project: str | None = None, model: str | None = None,
     house: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE ORG CHART TRICKLES (task #50, ruling cabc28f5) — mint a specialist WORKER seat
-    under YOUR OWN seat, one act: ensure_seat + an office scaffold (dir, .osiris pin
-    carrying project AND model, CLAUDE.md + charter.md) + an intended_model stamp (Sonnet
-    default) + managed_by (you become manager of record). THE CALLING SEAT IS ALWAYS THE
-    MANAGER — there is no override param; a seat mints its OWN workers, never another's
-    (minting into someone else's org is a console act, deliberately absent here — alfred
-    adopts Tantra himself, a manager adopts its own). Idempotent: a handle that already
-    names a living Seat is ADOPTED (a missing edge/stamp asserted, nothing rewritten, no
-    new identity minted) rather than twinned — automatic on an exact match, never a parameter here:
-    `osiris mint-seat`'s own --adopt/--force are deliberate console-only escape hatches
-    (refuse instead of minting fresh; force past a near-miss twin refusal), not something
-    an ordinary coordinator's mint should ever need. `house` omitted inherits YOUR house;
-    crossing houses refuses unless the caller is the operator. Refuses loudly if you hold
-    no seat of your own (claim_name first — an unclaimed lineage has no 'itself' to
-    extend)."""
+    """Mint a specialist WORKER seat under YOUR OWN seat, one act: ensure_seat + an
+    office scaffold (dir, .osiris pin, CLAUDE.md + charter.md) + an intended_model stamp
+    + managed_by (you become manager of record). The calling seat is always the manager
+    — no override param, a seat mints its own workers, never another's. Idempotent: a
+    handle already naming a living Seat is adopted (missing edge/stamp asserted, nothing
+    rewritten) rather than twinned. `house` omitted inherits your own; crossing houses
+    refuses unless the caller is the operator. Refuses loudly if you hold no seat of your
+    own (claim_name first)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — minting a worker is a seat's own act",
@@ -6497,79 +6109,22 @@ async def record_decision(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Write back a DECISION you made this session — a ruling, an architecture pivot, a
-    deliberate rejection — so the WHY becomes durable graph memory the next session inherits.
-    `kind`: ruling|reset|override|rejection|choice|decision. `rationale` = the reasoning;
-    `repo` = a SoftwareProject name to file it under. `grounds` cites the References the
-    decision rests on (ids, ref:<slug> canonicals, or titles — ingest them first with
-    ingest_reference): grounded_by edges minted at birth. `protocol` = the INVOCATION that
-    produced the finding — the exact command line, seeds, thresholds, bucket edges — so a
-    successor RERUNS instead of re-deriving; a ruling that states only the conclusion invites
-    exactly that re-derivation.
-    `supersedes` = an earlier decision this one CORRECTS — UUID, canonical, or 8-char
-    short id ONLY, never a free-text/prose match (an addressing act that BURIES a record
-    must name it exactly, or it refuses, the same law `resolves` follows): the old entry
-    is buried under this one — it leaves orient's recent list and the decision-log grays
-    it with its successor; never deleted, always unwindable. Idempotent on the summary.
-    `resolves` = the THREAD(s) this decision ANSWERS — UUID, canonical, or 8-char short id
-    ONLY, never a free-text/prose match: an addressing act must name its target exactly, or
-    it refuses. It closes the thread(s) in the same act. USE IT whenever your ruling settles
-    an open question — otherwise the answer lands and the question stays lit. Naming the
-    thread in your prose does nothing; the graph does not read prose. No matcher can refuse
-    a valid id that simply names the WRONG thread — the receipt (`resolved_thread`, or
-    per-entry `resolved_threads` for the list form) always carries the matched thread's own
-    summary, so a mis-citation is visible in the SAME turn.
-    A LIST folds a whole SET in one act. Each entry resolves INDEPENDENTLY: `resolved_threads`
-    names, per entry, exactly what closed (id + summary) or that it matched NOTHING — reported,
-    never silently swallowed. An unmatched entry inside a list does NOT abort the rest (one
-    typo must not veto the other nine); a single STRING keeps the original all-or-nothing
-    strictness — matches nothing → the call errors and NOTHING is recorded.
-    `obsoletes` = the WORKAROUND(s) this fix kills. Quote each as it PROPAGATES (the words
-    agents actually inherit, e.g. 'NEVER DM BY NAME'); each is minted a dead Superstition,
-    searchable forever, and orient announces recent kills FLEET-WIDE so any mind carrying the
-    practice strikes it. USE IT whenever your fix makes a known workaround unnecessary.
-    `confirms` = the Practice(s) this decision RE-DERIVES — same UUID/canonical/short-id-
-    only addressing as `supersedes`, never a free-text/prose match: a `witnesses` link is
-    minted to each. Resolves like `resolves`'s list form: each entry independent, a miss
-    reported not fatal. `confirmed` (the composition's count) is this link count, read at
-    query time.
-    `refutes` = a Practice this decision DISPROVES — same addressing strictness (UUID,
-    canonical, or 8-char short id only): converts it to a dead Superstition, reusing the
-    Practice's own statement. The Practice stays ACTIVE carrying `refuted_by` — never
-    retired, so a half-remembered refuted lesson stays findable. Same strictness as
-    `supersedes`: a target matching nothing errors and NOTHING is recorded.
-    `implements` = a standing Decision this one is a SPECIFIC EXECUTION of — the parent stays
-    alive, unlike `supersedes`. Same strictness as `supersedes`.
-    `rediscovers` = the earlier Decision(s) this one INDEPENDENTLY ARRIVED AT AGAIN (task #163,
-    ruling 5ecaf8d9 — the ruling this parameter exists to fix: it cited two earlier decisions
-    it re-derived by short-id as if `confirms` would link them, and `confirms` only resolves
-    against Practices). Points FROM this later finding TO each earlier one. Buries NEITHER:
-    the earlier decision's standing is untouched — no superseded_by, no graying out of
-    orient's recent list, unlike `supersedes`; and unlike `implements`, this decision isn't
-    executing the earlier one's plan, it reached the same conclusion on its own. Resolves like
-    `confirms`: each entry independent (UUID/canonical/short-id only), a miss reported in
-    `rediscovers_resolution` rather than aborting the rest. WHAT IT DOES NOT DO: it records a
-    rediscovery, it does not prevent one — catching one before it's written down is a
-    retrieval-quality question, deliberately not this parameter's job (task #163 piece 3).
-    `bears_on` = open board Thread(s) this decision SPEAKS TO without settling ("the
-    measurer's moment has a verb", thread 898840dc). Same addressing law as `resolves`;
-    mints the SAME `answers` edge but BY CONSTRUCTION nothing else — no status write. Use
-    `resolves` to settle a row, `bears_on` to merely inform it. Resolves like `confirms`
-    (a miss reported, never fatal); receipt carries `new_link` per thread plus its summary.
-    `narrows` = earlier decision(s) whose SCOPE this one bounds without refuting or
-    superseding — the target stays correct within its now-visible limit. Non-burying by
-    construction, same guarantee as `rediscovers`; surfaced on the bounded decision as
-    `narrowed_by` via recall(). Resolves like `rediscovers`.
-    `cites` = earlier decision(s) this one ADDS a new facet to, without bounding
-    (`narrows`), refuting, or independently re-deriving (`rediscovers`) them — the
-    declared form of the prose-citation miner's own `cites` edge (origin="declared"
-    instead of "prose"), for a caller naming the target without the miner's qualifier-
-    word convention. Resolves like `rediscovers`.
-    `ack_prior_art` = when this call's own `prior_art_flag` fires and none of supersedes/
-    implements/rediscovers/confirms/grounds/bears_on/narrows/cites already answers it,
-    pass True to record the dismissal as a graph event instead of a shrug with no trace.
-    `unlinked_because` (task #189) — declare-or-refuse's hatch: a real reason here lets
-    an otherwise-unlinked write through when the type requires a link kind.
+    """Write back a decision (ruling|reset|override|rejection|choice) so its WHY persists.
+    `rationale`=reasoning, `repo`=project it's filed under, `grounds`=References it rests
+    on, `protocol`=exact invocation to rerun rather than re-derive.
+
+    Graph-editing params take a UUID/canonical/short-id ONLY, never free text, and each
+    resolves independently in a list (a miss is reported, never fatal — except a single
+    string target, which errors the whole call if unmatched): `supersedes` buries an
+    earlier decision under this one; `resolves` closes the Thread(s) this settles;
+    `obsoletes` kills a named Superstition (quote the words agents inherit); `confirms`/
+    `refutes` witness or disprove a Practice; `implements` executes a standing Decision
+    (parent stays alive); `rediscovers`/`narrows`/`cites` link without burying anything —
+    an independent re-arrival, a scope bound, and an added facet, respectively; `bears_on`
+    speaks to an open Thread without settling it (use `resolves` to actually close one).
+    `ack_prior_art=True` records a dismissed prior_art_flag instead of a silent shrug.
+    `unlinked_because` lets a real reason through declare-or-refuse's link-kind gate.
+    Full per-parameter disambiguation: consult_canon('record_decision').
     `content_landed` — present when `rationale`/`protocol` was passed: a READ-BACK
     confirming your text is now the CURRENT value (a different assertion can silently win
     the tie-break on the same object despite a success response). A `false` entry names
@@ -7126,22 +6681,14 @@ async def record_practice(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Write back a TRANSFERABLE TECHNIQUE — Superstition's positive twin: the graph could
-    hold what to STOP believing but nothing held engineering technique that outlives any
-    single repo or date. `statement` is the imperative one-liner (e.g. 'arm before you seal
-    — one ceremony, not two') — quote it as
-    you'd want a future mind to inherit it, not as narration. `failure_prevented` is the
-    concrete symptom that makes it findable MID-FAILURE, not just on reflection.
-    `surface` reuses BlindSpot's domain vocabulary (a rough area: 'deploy', 'succession',
-    'search'). `witnesses` links the Decision(s)/Commit(s)/Thread(s) that are this
-    Practice's evidence (ids or short ids) — one witness is a hunch, four is law; a miss is
-    reported, never fatal. Idempotent on the normalized statement — recording the same
-    lesson again enriches the same node rather than minting a twin.
-    Timeless: never moment-stamped, unlike a Decision. If this Practice is later disproven,
-    kill it via record_decision(refutes=...), not here — a Practice never refutes itself.
-    Runs the SAME unified prior-art check record_decision does (over Decisions/Practices/
-    Superstitions), so recording a near-duplicate technique gets flagged before it mints a
-    twin the fused engine's wording just doesn't happen to match."""
+    """Write back a TRANSFERABLE TECHNIQUE, Superstition's positive twin. `statement` is
+    the imperative one-liner (quote it as you'd want a future mind to inherit it, not as
+    narration). `failure_prevented` is the concrete symptom that makes it findable
+    mid-failure. `surface` reuses BlindSpot's domain vocabulary. `witnesses` links
+    Decision(s)/Commit(s)/Thread(s) as evidence (a miss is reported, never fatal).
+    Idempotent on the normalized statement. Timeless, never moment-stamped — a later
+    disproof kills it via record_decision(refutes=...), never here. Runs the same
+    prior-art check record_decision does."""
     pool = await _pool_get()
     wids: list[uuid.UUID] = []
     receipt: list[dict[str, str]] = []
@@ -7190,17 +6737,13 @@ async def ingest_reference(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Turn something you READ into a first-class Reference node — a paper, a vendor doc,
-    a spec — so it can be FOUND by search, cited by record_decision(grounds=[...]), and
-    inherited, instead of being narrated into free text and lost. `title` is the citation
-    key (idempotent on its slug — re-ingesting enriches the same node). `vendor` = who
-    wrote it (arxiv author, 'anthropic', 'palantir'…); `body` = what it claims, in your
-    words. `caveats` is FIRST-CLASS and separate from body: the 'but only under X' that
-    dies when buried in prose — if the source tightens rather than confirms, say it HERE.
-    `cites` wires paper-to-paper lineage (ids, ref:<slug> canonicals, or titles of already-
-    ingested References) so a literature tree is walkable instead of re-derived per session.
-    Graded SELF_DECLARED (your testimony of what you read). Returns the id + canonical
-    to cite."""
+    """Turn something you READ into a first-class Reference node — a paper, vendor doc,
+    spec — so it's findable by search and citable via record_decision(grounds=[...]).
+    `title` is the citation key, idempotent on its slug. `vendor` = who wrote it; `body`
+    = what it claims, in your words. `caveats` is first-class and separate from body —
+    the "but only under X" that dies when buried in prose. `cites` wires paper-to-paper
+    lineage (ids/canonicals/titles of already-ingested References). Graded
+    SELF_DECLARED. Returns the id + canonical to cite."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     cids: list[uuid.UUID] = []
@@ -7262,50 +6805,22 @@ async def open_thread(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Open a THREAD — an unresolved question or next-step you want the next session to pick
-    up. Surfaces in run_composition('briefing') under open threads, beside mined ones. `repo`
-    files it under a SoftwareProject. Idempotent on the summary — and, with `repo`, ALSO on a
-    near-duplicate of it: a near-hit on that project's own open threads returns the EXISTING
-    id (`deduped: "true"`) instead of minting a twin — conservative on purpose, so a
-    genuinely new thread is never swallowed. This is how a session hands off its loose ends
-    instead of losing them (or doubling them). `dedup_scope` names what the twin check
-    covered (this project's own OPEN Threads) — `deduped: "false"` means "no twin there,"
-    never "nothing similar exists anywhere." A genuinely new thread also gets `prior_art` —
-    the same search record_decision/send already run, surfacing a standing Decision/
-    Practice/Superstition/open obligation Thread that may cover this ground; `prior_art_flag`
-    fires on a strong hit. Surfacing only, never a refusal.
-    `unlinked_because` (task #189) — declare-or-refuse's hatch, same shape as
-    record_decision's own parameter of this name.
-    `kind='obligation'` marks a DUTY minted by an action ('kernel changed → daemons need
-    restart') — record those the moment they're minted; they are neither rulings nor commits
-    and otherwise die with the context window. `owner` says WHOSE MOVE it is: 'operator' =
-    blocked on the human, 'agent:<id>' = a specific mind, a project name = any hand there;
-    unowned = anyone who reads it may act. orient sorts your wall by it — yours-to-act above
-    waiting-on-the-human.
-    `assignee` (single-assignee leased obligations) is the seat/agent THIS BUILD belongs to
-    — one build, one assignee. It stamps the SAME `owner` property (not a parallel field:
-    `owner` already IS "whose move
-    it is"; orient's ranking needs no change). What's new is the LEASE: with `assignee` set,
-    a near-duplicate hit SURFACES THE EXISTING LEASE instead of just deduping silently —
-    `leased_to` names who already holds it. Asking again as the SAME assignee finds your own
-    open build; a DIFFERENT assignee asking for near-duplicate work surfaces it too, by
-    design — a double-assignment must be VISIBLE, never silent.
-    `arc` names which of a CLOSED taxonomy (capture.ARCS) this thread belongs to — the
-    roadmap screen's top grouping. OSIRIS-SCOPED (d8ac7f5f): legal only on an osiris
-    thread, where a bad value refuses loudly; elsewhere dropped, receipt names why. Omit
-    for the common case; unset/dropped, the receipt reads "unsorted".
-    `resolves` closes a PREDECESSOR thread this new one supersedes, in the same call —
-    decision 883bb3da's own diagnosed gap: a lineage's own board-state/handoff threads
-    accumulate forever because nothing ever closed the ancestor's when the successor
-    opened their own. Pass your own predecessor's board-state thread here when you open
-    yours. Same addressing strictness as record_decision's own `resolves` (UUID,
-    canonical, or 8-char short id only, never a prose match); the list form resolves each
-    entry independently and reports per-entry in the receipt (`resolved_threads`) rather
-    than letting one miss veto the rest; the single-string form errors — and mints
-    nothing, not even the new thread — if it matches no thread, the same all-or-nothing
-    strictness record_decision's own single-ref form uses.
-    `branch`/`files_touched` mark held work (gated, unmerged); `colliding_work` in the
-    receipt names any open held-work thread already touching one of `files_touched`."""
+    """Open a THREAD — an unresolved question or next step for the next session to pick up.
+    Surfaces in run_composition('briefing'). `repo` files it under a project. Idempotent on
+    the summary, and on a near-duplicate too (`deduped`/`dedup_scope` name a twin among this
+    project's own OPEN threads instead of minting one). A genuinely new thread gets
+    `prior_art`/`prior_art_flag` — a standing Decision/Practice/Thread that may already
+    cover this ground, surfacing only, never a refusal.
+
+    `kind='obligation'` marks a duty minted by an action. `owner` says whose move it is
+    ('operator', 'agent:<id>', a project name, or unowned = anyone). `assignee` leases a
+    single-assignee obligation to one build; a near-duplicate then surfaces `leased_to`
+    instead of deduping silently. `arc` sorts into the roadmap taxonomy (osiris-scoped
+    only). `resolves` closes a predecessor thread this one supersedes — same UUID/
+    canonical/short-id-only strictness as record_decision's own `resolves`. `branch`/
+    `files_touched` mark held work; `colliding_work` names any open collision.
+    `unlinked_because` mirrors record_decision's own hatch. Full detail:
+    consult_canon('open_thread')."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
@@ -7480,22 +6995,16 @@ async def resolve_thread(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, str]:
-    """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
-    substring; `because` records why (a short WHY, not a completion essay). It leaves
-    briefing's open list and joins the resolved section. Event-sourced (never deleted), so
-    the close is auditable and reversible.
-    `artifact` is the POINTER to what actually closed it — a commit hash, a decision id, a
-    file:line — kept as resolved_artifact; when it names a graph object (Commit/Decision)
-    a resolved_by edge is minted too, the strong closure witness the closure-miner almost
-    never finds (022bd24a). Put the evidence THERE and keep `because` short. The receipt's
-    `resolved_by` field CONFIRMS whether that edge actually landed — an artifact that only
-    matched free text (a file:line, an unresolvable pointer) says so plainly rather than
-    leaving the caller to guess from a conditional sentence.
-    RE-RESOLVING IS ALLOWED, NOT REFUSED, ON PURPOSE — `ref` is matched by identity only,
-    never status, so a second call on an already-resolved thread is how a later, more
-    specific closure witness gets attached. because/resolved_artifact become this call's
-    own text (latest wins, earlier reasoning stays in history, not current). The receipt
-    names it plainly when a call landed on an already-resolved thread."""
+    """Close a THREAD — `ref` is its UUID or a summary substring; `because` is a short
+    WHY, not a completion essay. Event-sourced, never deleted, so the close is auditable
+    and reversible. `artifact` points at what actually closed it (a commit hash, decision
+    id, file:line) — kept as `resolved_artifact`; when it names a graph object a
+    `resolved_by` edge mints too, confirmed (or its absence explained) in the receipt.
+
+    Re-resolving is allowed, not refused: `ref` matches by identity, never status, so a
+    second call on an already-resolved thread attaches a later, more specific closure
+    witness — because/resolved_artifact become this call's own text, latest wins, earlier
+    reasoning stays in history. The receipt names it when this happens."""
     pool = await _pool_get()
     probe_tid = await capture._find_thread(pool, ref)
     was_already_resolved = (
@@ -7561,23 +7070,14 @@ async def rematerialize(
     anchor_sid: str, dest: str | None = None, force: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE SOUL STORE, PIECE 2 (task #51, ruling 62dc6397): reconstruct a session's
-    transcript BYTE-FOR-BYTE from soul_lines alone, written to disk — the acceptance
-    test a soul store stands or falls on, made durable (piece 1's own `re_materialize`
-    only ever returned the text in memory). `anchor_sid` is the 8-char session anchor
-    (matches harness/soul_sessions' own key).
+    """Reconstruct a session's transcript byte-for-byte from soul_lines alone, written
+    to disk. `anchor_sid` is the 8-char session anchor. Verifies the hash chain while
+    collecting: a break returns `{"error": ..., "verified_through": N}` and nothing is
+    written. `dest` defaults to the session's own recorded source_path.
 
-    Verifies the hash chain WHILE collecting, not as a separate pass: a break returns
-    `{"error": ..., "verified_through": N}` and NOTHING is written — never a silently
-    truncated file that looks complete. `dest` defaults to the session's own recorded
-    source_path (soul_sessions) — the harness's OWN projects-slug convention, so
-    `claude --resume` on a host that never had the original file finds the
-    reconstruction in the exact place a live session would have written it.
-
-    REFUSES to overwrite a LIVE transcript: if `dest` already exists and was modified
-    more recently than this session's last ingest, writing over it would clobber
-    content the store never saw — `force=True` overrides. Success returns
-    `{"written": <path>, "lines": N, "sha256": <hex>}`."""
+    Refuses to overwrite a LIVE transcript — `dest` modified more recently than this
+    session's last ingest would clobber unseen content; `force=True` overrides. Success
+    returns `{"written": <path>, "lines": N, "sha256": <hex>}`."""
     from src.ingest.soul_store import SoulStore
 
     pool = await _pool_get()
@@ -7590,32 +7090,20 @@ async def heal_seat_transcript(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Splice a seat's session, fragmented across multiple project slugs by a mid-session
-    cwd move, back into ONE file at its own office slug — the transcript half of the
-    jesus/chad repair (thread 6483/6534/6559/6567/6575), the operator's own injection
-    thesis (804d59c3) made a callable verb instead of a hand-run script.
+    cwd move, back into ONE file at its own office slug. `handle` names the seat whose
+    office the result lands at. `source_paths` are the original fragments, IN CHAIN ORDER
+    (oldest first) — the session uuid and 8-char anchor_sid are both derived from
+    `source_paths[0]`'s own filename.
 
-    `handle` names the seat whose OFFICE the result lands at
-    (`_default_office_root()/handle.lower()/<session-uuid>.jsonl`). `source_paths` are
-    the ORIGINAL harness-written fragments, IN CHAIN ORDER (oldest first) — the same list
-    `SoulStore.splice_sources` takes; getting the order wrong is exactly what the
-    preflight below exists to catch, not something this door infers from mtime. The
-    session's full uuid and its 8-char anchor_sid are both DERIVED from
-    `source_paths[0]`'s own filename — one source of truth, no second id a caller could
-    pass out of sync with the files themselves.
+    Every guard is splice_sources' own: `verify_jsonl_chain_boundary` runs on every
+    consecutive pair before anything is touched, refusing a false "same session" or a
+    genuinely separate session sharing only a directory.
 
-    EVERY GUARD IS SPLICE_SOURCES' OWN, UNCHANGED: `verify_jsonl_chain_boundary` runs on
-    every consecutive pair before anything is touched. A false "same session id"
-    coincidence, or genuinely separate sessions that only share a directory (Marquee's
-    own specimen, thread 6576 — three session ids, no pair of them chains) refuses here
-    exactly as it refused by hand.
-
-    `dry_run=True` (default, sweep_seat_disk's own convention) runs the SAME preflight
-    and reports per-pair clean/refused plus where the result WOULD be written — nothing
-    is read past the preflight scan, nothing is written. `dry_run=False` requires
-    `because` (operator-gated) and performs the real splice + `rematerialize_to_disk
-    (upto=None)` into the office slug. Never touches a Seat row, an anchor_cwd, or any
-    SOURCE transcript (splice only reads) — the anchor-repoint half of this repair is a
-    different door (Sekhmet's `heal_seat_anchor`) entirely."""
+    `dry_run=True` (default) runs the same preflight, reports clean/refused per pair and
+    where the result would land — nothing written. `dry_run=False` requires `because`
+    and performs the real splice + rematerialize. Never touches a Seat row, anchor_cwd,
+    or any source transcript — the anchor-repoint half is heal_seat_anchor, a different
+    door."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a transcript heal is a deliberate act on the record",
@@ -7676,19 +7164,13 @@ async def correct_thread_summary(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Correct a THREAD's own headline in place — the verb `annotate_thread` names and
-    refuses to be: "a caller who means the earlier understanding was wrong wants a
-    different verb entirely." `summary` itself is never touched (it is `open_thread`'s own
-    dedup key — re-asserting it under a new value would mint a twin, not fix the original);
-    `corrected_summary` is an ordinary property instead, so re-calling this SUPERSEDES the
-    prior correction (current_assertions' normal law) rather than piling up undated notes.
-    `because` (optional) rides the same pattern, naming why the headline changed.
-
-    ONE HOP: recall(ref) already returns every current property flat, no special-casing
-    needed — the corrected text sits right beside the untouched original `summary` in the
-    SAME call, so a reader sees both without a second lookup.
-
-    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing."""
+    """Correct a THREAD's own headline in place — for when the earlier understanding was
+    wrong, distinct from annotate_thread. `summary` itself is never touched (it's
+    open_thread's own dedup key); `corrected_summary` is an ordinary property, so
+    re-calling this supersedes the prior correction rather than piling up notes.
+    `because` (optional) names why. recall(ref) shows both the correction and the
+    untouched original `summary` in one call. Returns {"error": ...} when `ref` matches
+    nothing."""
     pool = await _pool_get()
     try:
         tid = await capture.correct_thread_summary(
@@ -7737,19 +7219,13 @@ async def amend_practice(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Narrow or correct a LIVE practice's guidance as understanding develops, WITHOUT
-    changing its id, its `statement`, or its witness/confirmed count — the third door for
-    a Practice, same shape as `amend_decision` for a Decision. `statement` is record_
-    practice's own idempotency key and is never touched here; use this when a mechanism
-    now covers part of what a practice warns about, so the next reader inherits "this half
-    is mechanical now, this half is still yours to watch" instead of a blanket warning
-    that's gone partly stale. Unlike a Decision's addenda, amendments here are folded
-    directly into `practices()`'s own listing — the live surface every caller already
-    reads — not left write-only.
-    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing, or
-    when it names a Practice already REFUTED (carries `refuted_by`) — a dead lesson does
-    not grow new guidance; use `record_decision(refutes=...)` if you mean to kill it, this
-    verb only ever adds to a practice still standing."""
+    """Narrow or correct a LIVE practice's guidance, without touching its id, its
+    `statement` (record_practice's idempotency key), or its witness/confirmed count —
+    same shape as amend_decision. Use when a mechanism now covers part of what a
+    practice warns about. Amendments fold directly into practices()'s own listing.
+    Returns {"error": ...} when `ref` matches nothing, or names a Practice already
+    REFUTED — use record_decision(refutes=...) to kill one, this only adds to a
+    practice still standing."""
     pool = await _pool_get()
     try:
         pid = await capture.amend_practice(
@@ -7768,32 +7244,16 @@ async def acquire_lease(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Claim ANY resource by an EXACT id — `deploy`, `docker-daemon`, a migration name, the
-    live server itself: genuinely SHARED, non-isolable resources, NOT the working tree (a
-    per-seat tree has no contention left to coordinate). UNLIKE `open_thread(assignee=)`'s
-    `leased_to` (fuzzy prose similarity over a thread summary, read-then-write, repo-scoped
-    only — two agents naming the same file in differently-worded summaries could get no
-    lease at all), `resource_id` here is matched by EQUALITY, backed by a real DB-level
-    uniqueness guarantee (`resource_leases_active_claim`), never a race.
+    """Claim any genuinely SHARED, non-isolable resource by an EXACT id (`deploy`,
+    `docker-daemon`, the live server) — not a working tree, which has no contention to
+    coordinate. Matched by equality, backed by a real DB uniqueness constraint, never a
+    race (unlike open_thread(assignee=)'s fuzzy prose match). `resource_id` is
+    convention, not a closed vocabulary.
 
-    `resource_id` is CONVENTION, not a closed vocabulary — nothing here validates,
-    enumerates, or pre-decides what strings mean. Same string in, same claim, whatever the
-    caller means by it.
-
-    `holder` defaults to YOUR OWN mounted identity; pass one explicitly to claim on
-    another's behalf — the same latitude `open_thread`'s `assignee` already has (a manager
-    reserving a lane before its worker starts, say).
-
-    A REFUSAL names WHO holds it and SINCE WHEN (`holder`/`held_since`) — enough for the
-    caller to decide wait-or-escalate instead of guessing, never a silent duplicate mint.
-
-    EXPIRY is deliberately NOT a renewed TTL: our holders are agent sessions doing
-    variable-length turns, not daemons with a background heartbeat loop — a short TTL would
-    either spam constant renewal calls or false-expire a legitimate long turn. Explicit
-    `release_lease` is the primary path (matches how the fleet already coordinates —
-    announce when done); `reap_stale_leases` is the crash/compaction backstop, not the
-    norm, and rides a cron every 5 minutes (arq_worker.reap_leases) the same way
-    `reap_stale_runs` already does for `helper_runs`."""
+    `holder` defaults to your own mounted identity; pass one to claim on another's
+    behalf. A refusal names who holds it and since when. No renewed TTL — explicit
+    release_lease is the primary path; reap_stale_leases is the crash/compaction
+    backstop (a 5-min cron), not the norm."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     try:
@@ -8097,33 +7557,18 @@ async def ack_handoff(
     ref: str, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE READ RECEIPT (operator ruling, 2026-08-03, replacing Thoth DM 3355's write-
-    triggered version — see settle()'s own docstring): the ONLY thing that retires a live
-    `is_handoff` marker. Mirrors inbox()'s lease-vs-settle split — orient() DELIVERS a
-    handoff unconditionally, this ACKNOWLEDGES it, a separate deliberate act naming the id.
-    `ref` is the id orient()'s succession_note or recall() gave you, resolved with
-    `require_identifier=True` (never a free-text guess — this CLOSES the record). Tries
-    Thread then Decision, like recall().
+    """The READ RECEIPT — the only thing that retires a live `is_handoff` marker.
+    orient() delivers a handoff unconditionally; this acknowledges it, a separate act
+    naming the id. `ref` is the id orient()'s succession_note or recall() gave you,
+    resolved strictly (never a free-text guess). Tries Thread then Decision.
 
-    Refuses rather than guesses: unresolvable ref ("no handoff matches"); already
-    acknowledged or never a handoff ("already acknowledged or not a handoff" — a duplicate
-    ack is a clean error, not a second write); caller isn't in the handoff's own author's
-    lineage ("not your lineage's handoff to ack") — checked via `lineage_root`, a
-    succeeded_from edge-walk (decision 61cb1f02: replaces a string-parsed check that went
-    blind across an id-format change). Defense in depth: a MISTAKEN ack (a copy-pasted ref
-    from another lineage) would permanently retire someone else's live handoff, refused —
-    including a truncated walk on either side (decision 1cb389be), never trusted as final.
-
-    PER-OBJECT not per-reader (first ack wins, retires for everyone). FINAL not a lease — an
-    ack does not reopen if that generation goes on to produce zero further turns, the same
-    way a mail ack is never revoked for going unfollowed-up. An UNacked handoff is what
-    redelivers, mail's own at-least-once shape — the correct failure mode, not a bug.
-
-    Never deleted, never inaccessible — recall()/search() see it exactly as before.
-
-    ALSO RESOLVES a Thread-shaped handoff's `status` (msg 4673, decision 4bf6d835): used to
-    stay 'open' forever after acking. `resolved` names whether this landed — always False
-    for a Decision, which has no status. Discriminator is the ack, never time."""
+    Refuses rather than guesses: unresolvable ref, already-acknowledged/not-a-handoff, or
+    caller outside the handoff author's own lineage (checked via a succeeded_from
+    edge-walk — a mistaken ack from another lineage would permanently retire someone
+    else's live handoff). Per-object not per-reader (first ack wins, retires for
+    everyone); final, not a lease. Never deleted — recall()/search() still see it. Also
+    resolves a Thread-shaped handoff's own `status`; `resolved` is always False for a
+    Decision (no status to resolve)."""
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -8180,64 +7625,25 @@ async def settle(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE END-OF-CONTEXT RITUAL (operator ruling c5b184cd): the mechanistic brain-dump a
-    session calls at every seam before compaction, so nothing it knows lives only in a
-    context about to be destroyed. COMPOSES record_decision/open_thread/resolve_thread —
-    never reimplements their writes — plus the same completeness boxes the Stop hook's
-    offload ritual checks (one shared implementation, src.orchestrator.settle).
+    """THE END-OF-CONTEXT RITUAL: deposit everything a session knows before compaction
+    destroys its context. No args = read-only SURFACE (completeness boxes + your open
+    obligations). With `decisions`/`threads_open`/`threads_resolve` (each item a dict of
+    that verb's own kwargs) it ACCEPTS a dump, dispatching to record_decision/open_thread/
+    resolve_thread unchanged, then re-confirms against the updated graph. `complete` is
+    true only when nothing is left unwritten.
 
-    Call with NO arguments to just SURFACE status (safe, read-only — the boxes, and your
-    own open obligations fleet-wide). Call WITH `decisions`/`threads_open`/`threads_resolve`
-    to ACCEPT a dump in the same act — each list item is a dict of that verb's own keyword
-    arguments (decisions: summary/kind/rationale/repo/resolves; threads_open: summary/repo/
-    kind/owner; threads_resolve: ref/because/artifact) — settle dispatches each to the real
-    verb, unchanged, then CONFIRMS by re-checking the boxes and your obligations against the
-    now-updated graph. `complete` is only true when nothing is left explicitly unwritten.
+    A bad item in `decisions`/`threads_open` never sinks the rest of the batch — it lands
+    in `rejected` (kind/summary/error) and `complete` reads False, but everything else
+    still writes. `is_handoff: true` on an item mints a structured marker your successor's
+    orient() finds directly (no 160-char cap); retires only when they call
+    ack_handoff(ref=...), not on your next write.
 
-    A bad `decisions`/`threads_open` item (e.g. a path-shaped `repo`) NEVER sinks the rest
-    of the dump — a whole-batch abort would lose everything ELSE in the same call, exactly
-    the failure this verb exists to prevent. Each dropped item lands in `rejected` (kind/
-    summary/error), and `complete` reads False whenever `rejected` is non-empty: a dropped
-    item is unwritten state, same class as a missing box, never a silent partial accept.
-
-    `is_handoff: true` on a decision or thread item MINTS A STRUCTURED HANDOFF MARKER (a
-    typed property, not a summary text the reader greps for) on that object: your
-    successor's orient() finds it directly, whole, exempt from the usual 160-char cap.
-    Idempotent and safe to call repeatedly through a session — later calls only add to
-    what's already written, never duplicate it.
-
-    THE EXEMPTION RETIRES ON READ RECEIPT, NOT YOUR NEXT WRITE (operator ruling, 2026-08-03,
-    superseding Thoth DM 3355's write-triggered version): settle() no longer auto-retires
-    your predecessor's handoff the moment you mint your own — that inferred a read from a
-    write. Your successor calls `ack_handoff(ref=<id>)` once they've actually read your note
-    (orient()'s succession_note names the id); that is what stops it riding every future
-    orient() at full length. Until acknowledged it stays live and redelivers, like unsettled
-    mail — correct, not a bug. Never deleted either way — recall()/search() always see it.
-
-    SURFACE also runs `git status --porcelain` (`uncommitted_git_files` in the receipt) —
-    the one box that isn't in the graph. PASS `repo_path` NAMING YOUR CODE REPO — your
-    mounted cwd is checked ONLY as a fallback, and for a seat-office agent (most of this
-    fleet) that cwd is the OFFICE, never the repo it governs, so an office-mounted call
-    with no `repo_path` reads None here even with a dirty tree sitting uncommitted in your
-    actual repo. The receipt's `git_checked_path` names whichever directory was actually
-    used. None on `uncommitted_git_files` means unevaluable there (no repo at that path)
-    and never blocks `complete`; a non-empty list does.
-
-    PHASE 1b (decision cb38d922): settle already holds `decisions` and `threads_resolve` in
-    the SAME payload — both halves of a relationship — so it wires the closure edge itself
-    instead of dropping it: when a decision in THIS call answers a thread (its own
-    `resolves=`) that a `threads_resolve` item in THIS SAME call also names, and that item
-    carries no `artifact` of its own, settle fills it in. record_decision's `resolves=`
-    already mints `answers` (Decision->Thread); this makes `resolve_thread` also mint
-    `resolved_by` (Thread->Decision), so the pair carries BOTH. CONSERVATIVE BY DESIGN: no
-    prose matching, no cross-product — only a pair the payload itself establishes gets
-    wired; anything else mints nothing. Each wired `threads_resolved` entry carries
-    `closure_edge_wired_to_decision`; the top-level `closure_edges_wired` count says so even
-    at zero.
-
-    `closure_coverage` (report-only, same discipline as `identity_coherence`, never gates
-    `complete`) surfaces this SESSION's running total: how many threads this session has
-    resolved and how many of those now carry a closure edge."""
+    `repo_path` names your code repo for the git-status box (`uncommitted_git_files`) —
+    your mounted cwd is checked only as a fallback and is usually the wrong directory for
+    a seat-office agent. A decision's `resolves=` and a same-call `threads_resolve` item
+    naming the same thread get the closure edge wired automatically if the latter has no
+    `artifact` of its own — conservative, no prose matching. Full mechanism:
+    consult_canon('settle')."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
@@ -8555,23 +7961,16 @@ async def reclassify_thread(
     arc: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Triage a thread WITHOUT changing its status (untouched is not resolved — ruling
-    758ded94). You read it and judged what it IS: `kind='obligation'` ADOPTS it as real owed
-    work (floats to the top of every briefing), `kind='question'` demotes a miner-promoted
-    question back to a question (stays open and searchable, leaves the work wall),
-    `kind='task'` marks ordinary work. `ref` is a UUID, an 8-char short id, or a summary
-    substring; `because` records your judgment. SELF_DECLARED — your testimony outranks the
-    miner's guess. Use resolve_thread instead when the work is actually done or moot.
-    `owner` optionally CLAIMS the thread in the same act ('operator' / 'agent:<id>' /
-    a project name) — triage is where an existing thread learns whose move it is.
+    """Triage a thread WITHOUT changing its status (untouched is not resolved). You read
+    it and judged what it IS: `kind='obligation'` adopts it as real owed work,
+    `kind='question'` demotes it back to a question, `kind='task'` marks ordinary work.
+    `ref` is a UUID, short id, or summary substring; `because` records your judgment,
+    outranking the miner's guess. Use resolve_thread instead when the work is done or
+    moot. `owner` optionally claims the thread in the same act.
 
-    `arc` names which of `open_thread`'s own closed taxonomy (capture.ARCS) this ALREADY-
-    OPEN thread belongs to — the write door `open_thread` cannot reach once a thread
-    exists: its own near-duplicate collision path returns the existing id without ever
-    asserting `arc` on it, a silent no-op discovered live (task #76's roadmap follow-on).
-    This is the door for backfilling arc onto a thread you're re-reading, not opening.
-    OSIRIS-SCOPED (d8ac7f5f), same law as open_thread's arc: dropped and named, never
-    refused, outside osiris."""
+    `arc` backfills `open_thread`'s own closed taxonomy onto an already-open thread
+    (open_thread's near-duplicate path can't set it on an existing one). Osiris-scoped:
+    dropped and named, never refused, outside osiris."""
     pool = await _pool_get()
     t = await capture.reclassify_thread(
         Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
@@ -8623,15 +8022,11 @@ async def register_blind_spot(
     repo: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Register your project's KNOWN BLIND SPOT — what the harness HERE cannot verify, and
-    where the real verification lives (thread 8e26cd10: 459 headless-Chromium tests stayed
-    green while every iPhone was broken, because nothing modeled 'this project targets an
-    engine your rig cannot see'). Surfaces at orient() under `blind_spots` for every session
-    on the project, BEFORE it trusts a green harness — the most expensive thing a session
-    re-derives is the shape of its own ignorance. `surface` names the capability
-    ('webkit-rendering', 'ios-touch'); `cannot_see` states the gap; `verify_with` points at
-    the rig or ritual that actually verifies (a test path, 'hand the phone to the operator').
-    Held like a Tension (its own type, never resolved away). Idempotent per
+    """Register your project's KNOWN BLIND SPOT — what the harness here cannot verify,
+    and where real verification lives. Surfaces at orient() under `blind_spots` before a
+    session trusts a green harness. `surface` names the capability ('webkit-rendering');
+    `cannot_see` states the gap; `verify_with` points at the rig or ritual that actually
+    verifies. Held like a Tension, never resolved away. Idempotent per
     (project, surface) — re-register to sharpen the wording."""
     ident = await _ident_for(ctx)
     b = await capture.record_blind_spot(
