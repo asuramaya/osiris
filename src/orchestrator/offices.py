@@ -820,7 +820,7 @@ async def establish_office(
     through the seat's occupant if it has ever had one (usually none), and `file_office_deed`
     is skipped entirely (it is Agent-only by construction — nothing to deed an office to
     until someone actually claims this seat by launching in it)."""
-    from src.orchestrator.agents import house_of, resolve_handle
+    from src.orchestrator.agents import project_of, resolve_handle
     from src.orchestrator.seats import held_seat
 
     seat_or_agent = (seat_or_agent or "").strip()
@@ -851,7 +851,11 @@ async def establish_office(
     if not handle:
         return {"error": f"{agent_id} has never claimed a name — an office is named for its "
                          "seat. claim_name first, then establish the office"}
-    house = await house_of(actions.pool, agent_id)
+    # RESOLVED, NEVER A RAW COPY (decision 68fba2e4, thread 19d6bdcb7fa9): house_of's raw
+    # `project` stamp could be a mint-time fabrication (24e0b761) — project_of resolves
+    # through charter/lineage works_in instead, never house. The refuse-on-nothing behavior
+    # below is unchanged; only the source of what counts as "something" moved.
+    house = await project_of(actions.pool, agent_id)
     if not house:
         return {"error": f"{agent_id} has no durable project label — it has never been "
                          "mounted in a project, so there is no house to pin at an office"}

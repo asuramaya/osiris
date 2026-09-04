@@ -28,12 +28,22 @@ NOW = datetime.now(UTC)
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
-    """A mounted lineage in a shared repo cwd, optionally named — the pre-office shape."""
+    """A mounted lineage in a shared repo cwd, optionally named — the pre-office shape.
+
+    Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
+    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
+    edge is a fixture lying about how mints actually work (Thoth's own framing, thread
+    19d6bdcb7fa9/c5a91ea1)."""
     agent = "agent:0ff1cee1"
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent, agent)
     await actions.assert_property(a, "project", "butlerhouse", agent, now, 0.9,
                                   evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:butlerhouse", agent)
+    await actions.assert_property(proj, "name", "butlerhouse", agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(a, proj, "works_in", agent, now, 0.9, evidence_class="self_declared")
     await actions.assert_property(a, "session", "0ff1cee1", agent, now, 0.9,
                                   evidence_class="self_declared")
     if handle:
