@@ -5817,3 +5817,43 @@ async def test_adopt_resumed_body_adopts_a_harness_copy_and_leaves_a_true_resume
                                     requested_sid=requested, holder="agent:ad0p7ee1",
                                     project="adopthouse", attempts=2, delay=0)
     assert out == {"session_id": None, "copied": False, "adopted": False}
+
+
+async def test_stop_seat_falls_back_to_the_lineages_own_graph_sessions(
+    actions: Actions,
+) -> None:
+    """THE LINEAGE FALLBACK (obligation 2e110f63): the seat's holder just succeeded
+    (agent:stop06 -> agent:stop06-ii), but the live body's own agent_mounts row hasn't
+    caught up yet (job_dir still filed under the OLD generation, Jesus's own live shape)
+    — the exact-agent_id match against `matched` misses it, so stop_seat must fall back to
+    the lineage's own succession_chain sessions against the /proc-verified census."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stop06", manager_agent="agent:stopm06",
+        worker_handle="Stop-Lineage-Test", house="osiris")
+    # the succession: a new generation now holds the seat...
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:stop06-ii")
+    a = await actions.create_or_find_object("Agent", "agent:stop06-ii", "test")
+    await actions.assert_property(a, "succeeded_from", "agent:stop06", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(a, "session", "ii906060", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    # ...but the live body's own registry row is still filed under the OLD generation
+    # (agent_mounts hasn't been re-written since the succession landed).
+    await save_mount(actions.pool, job_dir="/x/jobs/ii906060", agent_id="agent:stop06",
+                            project="osiris", cwd="/repo/lineage-demo", model=None,
+                            session_key=None)
+    killed: list[int] = []
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        killed.append(pid)
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopm06", target=worker_seat,
+        agents_json=_fake_census_agents_json(
+            5252, cwd="/repo/lineage-demo",
+            session_id="ii906060-0000-4000-8000-000000000000"),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/lineage-demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d["pid"] == 5252 and d["holder"] == "agent:stop06-ii"
+    assert killed == [5252]

@@ -3512,7 +3512,17 @@ async def stop_seat(
     (`no-live-body` — a stale mount row, or an already-dead process, is not something to
     signal). `stopped_at`/`stopped_reason` land on the seat object (survives succession —
     it names an EVENT, not a gate on the chair) as a plain, append-only assertion, never a
-    boolean flag a later caller has to remember to clear."""
+    boolean flag a later caller has to remember to clear.
+
+    MATCHES BY LINEAGE TOO, NOT ONLY BY EXACT HOLDER ID (obligation 2e110f63, the same
+    branch `_launch_twin_check` already carries): `registry_census`'s own `matched` list
+    reconciles a live body to whatever `agent_mounts.agent_id` its job_dir cache last
+    recorded — a CACHE that can lag the seat's current holder generation (Jesus's own
+    live shape: the seat succeeded, the live body's own mount row hadn't caught up yet).
+    A holder that misses THAT check falls back to the graph directly: any of this
+    lineage's own `succession_chain` sessions, /proc-verified live in the census, is the
+    same body wearing a different label — never declared `no-live-body` just because the
+    cache is stale."""
     pool = actions.pool
     from src.orchestrator.mounts import registry_census
     from src.orchestrator.seats import held_seat, seat_receipt
@@ -3566,6 +3576,22 @@ async def stop_seat(
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
+    if match is None:
+        # THE LINEAGE FALLBACK (obligation 2e110f63, the same branch _launch_twin_check
+        # already carries): `matched` reconciles by job_dir -> agent_mounts.agent_id, a
+        # CACHE that can lag the seat's own current holder generation (Jesus's own live
+        # shape) — a body genuinely IS this lineage's own, /proc-confirmed right now,
+        # just filed under a stale label the exact-equality check above never finds. Ask
+        # the graph directly: any of this lineage's own succession_chain sessions,
+        # verified live in the census, is the same body under a different name.
+        from src.orchestrator.succession import succession_chain
+        sessions = {str(h["session"]) for h in await succession_chain(pool, holder)
+                    if h.get("session")}
+        if sessions:
+            match = next(
+                (v for v in census.get("verified", [])
+                 if any(str(v.get("session_id") or "").startswith(sid) for sid in sessions)),
+                None)
     pid = match.get("pid") if match else None
     job_dir_key = match.get("job_dir_key") if match else None
     if not isinstance(pid, int):

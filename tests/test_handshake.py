@@ -1563,3 +1563,123 @@ async def test_the_ledger_refuses_a_sid_whose_own_transcript_names_another_linea
     # the owner's own claim files normally
     assert await record_session_anchor(
         actions, agent_id="agent:0wner001", session_id=SID, actor="test", root=root) is True
+
+
+def _write_transcript_lines(path: Path, lines: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+async def test_automount_mints_the_heir_on_a_manual_compacts_new_session_id(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE MANUAL COMPACT (Jesus's own incident, thread 6835): the harness mints a fresh
+    session id at /compact whose first line's logicalParentUuid names the prior session's
+    own last message. compact_seat must resolve it to the prior lineage's HEAD and mint
+    the heir there — never a fresh root, never adopting the same generation unminted."""
+    from src.ingest.soul_store import SoulStore
+
+    prior_uuid = "5af45aa8-2d28-4095-b130-2382b04fdab0"
+    prior_file = tmp_path / "prior-session.jsonl"
+    _write_transcript_lines(prior_file, [
+        {"type": "assistant", "uuid": "aaaa0000-0000-4000-8000-000000000000",
+         "message": {"content": [{"type": "text", "text": "earlier turn"}]}},
+        {"type": "assistant", "uuid": prior_uuid,
+         "message": {"content": [{"type": "text",
+                     "text": 'mount receipt {"agent":"agent:9a9a0003","project":"jesushouse"}'
+                             " logged"}]}},
+    ])
+    store = SoulStore(actions.pool)
+    await store.ingest_path(str(prior_file), anchor_sid="9a9a0003")
+    await actions.create_or_find_object("Agent", "agent:9a9a0003", "agent:9a9a0003")
+
+    root = tmp_path / "projects"
+    new_sid = "bbbb0002-0000-4000-8000-000000000000"
+    _write_transcript_lines(root / "-w-jesus-repo" / f"{new_sid}.jsonl", [
+        {"parentUuid": None, "logicalParentUuid": prior_uuid, "isSidechain": False,
+         "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+         "cwd": "/w/jesus-repo"},
+    ])
+    out = await automount(actions, session_id=new_sid, cwd="/w/jesus-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="startup")
+    assert out["agent"] == "agent:9a9a0003-ii"          # minted the heir, not a fresh root
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' "
+        "AND canonical=$1", f"agent:{new_sid[:8]}") == 0  # no phantom root either
+
+
+async def test_automount_refuses_a_compact_when_act_and_assertion_disagree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE CROSSED-REGISTRY REFUSAL (Thoth's ruling on the Chad/aad6603a incident, msg
+    6842): when the owning session's newest ACT names one lineage but the graph's own
+    anchor_sid assertion already names a DIFFERENT one (an anchor leak already poisoned
+    it), compact_seat must refuse outright — never pick either side — and the whisper
+    falls through to its ordinary fresh-mint behavior."""
+    from src.ingest.soul_store import SoulStore
+    from src.orchestrator.handshake import record_session_anchor
+
+    prior_uuid = "6bf56bb9-3e39-5106-c241-3493c15edac1"
+    prior_file = tmp_path / "prior-session-2.jsonl"
+    _write_transcript_lines(prior_file, [
+        {"type": "assistant", "uuid": prior_uuid,
+         "message": {"content": [{"type": "text",
+                     "text": 'mount receipt {"agent":"agent:7c7c0004","project":"realhouse"}'
+                             " logged"}]}},
+    ])
+    store = SoulStore(actions.pool)
+    await store.ingest_path(str(prior_file), anchor_sid="7c7c0004")
+    await actions.create_or_find_object("Agent", "agent:7c7c0004", "agent:7c7c0004")
+    # THE POISONED ASSERTION: a different lineage's own anchor leak stamped this sid to
+    # itself first (exactly Chad's own incident shape) — a positive disagreement, not an
+    # absence of evidence.
+    await actions.create_or_find_object("Agent", "agent:deadbeef", "agent:deadbeef")
+    assert await record_session_anchor(
+        actions, agent_id="agent:deadbeef", session_id="7c7c0004-0000-4000-8000-000000000000",
+        actor="agent:deadbeef") is True
+
+    root = tmp_path / "projects"
+    new_sid = "cccc0003-0000-4000-8000-000000000000"
+    _write_transcript_lines(root / "-w-crossed-repo" / f"{new_sid}.jsonl", [
+        {"parentUuid": None, "logicalParentUuid": prior_uuid, "isSidechain": False,
+         "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+         "cwd": "/w/crossed-repo"},
+    ])
+    out = await automount(actions, session_id=new_sid, cwd="/w/crossed-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
+                          source="startup")
+    assert out["agent"] != "agent:7c7c0004"          # refused, never picked the act's side
+    assert out["agent"] != "agent:deadbeef"          # refused, never picked the assertion
+
+
+async def test_automount_refuses_an_inherited_job_dirs_leaked_binding(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE INHERITED-JOB_DIR LEAK (Chad's own incident, Thoth's ruling msg 6852 item (a)):
+    a hand-run `claude --resume` from ANOTHER agent's own shell carries that agent's
+    CLAUDE_JOB_DIR — `find_mount` then hands back the LEAKER's own registry row for THIS
+    session's anchor. Before trusting it, the whisper must read THIS session's own
+    transcript: a newest ACT naming a different lineage refuses the binding outright,
+    falling through rather than greeting the window as the leaker."""
+    from src.orchestrator.mounts import save_mount
+
+    await actions.create_or_find_object("Agent", "agent:leaker01", "agent:leaker01")
+    await actions.create_or_find_object("Agent", "agent:0wner002", "agent:0wner002")
+    job_dir = str(tmp_path / "jobs" / SID[:8])
+    # THE LEAK: a registry row for THIS session's own anchor, but naming the OTHER
+    # lineage (exactly what an inherited CLAUDE_JOB_DIR produces).
+    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:leaker01",
+                     project="leakerhouse", cwd="/w/owner-repo", model=None,
+                     session_key=None)
+    # THE TRUTH: this session's OWN transcript, whose newest act names the real owner.
+    root = tmp_path / "projects"
+    proj = root / "-w-owner-repo"
+    proj.mkdir(parents=True)
+    (proj / f"{SID}.jsonl").write_text(
+        json.dumps({"type": "user",
+                   "text": '{"agent":"agent:0wner002","project":"ownerhouse"}'}) + "\n")
+
+    out = await automount(actions, session_id=SID, cwd="/w/owner-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert out["agent"] != "agent:leaker01"          # refused the leaked binding
