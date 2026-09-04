@@ -1966,7 +1966,8 @@ async def mount(
     session_anchor: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, subagent_transcript: str | None = None,
     transcript_path: str | None = None, bridge_session_id: str | None = None,
-    verbose: bool = False, ctx: Context | None = None
+    verbose: bool = False, want_co_agents: bool = False, want_held_work: bool = False,
+    ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project). For `job_dir`, pass a DURABLE
@@ -1981,6 +1982,15 @@ async def mount(
     `verbose=True` restores the guidance prose (co-agent etiquette, the 'call orient()
     next' reminder) that terse mode (the default) drops — every structured fact survives
     either way; verbose only adds explanation of facts already present.
+
+    `want_co_agents=True`/`want_held_work=True` (operator's context-bloat priority,
+    2026-09-04, msg 6870): the full co_agents/held_work payloads are now OPT-IN — a
+    receipt returns what the caller needs to ACT, and by default that is just a COUNT
+    (`co_agents_count`/`held_work_count`) naming that something is there, never the full
+    list unless asked. Measured live against Thoth's own 419MB transcript: co_agents
+    alone cost 31KB and held_work 12KB across 55 mount() calls (mount's two heaviest
+    keys after `minted`) — safety information that is valuable to SEE exists, expensive
+    to carry unread on every call.
 
     `transcript_path`/`bridge_session_id` are hook-stamped, same as `session_anchor` — a
     caller never sets these by hand. They complete the revisit-resolution chain to match
@@ -2378,8 +2388,10 @@ async def mount(
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            **({"model": ident.model} if ident.model else
               {"model_unresolved": "model unresolved — pass model= explicitly"}),
-           **({"co_agents": co_agents} if co_agents else {}),
-           **({"held_work": held_work} if held_work else {}),
+           **({"co_agents": co_agents} if co_agents and want_co_agents else
+              {"co_agents_count": len(co_agents)} if co_agents else {}),
+           **({"held_work": held_work} if held_work and want_held_work else
+              {"held_work_count": len(held_work)} if held_work else {}),
            # THE VISITOR GATE'S OWN CONFESSION (#48 piece 2): a resolved anchor that matched
            # no lineage got a registry row and NOTHING ELSE above — `agent` above is a
            # bookkeeping handle, never a minted identity, and the receipt must say so
@@ -3986,6 +3998,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                threads: list[str] | None = None,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
+               want_prior_art: bool = False, want_listener: bool = False,
                ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. TWO channels: `to`=<project> is a BROADCAST — the group chat, seen by
     every agent working that project (`to='operator'` reaches the HUMAN's desk); `to_agent`=
@@ -3997,6 +4010,14 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     that sender privately; a reply to a broadcast returns to the thread's project), joins the
     thread, and SETTLES the message you're answering. You must be mounted; stamped from YOU.
     At-least-once and deduped. For DURABLE knowledge use record_decision/open_thread.
+    `want_prior_art=True`/`want_listener=True` (operator's context-bloat priority,
+    2026-09-04, msg 6870): the full `prior_art` list and `listener` liveness block are
+    now OPT-IN — measured live against Thoth's own transcript, together ~38% of send()'s
+    own receipt bytes (299KB + 99KB across 1621 calls), most of it never read before the
+    next call. Prior art still lands on the DELIVERED message (the reader's own inbox()
+    copy is untouched) and still gets a cheap one-line `prior_art_flag` by default when a
+    hit exists — only the full echoed list needs asking for. `listener` is `peer_reachable()`'s
+    own job; ask for it here only when you need it inline with the send.
     OPERATOR BRIEFS: pass `desk` — your own triage of what you're handing the human:
     'decision' (a call only they can make) | 'hands' (blocked on their physical/authorization
     act) | 'fyi' (loop-closed status). The desk renders in those bands; an unclassified brief
@@ -4089,8 +4110,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         # and the head. `redirect` (mailbox.send_message's own new field), when present,
         # names the divergence explicitly instead of leaving it to be inferred by comparing
         # `dm_to` against `seat`/`lineage_head` by hand.
-        out["listener"] = await mounts.agent_liveness(
-            pool, res.get("lineage_head") or res["to_agent"])
+        if want_listener:
+            out["listener"] = await mounts.agent_liveness(
+                pool, res.get("lineage_head") or res["to_agent"])
         if res.get("redirect"):
             out["redirect"] = res["redirect"]
         # THE IMMEDIATE LEG (the background-session adapter, ruling 6c4d0b62): a DM's wake
@@ -4121,9 +4143,10 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         dest = res["to"]
         last_seen = await mounts.project_last_seen(pool, dest)
         out["to"] = dest
-        out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
-                           - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
-                           "last_seen": last_seen}
+        if want_listener:
+            out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
+                               - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
+                               "last_seen": last_seen}
         # THE IMMEDIATE LEG, extended from the DM lane to broadcasts (task #151, ruling
         # 60bc15db in the mail layer): a broadcast used to file and return a bare "sent" —
         # a caller reasonably read that as delivered when it meant filed, and the only push
@@ -4165,11 +4188,13 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # with this resend's own, possibly-empty, recomputation — moot anyway since we never
     # searched for a dedup'd resend in the first place... but the gate stays explicit).
     if prior and not res["dedup"]:
-        out["prior_art"] = prior
+        if want_prior_art:
+            out["prior_art"] = prior
         top = prior[0]
         out["prior_art_flag"] = (
             f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
-            "worth reading before dispatching/answering as if it's new")
+            "worth reading before dispatching/answering as if it's new"
+            + ("" if want_prior_art else " (pass want_prior_art=True for the full list)"))
         try:
             await pool.execute(
                 "UPDATE fleet_messages SET prior_art=$1 WHERE id=$2", prior, res["id"])
@@ -4386,6 +4411,7 @@ async def stop(target: str | None = None, reason: str = "",
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
+                want_prior_art: bool = False,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you (the fleet mailbox). Defaults to YOUR mounted
     project; pass `project` to read another's (project='operator' reads the human's desk).
@@ -4396,7 +4422,14 @@ async def inbox(project: str | None = None, peek: bool = False,
     mount()/orient() report your deliverable count. THE OPERATOR'S DESK IS DIFFERENT: glance
     at project='operator' ONLY with peek; settle it ONLY at the human's explicit word (the
     desk count means "briefs the operator hasn't dismissed" — an agent consuming it silently
-    would blind the one lane that exists for the human)."""
+    would blind the one lane that exists for the human).
+
+    `want_prior_art=True` (operator's context-bloat priority, 2026-09-04, msg 6870): each
+    message's own `prior_art` (the search hits attached at send-time) is OPT-IN — measured
+    live, 278KB of 4.87MB across Thoth's own transcript (6.4%, 131.6 bytes/message
+    average). Default renders `prior_art_count` per message that carries any, instead of
+    the full list — a message worth deeper handling warrants a non-peek read anyway,
+    per this tool's own leasing law."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -4437,6 +4470,11 @@ async def inbox(project: str | None = None, peek: bool = False,
         return {"project": OPERATOR_ADDR, **desk, **ack_keys}
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
+    if not want_prior_art:
+        for m in msgs:
+            pa = m.pop("prior_art", None)
+            if pa:
+                m["prior_art_count"] = len(pa)
     flight = await in_flight(pool, proj, reader_agent=reader,
                              lease_secs=st.osiris_mail_lease_secs)
     if not peek:  # what THIS call just leased is ours, not someone else's in-flight

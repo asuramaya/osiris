@@ -530,7 +530,7 @@ async def test_send_mcp_wrapper_surfaces_the_redirect_and_reads_listener_off_the
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
         agent_id="agent:boss", session="boss0002", project="alpha", model=None, cwd=None)
     try:
-        out = await srv.send("ship it", to_agent=ancestor, ctx=ctx)
+        out = await srv.send("ship it", to_agent=ancestor, want_listener=True, ctx=ctx)
         assert out["dm_to"] == ancestor                # sent to exactly the id named
         assert out["seat"] == "Anubis II"               # the HEAD's own current handle
         assert out["lineage_head"] == heir
@@ -1837,7 +1837,7 @@ async def test_send_dm_surfaces_prior_art_on_senders_receipt_and_readers_inbox(
     try:
         out = await srv.send(
             "dispatching a build for the kaboomquartz throttle memory.high watermark "
-            "issue", to_agent="agent:worker-1", ctx=ctx)
+            "issue", to_agent="agent:worker-1", want_prior_art=True, ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -1915,7 +1915,7 @@ async def test_send_surfaces_prior_art_on_an_ask_graded_broadcast(
     try:
         out = await srv.send(
             "please check the zylophage cache invalidation on every merged_into write",
-            to="osiris", grade="ask", ctx=ctx)
+            to="osiris", grade="ask", want_prior_art=True, ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
