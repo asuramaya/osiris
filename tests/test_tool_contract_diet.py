@@ -723,7 +723,41 @@ def _tool_chars(t: Any) -> int:
 # jesus/chad transcript-splice repair made reachable without a worker hand-invoking the
 # function directly. A genuinely new capability (dry_run default, because required on
 # execute, same shape sweep_seat_disk's own door already established), not padding.
-TOOL_CONTRACT_EXPECTED_COUNT = 121
+TOOL_CONTRACT_EXPECTED_COUNT = 115
+# 121 -> 115 (2026-09-03, Imhotep, task #199 lane 2, thread 6854, Thoth dispatch: families
+# wave, rebased onto main 049ff59). Two genuine consolidations, both with the same-real-
+# call-shared test applied first, not just a matching name prefix:
+# (1) abstained_derivations/retryable_abstentions/retryable_ambiguous_abstentions (3 -> 1):
+# all three query the SAME derivation_abstained_<link_type> population in capture.py with
+# an IDENTICAL (pool, link_type, limit) signature, differing only in which structural SQL
+# subset they filter to — a genuine shared call. abstained_derivations gained `scope=
+# "all"|"retryable"|"retryable_ambiguous"` (default "all", backward compatible); the two
+# narrower names are now hidden aliases. retry_ambiguous_abstentions (the WRITE half,
+# dry_run/because/mutates) stays separate — a different action, not a view, never folded in.
+# (2) 5 backfill_* tools -> 1 `backfill(target=...)`: NOT a shared-call consolidation like
+# (1) — each of the five repairs a structurally different defect class in its own module,
+# no common orchestrator function underneath. Named honestly as a genuine dispatch table in
+# its own docstring rather than dressed up as a merge, since the wire shape (dry_run
+# default True, because required to write, idempotent) was close enough to unify without
+# creating a misleading contract. backfill_agent_project_links kept its OWN original
+# signature as the deprecated alias (explicit actor, no ctx/because) rather than routed
+# through the shared dispatcher — the new primary derives actor from mounted identity
+# instead, a deliberate behavior change not safe to impose on the old name's callers.
+#
+# DECLINED, with reasons, rather than swept into a false family for the count alone:
+# backfill_* families were the ONLY "family" from Thoth's dispatch actually built this
+# wave; the other three named populations were examined and declined:
+# - correct_*/reconcile_* remainder (correct_house, correct_pin_value,
+#   correct_thread_summary): three genuinely different targets (a seat's own house, a
+#   seat's own pin file, any Thread's summary) with three different param shapes and two
+#   different auth scopes (self-only vs any-ref) — a false family by prefix alone.
+# - list_* (list_assertions, list_compositions, list_functions, list_rooms): four
+#   unrelated domains with INCOMPATIBLE RETURN TYPES (dict, list[dict], list[str],
+#   list[dict]) as well as incompatible params (ref+name vs none) — forcing these into one
+#   tool would produce an incoherent output contract, not just an unusual input one.
+# - peer_*/unpeer: already resolved by the retirement wave (peer_ledger/peer_reachable/
+#   unpeer already hidden); peer_seats is the sole remaining live primitive and has no
+#   sibling left to consolidate against.
 # 147 -> 121 (2026-09-03, Imhotep, task #199 lane 2, thread 6822, Thoth dispatch: retirement
 # wave 1, operator's own stated goal "folding mcp slop from 100+ down to a few dozen"): 26
 # tools hidden via the same meta={"deprecated": True} mechanism as the earlier consolidation
@@ -873,6 +907,10 @@ TOOL_CONTRACT_CEILING_CHARS = 208349
 # recorded: 26 tools hidden from list_tools() in one pass, all genuinely unused rather than
 # merged into a surviving sibling.
 TOOL_CONTRACT_CEILING_CHARS = 186392
+# 186,392 -> 181,493 (measured exact). Tool count 121 -> 115 (2026-09-03, Imhotep, task
+# #199 lane 2, thread 6854, families wave — see the count changelog above for the full
+# breakdown and the three declined families).
+TOOL_CONTRACT_CEILING_CHARS = 181493
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -4711,7 +4711,92 @@ async def unwire_informs_fanout(
         dry_run=dry_run, because=because)
 
 
+_BACKFILL_TARGETS = frozenset({
+    "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
+    "lineage_repo_links", "agent_project_links",
+})
+
+
+async def _backfill_impl(
+    target: str, dry_run: bool, because: str | None, only_bases: list[str] | None,
+    ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared dispatch (task #199 lane 2, families wave, thread 6854): five repair verbs
+    with near-identical wire shape (dry_run default True, because required to write,
+    idempotent, mount-gated) but NO shared orchestrator call — each fixes a structurally
+    different defect class in its own module. Unlike abstained_derivations's own
+    consolidation (one real underlying query, three filters), this is a genuine dispatch
+    table, named as such rather than dressed up as a merge. `target` selects which."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    if target == "bootstrap_orphan_references":
+        from src.ingest.reference import (
+            backfill_bootstrap_orphan_references as _f_orphan_refs,
+        )
+        return await _f_orphan_refs(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "boot_alarm_commit_links":
+        from src.orchestrator.capture import backfill_boot_alarm_commit_links as _f_boot_alarm
+        return await _f_boot_alarm(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "task_sync_citation_links":
+        from src.orchestrator.task_sync import (
+            backfill_task_sync_citation_links as _f_task_sync,
+        )
+        return await _f_task_sync(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "lineage_repo_links":
+        from src.orchestrator.capture import backfill_lineage_repo_links as _f_lineage
+        return await _f_lineage(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "agent_project_links":
+        from src.orchestrator.agents import backfill_agent_project_links as _f_agent_links
+        return await _f_agent_links(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run,
+            only_bases=set(only_bases) if only_bases else None)
+    return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
+
+
 @mcp.tool()
+async def backfill(
+    target: str, dry_run: bool = True, because: str | None = None,
+    only_bases: list[str] | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Repair verb, parameterized over WHICH defect class (task #199 lane 2, families
+    wave): five formerly-separate tools, one per structurally distinct backfill, now one
+    door selected by `target` — a genuine dispatch, not a claim that the underlying
+    repairs share logic (they don't; see each target's own history below). DRY RUN IS
+    THE DEFAULT for every target; `dry_run=False` REQUIRES a non-blank `because` (except
+    `agent_project_links`, which predates that convention and has none). All five are
+    idempotent.
+
+    `target=`:
+    - "bootstrap_orphan_references": the bootstrap_project door-gap repair (decision
+      49231693/adde094b) — links a zero-live-link, `source_id='ref:osiris'`-stamped
+      Reference to the active SoftwareProject its own canonical prefix names.
+    - "boot_alarm_commit_links": links a zero-live-link `UNREVIEWED BOOT` alarm Thread to
+      the Commit its own summary cites by sha, via derive_or_abstain.
+    - "task_sync_citation_links": links a zero-live-link task_sync obligation Thread to
+      the Thread its own summary names, via task_sync.parse_thread_citations.
+    - "lineage_repo_links": links a zero-live-link Decision/Thread authored by a real
+      Agent lineage to its project, re-running the same rung-3 lineage-wide works_in
+      lookup a new write already gets.
+    - "agent_project_links": moves works_in/governs off an off-head Agent generation onto
+      its living lineage head (thread 20af2c95); the one target taking `only_bases` to
+      scope a write to specific lineages instead of every off-head agent in scope."""
+    if target not in _BACKFILL_TARGETS:
+        return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
+    return await _backfill_impl(target, dry_run, because, only_bases, ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='bootstrap_orphan_references')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_bootstrap_orphan_references(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4730,15 +4815,7 @@ async def backfill_bootstrap_orphan_references(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Links land
     evidence_class DERIVED. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.ingest.reference import (
-        backfill_bootstrap_orphan_references as _backfill_bootstrap_orphan_references,
-    )
-    return await _backfill_bootstrap_orphan_references(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("bootstrap_orphan_references", dry_run, because, None, ctx)
 
 
 @mcp.tool()
@@ -4767,7 +4844,11 @@ async def repair_stale_pile_summons(
         Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='boot_alarm_commit_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_boot_alarm_commit_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4780,18 +4861,14 @@ async def backfill_boot_alarm_commit_links(
     connectivity it actually has.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.capture import (
-        backfill_boot_alarm_commit_links as _backfill_boot_alarm_commit_links,
-    )
-    return await _backfill_boot_alarm_commit_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("boot_alarm_commit_links", dry_run, because, None, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='task_sync_citation_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_task_sync_citation_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4804,18 +4881,14 @@ async def backfill_task_sync_citation_links(
     Thread; anything else abstains durably with a distinct reason and the candidate set kept.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.task_sync import (
-        backfill_task_sync_citation_links as _backfill_task_sync_citation_links,
-    )
-    return await _backfill_task_sync_citation_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("task_sync_citation_links", dry_run, because, None, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='lineage_repo_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_lineage_repo_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -4828,15 +4901,7 @@ async def backfill_lineage_repo_links(
     abstains durably via derive_or_abstain, candidate set kept, never a guess (a0339e16).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.capture import (
-        backfill_lineage_repo_links as _backfill_lineage_repo_links,
-    )
-    return await _backfill_lineage_repo_links(
-        Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because)
+    return await _backfill_impl("lineage_repo_links", dry_run, because, None, ctx)
 
 
 @mcp.tool()
@@ -5700,7 +5765,11 @@ async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                                override_live=override_live)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "backfill(target='agent_project_links')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def backfill_agent_project_links(
     actor: str, dry_run: bool = True, only_bases: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -5712,7 +5781,12 @@ async def backfill_agent_project_links(
     to which living head — no write. `dry_run=False` writes via the same
     `move_agent_project_links` the write-side fix already uses. `only_bases` scopes a
     write to specific lineages; omitted, every off-head agent in scope moves. Executing
-    the write is the operator's own call, same class as #150's repairs."""
+    the write is the operator's own call, same class as #150's repairs.
+
+    KEPT AT ITS ORIGINAL SIGNATURE (explicit `actor`, no ctx/because) rather than routed
+    through the new dispatcher's shared body — the new `backfill(target='agent_project_
+    links', ...)` derives actor from the caller's mounted identity instead, a deliberate
+    behavior change not safe to impose on this deprecated name's existing callers."""
     from src.orchestrator.agents import backfill_agent_project_links as _backfill
     return await _backfill(Actions(await _pool_get()), actor=actor, dry_run=dry_run,
                            only_bases=set(only_bases) if only_bases else None)
@@ -5732,18 +5806,54 @@ async def list_assertions(ref: str, name: str) -> dict[str, Any]:
     return await _list_assertions(Actions(await _pool_get()), ref=ref, name=name)
 
 
+async def _abstained_derivations_impl(
+    scope: str, link_type: str | None, limit: int,
+) -> dict[str, Any]:
+    """Shared body (task #199 lane 2, families wave, thread 6854): all three READ-ONLY
+    views below query the SAME `derivation_abstained_<link_type>` population in
+    capture.py, differing only in which structural SQL subset they filter to — a
+    genuine shared call, not a cosmetic dispatch. `scope` picks the population:
+    "all" (every live abstention, capture.abstained_derivations), "retryable" (the
+    zero-candidate subset, safe to re-attempt as time passes), "retryable_ambiguous"
+    (the 2+-candidate subset reduced by elimination alone to exactly one survivor)."""
+    pool = await _pool_get()
+    if scope == "retryable":
+        return await capture.retryable_abstentions(pool, link_type, limit=limit)
+    if scope == "retryable_ambiguous":
+        return await capture.retryable_ambiguous_abstentions(pool, link_type, limit=limit)
+    return await capture.abstained_derivations(pool, link_type, limit=limit)
+
+
 @mcp.tool()
-async def abstained_derivations(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
+async def abstained_derivations(
+    link_type: str | None = None, limit: int = 100, scope: str = "all",
+) -> dict[str, Any]:
     """READ-ONLY. Every `derive_or_abstain` refusal, `from_id` and every candidate already
     resolved to (type, summary) — a caller gets the shortlist as it stands now, never bare
     uuids to re-look-up itself. `link_type=None` pools every lane; pass one (e.g.
     `in_repo`) to scope to that namespaced `derivation_abstained_<link_type>` property
     only — never a mixed soup unless asked. `count` is the true total (never capped);
-    `sample` is bounded by `limit`, newest-abstained first."""
-    return await capture.abstained_derivations(await _pool_get(), link_type, limit=limit)
+    `sample` is bounded by `limit`, newest-abstained first.
+
+    `scope` narrows WHICH abstentions, structurally (SQL, never a post-fetch filter a
+    caller could widen): "all" (default, every live abstention) | "retryable" (the
+    zero-candidate subset — nothing found YET, which time can change; oldest first) |
+    "retryable_ambiguous" (the 2+-candidate subset whose original set has, by
+    elimination alone — a merge, a retire, an invalidation, never a fresh re-derivation
+    — shrunk to exactly one `status='active'` survivor; adds `surviving_candidate`,
+    `original_candidate_count` per row and a top-level `eliminated_to_zero` count for
+    the different, zero-survivor population, visibility only, never folded into
+    `count`/`sample`). Neither retryable scope re-attempts anything — see
+    retry_ambiguous_abstentions for the one write half both retryable scopes name a
+    target for."""
+    return await _abstained_derivations_impl(scope, link_type, limit)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "abstained_derivations(scope='retryable')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def retryable_abstentions(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
     """READ-ONLY. The zero-candidate SUBSET of abstained_derivations, structurally —
     filtered in SQL, not by a condition a caller could widen. A zero-candidate abstention
@@ -5751,10 +5861,14 @@ async def retryable_abstentions(link_type: str | None = None, limit: int = 100) 
     genuine ambiguity time cannot resolve, and never appears here. Oldest-abstained first
     — names which objects are safe to re-attempt; does not re-attempt them. Re-run your
     own lane's lookup on each and call derive_or_abstain(..., retried=True) yourself."""
-    return await capture.retryable_abstentions(await _pool_get(), link_type, limit=limit)
+    return await _abstained_derivations_impl("retryable", link_type, limit)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "abstained_derivations(scope='retryable_ambiguous')",
+    "since": "task #199 lane 2, families wave (thread 6854)",
+})
 async def retryable_ambiguous_abstentions(
     link_type: str | None = None, limit: int = 100,
 ) -> dict[str, Any]:
@@ -5767,8 +5881,7 @@ async def retryable_ambiguous_abstentions(
     population whose every candidate is now gone — real, but nothing to retry-mint from,
     never folded into `count`/`sample`. Oldest-abstained first; names what's safe to
     retry, never retries it. See retry_ambiguous_abstentions for the write half."""
-    return await capture.retryable_ambiguous_abstentions(
-        await _pool_get(), link_type, limit=limit)
+    return await _abstained_derivations_impl("retryable_ambiguous", link_type, limit)
 
 
 @mcp.tool()
