@@ -5517,6 +5517,69 @@ async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
     _ = manager_seat
 
 
+async def test_stop_seat_records_the_session_anchor_for_a_clean_lineage_before_the_kill(
+    actions: Actions,
+) -> None:
+    """Khnum's own #201 acceptance finding b (Thoth dispatch 6928), closed: a seat
+    mounted ONCE and never compacted never had a heartbeat/live_succession call to
+    stamp `session` (register_agent's own birth-time write deliberately skips it on a
+    `--bg` seat's FIRST mount) — a plain SIGTERM used to kill that body with NO graph
+    session property anywhere on its lineage, so `_lineage_resume_candidate`'s own
+    succession_chain walk (which reads exactly this property, confirmed by reading
+    succession.py's query directly) found nothing and reported
+    `refused-nothing-to-resume` even though the body just died with a real, resumable
+    transcript on disk.
+
+    PROVEN HERE at the graph level (the part stop_seat actually controls; a real
+    transcript file matching the session id is a harness-truth fact independent of
+    this fix): BEFORE stop, the holder carries no `session` property at all. AFTER,
+    it carries the census-confirmed session id (truncated to 8 chars, same shape
+    register_agent's own write uses) — and succession_chain, read fresh, now finds it
+    on hop 0. The sid->soul ledger (`anchor_sid:`, handshake.record_session_anchor)
+    lands too, for the SIBLING gap: the session resume() eventually spawns needs its
+    own identity resolved from the sid alone once it mounts."""
+    from src.orchestrator.succession import succession_chain
+
+    full_sid = "abcd1234-0000-4000-8000-000000000000"
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stopanchor01", manager_agent="agent:stopanchorm01",
+        worker_handle="Stop-Anchor-Test", house="osiris")
+    await save_mount(actions.pool, job_dir="/x/jobs/abcd1234", agent_id="agent:stopanchor01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    before = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='session' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", "agent:stopanchor01")
+    assert before is None  # the exact clean-lineage gap: nothing written yet
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        pass
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopanchorm01", target=worker_seat,
+        agents_json=_fake_census_agents_json(7373, session_id=full_sid),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d["session_anchor_recorded"] is True
+
+    after = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='session' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", "agent:stopanchor01")
+    assert after == full_sid[:8]
+
+    chain = await succession_chain(actions.pool, "agent:stopanchor01")
+    assert chain[0]["session"] == full_sid[:8]  # _lineage_resume_candidate's own hop-0 read
+
+    ledger = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name=$2",
+        "agent:stopanchor01", f"anchor_sid:{full_sid[:8]}")
+    assert ledger == full_sid  # the sibling ledger, for the SPAWNED resumed session's own id
+
+
 async def test_stop_seat_releases_both_the_anchor_and_session_derived_mount_rows(
     actions: Actions,
 ) -> None:
