@@ -14,13 +14,23 @@ from src.orchestrator.walkin import walk_in_named
 
 async def _mounted(actions: Actions, agent_id: str, *, project: str = "stopslop") -> None:
     """A bare mounted-but-anonymous Agent — walk_in_named's own starting shape (the mount
-    half is out of scope for this module; the MCP wrapper owns it)."""
+    half is out of scope for this module; the MCP wrapper owns it).
+
+    Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
+    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
+    edge is a fixture lying about how mints actually work (thread 19d6bdcb7fa9/c5a91ea1)."""
     from datetime import UTC, datetime
 
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(a, "project", project, agent_id, now, 0.9,
                                   evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", agent_id)
+    await actions.assert_property(proj, "name", project, agent_id, now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(a, proj, "works_in", agent_id, now, 0.9,
+                              evidence_class="self_declared")
 
 
 async def test_walk_in_named_the_whole_ceremony(

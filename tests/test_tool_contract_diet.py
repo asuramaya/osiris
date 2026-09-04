@@ -799,7 +799,10 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 116
+TOOL_CONTRACT_EXPECTED_COUNT = 117
+# 116 -> 117 (2026-09-04, Sekhmet, decision 68fba2e4/thread 19d6bdcb7fa9): resync_seat_house
+# — the MCP door onto seats.resync_seat_house_third_party (existed, unreached until the
+# house/project ruling's six-seat repair task needed it, msg 6967).
 # 115 -> 116 (2026-09-04, Imhotep, task #199's core-verbs lane, Thoth dispatch 6901):
 # transition_seat_project — the self-service TRANSITION verb (invalidate_works_in +
 # correct_pin_value + set_charter, one composed act, MCP + CLI same commit) — see the
@@ -1014,6 +1017,11 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # widened to str | None so a pin key can be UNSET (operator ruling 004cc8d8: homeless is legal);
 # +79 post-title-strip schema chars for the anyOf, no prose.
 TOOL_CONTRACT_CEILING_CHARS = 115446
+# 115,446 -> 116,642 (2026-09-04, Sekhmet, decision 68fba2e4/thread 19d6bdcb7fa9): a
+# genuinely new tool, resync_seat_house -- the MCP door onto seats.resync_seat_house_
+# third_party (existed, unreached until the six-seat house repair needed it). A real
+# capability, not bloat.
+TOOL_CONTRACT_CEILING_CHARS = 116642
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

@@ -3549,12 +3549,65 @@ async def test_resync_seat_house_third_party_refuses_an_empty_reason(
     assert facts["house"] == "tony"                   # nothing written
 
 
-async def test_resync_seat_house_third_party_refuses_an_empty_house(actions: Actions) -> None:
-    from src.orchestrator.seats import resync_seat_house_third_party
+async def test_resync_seat_house_third_party_an_empty_string_unsets_like_none(
+    actions: Actions,
+) -> None:
+    """Whitespace-only normalizes to unset, same as an explicit None — an empty string is
+    itself a fabricated placeholder (decision 68fba2e4/thread 19d6bdcb7fa9), never a
+    distinct third state this function refuses on."""
+    from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs4empty0", "test")
+    await actions.assert_property(seat, "house", "tony", "test", datetime.now(UTC), 0.9)
 
     out = await resync_seat_house_third_party(
         actions, "seat:rs4empty0", "   ", source="test", reason="x")
-    assert "needs a name" in out["error"]
+    assert out["written"] is True
+    assert out["house"] is None
+    facts = await seat_facts(actions.pool, "seat:rs4empty0")
+    # the ESTABLISHED empty-string sentinel every derive_house reader already treats as
+    # unset (their own docstrings: "a genuinely EMPTY derived house... 'no seat yet'") —
+    # not a new state, just a new door reaching it; only this function's own RECEIPT
+    # normalizes to a clean None for its external contract.
+    assert not facts.get("house")
+
+
+async def test_resync_seat_house_third_party_none_unsets_a_fabricated_house(
+    actions: Actions,
+) -> None:
+    """THE LIVE REPAIR SHAPE (decision 68fba2e4/thread 19d6bdcb7fa9): a seat whose house
+    was fabricated at mint (=handle, decision 24e0b761's own class) repairs to genuinely
+    unset, never a placeholder string."""
+    from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
+
+    seat = await actions.create_or_find_object("Seat", "seat:rs6chad0", "test")
+    await actions.assert_property(seat, "house", "Chad", "test", datetime.now(UTC), 0.9)
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:rs6chad0", None, source="test",
+        reason="decision 68fba2e4: Chad's house was fabricated =handle at mint, repair to "
+               "genuinely unset")
+    assert out == {"written": True, "seat_id": "seat:rs6chad0", "house": None, "was": "Chad",
+                   "reason": "decision 68fba2e4: Chad's house was fabricated =handle at "
+                             "mint, repair to genuinely unset",
+                   "still_contradicted": []}
+    facts = await seat_facts(actions.pool, "seat:rs6chad0")
+    assert not facts.get("house")  # the established empty-string sentinel, see the sibling test
+
+
+async def test_resync_seat_house_third_party_none_is_a_noop_when_already_unset(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    seat_id = "seat:rs7nohous"
+    await actions.create_or_find_object("Seat", seat_id, "test")
+    # never stamped `house` at all — genuinely unset from birth
+
+    out = await resync_seat_house_third_party(
+        actions, seat_id, None, source="test", reason="x")
+    assert out == {"written": False, "seat_id": seat_id, "house": None,
+                   "still_contradicted": []}
 
 
 async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
@@ -3595,6 +3648,43 @@ async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
         srv._pool = saved_pool
         srv._agents.pop(key, None)
     assert after["project"] == "newhouse"                    # RESOLUTION moved, not just the row
+
+
+async def test_resync_seat_house_mcp_wrapper_unsets_a_fabricated_house(
+    actions: Actions,
+) -> None:
+    """THE MISSING DOOR (decision 68fba2e4/thread 19d6bdcb7fa9): resync_seat_house_third_
+    party existed, unreached from MCP, until the six-seat house repair needed it. THIRD-
+    PARTY like its own function, unlike correct_house: the caller need not hold the
+    target seat at all."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    seat = await actions.create_or_find_object("Seat", "seat:rswrap01", "test")
+    await actions.assert_property(seat, "house", "Chad", "test", datetime.now(UTC), 0.9)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ident = AgentIdentity(agent_id="agent:rswrapcaller", session="rswrap1", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    key = srv._conn_key(ctx)
+    srv._agents[key] = ident
+    try:
+        out = await srv.resync_seat_house(
+            "seat:rswrap01", None, "decision 68fba2e4: repair a fabricated house", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(key, None)
+    assert out == {"written": True, "seat_id": "seat:rswrap01", "house": None, "was": "Chad",
+                   "reason": "decision 68fba2e4: repair a fabricated house",
+                   "still_contradicted": []}
 
 
 async def test_correct_pin_value_mcp_wrapper_targets_the_callers_own_office(

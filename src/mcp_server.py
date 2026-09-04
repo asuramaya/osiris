@@ -4938,6 +4938,31 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
 
 
 @mcp.tool()
+async def resync_seat_house(seat_id: str, new_house: str | None, reason: str,
+                            ctx: Context | None = None) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING OF `correct_house` (task #152's khepri/deckard/metron
+    repair, decision 6602d39d) — the door that was missing: `seats.resync_seat_house_
+    third_party` had no MCP surface at all. UNLIKE `correct_house`, NOT self-scoped and
+    NOT headship-gated (a deliberate, standing refusal to merge the two — decision
+    4e1dde75: the authority mismatch is load-bearing) — any mounted caller may name any
+    seat, `actor` is attribution only, and callers are responsible for the authorization
+    this tool cannot enforce. `reason` is required and non-empty, same law as
+    `correct_pin_value`.
+
+    `new_house=None` UNSETS the seat's house — genuinely absent, never a fabricated
+    placeholder (decision 68fba2e4/thread 19d6bdcb7fa9: the operator's own house/project
+    ruling, the repair target for the six live specimens whose house was stamped
+    `=handle` at mint, decision 24e0b761's own class)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a correction is a mind's act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.seats import resync_seat_house_third_party
+    return await resync_seat_house_third_party(
+        Actions(await _pool_get()), seat_id, new_house, source=ident.agent_id, reason=reason)
+
+
+@mcp.tool()
 async def correct_pin_value(key: str, value: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
     """Correct an EXISTING key in your own seat's `.osiris` pin (msg 4761, obligation
