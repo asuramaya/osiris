@@ -811,6 +811,13 @@ TOOL_CONTRACT_CEILING_CHARS = 202871
 # 3-way-reconciled) but their combined char cost was never actually measured together
 # until now. Measured fresh, not summed.
 TOOL_CONTRACT_CEILING_CHARS = 210451
+# 210,451 -> 210,891 (measured exact). Tool count unchanged at 151 (2026-09-04, Seshat, #203
+# mechanism ruling 880ffe79/decision 46ee0083, Thoth dispatch 6865): resolve_thread's own
+# `ref` widened to accept a LIST (batch-close under one shared because/artifact, refuse-
+# whole-run on any bad ref) plus a new `dry_run` param — a genuinely new capability (the
+# operator's own "closing 1000+ obligations" mechanism), not padding. Docstring trimmed
+# once under the category rule before raising.
+TOOL_CONTRACT_CEILING_CHARS = 210891
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

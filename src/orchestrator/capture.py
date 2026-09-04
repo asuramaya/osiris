@@ -2848,6 +2848,84 @@ async def resolve_thread(
     return tid
 
 
+async def resolve_threads_bulk(
+    actions: Actions, refs: list[str], *, because: str, artifact: str | None = None,
+    dry_run: bool = True, source: str = _SOURCE,
+) -> dict[str, Any]:
+    """Batch-close obligations — the mechanism decision 880ffe79/76d43073 proposed and the
+    operator ruled on, built as a PARAMETER on the existing single-ref `resolve_thread`
+    rather than a new verb (Thoth dispatch 6865): every ref closes under the SAME shared
+    `because`/`artifact`, each write still its own independent compensating event (never
+    one collapsed write) via a plain per-ref call to `resolve_thread` below.
+
+    REFUSE-WHOLE-RUN, same posture as `_retire_handoff_backlog` / backfill_thread_status_
+    collapse.py: if ANY ref fails to resolve to exactly one real thread (unmatched, or two
+    refs in the same call resolving to the same thread — a caller-side collision, not a
+    graph ambiguity), NOTHING is written and the refusal names every offending ref. A
+    batch close off an unmeasured error rate is the 844-agents mistake again — refusing
+    outright beats silently skipping the bad rows and closing the rest.
+
+    `because` is MANDATORY here (unlike the single-ref door, where it's optional) — a
+    batch close with no shared, recorded reason is exactly what the operator's own
+    "closing 1000+ obligations that are mostly stale" worry was about.
+
+    `dry_run=True` (hard default, mirrors every other bulk primitive in this codebase) —
+    previews every match (id, summary, whether already resolved) and writes nothing; pass
+    `dry_run=False` to actually close. `_find_thread(..., require_identifier=True)` is
+    used for every ref (record_decision's own `resolves=` ladder, not the looser summary-
+    substring read `resolve_thread`'s single-ref door still allows) — a batch CLOSES what
+    it names, same discipline as resolves=, never a loose match."""
+    if not refs:
+        return {"ok": False, "reason": "empty ref list — nothing to do"}
+    if not because or not because.strip():
+        return {"ok": False, "reason": "because is mandatory for a batch close"}
+    resolved: dict[str, uuid.UUID | None] = {}
+    for ref in refs:
+        resolved[ref] = await _find_thread(actions.pool, ref, require_identifier=True)
+    unresolved = [r for r, tid in resolved.items() if tid is None]
+    seen: dict[uuid.UUID, str] = {}
+    duplicates: list[dict[str, str]] = []
+    for r, tid in resolved.items():
+        if tid is None:
+            continue
+        if tid in seen:
+            duplicates.append({"first": seen[tid], "also": r})
+        else:
+            seen[tid] = r
+    if unresolved or duplicates:
+        return {
+            "ok": False,
+            "reason": "refusing the whole batch — not every ref resolved to exactly one "
+                      "distinct thread; same posture as _retire_handoff_backlog, nothing "
+                      "written",
+            "unresolved": unresolved,
+            "duplicates": duplicates,
+        }
+    matched: dict[str, uuid.UUID] = {r: t for r, t in resolved.items() if t is not None}
+    previews = []
+    for ref, tid in matched.items():
+        summary = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+            "AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            tid)
+        already = await _thread_resolved_in(actions.pool, tid) is not None
+        previews.append({
+            "ref": ref, "id": str(tid)[:8], "summary": summary,
+            "already_resolved": already,
+        })
+    if dry_run:
+        return {"ok": True, "dry_run": True, "would_close": previews, "count": len(previews)}
+    closed = []
+    for tid in matched.values():
+        await resolve_thread(actions, str(tid), because=because, artifact=artifact,
+                             source=source)
+        closed.append(str(tid)[:8])
+    return {
+        "ok": True, "dry_run": False, "closed": closed, "count": len(closed),
+        "because": because,
+    }
+
+
 async def _mint_closed_by(
     actions: Actions, tid: uuid.UUID, source: str, observed: datetime
 ) -> None:

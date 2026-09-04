@@ -7140,11 +7140,12 @@ async def open_thread(
 
 @mcp.tool()
 async def resolve_thread(
-    ref: str, because: str | None = None, artifact: str | None = None,
+    ref: str | list[str], because: str | None = None, artifact: str | None = None,
+    dry_run: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Close a THREAD you (or an earlier session) resolved — `ref` is its UUID or a summary
     substring; `because` records why (a short WHY, not a completion essay). It leaves
     briefing's open list and joins the resolved section. Event-sourced (never deleted), so
@@ -7160,7 +7161,17 @@ async def resolve_thread(
     never status, so a second call on an already-resolved thread is how a later, more
     specific closure witness gets attached. because/resolved_artifact become this call's
     own text (latest wins, earlier reasoning stays in history, not current). The receipt
-    names it plainly when a call landed on an already-resolved thread."""
+    names it plainly when a call landed on an already-resolved thread.
+
+    A LIST closes a whole BATCH under one shared because/artifact (#203, decision 880ffe79):
+    `because` is then MANDATORY, `dry_run=True` previews every match without writing, and
+    the WHOLE BATCH refuses — nothing written — if any ref fails to resolve to exactly one
+    thread. See `capture.resolve_threads_bulk`."""
+    if isinstance(ref, list):
+        pool = await _pool_get()
+        return await capture.resolve_threads_bulk(
+            Actions(pool), ref, because=because or "", artifact=artifact, dry_run=dry_run,
+            source=await _actor_for(ctx, subagent_id, subagent_type))
     pool = await _pool_get()
     probe_tid = await capture._find_thread(pool, ref)
     was_already_resolved = (
