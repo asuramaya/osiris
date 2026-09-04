@@ -4938,7 +4938,7 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
 
 
 @mcp.tool()
-async def correct_pin_value(key: str, value: str, reason: str,
+async def correct_pin_value(key: str, value: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
     """Correct an EXISTING key in your own seat's `.osiris` pin (msg 4761, obligation
     114f7ac9) — the door that was missing: `offices.correct_pin_value` (the raw rewrite) had
@@ -4951,7 +4951,9 @@ async def correct_pin_value(key: str, value: str, reason: str,
     to prevent. Refuses on: no held seat; `key` not already declared (use write_pin_additions
     for a genuinely missing one); invalid TOML; an empty reason. Also corrects your ANCHOR
     copy when one exists and differs (ruling b30e2b38), reported under `anchor`.
-    `revert_own_pin_write` is the self-scoped undo."""
+    `revert_own_pin_write` is the self-scoped undo.
+
+    `value=None` UNSETS `key` — deletes the line, never a fabricated placeholder."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a pin correction is a seat's own act",

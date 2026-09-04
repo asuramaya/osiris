@@ -84,16 +84,30 @@ async def compute_heartbeat(
     comments for the WHY of each step; only the connection source and the succession call
     moved, nothing about the resolution order changed.
 
-    `cwd` (added: thread 6483/6487/6492, Thoth's own dispatch and ruling) feeds the (A)/(B)
-    split his "mark, never pick a winner" prior was missing the discriminator for: at the
-    seat's OWN mechanical pin copies (case A — `_seat_owns_cwd` above), nobody ever
-    DECLARED the value there, mint wrote it once and no verb kept it synced, so a
-    divergence from the graph is fossil, not testimony — the graph wins outright. Anywhere
-    else (case B), a `.osiris` pin is a genuinely separate governed checkout speaking for
-    itself (577988ed) and keeps winning, unchanged. `model`'s file-wins precedent (ruling
-    1874ad35) does NOT transfer here: the pin is a genuine operator INPUT for `model` (a
-    deliberate /model swap); `project` is never operator-input the same way, so there is no
-    parallel input to protect."""
+    `cwd` (added: thread 6483/6487/6492) used to feed an (A)/(B) split that let a seat's
+    own `house` override an already-resolved pin at the seat's own mechanical pin copies
+    (office/anchor/workspace) — on the premise that nobody ever DECLARES a value there, so
+    a divergence from the graph must be a mint fossil. THAT PREMISE BROKE the day
+    found_seat/mint_seat stopped fabricating `project` from the handle (decision
+    24e0b761/commit cf201a9): the office pin is now exactly where a seat's project gets
+    DELIBERATELY declared, so overriding it with `house` reintroduced the same class of
+    fabrication one hop over — the live specimen (operator bug, msg 6934, thread
+    19d6bdcb7fa9): Chad's pin correctly says `cdking`, but the statusline rendered
+    `Chad·Chad` because `house` (itself fabricated at mint — a seat founded via
+    found_seat/mint_seat gets `house=handle` unconditionally, never a project) won over it.
+
+    RESOLUTION ORDER NOW, PLAINLY: (1) the PIN — `project_hint`, however it resolved —
+    wins outright the instant it resolves to anything; no cwd-based override, ever. (2)
+    Absent a pin, the seat's own DECLARED `charter` — if it names exactly one repo, that
+    repo is the project; more than one is genuine ambiguity, not this function's call to
+    break. (3) Absent both, the agent's own LINEAGE `works_in` (`lineage_works_in`,
+    merge-normalized through `_normalize_project_label_through_merge`) — the same
+    ABSTAIN law that lookup already enforces (only when the whole lineage agrees). `house`
+    NEVER stands in for `project` anywhere in this order — it answers a different
+    question (which house a seat belongs to), and conflating the two is the exact bug this
+    fix closes. `model`'s file-wins precedent (ruling 1874ad35) does NOT transfer here:
+    the pin is a genuine operator INPUT for `model` (a deliberate /model swap); `project`
+    is never operator-input the same way, so there is no parallel input to protect."""
     from src.orchestrator.mounts import find_session_row
 
     agent = None
@@ -131,14 +145,15 @@ async def compute_heartbeat(
                 if resolved_intent is None and anchor:
                     from src.orchestrator.agents import read_project_model
                     resolved_intent = read_project_model(anchor)
+            # PIN WINS OUTRIGHT (see this function's own docstring for the full law and
+            # the live specimen that caught its absence): once `resolved_project` answers
+            # from the pin, nothing below ever touches it again — no cwd-based override,
+            # `house` least of all. Absent a pin, `project_of` (agents.py) carries the
+            # SAME charter -> lineage_works_in fallback this function used to inline —
+            # one implementation, not two copies drifting apart.
             if resolved_project is None:
-                resolved_project = seat.get("house")
-            elif (cwd and resolved_seat_handle
-                  and _seat_owns_cwd(cwd, handle=resolved_seat_handle, anchor_cwd=anchor)):
-                # CASE (A): the pin answered from one of THIS seat's own mechanical
-                # copies — nobody ever declared it there, so a divergence from the
-                # graph is a fossil, not a second witness. Graph wins outright.
-                resolved_project = seat.get("house") or resolved_project
+                from src.orchestrator.agents import project_of
+                resolved_project = await project_of(conn, agent, cwd=cwd or None)
 
     from src.orchestrator import surface
 

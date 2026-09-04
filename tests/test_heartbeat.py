@@ -1,10 +1,12 @@
-"""compute_heartbeat's (A)/(B) statusline-precedence split (thread 6483/6487/6492, Thoth's
-own scoping and ruling adoption). The three pin copies per seat (office / anchor_cwd
-courtesy copy / `~/code/<handle>` scratch convention) hold a value nobody ever DECLARED —
-mint wrote it once, no verb kept it synced (Thoth's own d8331496 census) — so a divergence
-FROM the graph at one of those exact locations is a fossil, not a second witness: the graph
-wins outright there. Anywhere else, a `.osiris` pin speaks for a genuinely separate governed
-checkout (577988ed) and keeps winning, unchanged.
+"""compute_heartbeat's project-label resolution (operator bug, msg 6934, thread
+19d6bdcb7fa9): the PIN wins outright the instant it resolves to anything — the old (A)/(B)
+split (thread 6483/6487/6492) let a seat's own mechanical pin copies (office / anchor_cwd
+courtesy copy / `~/code/<handle>` scratch convention) lose to `seat.house` on the premise
+that nobody ever DECLARES a value there, which broke the day found_seat/mint_seat stopped
+fabricating `project` from the handle (decision 24e0b761/commit cf201a9) — the office pin
+became exactly where a seat's project IS deliberately declared. Absent a pin, the fallback
+is charter (exactly one governed repo) then lineage_works_in (merge-normalized, whole-
+lineage-agrees) — `house` NEVER stands in for `project` anywhere in this order.
 """
 from __future__ import annotations
 
@@ -83,12 +85,17 @@ async def _seated(actions: Actions, *, handle: str, house: str, anchor_cwd: str,
     return agent
 
 
-async def test_case_a_a_stale_pin_at_the_seats_own_anchor_loses_to_the_graph(
+async def test_a_pin_at_the_seats_own_anchor_wins_over_house(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """THE LIVE SPECIMEN THIS FIX CLOSES (operator bug, msg 6934): a seat's own OFFICE pin
+    is exactly where found_seat/mint_seat now writes a DELIBERATELY declared project
+    (cf201a9) — house (here "Godel", itself the mint-time handle fabrication for a
+    self-managed seat) must never override it, even though this cwd is the seat's own
+    mechanical pin copy."""
     anchor = tmp_path / "jesuslike"
     anchor.mkdir()
-    (anchor / ".osiris").write_text('project = "Jesus"\n')  # the fossil: mint wrote this once
+    (anchor / ".osiris").write_text('project = "Jesus"\n')  # the seat's own DECLARATION
     await _seated(actions, handle="Jesuslike", house="Godel", anchor_cwd=str(anchor),
                  session_id="jesuslike01")
 
@@ -96,7 +103,7 @@ async def test_case_a_a_stale_pin_at_the_seats_own_anchor_loses_to_the_graph(
         actions.pool, project_hint="Jesus", session_id="jesuslike01",
         model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
     assert out.resolved_seat_handle == "Jesuslike"  # agent resolution actually ran
-    assert out.resolved_project == "Godel"  # the graph wins — nobody ever declared "Jesus" here
+    assert out.resolved_project == "Jesus"  # the pin wins outright — house never overrides
 
 
 async def test_case_b_a_pin_at_a_genuinely_separate_checkout_still_wins(
@@ -149,3 +156,68 @@ async def test_case_a_a_matching_pin_at_the_anchor_is_a_no_op(
         actions.pool, project_hint="Godel", session_id="agreeing01",
         model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
     assert out.resolved_project == "Godel"
+
+
+# --- no pin: charter, then lineage works_in, then nothing — house NEVER appears ----------
+
+async def test_no_pin_falls_back_to_a_single_chartered_repo_never_house(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.charter import set_charter
+
+    anchor = tmp_path / "chartered"
+    anchor.mkdir()  # no .osiris here at all — project_hint resolves to None
+    agent = await _seated(actions, handle="Chartered", house="Chartered",
+                          anchor_cwd=str(anchor), session_id="chartered01")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:cdking", "test")
+    from datetime import UTC, datetime
+    await actions.assert_property(proj, "name", "cdking", "test", datetime.now(UTC), 0.9)
+    seat_id = (await actions.pool.fetchval(
+        "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "AND a.name='handle' AND a.value #>> '{}' = 'Chartered')"))
+    await set_charter(actions, seat_id, ["cdking"], actor="test")
+
+    out = await compute_heartbeat(
+        actions.pool, project_hint="", session_id="chartered01",
+        model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
+    assert out.resolved_seat_handle == "Chartered"
+    assert out.resolved_project == "cdking"  # the charter, never "Chartered" (house)
+    _ = agent
+
+
+async def test_no_pin_no_charter_falls_back_to_lineage_works_in_never_house(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    anchor = tmp_path / "workedin"
+    anchor.mkdir()
+    agent = await _seated(actions, handle="Workedin", house="Workedin",
+                          anchor_cwd=str(anchor), session_id="workedin01")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:realproject", "test")
+    from datetime import UTC, datetime
+    await actions.assert_property(proj, "name", "realproject", "test", datetime.now(UTC), 0.9)
+    agent_oid = await actions.create_or_find_object("Agent", agent, agent)
+    await actions.create_link(agent_oid, proj, "works_in", agent, datetime.now(UTC), 0.9)
+
+    out = await compute_heartbeat(
+        actions.pool, project_hint="", session_id="workedin01",
+        model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
+    assert out.resolved_seat_handle == "Workedin"
+    assert out.resolved_project == "realproject"  # lineage works_in, never "Workedin" (house)
+
+
+async def test_no_pin_no_charter_no_works_in_stays_unresolved_never_house(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Absent every real signal, the answer is honest absence — NOT the seat's own house,
+    which is exactly the fabrication this whole fix exists to stop propagating."""
+    anchor = tmp_path / "nosignal"
+    anchor.mkdir()
+    await _seated(actions, handle="Nosignal", house="Nosignal",
+                 anchor_cwd=str(anchor), session_id="nosignal01")
+
+    out = await compute_heartbeat(
+        actions.pool, project_hint="", session_id="nosignal01",
+        model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
+    assert out.resolved_seat_handle == "Nosignal"
+    assert out.resolved_project is None

@@ -104,14 +104,13 @@ async def test_heartbeat_route_with_no_session_id_still_answers_project_counts(
     assert payload["resolved_project"] == "osiris"
 
 
-async def test_heartbeat_route_threads_cwd_into_the_seats_own_location_split(
+async def test_heartbeat_route_accepts_cwd_and_the_pin_wins_regardless(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The (A)/(B) statusline-precedence split (thread 6483/6487/6492) lives in
-    compute_heartbeat itself (see test_heartbeat.py) — this only proves the route's own
-    JSON contract actually carries `cwd` through, since a body the hook never sends
-    (mismatched key, dropped field) would silently degrade to the pre-fix behavior with no
-    test catching it."""
+    """The route's own JSON contract still accepts `cwd` (a hook sending it must not error)
+    even though compute_heartbeat's resolution no longer branches on it at all (operator
+    bug, msg 6934, thread 19d6bdcb7fa9: the pin wins outright everywhere now — see
+    test_heartbeat.py for the resolution law itself)."""
     from src import mcp_server as srv
     from src.orchestrator.seats import bind_holder, ensure_seat
 
@@ -141,4 +140,6 @@ async def test_heartbeat_route_threads_cwd_into_the_seats_own_location_split(
     payload = json.loads(out.body)
     assert "error" not in payload
     assert payload["resolved_seat_handle"] == "Routecwdcase"
-    assert payload["resolved_project"] == "RouteHouse"  # the graph wins at the seat's own anchor
+    # the PIN wins outright, even at the seat's own anchor (operator bug fix) — proves
+    # `cwd` really made it through the route's JSON body, not that it changed the outcome
+    assert payload["resolved_project"] == "StaleRouteName"
