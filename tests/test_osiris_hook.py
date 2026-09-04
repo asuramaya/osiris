@@ -683,6 +683,57 @@ def test_cmd_whisper_no_session_id_or_cwd_is_a_clean_noop(monkeypatch: Any) -> N
     assert osiris_hook._cmd_whisper({}) == 0
 
 
+# --- bg-spare bodies never mint or mount (task #204, Thoth msg 6997: pid 2979241, cmdline
+# `claude bg-spare --bg-spare .../claim.sock`, cwd the bare container root, zero turns
+# ever, its own heartbeat refreshing agent_mounts every few minutes; the phantom-fold
+# correctly retired the resulting false_mint generation, but the mount row itself kept
+# refreshing, so deploy's false-mint-live gate refused forever) ------------------------
+
+def test_is_bg_spare_process_reads_the_parent_cmdline(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook.os, "getppid", lambda: 9999)
+
+    def _fake_read_bytes(self: Path) -> bytes:
+        assert str(self) == "/proc/9999/cmdline"
+        return b"claude\x00bg-spare\x00--bg-spare\x00/tmp/x/y.claim.sock\x00"
+
+    monkeypatch.setattr(Path, "read_bytes", _fake_read_bytes)
+    assert osiris_hook._is_bg_spare_process() is True
+
+
+def test_is_bg_spare_process_false_for_an_ordinary_session(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook.os, "getppid",
+                        lambda: osiris_hook.os.getpid())  # this test process itself
+    assert osiris_hook._is_bg_spare_process() is False
+
+
+def test_is_bg_spare_process_fails_open_when_proc_is_unreadable(monkeypatch: Any) -> None:
+    monkeypatch.setattr(osiris_hook.os, "getppid", lambda: -1)  # never a real pid
+    assert osiris_hook._is_bg_spare_process() is False
+
+
+def test_cmd_whisper_never_mints_a_bg_spare_body(monkeypatch: Any) -> None:
+    def _unreachable(*a: Any, **k: Any) -> None:
+        raise AssertionError("a bg-spare has no identity until claimed — must never POST")
+
+    monkeypatch.setattr(osiris_hook, "_is_bg_spare_process", lambda: True)
+    monkeypatch.setattr(osiris_hook, "_post", _unreachable)
+    assert osiris_hook._cmd_whisper({"session_id": "spare-s1", "cwd": "/home/user/code"}) == 0
+
+
+def test_cmd_whisper_still_mints_an_ordinary_session(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any]:
+        captured.update(data)
+        return {"agent": "agent:x", "seat": None, "mail": 0}
+
+    monkeypatch.setattr(osiris_hook, "_is_bg_spare_process", lambda: False)
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    osiris_hook._cmd_whisper({"session_id": "s1", "cwd": "/repo"})
+    assert captured["session_id"] == "s1"
+
+
 def test_cmd_whisper_prints_the_rendered_banner(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         osiris_hook, "_post",
