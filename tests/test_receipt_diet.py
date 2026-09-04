@@ -8,8 +8,9 @@ orient()'s own blind_spots list (msg 6885's next assignment) measured as the sin
 largest static field in a 37-call sample of the same transcript: 154,059 of 751,203 total
 orient() bytes (~4.2K bytes/call) — a project-level fact, not a per-call work item.
 
-This file is the RATCHET for my assigned slice of the top-ten read-verb bloat (send,
-inbox, mount, orient) — a byte-per-call CEILING per representative call shape, raised
+This file is the RATCHET for the read-verb receipt slice (send, inbox, mount, orient)
+AND the write-verb slice (record_decision/open_thread/send nags + prior_art, msg 6871)
+— a byte-per-call CEILING per representative call shape, raised
 only as a deliberate, reasoned act (same convention as tests/test_tool_contract_diet.py's
 own history), never a reflex.
 """
@@ -223,3 +224,103 @@ async def test_orient_omits_blind_spots_list_by_default(actions: Actions) -> Non
         f"over the ratchet of 1000 (before-diet equivalent was {before_bytes}) — if the "
         "growth is genuinely load-bearing, raise the ceiling as a deliberate act with a "
         "reason, not a reflex")
+
+
+
+# --- WRITE-VERB SLICE (msg 6871, operator's context-bloat priority): record_decision/
+# open_thread/send — echoed summary dropped, protocol_nag/assertion_nag collapsed to a
+# short `nags` code (full text moved to describe('nags:<code>')), prior_art slimmed to
+# {id,type,summary} (grade/via dropped). resolve_thread/settle needed no change — already
+# lean, same finding Sekhmet's own lane made for get_status()/settle().
+
+async def test_record_decision_receipt_omits_echoed_summary(actions: Actions) -> None:
+    """The caller supplied `summary` this same turn — echoing it back is pure duplication.
+    `resolved_thread`'s OWN summary (the closed THREAD's words, a different string) still
+    echoes: that's the one place a valid id naming the wrong target is only catchable by
+    reading it, a mis-citation risk, not a duplication."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rd-nosummary", session="rdnosummary", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.record_decision(
+            "RULING — the beryl queue drains in arrival order, per operator word.",
+            kind="ruling", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "summary" not in out
+    assert out["kind"] == "ruling"
+
+
+async def test_record_decision_protocol_nag_collapses_to_a_code(actions: Actions) -> None:
+    """A measurement-smelling decision with no `protocol` used to pay ~300 bytes of nag
+    prose on the receipt every time; now it's one short code, full text one lookup away
+    (describe('nags:protocol'))."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rd-nag", session="rdnag", project="osiris", model=None, cwd=None)
+    try:
+        out = await srv.record_decision(
+            "verified 4/5 nodes converge within the threshold window after the index change",
+            kind="finding", ctx=ctx)
+        described = await srv.describe("nags:protocol")
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "protocol_nag" not in out
+    assert out["nags"] == ["protocol"]
+    assert described["code"] == "protocol" and "MEASUREMENT" in described["text"]
+    receipt_bytes = _receipt_bytes(out)
+    # RATCHET: measured exact value, 251 bytes (the old protocol_nag prose alone ran
+    # ~330 bytes on its own, on top of everything else in the receipt). Raise only with
+    # a reason, never a reflex.
+    assert receipt_bytes <= 280, (
+        f"record_decision() receipt with a protocol nag grew to {receipt_bytes} bytes, "
+        "over the ratchet of 280")
+
+
+async def test_record_decision_prior_art_is_slimmed_not_the_full_search_shape(
+    actions: Actions, monkeypatch,
+) -> None:
+    """prior_art on record_decision/open_thread keeps {id,type,summary} — enough to
+    recognize the hit and go read it — and drops the ranking metadata (`grade`/`via`)
+    the underlying search() result carries but this turn's caller doesn't act on. Same
+    monkeypatch-the-search-hit fixture shape as test_ack_prior_art_distinguishes_weak_
+    hits_from_no_hits above — live search indexing timing is not this test's concern."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    unslimmed_hit = [{"id": "feedf00d", "type": "Decision", "summary": "a related ruling",
+                      "grade": "self_declared", "via": "both"}]
+    monkeypatch.setattr(
+        "src.orchestrator.capture.prior_art_from_hits", lambda *a, **k: unslimmed_hit)
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rd-priorart", session="rdpriorart", project="osiris", model=None,
+        cwd=None)
+    try:
+        out = await srv.record_decision(
+            "the onyx cache invalidates on every leader re-election, confirmed live",
+            kind="finding", repo="osiris", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["prior_art"] == [{"id": "feedf00d", "type": "Decision",
+                                 "summary": "a related ruling"}]

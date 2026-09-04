@@ -1176,6 +1176,12 @@ async def describe(table: str) -> dict[str, Any]:
     link types, categories, canonical schemes); this answers what the DATABASE actually has,
     for when you need a real column name or type before hand-writing SQL. Returns
     `exists: false` (never a silently-empty shape) when `table` doesn't match anything real."""
+    if table == "nags":
+        return {"nags": _NAG_CATALOG}
+    if table.startswith("nags:"):
+        code = table.split(":", 1)[1]
+        text = _NAG_CATALOG.get(code)
+        return {"code": code, "text": text} if text else {"exists": False, "code": code}
     return await describe_table(await _pool_get(), table)
 
 
@@ -3964,12 +3970,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # same turn, before anyone downstream ever sees the message — no new storage, no new
     # consumer, the same design that let this ship without the read-lens work.
     if capture.unhedged_assertion_smell(body):
-        out["assertion_nag"] = (
-            "this reads like a flat claim about code/system behavior with no hedge "
-            "acknowledging it might be wrong — if you re-read the thing you're "
-            "describing THIS turn, say so; a citation alone doesn't clear this (it still "
-            "fires on a cited claim if the citation itself wasn't re-checked for what it "
-            "actually proves)")
+        # RECEIPT DIET (msg 6871): short code, not the full prose every firing —
+        # describe('nags:assertion') for the text (catalog: _NAG_CATALOG below).
+        out.setdefault("nags", []).append("assertion")
     return out
 
 
@@ -6096,6 +6099,36 @@ _EXTENSION_LINK_PENDING_REASON = (
     "and cannot satisfy the gate at its own commit point")
 
 
+# WRITE-VERB RECEIPT DIET (msg 6871, operator's context-bloat priority, 2026-09-04): a nag
+# is advice a caller mostly doesn't act on the same turn — the old shape paid its full
+# prose on EVERY firing. Collapsed to a short code in the receipt's own `nags` list;
+# describe('nags') (or describe('nags:<code>')) is the one place the full text lives now,
+# a deliberate lookup rather than a reflexive re-explain each call. Same convention
+# consult_canon('record_decision') already uses for per-parameter detail — this is that
+# same move applied to advisory nags specifically.
+_NAG_CATALOG: dict[str, str] = {
+    "protocol": (
+        "this decision reads like a MEASUREMENT and its `protocol` is empty — record "
+        "the exact invocation (command line, seeds, thresholds, bucket edges) so a "
+        "successor RERUNS instead of re-deriving; re-run record_decision with the same "
+        "summary + protocol to enrich this same decision (idempotent)"),
+    "assertion": (
+        "this reads like a flat claim about code/system behavior with no hedge "
+        "acknowledging it might be wrong — if you re-read the thing you're "
+        "describing THIS turn, say so; a citation alone doesn't clear this (it still "
+        "fires on a cited claim if the citation itself wasn't re-checked for what it "
+        "actually proves)"),
+}
+
+
+def _slim_prior_art(prior: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One-line id+short-summary, not the full {id,type,summary,grade,via} shape —
+    write-verb receipt diet (msg 6871): the caller acting THIS turn needs enough to
+    recognize the hit and go read it, not the ranking metadata that shaped the search."""
+    return [{"id": p["id"], "type": p.get("type"), "summary": p.get("summary", "")}
+            for p in prior]
+
+
 @mcp.tool()
 async def record_decision(
     summary: str, kind: str = "ruling", rationale: str | None = None,
@@ -6397,7 +6430,12 @@ async def record_decision(
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}
-    out: dict[str, Any] = {"id": str(d), "kind": kind, "summary": summary}
+    # RECEIPT DIET (msg 6871): `summary` is NOT echoed back — the caller supplied it this
+    # same turn, so echoing it verbatim is pure duplication. `resolved_thread(s)` below
+    # still echoes ITS OWN summary (the closed THREAD's words, not this call's) because
+    # that's the one place a valid id naming the wrong target is only catchable by the
+    # caller reading it — a mis-citation risk, not a duplication.
+    out: dict[str, Any] = {"id": str(d), "kind": kind}
     if repo_defaulted:
         out["repo_defaulted"] = {
             "to": repo,
@@ -6497,7 +6535,7 @@ async def record_decision(
         exclude={d} | ({old} if old else set()), repo=repo, actor=actor)
     strong = capture.prior_art_is_strong(prior)
     if prior:
-        out["prior_art"] = prior
+        out["prior_art"] = _slim_prior_art(prior)
     if refute_id is not None:
         # THE STRUCTURAL DISCRIMINATOR, DECOUPLED FROM SEARCH TIMING (thread 7e8cb735,
         # piece 2): refute_id was already resolved and validated against a real Practice
@@ -6650,12 +6688,10 @@ async def record_decision(
                 "fleet-wide for 14 days so minds carrying the practice strike it")
     if not protocol and capture.measurement_smell(f"{summary} {rationale or ''}"):
         # thread 022bd24a: `protocol` is this tool's best field and nothing asked for it —
-        # advice in the receipt, never a gate (the decision is recorded either way)
-        out["protocol_nag"] = (
-            "this decision reads like a MEASUREMENT and its `protocol` is empty — record "
-            "the exact invocation (command line, seeds, thresholds, bucket edges) so a "
-            "successor RERUNS instead of re-deriving; re-run record_decision with the same "
-            "summary + protocol to enrich this same decision (idempotent)")
+        # advice in the receipt, never a gate (the decision is recorded either way).
+        # RECEIPT DIET (msg 6871): short code, not the full prose every firing —
+        # describe('nags:protocol') for the text.
+        out.setdefault("nags", []).append("protocol")
     if isinstance(resolves, list):
         out["resolved_threads"] = receipt
     elif answered:
@@ -6941,7 +6977,7 @@ async def open_thread(
     # existing open Thread doesn't need a second search to be told something related exists.
     prior = await _surface_prior_art(pool, summary, repo=repo, actor=actor)
     if prior:
-        out["prior_art"] = prior
+        out["prior_art"] = _slim_prior_art(prior)
         if capture.prior_art_is_strong(prior):
             top = prior[0]
             if top.get("type") == "Thread":
