@@ -1992,6 +1992,31 @@ async def _real_check_whisper_probe() -> tuple[bool, str]:
         return await _synthetic_automount_probe(client)
 
 
+def _run_install_script(script_rel: str, root: Path) -> str:
+    """Run one of this repo's idempotent install-*.sh scripts (task #204, Thoth ruling msg
+    6949: "deploy is the one sanctioned hand that writes machine files" — a read-only
+    status line that can only ever report STALE was half a mechanism). Every install
+    script here (install_gate_hook.sh, install_push_guard_hook.sh, install_commands.sh)
+    already follows the SAME idempotent copy-and-compare convention and prints its own
+    one-line summary on success — this just runs it and surfaces that line, or a clear
+    failure, never raising past this wrapper (a broken installer must not crash the rest
+    of deploy's own report)."""
+    import subprocess
+
+    script = root / script_rel
+    if not script.is_file():
+        return f"{script_rel}: SOURCE MISSING — nothing installed"
+    try:
+        result = subprocess.run(
+            ["sh", str(script)], cwd=root, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"{script_rel}: could not run ({exc})"
+    if result.returncode != 0:
+        return (f"{script_rel}: FAILED (exit {result.returncode}) — "
+                f"{result.stderr.strip() or result.stdout.strip()}")
+    return result.stdout.strip() or f"{script_rel}: ran, no output"
+
+
 async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
@@ -2337,12 +2362,15 @@ async def cmd_deploy(
             print("landing audit: clean — every branch is either merged or held-work-claimed, "
                   "no graph text disagrees with git")
 
+        print(_run_install_script("scripts/install_push_guard_hook.sh", root))
         from scripts.push_guard import hook_status
         print(hook_status(root))
 
+        print(_run_install_script("scripts/install_gate_hook.sh", root))
         from scripts.gate_hook import hook_status as gate_hook_status
         print(gate_hook_status(root))
 
+        print(_run_install_script("scripts/install_commands.sh", root))
         from scripts.commands_status import commands_status
         print(commands_status(root))
 
