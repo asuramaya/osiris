@@ -320,7 +320,7 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
             "path": str(p), "backup": str(backup)}
 
 
-def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[str, Any]:
+def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) -> dict[str, Any]:
     """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY LAW (ruling 719ed5b1/msg
     3929) — NOT a change to that function, NOT a bulk driver, and NOT interchangeable with
     it. write_pin_additions refuses to overwrite an existing key so that a disagreement
@@ -332,6 +332,15 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
     dishonesty, not the cure. Every call is a deliberate, one-seat-at-a-time act with a
     `reason` that MUST land in the caller's own decision record — this function does not
     itself write to the graph, it only makes the correction auditable at the call site.
+
+    `value=None` UNSETS the key — the line is DELETED, not rewritten to an empty string or
+    the literal text "None" (#199's mint-layer prerequisite, decision 24e0b761/commit
+    cf201a9: found_seat/mint_seat already learned that a fabricated placeholder is worse
+    than genuine absence, and the pin-read self-heal at df646654/fe8ec7ff already tolerates
+    a missing key — but until this, nothing on the CORRECTION side could ever reach that
+    state for a seat minted BEFORE that fix, only for one founded after it. A transition
+    verb moving a seat's project off a fabricated value onto "no project, genuinely" needs
+    this as a legal target, not just the mint-time door.)
 
     Same backup discipline as write_pin_additions (`.osiris.bak` captures the exact pre-write
     bytes, overwritten each real write): a caller who mis-corrects can revert_pin_write same
@@ -367,8 +376,11 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
     prefix = f"{key} ="
     for i, line in enumerate(lines):
         if line.split("=", 1)[0].strip() == key:
-            eol = "\n" if line.endswith("\n") else ""
-            lines[i] = f"{prefix} {json.dumps(value)}{eol}"
+            if value is None:
+                del lines[i]  # UNSET: the line is gone, never rewritten to a placeholder
+            else:
+                eol = "\n" if line.endswith("\n") else ""
+                lines[i] = f"{prefix} {json.dumps(value)}{eol}"
             rewritten = True
             break
     if not rewritten:  # defensive — tomllib parsed the key but the line-scan missed it
@@ -380,7 +392,7 @@ def correct_pin_value(path: str, key: str, value: str, *, reason: str) -> dict[s
 
 
 async def correct_own_pin_value(
-    pool: asyncpg.Pool, agent_id: str, key: str, value: str, *, reason: str,
+    pool: asyncpg.Pool, agent_id: str, key: str, value: str | None, *, reason: str,
     office_root: Path | None = None, workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     """THE SELF-SCOPED DOOR onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
@@ -396,7 +408,8 @@ async def correct_own_pin_value(
     Refuses on a caller holding no seat — a pin correction is a seat's own act, never
     performed on another's behalf and never inferred. `reason` stays required and non-empty;
     enforced by `correct_pin_value` itself, unchanged here. `office_root` exists only as a
-    test seam, same convention as `establish_office`.
+    test seam, same convention as `establish_office`. `value=None` unsets `key` (deletes the
+    line) across every copy this reaches — see `correct_pin_value`'s own docstring.
 
     THE SECOND COPY (ruling b30e2b38, the Jesus/Godel live specimen): `rebind_seat` writes
     its own courtesy `.osiris` at the seat's ANCHOR path — a second, independent pin copy

@@ -667,6 +667,39 @@ def test_correct_pin_value_preserves_other_lines_and_comments(tmp_path: Path) ->
     assert 'project = "cultural-infrastructure"' in text
 
 
+def test_correct_pin_value_none_unsets_the_key_never_a_placeholder(tmp_path: Path) -> None:
+    """#199's mint-layer prerequisite (decision 24e0b761/commit cf201a9): found_seat/
+    mint_seat already learned a fabricated placeholder is worse than genuine absence at
+    MINT time — this is the same legal target state reachable at CORRECTION time, for a
+    seat that was minted before that fix and needs its project pin walked back to unset."""
+    office = tmp_path / "unsetoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "chad"\nseat = "khepri"\n')
+
+    out = correct_pin_value(str(office), "project", None,
+                            reason="#199: chad was a fabricated project, walking it back to unset")
+    assert out["written"] is True
+    assert out["old_value"] == "chad"
+    assert out["new_value"] is None
+    text = (office / ".osiris").read_text()
+    assert "project" not in text          # the LINE is gone, not rewritten to "" or "None"
+    assert 'seat = "khepri"' in text      # untouched, a different key
+
+
+def test_correct_pin_value_none_is_reversible_via_revert_pin_write(tmp_path: Path) -> None:
+    office = tmp_path / "unsetrevertoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "chad"\n')
+    original = (office / ".osiris").read_bytes()
+
+    correct_pin_value(str(office), "project", None, reason="#199")
+    assert "project" not in (office / ".osiris").read_text()
+
+    out = revert_pin_write(str(office))
+    assert out["reverted"] is True
+    assert (office / ".osiris").read_bytes() == original
+
+
 def test_correct_pin_value_is_reversible_via_revert_pin_write(tmp_path: Path) -> None:
     office = tmp_path / "revertcorrectoffice"
     office.mkdir()

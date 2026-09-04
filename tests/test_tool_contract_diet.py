@@ -1001,7 +1001,15 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # branches pydantic emits for Optional params are deliberately left alone — not the
 # same zero-risk shape, a strict client's validation could depend on them. -12.5% off
 # the whole tool-contract surface in one mechanical change, no docstring rewritten.
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# 114,770 -> 115,367 (sekhmet-orient-diet, 2026-09-04, rebased onto the title-strip
+# above): correct_pin_value's `value` widened str -> str | None so a caller can UNSET a
+# fabricated pin key (delete the line) instead of only ever rewriting it to another
+# string -- #199's mint-layer prerequisite for a transition verb walking a seat off an
+# old fabricated project value, decision 24e0b761/commit cf201a9's own law extended from
+# mint-time to correction-time. A real capability, not bloat: the anyOf-null schema
+# shape (deliberately NOT stripped by the title-strip above, per its own note) is the
+# honest cost of representing a legal "no value" the tool previously could not express.
+TOOL_CONTRACT_CEILING_CHARS = 115367
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
