@@ -2523,7 +2523,7 @@ async def wake_worker(
     returned once the marker is CONFIRMED landed as a submitted turn in the target's own
     transcript — a queued injection that hasn't (yet, or ever) been seen reports honestly
     as "queued", never as an effect nobody observed."""
-    from src.orchestrator.agents import house_of
+    from src.orchestrator.agents import project_of
     from src.orchestrator.seats import held_seat
 
     pool = actions.pool
@@ -2559,7 +2559,7 @@ async def wake_worker(
                           "this deployment has it disabled, so no knock was sent"}
     marker = _wake_marker(caller, caller_seat, (caller_held or {}).get("handle"))
     body = f"{marker}\n\n{message}"
-    res = await send_message(pool, from_agent=caller, from_project=await house_of(pool, caller),
+    res = await send_message(pool, from_agent=caller, from_project=await project_of(pool, caller),
                              to_agent=target_seat, body=body, grade="ask")
     d = await dispatch_dm(pool, addressee=res["to_agent"], msg_id=res["id"], sender=caller,
                           settings=settings, spawn=spawn, windows=windows, poke=poke,
@@ -3025,7 +3025,7 @@ async def launch_seat(
     unknown refusal, the one-shot `-p --resume` shape, the receipt's decision-naming
     discipline) — read it there, not here, if that is what you are looking for."""
     pool = actions.pool
-    from src.orchestrator.agents import house_of
+    from src.orchestrator.agents import project_of
     manager = manager or _manager_control
     windows = windows or _manager_windows
     spawn = spawn or _spawn_claude_bg
@@ -3266,7 +3266,7 @@ async def launch_seat(
     brief_id: int | None = None
     if message.strip():
         sent = await send_message(
-            pool, from_agent=caller, from_project=await house_of(pool, caller),
+            pool, from_agent=caller, from_project=await project_of(pool, caller),
             to_agent=target_seat, body=message, grade="ask")
         brief_id = sent.get("id")
 
@@ -3327,7 +3327,7 @@ async def resume_seat(
     now (`status: refused-nothing-to-resume`) — that session was never this seat's, and
     resume has nothing left to fall through TO; the caller wants `launch` instead."""
     pool = actions.pool
-    from src.orchestrator.agents import _generation, house_of
+    from src.orchestrator.agents import _generation, project_of
     from src.orchestrator.seats import seat_receipt
     agents_json = agents_json or _claude_agents_json
     resume_spawn = resume_spawn or _spawn_claude
@@ -3398,7 +3398,7 @@ async def resume_seat(
     resume_brief_id: int | None = None
     if message.strip():
         sent = await send_message(
-            pool, from_agent=caller, from_project=await house_of(pool, caller),
+            pool, from_agent=caller, from_project=await project_of(pool, caller),
             to_agent=target_seat, body=message, grade="ask")
         resume_brief_id = sent.get("id")
     await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
