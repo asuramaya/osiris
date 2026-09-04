@@ -1017,6 +1017,65 @@ async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter
     assert spawned == [str(real_tree)]
 
 
+async def test_cmd_launch_harness_refuses_a_fabricated_project_when_the_charter_disagrees(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE OPERATOR'S OWN BUG (2026-09-04, verbatim: "chad spawned in project chad and
+    jesus in project jesus ... it should not be their problem"), task #204's launch-
+    identity fix (Thoth msg 6935/6949, decision 68fba2e4): the seat's own OFFICE pin
+    still names the fabricated handle-project (the mint-time stamp this whole ruling
+    exists to stop trusting) while the charter now names the real repo — refused BY
+    NAME with transition_seat_project as the remedy, never spawned into the
+    fabrication. Negative control: once the pin agrees with the charter, launch
+    proceeds and the boot prompt names the resolved project explicitly."""
+    import io
+    from contextlib import redirect_stderr
+
+    from src.orchestrator.charter import set_charter
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "fabprojseat"\n')
+
+    await actions.create_or_find_object("SoftwareProject", "repo:realrepo", "test")
+    seat = await ensure_seat(actions, house="osiris", handle="fabprojseat",
+                             anchor_cwd=str(office), source="test")
+    charter = await set_charter(actions, seat["seat_id"], ["realrepo"], actor="operator")
+    assert not charter.get("rejected"), charter
+
+    async def _spawn_unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the project check refuses first")
+
+    async def _empty_roster(*a: Any, **k: Any) -> list[dict[str, Any]]:
+        return []  # the twin check runs before this refusal, unconditionally — never live
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("fabprojseat", model=None, pool=actions.pool,
+                               spawn=_spawn_unreachable, agents_json=_empty_roster)
+    assert out == 1
+    err = buf.getvalue()
+    assert "realrepo" in err and "fabprojseat" in err
+    assert "transition-seat-project" in err
+
+    # NEGATIVE CONTROL: pin corrected to agree with the charter — launch proceeds and the
+    # boot prompt names the resolved project explicitly ("working <project>").
+    (office / ".osiris").write_text('project = "realrepo"\n')
+    prompts: list[str] = []
+
+    async def _spawn(cwd: str, *, prompt: str, **k: Any) -> None:
+        prompts.append(prompt)
+
+    async def _empty(*a: Any, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    with redirect_stderr(io.StringIO()):
+        await cmd_launch("fabprojseat", model=None, pool=actions.pool,
+                         spawn=_spawn, agents_json=_empty)
+    assert len(prompts) == 1
+    assert "working realrepo" in prompts[0]
+
+
 async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:
