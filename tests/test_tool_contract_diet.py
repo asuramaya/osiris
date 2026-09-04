@@ -815,7 +815,19 @@ def _tool_chars(t: Any) -> int:
 # Six old names all kept as hidden deprecated aliases. pause_seat/vacate_seat and save_
 # composition/run_composition/list_compositions were both scanned and DECLINED as false
 # families (incoherent return contracts) — see decision 6fe4305c for the full reasoning.
-TOOL_CONTRACT_EXPECTED_COUNT = 106
+# 106 -> 83 (2026-09-04, Imhotep, #202 SEAT DISPATCHER, operator ruling f9182ad7, Thoth
+# dispatch 7039, migration plan decision 620bdb32): the first object-type dispatcher.
+# 24 old standalone names (mint_seat, stop, walk_in, pause_seat, vacate_seat, rebind_
+# seat, bind_seat_tree, seat_edge, charter, charter_for, heal_seat_anchor, heal_seat_
+# transcript, transition_seat_project, resync_seat_house, sweep_seat_disk, rename_seat,
+# set_seat_attended, reissue_office, establish_office, invalidate_works_in, reconcile_
+# seat_identity, correct_house, correct_pin_value, revert_own_pin_write) fold into one
+# door's 26+ actions, all kept as hidden deprecated aliases. -24 old names, +1 new
+# (seat) = -23 net. launch/resume/wake/wake_preflight ALSO dispatch here but stay
+# separately named, not aliases, no count change from those four. retire_object and
+# self-scoped retire() deliberately stay OUT (see the migration plan's own correction
+# addendum) — retire_object still serves kind='project'/'agent'.
+TOOL_CONTRACT_EXPECTED_COUNT = 83
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1087,7 +1099,24 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # in one place) cost slightly more schema than the six standalone tools they replaced.
 # Measured exact (113,259), not estimated. A genuine tradeoff of the dispatch-shape rule,
 # not padding: fewer tools at a small per-tool prose cost.
-TOOL_CONTRACT_CEILING_CHARS = 113259
+# 113,259 -> 99,443 (2026-09-04, Imhotep, #202 SEAT DISPATCHER, operator ruling
+# f9182ad7, Thoth dispatch 7039, migration plan decision 620bdb32): -13,816 net despite
+# seat's own hand-built oneOf schema costing 10,828 chars alone (the single most
+# expensive tool in the whole contract, ahead of record_decision's 3,753) — removing 24
+# standalone tools' own full schemas from the live listing outweighs it by a wide
+# margin. Measured exact (99,443), not estimated. The largest single-commit reduction
+# this ratchet has recorded, and the first real evidence for the operator's own
+# thesis ("the shrink seems like the correct direction... vs 100 individual tools").
+# 99,443 -> 101,729 (2026-09-04, Imhotep, same commit, price-minimizer follow-through):
+# +2,286 for two real-client-validation gates SEAT_INPUT_SCHEMA was still missing —
+# `additionalProperties: False` on every one of the 30 branches (a real client's typo
+# or cross-action param now gets rejected client-side, not silently accepted) and the
+# subagent-attribution trio (subagent_id/subagent_type/session_anchor) added to the six
+# branches (stop/walk_in/pause/launch/resume/wake) whose own standalone predecessors
+# genuinely accepted them — without this, a real client validating against the schema
+# would have wrongly rejected a legitimate attributed call. seat now costs 13,114 chars,
+# a real cost of correctness, not padding. Measured exact (101,729).
+TOOL_CONTRACT_CEILING_CHARS = 101729
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

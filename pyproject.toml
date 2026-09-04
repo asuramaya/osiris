@@ -42,6 +42,10 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-PyYAML>=6.0",
+    "jsonschema>=4.20",  # already a transitive dep of mcp itself (the same library its
+                         # own server/client use to validate a tool's inputSchema) —
+                         # declared directly here since test_seat_dispatcher_schema.py
+                         # imports it explicitly (#202 seat dispatcher, msg 7039)
 ]
 
 [tool.ruff]
