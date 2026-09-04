@@ -567,6 +567,26 @@ async def test_mcp_resolve_thread_dispatches_a_list_ref_to_the_bulk_door(
     assert out["count"] == 2
 
 
+async def test_mcp_resolve_thread_list_ref_defaults_to_dry_run(actions: Actions) -> None:
+    """A real incident (decision 38755abe): a caller intending a dry-run QA preview on a
+    list ref omitted `dry_run` and it executed for real, because the MCP wrapper's own
+    signature defaulted dry_run=False while capture.resolve_threads_bulk's default is
+    True — a silent override of the safer default. Fixed: the wrapper now defaults True
+    too, so omitting dry_run on a list ref previews, never writes."""
+    from src import mcp_server as srv
+
+    t1 = await open_thread(actions, "mcp bulk-close default-dry-run specimen")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.resolve_thread([str(t1)], because="default dry-run test")
+    finally:
+        srv._pool = saved_pool
+    assert out["ok"] is True
+    assert out["dry_run"] is True
+    assert await _thread_resolved_in_test_helper(actions, t1) is None
+
+
 async def test_resolve_by_a_different_agent_than_the_opener_still_supersedes(
     actions: Actions,
 ) -> None:

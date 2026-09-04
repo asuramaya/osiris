@@ -7122,7 +7122,7 @@ async def open_thread(
 @mcp.tool()
 async def resolve_thread(
     ref: str | list[str], because: str | None = None, artifact: str | None = None,
-    dry_run: bool = False,
+    dry_run: bool = True,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
@@ -7138,8 +7138,9 @@ async def resolve_thread(
     wins, earlier reasoning stays in history. The receipt names it when this happens.
 
     A LIST of refs closes a BATCH (#203, decision 880ffe79): `because` becomes mandatory,
-    `dry_run=True` previews without writing, and the whole batch refuses if any ref does
-    not resolve to exactly one thread. See `capture.resolve_threads_bulk`."""
+    `dry_run` DEFAULTS TRUE and previews without writing — pass `dry_run=False` explicitly
+    to actually close the batch — and the whole batch refuses if any ref does not resolve
+    to exactly one thread. See `capture.resolve_threads_bulk`."""
     if isinstance(ref, list):
         pool = await _pool_get()
         return await capture.resolve_threads_bulk(
