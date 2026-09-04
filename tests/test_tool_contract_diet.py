@@ -970,7 +970,11 @@ TOOL_CONTRACT_CEILING_CHARS = 133746
 # genuinely dense contract (refusal-condition lists, per-parameter disambiguation) that
 # Thoth's own msg 6886 named as correctly kept whole. Diminishing returns confirmed a
 # second time; reported honestly rather than padded toward the number.
-TOOL_CONTRACT_CEILING_CHARS = 129145
+# 133,746 -> 133,906 (sekhmet-orient-diet, 2026-09-04): one opt-in param
+# (want_blind_spots on orient) adds inputSchema + a one-line docstring note — measured
+# to buy a 31.4% cut (1324 -> 908 bytes) on the seven-blind-spot fixture in
+# tests/test_receipt_diet.py, same trade as the prior raise above.
+TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
