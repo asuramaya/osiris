@@ -278,6 +278,10 @@ BINDING_VERBS = frozenset({
     # invalidate_works_in + correct_pin_value + set_charter, writes works_in/pin/
     # governs, a binding-mover by the same 6823 rule the seven above were added under.
     "transition_seat_project",
+    # `seat_edge` (#202 wave 3, Thoth dispatch 6987) — attach_seat/detach_seat folded
+    # into one door; still writes managed_by, same binding-mover status the two hidden
+    # aliases already carried.
+    "seat_edge",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -295,6 +299,9 @@ NO_CLI_EQUIVALENT = {
     "attach_seat": "not yet built — a real gap named by Khnum's lane-2 scoping (msg 6463): "
         "not on the jesus/chad reconciliation path his dispatch scoped him to.",
     "detach_seat": "not yet built — same scoping note as attach_seat.",
+    "seat_edge": "not yet built — the #202 wave-3 fold (msg 6987) of attach_seat/"
+        "detach_seat inherits the same CLI gap, unrenamed; not on any dispatch's own "
+        "scope to close.",
     "pause_seat": "not yet built — not on the jesus/chad path; not ruled out.",
     "vacate_seat": "not yet built — not on the jesus/chad path; not ruled out.",
     "retire_seat": "not yet built at the RAW CLI layer — already reachable indirectly via "
@@ -885,6 +892,10 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # into one door, all four kept as hidden deprecated aliases. Not a binding-mover
     # (coordinates over an arbitrary shared resource, never seat/project state).
     "lease": {"binding_verb": False, "parameterizes": "acquire_lease"},
+    # seat_edge(action=...) — #202 wave 3: attach_seat/detach_seat folded into one
+    # door, both kept as hidden deprecated aliases. Writes managed_by — a binding-
+    # mover, same as the two hidden aliases already were in BINDING_VERBS above.
+    "seat_edge": {"binding_verb": True, "parameterizes": "attach_seat"},
 }
 
 

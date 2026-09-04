@@ -5423,48 +5423,75 @@ async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
     return await _peer_ledger(pool, seat_a, seat_b)
 
 
-@mcp.tool()
-async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Invalidate an active managed_by edge — the toolkit hole named at thread fad0dc14
-    (unpeer heals peer_of, nothing healed managed_by before this). A COORDINATOR IS DEFINED
-    BY HAVING NO MANAGER (derive_role: 'worker' if a manager exists else 'coordinator'), so
-    this REMOVES the edge, never repoints it — a fresh manager, if one is ever assigned, is
-    a separate act.
-
-    Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active managed_by
-    edge out of it (nothing to detach)."""
+async def _seat_edge_impl(
+    action: str, worker: str, *, manager: str | None, because: str, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `seat_edge` and its two hidden single-purpose aliases (attach_
+    seat/detach_seat) — one code path, three names. Each action below is copied
+    verbatim from what was that alias's own top-level function body before the fold."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — detaching a seat from its manager is a deliberate "
+        return {"error": f"mount first — {action}ing a seat's manager is a deliberate "
                          "act on the record", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import detach_seat as _detach
-    return await _detach(Actions(await _pool_get()), seat, because=because,
-                         actor=ident.agent_id)
+    if action == "detach":
+        from src.orchestrator.seats import detach_seat as _detach
+        return await _detach(Actions(await _pool_get()), worker, because=because,
+                             actor=ident.agent_id)
+    if action == "attach":
+        assert manager is not None
+        from src.orchestrator.seats import attach_seat as _attach
+        return await _attach(Actions(await _pool_get()), worker, manager, evidence=because,
+                             actor=ident.agent_id)
+    return {"error": f"unknown action {action!r} — one of attach/detach"}
 
 
 @mcp.tool()
+async def seat_edge(
+    action: str, worker: str, manager: str | None = None, because: str = "",
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Create or remove a managed_by edge — one door, two `action`s, never a third.
+
+    `action='attach'` — create it. `manager` required. managed_by is created in exactly
+    two other places in the whole codebase (mint_seat's birth-time edge, fold_seat's
+    re-point) — every seat that predates mint_seat, was adopted, or lost its edge to a
+    detach nobody re-pointed has had no path back except raw SQL until this. Refuses
+    LOUDLY on: blank `because` (the evidence); either seat unknown/inactive; `worker ==
+    manager`; or an already-active managed_by edge out of `worker` — this is a CREATE,
+    never a silent repoint (`action='detach'` first, then attach, if that's what's
+    meant).
+
+    `action='detach'` — remove it. A COORDINATOR IS DEFINED BY HAVING NO MANAGER
+    (derive_role: 'worker' if a manager exists else 'coordinator'), so this REMOVES the
+    edge, never repoints it — a fresh manager, if one is ever assigned, is a separate
+    act. Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active
+    managed_by edge out of it (nothing to detach). `manager` is ignored for this
+    action."""
+    return await _seat_edge_impl(action, worker, manager=manager, because=because, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat_edge(action='detach')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
+async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat_edge(action='detach')."""
+    return await _seat_edge_impl("detach", seat, manager=None, because=because, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat_edge(action='attach')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def attach_seat(
     worker: str, manager: str, evidence: str, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Create a managed_by edge — the mirror of detach_seat, and the other half of the
-    toolkit hole named at thread fad0dc14. managed_by is created in exactly two places in
-    the whole codebase (mint_seat's birth-time edge, fold_seat's re-point) — every seat
-    that predates mint_seat, was adopted, or lost its edge to a detach nobody re-pointed
-    has had no path back except raw SQL until this. Confirmed live: 30 active seats, 23
-    with no managed_by edge at all — an absent edge raises no error, it just renders as an
-    empty chart, which is why nobody noticed you could not attach even after #99 built the
-    way to detach.
-
-    Refuses LOUDLY on: blank `evidence`; either seat unknown/inactive; `worker == manager`;
-    or an already-active managed_by edge out of `worker` — this is a CREATE, never a silent
-    repoint (detach_seat first, then attach, if that's what's meant)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — attaching a seat to a manager is a deliberate "
-                         "act on the record", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import attach_seat as _attach
-    return await _attach(Actions(await _pool_get()), worker, manager, evidence=evidence,
-                         actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat_edge(action='attach')."""
+    return await _seat_edge_impl("attach", worker, manager=manager, because=evidence, ctx=ctx)
 
 
 @mcp.tool()
