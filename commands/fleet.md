@@ -1,0 +1,1 @@
+Show the fleet at a glance. Call the osiris MCP tool `fleet` and render its `tree` verbatim in a code block (● live / ○ historical), then call `fleet_digest` with hours=24 and give ONE summary line from its `summary` (agents, unresolved, swapped, conversations, operator_unread) plus the danger map rows if any agents are swapped. Compact — no tables beyond the tree, no advice.
