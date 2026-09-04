@@ -648,11 +648,36 @@ async def automount(
     job_dir = job_dir or _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
     bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
+    # THE INHERITED-JOB_DIR LEAK (Thoth's ruling on Chad/aad6603a, msg 6852 item (a)): a
+    # hand-run `claude --resume` from ANOTHER agent's own shell carries THAT agent's
+    # CLAUDE_JOB_DIR — `bound` above then finds the LEAKER's own registry row, not this
+    # session's, and every downstream door trusts it as this session's identity. The same
+    # acts-first rule record_session_anchor's write side already applies
+    # (`_transcript_contradicts`) belongs here too: THIS session's own transcript (found
+    # by its own session_id, independent of the possibly-inherited job_dir) is the one
+    # honest witness. A newest ACT naming a different lineage than `bound.agent_id`
+    # refuses the binding outright — never greets as the leaker, falls through to the
+    # next door exactly as if no row had ever been found.
+    bound_contradiction: str | None = None
+    if bound is not None:
+        bound_contradiction = await asyncio.to_thread(
+            _transcript_contradicts, session_id, bound.agent_id, root)
+        if bound_contradiction:
+            bound = None
     # THE FORK (7cbc2f98): no row for this anchor does NOT mean a new mind. `--fork-session
     # --resume` gives one running conversation a brand-new session id, and the transcript it
     # carries REWRITES every record's sessionId to the new one, so the fork swears it is newborn.
     # Ask its record uuids who its parent is before we mint it a second identity.
     forked = await fork_seat(actions, job_dir=job_dir, root=root) if bound is None else None
+    # THE FORK'S OWN REGISTRY HOP (the bridged-resume branch inside fork_seat, same leak
+    # class): when the archaeology finds no transcript at all, fork_seat adopts whoever
+    # mounts.resumed_anchor's OWN job_dir points at — the identical inherited-job_dir
+    # vector, one hop later. Same acts-first check, same refusal.
+    if forked is not None:
+        forked_contradiction = await asyncio.to_thread(
+            _transcript_contradicts, session_id, forked, root)
+        if forked_contradiction:
+            forked = None
     # THE MANUAL COMPACT (Jesus's own incident, thread 6835): a fresh session id whose
     # first line's logicalParentUuid names the PRIOR session's own last message — not a
     # fork (no shared uuid, a genuinely new file), so ask compact_seat before falling

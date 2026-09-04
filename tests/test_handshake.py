@@ -1651,3 +1651,35 @@ async def test_automount_refuses_a_compact_when_act_and_assertion_disagree(
                           source="startup")
     assert out["agent"] != "agent:7c7c0004"          # refused, never picked the act's side
     assert out["agent"] != "agent:deadbeef"          # refused, never picked the assertion
+
+
+async def test_automount_refuses_an_inherited_job_dirs_leaked_binding(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE INHERITED-JOB_DIR LEAK (Chad's own incident, Thoth's ruling msg 6852 item (a)):
+    a hand-run `claude --resume` from ANOTHER agent's own shell carries that agent's
+    CLAUDE_JOB_DIR — `find_mount` then hands back the LEAKER's own registry row for THIS
+    session's anchor. Before trusting it, the whisper must read THIS session's own
+    transcript: a newest ACT naming a different lineage refuses the binding outright,
+    falling through rather than greeting the window as the leaker."""
+    from src.orchestrator.mounts import save_mount
+
+    await actions.create_or_find_object("Agent", "agent:leaker01", "agent:leaker01")
+    await actions.create_or_find_object("Agent", "agent:0wner002", "agent:0wner002")
+    job_dir = str(tmp_path / "jobs" / SID[:8])
+    # THE LEAK: a registry row for THIS session's own anchor, but naming the OTHER
+    # lineage (exactly what an inherited CLAUDE_JOB_DIR produces).
+    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:leaker01",
+                     project="leakerhouse", cwd="/w/owner-repo", model=None,
+                     session_key=None)
+    # THE TRUTH: this session's OWN transcript, whose newest act names the real owner.
+    root = tmp_path / "projects"
+    proj = root / "-w-owner-repo"
+    proj.mkdir(parents=True)
+    (proj / f"{SID}.jsonl").write_text(
+        json.dumps({"type": "user",
+                   "text": '{"agent":"agent:0wner002","project":"ownerhouse"}'}) + "\n")
+
+    out = await automount(actions, session_id=SID, cwd="/w/owner-repo",
+                          actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+    assert out["agent"] != "agent:leaker01"          # refused the leaked binding
