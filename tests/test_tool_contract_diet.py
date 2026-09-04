@@ -808,7 +808,14 @@ def _tool_chars(t: Any) -> int:
 # 117 -> 114 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): resolve_thread/
 # annotate_thread/correct_thread_summary/reclassify_thread folded into thread_action
 # (action=...) — one door, four hidden deprecated aliases forwarding to it.
-TOOL_CONTRACT_EXPECTED_COUNT = 109
+# 109 -> 106 (2026-09-04, Imhotep, #202 wave 4, Thoth dispatch 7034, decision 6fe4305c):
+# three more folds, same dispatch-shape rule: stale_current_flags/repair_stale_current_
+# flags -> current_flags(action=...); fold_candidates/resolve_fold -> fold_review
+# (action=...); get_thread_list/get_decision_list -> get_object_list(object_type=...).
+# Six old names all kept as hidden deprecated aliases. pause_seat/vacate_seat and save_
+# composition/run_composition/list_compositions were both scanned and DECLINED as false
+# families (incoherent return contracts) — see decision 6fe4305c for the full reasoning.
+TOOL_CONTRACT_EXPECTED_COUNT = 106
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1069,8 +1076,18 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # family-folds): the same stale-ancestor merge artifact Imhotep named above landed AGAIN
 # on this merge (both branches' deltas, ancestor value kept); re-measured against the
 # merged tree: 113,162 = wave 3's 111,966 + resync_seat_house (Sekhmet, ruling 68fba2e4's
-# repair door) + list_unfiled_threads' carry. Pinned to the measurement, not summed.
-TOOL_CONTRACT_CEILING_CHARS = 113162
+# repair door) + list_unfiled_threads' carry. Pinned to the measurement, not summed. THIS
+# IS THE THIRD OCCURRENCE of the stale-post-merge-ceiling class (see the 202,871 catch
+# above and the 116,137 catch further down this same file) — a merge driver repeatedly
+# declining to reconcile two branches' own deltas and leaving the ceiling at a shared
+# ancestor's stale value; not a new bug, the same recurring one, worth naming again.
+# 113,162 -> 113,259 (2026-09-04, Imhotep, #202 wave 4, Thoth dispatch 7034, decision
+# 6fe4305c): +97 net despite -3 tools — three folds' merged docstrings (each one now
+# carries both branches' own prose, e.g. current_flags documents both inspect and repair
+# in one place) cost slightly more schema than the six standalone tools they replaced.
+# Measured exact (113,259), not estimated. A genuine tradeoff of the dispatch-shape rule,
+# not padding: fewer tools at a small per-tool prose cost.
+TOOL_CONTRACT_CEILING_CHARS = 113259
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
