@@ -221,11 +221,10 @@ BINDING_VERBS = frozenset({
     # definition; 'adjacent to' is not a category." merge/unmerge were the STALE-LIST
     # finding named in that same ruling — both already have CLI doors and simply were
     # never added to the population that credits them for it.
-    # correct_agent_house + reconcile_merge were HIDDEN by retirement wave 1 (f38e135,
-    # zero traffic) — still callable as deprecated aliases, dropped from list_tools().
-    # This gate reads list_tools(), so they read as "stale entry" until Seshat's
-    # d232cb3 (raw-ToolManager existence check) lands; re-add them then, not before.
-    "correct_house", "retire", "retire_agent",
+    # correct_agent_house + reconcile_merge are HIDDEN (retirement wave 1, f38e135) but
+    # still callable deprecated aliases — Seshat's d232cb3 reads existence off the raw
+    # registry, so they stay in the gated population rather than misreading as stale.
+    "correct_house", "correct_agent_house", "reconcile_merge", "retire", "retire_agent",
     "fleet_reconcile", "heal_seat_transcript", "merge", "unmerge",
     # `resume` (task #199 lane 3C, ruling 41a41437) — a brand-new tool tonight, already
     # declared in NEW_TOOL_DECLARATIONS below, not grandfathered in the snapshot.
@@ -281,6 +280,11 @@ NO_CLI_EQUIVALENT = {
         "marks THIS mounted session retired off the caller's own identity — a raw "
         "terminal has no mounted session of that kind to retire. retire_agent (the "
         "third-party, explicit-target form) is the real gap; see its own entry below.",
+    "correct_agent_house": "not yet built — a real gap, found by the #199 lane 3B audit "
+        "rather than any prior scoping; not ruled out. Hidden from list_tools() since "
+        "retirement wave 1 (zero traffic), still callable.",
+    "reconcile_merge": "not yet built — a real gap, found by the #199 lane 3B audit; "
+        "not ruled out. Hidden from list_tools() since retirement wave 1, still callable.",
     "retire_agent": "not yet built — a real gap, found by the #199 lane 3B audit; "
         "not ruled out.",
     "fleet_reconcile": "not yet built — a real gap, found by the #199 lane 3B audit; "
