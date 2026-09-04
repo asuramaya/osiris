@@ -1907,7 +1907,8 @@ async def mount(
     session_anchor: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, subagent_transcript: str | None = None,
     transcript_path: str | None = None, bridge_session_id: str | None = None,
-    verbose: bool = False, ctx: Context | None = None
+    verbose: bool = False, want_co_agents: bool = False, want_held_work: bool = False,
+    ctx: Context | None = None
 ) -> dict[str, Any]:
     """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
     Pass your working directory `cwd` (names your project). For `job_dir`, pass a DURABLE
@@ -1925,7 +1926,10 @@ async def mount(
     `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they rebind
     a revisited tab or background-job fork to its existing soul instead of minting a
     stranger, and `transcript_path` also feeds model resolution directly when the job_dir
-    search would land on a stub or nothing."""
+    search would land on a stub or nothing.
+
+    `want_co_agents`/`want_held_work` (default False) return the full lists; by default only
+    `co_agents_count`/`held_work_count` are carried (context-bloat priority, msg 6870)."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2311,8 +2315,10 @@ async def mount(
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            **({"model": ident.model} if ident.model else
               {"model_unresolved": "model unresolved — pass model= explicitly"}),
-           **({"co_agents": co_agents} if co_agents else {}),
-           **({"held_work": held_work} if held_work else {}),
+           **({"co_agents": co_agents} if co_agents and want_co_agents else
+              {"co_agents_count": len(co_agents)} if co_agents else {}),
+           **({"held_work": held_work} if held_work and want_held_work else
+              {"held_work_count": len(held_work)} if held_work else {}),
            # THE VISITOR GATE'S OWN CONFESSION (#48 piece 2): a resolved anchor that matched
            # no lineage got a registry row and NOTHING ELSE above — `agent` above is a
            # bookkeeping handle, never a minted identity, and the receipt must say so
@@ -3790,6 +3796,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                threads: list[str] | None = None,
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
+               want_prior_art: bool = False, want_listener: bool = False,
                ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. `to`=<project> is a BROADCAST, the group chat ('operator' reaches
     the human's desk); `to_agent`=<agent:id> is a private DM (ids from orient()/fleet). `to`
@@ -3806,7 +3813,10 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     `threads` transfers ownership of existing Thread(s) to a DM's addressee in the same
     act (exact ref only, never inferred from `body`) — `threads_stamped` names what moved.
     A DM or graded 'ask' runs the same prior-art search record_decision does, surfaced on
-    both your receipt and the delivered message."""
+    both your receipt and the delivered message.
+
+    `want_prior_art`/`want_listener` (default False) return the full prior_art list and the
+    listener block; by default a one-line `prior_art_flag` only (context-bloat priority, 6870)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
@@ -3865,8 +3875,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         # and the head. `redirect` (mailbox.send_message's own new field), when present,
         # names the divergence explicitly instead of leaving it to be inferred by comparing
         # `dm_to` against `seat`/`lineage_head` by hand.
-        out["listener"] = await mounts.agent_liveness(
-            pool, res.get("lineage_head") or res["to_agent"])
+        if want_listener:
+            out["listener"] = await mounts.agent_liveness(
+                pool, res.get("lineage_head") or res["to_agent"])
         if res.get("redirect"):
             out["redirect"] = res["redirect"]
         # THE IMMEDIATE LEG (the background-session adapter, ruling 6c4d0b62): a DM's wake
@@ -3897,9 +3908,10 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         dest = res["to"]
         last_seen = await mounts.project_last_seen(pool, dest)
         out["to"] = dest
-        out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
-                           - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
-                           "last_seen": last_seen}
+        if want_listener:
+            out["listener"] = {"live": bool(last_seen and datetime.now(UTC)
+                               - datetime.fromisoformat(last_seen) < timedelta(minutes=15)),
+                               "last_seen": last_seen}
         # THE IMMEDIATE LEG, extended from the DM lane to broadcasts (task #151, ruling
         # 60bc15db in the mail layer): a broadcast used to file and return a bare "sent" —
         # a caller reasonably read that as delivered when it meant filed, and the only push
@@ -3941,11 +3953,13 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # with this resend's own, possibly-empty, recomputation — moot anyway since we never
     # searched for a dedup'd resend in the first place... but the gate stays explicit).
     if prior and not res["dedup"]:
-        out["prior_art"] = prior
+        if want_prior_art:
+            out["prior_art"] = prior
         top = prior[0]
         out["prior_art_flag"] = (
             f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
-            "worth reading before dispatching/answering as if it's new")
+            "worth reading before dispatching/answering as if it's new"
+            + ("" if want_prior_art else " (pass want_prior_art=True for the full list)"))
         try:
             await pool.execute(
                 "UPDATE fleet_messages SET prior_art=$1 WHERE id=$2", prior, res["id"])
@@ -4115,13 +4129,17 @@ async def stop(target: str | None = None, reason: str = "",
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
+                want_prior_art: bool = False,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you. Defaults to your mounted project; pass
     `project` for another's ('operator' reads the human's desk). Reading LEASES a
     message, doesn't consume it — settle each one via send(reply_to=<id>) or ack=[ids],
     or it redelivers after the lease (at-least-once). `peek=True` reads without leasing.
     Check after mount()/compaction. THE OPERATOR'S DESK IS DIFFERENT: glance with peek
-    only, settle only at the human's explicit word."""
+    only, settle only at the human's explicit word.
+
+    `want_prior_art=True` returns each message's full prior_art list; by default only a
+    `prior_art_count` (context-bloat priority, msg 6870)."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -4162,6 +4180,11 @@ async def inbox(project: str | None = None, peek: bool = False,
         return {"project": OPERATOR_ADDR, **desk, **ack_keys}
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
+    if not want_prior_art:
+        for m in msgs:
+            pa = m.pop("prior_art", None)
+            if pa:
+                m["prior_art_count"] = len(pa)
     flight = await in_flight(pool, proj, reader_agent=reader,
                              lease_secs=st.osiris_mail_lease_secs)
     if not peek:  # what THIS call just leased is ours, not someone else's in-flight

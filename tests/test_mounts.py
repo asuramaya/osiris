@@ -291,7 +291,7 @@ async def test_mount_surfaces_held_work_for_the_project(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.mount(cwd=str(office), job_dir=job_dir)
+        out = await srv.mount(cwd=str(office), job_dir=job_dir, want_held_work=True)
     finally:
         srv._pool = saved_pool
     assert "held_work" in out

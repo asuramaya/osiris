@@ -113,12 +113,14 @@ async def test_mount_terse_keeps_co_agents_note_in_both_modes(
     srv._pool = actions.pool
     try:
         terse = await srv.mount(cwd=str(tmp_path / proj),
-                                job_dir=str(tmp_path / "jobs" / "trscme01"))
+                                job_dir=str(tmp_path / "jobs" / "trscme01"),
+                                want_co_agents=True)
         assert terse["co_agents"]["live"][0]["agent"] == "agent:trscsib1"
         assert terse["co_agents"]["note"].startswith("1 other LIVE agent(s)")
 
         verbose = await srv.mount(cwd=str(tmp_path / proj),
-                                  job_dir=str(tmp_path / "jobs" / "trscme02"), verbose=True)
+                                  job_dir=str(tmp_path / "jobs" / "trscme02"), verbose=True,
+                                  want_co_agents=True)
         assert verbose["co_agents"]["note"].startswith("2 other LIVE agent(s)")
         assert verbose["co_agents"].keys() == terse["co_agents"].keys()
     finally:

@@ -956,6 +956,11 @@ TOOL_CONTRACT_CEILING_CHARS = 133436
 # #199 lane 2, retirement wave 2 — see the count changelog above): uningested_trees
 # hidden, same commit as the docstring diet per Thoth's own instruction.
 TOOL_CONTRACT_CEILING_CHARS = 132810
+# 132,810 -> 133,746 (merge of sekhmet-receipt-diet onto imhotep-docstring-diet, 2026-09-04):
+# four opt-in params (want_prior_art/want_listener on send, want_prior_art on inbox,
+# want_co_agents/want_held_work on mount) add inputSchema + a one-line note each — the
+# params exist to SHRINK receipts; +936 schema chars buys ~32% off every send/inbox call.
+TOOL_CONTRACT_CEILING_CHARS = 133746
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
