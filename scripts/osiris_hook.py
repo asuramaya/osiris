@@ -703,12 +703,12 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
             bits.append(
                 f"You were MINTED as this lineage's successor — ancestor {out['minted']}. "
                 f"The newest open obligation your project owns is [{succ['thread_id']}] "
-                f"{str(succ.get('thread_summary') or '')[:120]} — read it, then orient()."
+                f"{str(succ.get('thread_summary') or '')[:120]} — read it."
             )
         else:
             bits.append(f"You were MINTED as this lineage's successor — ancestor "
-                        f"{out['minted']}; your first act: read orient()'s open threads for "
-                        "the succession note.")
+                        f"{out['minted']}; your first act: check your project's open "
+                        "threads for the succession note.")
     if out.get("swap"):
         if "[operator /model]" in str(out["swap"]):
             bits.append(f"Model seam on your lineage: {out['swap']} — the OPERATOR's own "
@@ -739,11 +739,7 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
         bits.append("While your lineage slept: "
                     + (f"{who_away} acted in your project's name; " if who_away else "")
                     + (f"{n} conversation{'s' if n != 1 else ''} moved; " if n else "")
-                    + "orient() shows the fold.")
-    if out.get("obligations"):
-        obl = out["obligations"]
-        listed = "; ".join(f"[{o['id']}] {o['summary'][:100]}" for o in obl)
-        bits.append(f"Top of your project's wall: {listed} (orient() for the rest).")
+                    + "the graph carries the fold.")
     if out.get("seat"):
         bits.append(f"You answer to the name {out['seat']} — the fleet can DM you as "
                     f"send(to_agent='{out['seat'].split(' ')[0]}').")
@@ -754,18 +750,14 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     if out.get("thin"):
         bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet) — but the "
                     "FLEET'S memory is not: search() and consult_canon() reach the operator's "
-                    "whole corpus across every project. An empty orient() here means a new "
-                    "project, never an empty graph.")
+                    "whole corpus across every project. An empty project graph here means a "
+                    "new project, never an empty fleet.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
-    if out.get("job_dir") and anchored:
-        bits.append(f"YOUR DURABLE ANCHOR is job_dir='{out['job_dir']}'. If you ever need to "
-                    f"mount again (e.g. after an MCP reconnect), call "
-                    f"mount(cwd=..., job_dir='{out['job_dir']}') — NOT $CLAUDE_JOB_DIR (empty "
-                    "here); that re-attaches you instead of splitting your identity.")
     bits.append("RITUAL: write back AS YOU GO — record_decision / open_thread "
                 "(kind='obligation') / resolve_thread. A session can die at any instant; "
-                "what is not in the graph does not exist. orient() for bearings.")
+                "what is not in the graph does not exist. get_status() for a quick check, "
+                "orient() for the deep briefing.")
     return " ".join(bits)
 
 

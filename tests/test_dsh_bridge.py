@@ -245,8 +245,8 @@ async def test_automount_route_renders_the_whisper_for_the_bridge(
     # session is told it is already mounted, not ordered to mount first
     assert "ALREADY MOUNTED" in text
     assert f"agent:{UUID_A[:8]}" in text
-    # the durable anchor travels, so a bounce is recoverable by hand
-    assert job_dir in text
+    # the durable-anchor mount-again mechanics paragraph moved to orient()'s own output
+    # (context-bloat diet, decision e1fbde18, Thoth msg 6884) — no longer pushed here
 
 
 async def test_automount_route_without_render_leaves_the_whisper_out(
