@@ -799,7 +799,12 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 115
+TOOL_CONTRACT_EXPECTED_COUNT = 116
+# 115 -> 116 (2026-09-04, Imhotep, task #199's core-verbs lane, Thoth dispatch 6901):
+# transition_seat_project — the self-service TRANSITION verb (invalidate_works_in +
+# correct_pin_value + set_charter, one composed act, MCP + CLI same commit) — see the
+# char ceiling's own changelog below for the full mechanism and why rebind_seat is
+# deliberately excluded.
 # 116 -> 115 (2026-09-04, Imhotep, task #199 lane 2, retirement wave 2, Thoth dispatch
 # 6872/6876, operator-accepted null result): uningested_trees hidden — zero MCP traffic,
 # no CLI/daemon/slash bypass, and its automated companion uningested_trees_alarm_tick
@@ -980,6 +985,22 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # whole-run on any bad ref) plus a new `dry_run` param — a genuinely new capability (the
 # operator's own "closing 1000+ obligations" mechanism), not padding. Docstring trimmed
 # once under the category rule before raising.
+# 129,145 -> 131,200 (2026-09-04, Imhotep, task #199's core-verbs lane, Thoth dispatch
+# 6901): +2,055 chars for transition_seat_project, the new self-service TRANSITION
+# verb — a genuine new tool, not a diet regression. A real cost for closing the Jesus/
+# Chad specimen's own gap (no single verb folded works_in + pin + charter, and the
+# hand-run sequence is exactly what broke both seats' anchors and mail attribution
+# once already).
+
+# 131,200 -> 114,770 (2026-09-04, Imhotep, task #199's context-bloat priority, Thoth
+# dispatch 6886/6908, decision on the schema lever): BoundedMCP.list_tools now strips
+# every auto-generated, always-redundant JSON-Schema `title` key (497 occurrences
+# fleet-wide) from inputSchema/outputSchema before it reaches a model — the same seam
+# the deprecated-tool filter already lives in, mechanical, zero semantic risk (no
+# client reads `title`; the property KEY it duplicates is untouched). The anyOf/null
+# branches pydantic emits for Optional params are deliberately left alone — not the
+# same zero-risk shape, a strict client's validation could depend on them. -12.5% off
+# the whole tool-contract surface in one mechanical change, no docstring rewritten.
 TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
