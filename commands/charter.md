@@ -1,0 +1,7 @@
+Declare a seat's charter — composes existing verbs (osiris decisions 4a3858e9/87457dc1, operator ruling 1a5eaf98), never new orchestration. Parse `$ARGUMENTS`: `set <seat> --repos r1,r2 --because "..."` is the only shape. `--repos` is the WHOLE charter, replacing whatever was declared before, never an increment — the same law `set_charter`/`charter_for` already enforce; never call either with a partial list meaning "add these."
+
+Pick the underlying verb by WHO is calling and WHOM the target is (charter.py's own documented split — never conflate them into one call):
+- The seat declaring its OWN charter (the caller's own mounted seat IS `<seat>`) → composes the `charter` MCP tool (which itself calls the orchestrator's `set_charter`, self-scoped to the caller's own held seat).
+- A manager, or the operator ("every seat's ultimate manager"), declaring on ANOTHER seat's behalf → composes `charter_for`, which additionally requires `--because`.
+
+Never silently substitute a repo name that doesn't already resolve to a real SoftwareProject for one that looks close — `set_charter`'s own per-name refusal (`rejected`, with why) is the honest answer; surface it and let the caller ingest or confirm the repo first (`/project create`), then re-declare. The rest of a valid call still applies even when one name is rejected — report both the accepted set and the rejection, never treat one bad name as sinking the whole charter.

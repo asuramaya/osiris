@@ -1,0 +1,7 @@
+The end-of-context ritual — deposit everything this session knows into the graph before compaction, so nothing lives only in a context about to vanish.
+
+Call the osiris MCP tool `settle` with NO arguments first (SURFACE, read-only): it returns a one-call completeness verdict — your open obligations fleet-wide, whether a structured handoff marker exists yet, and, if you pass `repo_path=<your code repo, e.g. /home/asuramaya/code/osiris>`, any uncommitted git work. Don't check any of these by hand; that is exactly what settle does for you.
+
+Then ACCEPT your brain-dump, in the same or a follow-up call: pass `decisions`, `threads_open`, `threads_resolve` (each item a dict of that verb's own keyword args) — every ruling or decision made this session not yet recorded, every loose end as an obligation (kind='obligation'), every thread you actually closed. Put `is_handoff: true` on your STATE-OF-THE-BOARD decision so your successor's orient() finds it directly (get_status() is the cheap glance for routine bearings, but it carries no threads or decisions — this marker only surfaces through orient()'s full briefing) — a typed marker, never a summary they have to grep for.
+
+settle then CONFIRMS against the updated graph and returns `complete: true` only when nothing is left explicitly unwritten; if it isn't complete, it names what's missing — write that, and you are safe to compact. You supply only the judgment (what's worth carrying forward); settle does every mechanical check itself. Mount first if you are not mounted.
