@@ -1010,6 +1010,10 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # shape (deliberately NOT stripped by the title-strip above, per its own note) is the
 # honest cost of representing a legal "no value" the tool previously could not express.
 TOOL_CONTRACT_CEILING_CHARS = 115367
+# 115,367 -> 115,446 (merge of sekhmet-orient-diet, 2026-09-04): correct_pin_value's `value`
+# widened to str | None so a pin key can be UNSET (operator ruling 004cc8d8: homeless is legal);
+# +79 post-title-strip schema chars for the anyOf, no prose.
+TOOL_CONTRACT_CEILING_CHARS = 115446
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
