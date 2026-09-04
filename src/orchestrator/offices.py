@@ -447,15 +447,11 @@ async def correct_own_pin_value(
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
     if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             (Path(anchor_cwd) / ".osiris").is_file():
-        anchor_result = correct_pin_value(anchor_cwd, key, value, reason=reason)
-        result["anchor"] = anchor_result if anchor_result.get("error") else {
-            "path": anchor_result["path"], "corrected": True}
+        result["anchor"] = correct_pin_value(anchor_cwd, key, value, reason=reason)
         touched.add(_resolved(Path(anchor_cwd)))
     workspace = (workspace_root or (Path.home() / "code")) / handle
     if _resolved(workspace) not in touched and (workspace / ".osiris").is_file():
-        workspace_result = correct_pin_value(str(workspace), key, value, reason=reason)
-        result["workspace"] = workspace_result if workspace_result.get("error") else {
-            "path": workspace_result["path"], "corrected": True}
+        result["workspace"] = correct_pin_value(str(workspace), key, value, reason=reason)
     return result
 
 

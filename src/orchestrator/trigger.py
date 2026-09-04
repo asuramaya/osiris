@@ -3532,7 +3532,15 @@ async def stop_seat(
     A holder that misses THAT check falls back to the graph directly: any of this
     lineage's own `succession_chain` sessions, /proc-verified live in the census, is the
     same body wearing a different label — never declared `no-live-body` just because the
-    cache is stale."""
+    cache is stale.
+
+    RECORDS THE SESSION ANCHOR BEFORE THE KILL (Khnum's #201 acceptance finding b, Thoth
+    dispatch 6928): a clean-lineage holder — mounted once, never compacted — carries no
+    graph `session` property register_agent would otherwise stamp at a second mount, so
+    a plain SIGTERM used to leave resume() nothing to find (`refused-nothing-to-resume`
+    even though the body just died). Calls `handshake.record_session_anchor` on the
+    census-matched session id, ambient (never blocks or fails the kill on a ledger-write
+    error) — `session_anchor_recorded` on the receipt names whether it actually landed."""
     pool = actions.pool
     from src.orchestrator.mounts import registry_census
     from src.orchestrator.seats import held_seat, seat_receipt
@@ -3613,6 +3621,46 @@ async def stop_seat(
         return {"status": "no-live-body", "seat": target_seat, "holder": holder,
                 "detail": f"{holder} carries no harness/proc-confirmed live body right "
                           "now — nothing to signal (already dead, or never really live)"}
+    # THE SESSION ANCHOR, BEFORE THE KILL (Khnum's own #201 acceptance finding b, Thoth
+    # dispatch 6928): a plain SIGTERM used to leave NO graph session property for a
+    # clean-lineage holder — register_agent's own BIRTH-TIME WRITE (agents.py) skips the
+    # `session` assert on a `--bg` seat's FIRST-EVER mount, deliberately: `identity.
+    # session` falls back to the seat's stable anchor slug at that point, not a real
+    # session id yet, so writing it would plant a confident lie. The property is meant
+    # to get filled in LATER, by a heartbeat/live_succession mount or a fresh
+    # resolve_identity once the transcript exists — a body killed before that ever fires
+    # dies with the gap still open, and `_lineage_resume_candidate`'s own succession_
+    # chain walk (which reads exactly this `session` property, verified by reading both
+    # succession.py's query and _lineage_resume_candidate's own hop loop) finds nothing,
+    # reporting `refused-nothing-to-resume` on a lineage that never actually compacted.
+    #
+    # stop_seat is the one caller left holding GROUND TRUTH about which session this
+    # process actually was — registry_census's own /proc-confirmed match, not a guess —
+    # so this is the last point anything can still write it. Two writes, same session id,
+    # two different readers: the plain `session` property (register_agent's own shape,
+    # `_looks_like_a_real_session`-gated, truncated to 8 chars — what succession_chain/
+    # _lineage_resume_candidate actually read) closes THIS gap; record_session_anchor
+    # (the sid->soul ledger, handshake.py) closes the SIBLING gap for the session
+    # resume() eventually spawns, once IT mounts and needs to resolve its own identity
+    # from a sid the ledger's other lanes cannot re-derive alone.
+    from src.orchestrator.agents import _looks_like_a_real_session
+    from src.orchestrator.handshake import record_session_anchor
+    session_id = str((match or {}).get("session_id") or "")
+    session_anchor_recorded = False
+    if session_id:
+        try:
+            sid8 = session_id[:8]
+            if _looks_like_a_real_session(sid8):
+                now_sess = datetime.now(UTC)
+                holder_oid = await actions.create_or_find_object("Agent", holder, caller)
+                await actions.assert_property(
+                    holder_oid, "session", sid8, caller, now_sess, 0.9,
+                    evidence_class="direct_observation")
+            session_anchor_recorded = await record_session_anchor(
+                actions, agent_id=holder, session_id=session_id, actor=caller)
+        except Exception:  # noqa: BLE001 — ambient: a kill signal must never wait on, or
+            # be blocked by, a best-effort ledger write; reported False, never silent
+            session_anchor_recorded = False
     try:
         await kill(pid, job_dir_key)
     except ProcessLookupError:
@@ -3665,6 +3713,7 @@ async def stop_seat(
                                         else "manager"),
             **({"reason": reason} if reason else {}),
             "released_mounts": released_mounts,
+            "session_anchor_recorded": session_anchor_recorded,
             "detail": f"stop signal sent to {holder}'s live body (pid {pid}); "
                       f"{released_mounts} agent_mounts row(s) suspended — reachability "
                       "afterward is governed entirely by the SAME occupancy authority "
