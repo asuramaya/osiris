@@ -72,6 +72,10 @@ NO_MCP_EQUIVALENT = {
         "correct-agent-house's own entry above; annotate_thread carries meta="
         "{'deprecated': True} from the #202 wave-3 thread_action fold, still fully "
         "callable, its own CLI door untouched by the fold.",
+    "retire-agent": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; retire_agent carries meta="
+        "{'deprecated': True} from the #202 wave-3 retire_object fold, still fully "
+        "callable, its own CLI door untouched by the fold.",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -223,12 +227,16 @@ RENAMED_PARAMS = {
         "calls identity_heal.heal_seat_anchor_third_party directly, unchanged and "
         "unaffected by the MCP-layer consolidation; its own `seat` param maps to this "
         "same `seat_id`, not yet reconciled by name.",
-    ("retire-agent", "seat", "retire_agent", "agent_id"):
+    ("retire-agent", "seat", "retire_object", "target"):
         "the same agent reference, two names — same shape as charter-for/seat and "
         "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
         "for the same reason every other third-party-target repair door in this file "
-        "does — a human types a handle far more often than a raw agent:... id — while "
-        "the MCP tool keeps `agent_id`, its own long-standing name).",
+        "does — a human types a handle far more often than a raw agent:... id). Retargeted "
+        "from retire_agent to retire_object/target (#202 wave 3): retire_agent is now "
+        "hidden (meta={'deprecated': True}), the CLI door still calls agents.retire_agent "
+        "directly, unchanged and unaffected by the MCP-layer fold — same reasoning as "
+        "heal-seat-anchor's own entry above, this comparison just needs a LIVE mcp name "
+        "to check itself against.",
     ("heal-seat-transcript", "seat", "heal_seat_transcript", "handle"):
         "the same seat reference, two names — the CLI positional is named `seat` to "
         "match every other third-party-target door in this file; the MCP tool's own "
@@ -282,6 +290,10 @@ BINDING_VERBS = frozenset({
     # into one door; still writes managed_by, same binding-mover status the two hidden
     # aliases already carried.
     "seat_edge",
+    # `retire_object` (#202 wave 3, Thoth dispatch 6987) — retire_seat/retire_project/
+    # retire_agent folded into one door; flips objects.status the same way each of the
+    # three hidden aliases already did.
+    "retire_object",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -322,6 +334,10 @@ NO_CLI_EQUIVALENT = {
         "(seat reconciliation only); a real gap, not ruled out.",
     "rename_project": "not yet built — same scoping note as create_project.",
     "retire_project": "not yet built — same scoping note as create_project.",
+    "retire_object": "not yet built — the #202 wave-3 fold (msg 6987) of retire_seat/"
+        "retire_project/retire_agent inherits the same CLI gap two of the three "
+        "already carried (retire_agent's own CLI door stays a direct third-party "
+        "act, untouched by the fold, not routed through this new door).",
     "fork_project": "not yet built — same scoping note as create_project.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
@@ -896,6 +912,11 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # door, both kept as hidden deprecated aliases. Writes managed_by — a binding-
     # mover, same as the two hidden aliases already were in BINDING_VERBS above.
     "seat_edge": {"binding_verb": True, "parameterizes": "attach_seat"},
+    # retire_object(kind=...) — #202 wave 3: retire_seat/retire_project/retire_agent
+    # folded into one door, all three kept as hidden deprecated aliases. self-scoped
+    # retire() and retire_assertion deliberately excluded (see the wave-3 proposal,
+    # decision 1ddf8e1c) — different auth shape / genuinely unrelated param shape.
+    "retire_object": {"binding_verb": True, "parameterizes": "retire_seat"},
 }
 
 

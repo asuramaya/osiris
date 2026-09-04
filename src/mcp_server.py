@@ -5038,20 +5038,78 @@ async def revert_own_pin_write(ctx: Context | None = None) -> dict[str, Any]:
     return await _revert_own_pin_write(pool, ident.agent_id)
 
 
-@mcp.tool()
-async def retire_seat(seat_id: str, reason: str = "",
-                      ctx: Context | None = None) -> dict[str, Any]:
-    """Mark a Seat permanently CLOSED — a genuinely dead role, no successor, no merge
-    target. DISTINCT from retire() (that one retires a live agent's own session/turn;
-    this retires the ROLE ITSELF). Refuses on an unknown or already-inactive seat, or an
-    ACTIVE holder — transfer or let it vacate first."""
+async def _retire_object_impl(
+    kind: str, target: str, *, because: str, override_live: bool, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `retire_object` and its three hidden single-purpose aliases
+    (retire_seat/retire_project/retire_agent) — one code path, four names. Each kind
+    below is copied verbatim from what was that alias's own top-level function body
+    before the fold. Deliberately does NOT cover self-scoped `retire()` (no target
+    param, different auth shape entirely) or `retire_assertion` (a genuinely unrelated
+    5-field shape, not a target+reason act) — see the wave-3 proposal (decision
+    1ddf8e1c) for why those two stay out."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — retiring a seat is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.seats import retire_seat as _retire_seat
-    return await _retire_seat(Actions(await _pool_get()), seat_id, reason=reason,
-                              actor=ident.agent_id)
+        return {"error": f"mount first — retiring {'a' if kind != 'agent' else 'an'} "
+                         f"{kind} is a deliberate act on the record", "why": _anchorless(ctx)}
+    if kind == "seat":
+        from src.orchestrator.seats import retire_seat as _retire_seat
+        return await _retire_seat(Actions(await _pool_get()), target, reason=because,
+                                  actor=ident.agent_id)
+    if kind == "project":
+        from src.orchestrator.projects import retire_project as _retire_project
+        return await _retire_project(Actions(await _pool_get()), project=target,
+                                     actor=ident.agent_id, because=because)
+    if kind == "agent":
+        from src.orchestrator.agents import retire_agent as _retire_agent
+        return await _retire_agent(Actions(await _pool_get()), agent_id=target,
+                                   actor=ident.agent_id, because=because,
+                                   override_live=override_live)
+    return {"error": f"unknown kind {kind!r} — one of seat/project/agent"}
+
+
+@mcp.tool()
+async def retire_object(
+    kind: str, target: str, because: str = "", override_live: bool = False,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Third-party retirement of a named Seat/SoftwareProject/Agent — one door, three
+    `kind`s, never a fourth. DISTINCT from self-scoped `retire()` (no target param,
+    retires the CALLING agent's own live session/turn) and from `retire_assertion` (a
+    cross-source supersede, an unrelated shape) — neither folds into this door.
+
+    `kind='seat'` — mark a Seat permanently CLOSED: a genuinely dead role, no successor,
+    no merge target. Refuses on an unknown or already-inactive seat, or an ACTIVE
+    holder — transfer or let it vacate first.
+
+    `kind='project'` — retire a dead SoftwareProject stub, status flip to 'retired' via
+    a compensating event, never a DELETE. `target` resolves to a SoftwareProject ONLY
+    (UUID, 8-char short id, canonical `repo:<name>`, or its `name` property) — never a
+    Seat or Agent of the same name. Refuses LOUDLY on: blank `because`; an unresolved or
+    already-non-active project; any commit recorded against it; any open Thread pointing
+    in; or a mount seen against it within the last 15 minutes.
+
+    `kind='agent'` — third-party Agent retirement. Stamps retired/retired_by/retired_
+    because, flips objects.status. Not self-scoped or manager-gated — any caller may
+    name any target; `actor` is attribution, not authority. ALWAYS releases the target's
+    held seat and mount rows on success. Refuses LOUDLY on: blank `because`; an unknown/
+    non-active agent; a target that reads LIVE (seen within 15 min) unless
+    `override_live=True`. `override_live` is ignored for the other two kinds."""
+    return await _retire_object_impl(
+        kind, target, because=because, override_live=override_live, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='seat')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
+async def retire_seat(seat_id: str, reason: str = "",
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='seat')."""
+    return await _retire_object_impl(
+        "seat", seat_id, because=reason, override_live=False, ctx=ctx)
 
 
 @mcp.tool()
@@ -5110,26 +5168,17 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
                                   actor=ident.agent_id, because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='project')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def retire_project(project: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Retire a dead SoftwareProject stub (msg 1675, the stub cull) — status flip to
-    'retired' via a compensating event, never a DELETE. `project` resolves to a
-    SoftwareProject ONLY (UUID, 8-char short id, canonical `repo:<name>`, or its `name`
-    property) — never a Seat or Agent of the same name, even for a name like 'seshat' or
-    'ra' that also happens to be a seat's handle.
-
-    Refuses LOUDLY on: blank `because`; an unresolved or already-non-active project; any
-    commit recorded against it; any open Thread pointing in (`in_repo`, status='active');
-    or a mount seen against it within the last 15 minutes (live signal — this verb never
-    evicts a project actually in use)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — retiring a project is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
-    from src.orchestrator.projects import retire_project as _retire_project
-    return await _retire_project(Actions(await _pool_get()), project=project,
-                                 actor=ident.agent_id, because=because)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='project')."""
+    return await _retire_object_impl(
+        "project", project, because=because, override_live=False, ctx=ctx)
 
 
 @mcp.tool()
@@ -5622,25 +5671,17 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
                                       actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "retire_object(kind='agent')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Third-party retirement — complements self-scoped retire() (no target param).
-    Stamps retired/retired_by/retired_because, flips objects.status. Not self-scoped or
-    manager-gated — any caller may name any target; `actor` is attribution, not
-    authority.
-
-    ALWAYS releases the target's held seat and mount rows on success. Refuses LOUDLY on:
-    blank `because`; an unknown/non-active agent; a target that reads LIVE (seen within
-    15 min) unless `override_live=True`."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — retiring an agent is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
-    from src.orchestrator.agents import retire_agent as _retire_agent
-    return await _retire_agent(Actions(await _pool_get()), agent_id=agent_id,
-                               actor=ident.agent_id, because=because,
-                               override_live=override_live)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    retire_object(kind='agent')."""
+    return await _retire_object_impl(
+        "agent", agent_id, because=because, override_live=override_live, ctx=ctx)
 
 
 @mcp.tool(meta={

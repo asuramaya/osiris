@@ -799,7 +799,9 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 110
+TOOL_CONTRACT_EXPECTED_COUNT = 108
+# 110 -> 108 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): retire_seat/
+# retire_project/retire_agent folded into retire_object(kind=...) (-3, +1 new tool).
 # 111 -> 110 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): attach_seat/
 # detach_seat folded into seat_edge(action=...).
 # 114 -> 111 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): acquire_lease/
@@ -1052,6 +1054,11 @@ TOOL_CONTRACT_CEILING_CHARS = 112621
 # seat/detach_seat folded into seat_edge(action=...), both kept as hidden deprecated
 # aliases. No CLI door for either name before or after (NO_CLI_EQUIVALENT retargeted).
 TOOL_CONTRACT_CEILING_CHARS = 112241
+# 112,241 -> 111,966 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): retire_
+# seat/retire_project/retire_agent folded into retire_object(kind=...), all three kept
+# as hidden deprecated aliases. Self-scoped retire() and retire_assertion deliberately
+# excluded (decision 1ddf8e1c) — different auth shape / unrelated param shape.
+TOOL_CONTRACT_CEILING_CHARS = 111966
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
