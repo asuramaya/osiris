@@ -57,6 +57,17 @@ NO_MCP_EQUIVALENT = {
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
+    "correct-agent-house": "NOT actually MCP-less — correct_agent_house is hidden from "
+        "`list_tools()` by the deprecated-alias mechanism (meta={'deprecated': True}, "
+        "retirement wave 1, zero traffic at the time) but stays fully callable, same "
+        "shape as heal_seat_anchor_third_party's own hidden alias. _mcp_tools() reads "
+        "the FILTERED listing (what a model actually sees), which is right for the "
+        "forward param-shape check but blind to a hidden-but-real tool's existence — "
+        "named here rather than left as a false 'no MCP tool at all' (#204: the CLI "
+        "door built for the #199 lane 3B audit's own real gap).",
+    "reconcile-merge": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry directly above; reconcile_merge carries the "
+        "identical deprecated meta from the same retirement wave (#204).",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -152,6 +163,10 @@ CLI_ONLY_PARAMS = {
     ("transition-seat-project", "apply"): "the SAME dry-run/apply concept as MCP's "
         "`dry_run` below, INVERTED and renamed to match this house's --apply repair "
         "convention, same declared split as heal-seat-anchor's own entry above.",
+    ("heal-seat-transcript", "apply"): "the SAME dry-run/apply concept as MCP's `dry_run` "
+        "below, INVERTED and renamed — identical shape to heal-seat-anchor's own entry "
+        "above, same reasoning (#204: the CLI door built for the #199 lane 3B audit's "
+        "original specimen).",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -166,6 +181,10 @@ MCP_ONLY_PARAMS = {
     ("transition_seat_project", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
         "above) is the same concept, inverted and renamed to match this house's --apply "
         "repair convention rather than the MCP tools' own dry_run=True default.",
+    ("heal_seat_transcript", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
+        "above) is the same concept, inverted and renamed to match this house's --apply "
+        "repair convention rather than the MCP tools' own dry_run=True default — "
+        "identical shape to heal_seat_anchor's own entry above.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -200,6 +219,16 @@ RENAMED_PARAMS = {
         "calls identity_heal.heal_seat_anchor_third_party directly, unchanged and "
         "unaffected by the MCP-layer consolidation; its own `seat` param maps to this "
         "same `seat_id`, not yet reconciled by name.",
+    ("retire-agent", "seat", "retire_agent", "agent_id"):
+        "the same agent reference, two names — same shape as charter-for/seat and "
+        "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
+        "for the same reason every other third-party-target repair door in this file "
+        "does — a human types a handle far more often than a raw agent:... id — while "
+        "the MCP tool keeps `agent_id`, its own long-standing name).",
+    ("heal-seat-transcript", "seat", "heal_seat_transcript", "handle"):
+        "the same seat reference, two names — the CLI positional is named `seat` to "
+        "match every other third-party-target door in this file; the MCP tool's own "
+        "param is `handle`, unchanged (#204).",
 }
 
 # LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
@@ -291,25 +320,19 @@ NO_CLI_EQUIVALENT = {
     "correct_house": "self-scoped by design (same shape as charter above): it resolves "
         "the target seat from the CALLING agent's own mounted identity — a raw terminal "
         "holds no such identity to be self about. correct_agent_house (the third-party, "
-        "explicit-target form) is the real gap; see its own entry below.",
+        "explicit-target form) now has its own CLI door (#204); see NO_MCP_EQUIVALENT "
+        "for why it still reads as a declared exemption rather than a plain match.",
     "retire": "self-scoped by design (same shape as charter/correct_house above): it "
         "marks THIS mounted session retired off the caller's own identity — a raw "
         "terminal has no mounted session of that kind to retire. retire_agent (the "
-        "third-party, explicit-target form) is the real gap; see its own entry below.",
-    "correct_agent_house": "not yet built — a real gap, found by the #199 lane 3B audit "
-        "rather than any prior scoping; not ruled out. Hidden from list_tools() since "
-        "retirement wave 1 (zero traffic), still callable.",
-    "reconcile_merge": "not yet built — a real gap, found by the #199 lane 3B audit; "
-        "not ruled out. Hidden from list_tools() since retirement wave 1, still callable.",
-    "retire_agent": "not yet built — a real gap, found by the #199 lane 3B audit; "
-        "not ruled out.",
-    "fleet_reconcile": "not yet built — a real gap, found by the #199 lane 3B audit; "
-        "not ruled out.",
-    "heal_seat_transcript": "not yet built — the ORIGINAL specimen this whole lane "
-        "exists to prevent recurring (task #199, tonight): shipped with no CLI door and "
-        "no declaration anywhere, silently, because it was never added to the "
-        "population this gate walks. Declared now, still not built — a real gap named "
-        "honestly rather than hidden a second time.",
+        "third-party, explicit-target form) now has its own CLI door (#204).",
+    # correct_agent_house, reconcile_merge, retire_agent, fleet_reconcile,
+    # heal_seat_transcript: ALL FIVE BUILT (#204, the #199 lane 3B audit's own gaps) —
+    # correct-agent-house, reconcile-merge, retire-agent, fleet-reconcile,
+    # heal-seat-transcript. The first two still carry a NO_MCP_EQUIVALENT entry (their
+    # MCP twin is real but hidden from list_tools() by the deprecated-alias mechanism);
+    # retire-agent and heal-seat-transcript carry RENAMED_PARAMS/CLI_ONLY_PARAMS entries
+    # for their own seat/agent_id and apply/dry_run naming — see those tables.
 }
 
 
@@ -1013,12 +1036,18 @@ async def test_every_slash_command_reference_names_a_real_live_verb() -> None:
                     "this test walks lives outside the repo by design (decision a34a9850); "
                     "nothing to check where it doesn't exist")
     mcp = await _mcp_tools()
+    # #204: a slash doc may deliberately name a HIDDEN-but-real tool (the deprecated-alias
+    # mechanism, e.g. correct_agent_house/reconcile_merge — retirement wave 1, zero traffic
+    # at the time, still fully callable) — same blind spot _find_missing_cli_doors's own
+    # `all_registered` parameter already dodges for the CLI-door gate; check existence
+    # against the UNFILTERED registry, not `_mcp_tools()`'s own list_tools()-filtered dict.
+    registered = await _mcp_registered_names()
     cli = _cli_commands()
     problems: list[str] = []
     for name, text in files.items():
         mcp_refs, cli_refs = _slash_command_references(text)
         for ref in sorted(mcp_refs):
-            if ref not in mcp:
+            if ref not in mcp and ref not in registered:
                 problems.append(
                     f"{name}.md references `{ref}` as an MCP tool — no such live tool "
                     f"(renamed, retired, or a typo)")

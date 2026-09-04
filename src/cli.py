@@ -3099,6 +3099,241 @@ async def cmd_heal_seat_anchor(
     return 0
 
 
+async def _resolve_target_agent(actions: Any, handle_or_agent: str) -> str | None:
+    """Handle or raw agent id -> a real, existing agent id — the same fallback shape
+    cmd_correct_pin_value already uses (#204: shared here since three new doors below need
+    the identical resolution and a terminal has no mounted identity to be self-scoped
+    about, so all of them take an EXPLICIT target)."""
+    from src.orchestrator.agents import resolve_handle
+
+    agent_id = await resolve_handle(actions, handle_or_agent)
+    if agent_id is not None:
+        return agent_id
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+        handle_or_agent)
+    return handle_or_agent if exists else None
+
+
+async def cmd_correct_agent_house(
+    handle_or_agent: str, *, project: str | None = None, seat_generation: int | None = None,
+    actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris correct-agent-house <agent> [--project P] [--seat-generation N] [--actor W]
+    — the console-script door onto orchestrator.agents.correct_agent_house, the SAME
+    function the correct_agent_house MCP tool wraps (#204, the #199 lane 3B audit's
+    real gap). UNLIKE correct_house (self-scoped), NOT self-scoped — the target need not
+    be the caller, so this takes an EXPLICIT target, resolved the same handle-or-raw-id
+    way correct-pin-value's own console door does."""
+    from src.actions.core import Actions
+    from src.orchestrator.agents import correct_agent_house as _correct_agent_house
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:correct-agent-house")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris correct-agent-house: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        actions = Actions(pool)
+        agent_id = await _resolve_target_agent(actions, handle_or_agent)
+        if agent_id is None:
+            print(f"osiris correct-agent-house: refused — no such claimed seat or live "
+                  f"agent: {handle_or_agent!r}", file=sys.stderr)
+            return 1
+        out = await _correct_agent_house(actions, agent_id=agent_id, project=project,
+                                         seat_generation=seat_generation, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris correct-agent-house: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"corrected {agent_id}: {out}")
+    return 0
+
+
+async def cmd_reconcile_merge(
+    dupe: str, into: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris reconcile-merge <dupe> <into> [--actor W] — the console-script door onto
+    orchestrator.merge.reconcile_merge, the SAME function the reconcile_merge MCP tool
+    wraps (#204). Repairs the estate a partial first fold left stranded on an
+    ALREADY-MERGED dupe — never re-performs the merge itself (that's `merge`'s job)."""
+    from src.actions.core import Actions
+    from src.orchestrator.merge import reconcile_merge as _reconcile_merge
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:reconcile-merge")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris reconcile-merge: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _reconcile_merge(Actions(pool), dupe=dupe, into=into, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris reconcile-merge: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"reconciled {dupe} -> {into}: {out}")
+    return 0
+
+
+async def cmd_retire_agent(
+    handle_or_agent: str, because: str, *, override_live: bool = False, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris retire-agent <agent> --because <reason> [--override-live] [--actor W] — the
+    console-script door onto orchestrator.agents.retire_agent, the SAME function the
+    retire_agent MCP tool wraps (#204). Third-party retirement, complementing the
+    self-scoped `retire` (a raw terminal has no mounted session of its own to retire, so
+    this always names an EXPLICIT target). ALWAYS releases the target's held seat and
+    mount rows on success; refuses on a target seen live within 15 min unless
+    --override-live."""
+    from src.actions.core import Actions
+    from src.orchestrator.agents import retire_agent as _retire_agent
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:retire-agent")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris retire-agent: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        actions = Actions(pool)
+        agent_id = await _resolve_target_agent(actions, handle_or_agent)
+        if agent_id is None:
+            print(f"osiris retire-agent: refused — no such claimed seat or live agent: "
+                  f"{handle_or_agent!r}", file=sys.stderr)
+            return 1
+        out = await _retire_agent(actions, agent_id=agent_id, actor=actor, because=because,
+                                  override_live=override_live)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris retire-agent: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"retired {agent_id}: {out}")
+    return 0
+
+
+async def cmd_fleet_reconcile(
+    *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris fleet-reconcile [--execute] [--actor W] — the console-script door onto
+    orchestrator.fleet_reconcile.reconcile_execute, the SAME function the fleet_reconcile
+    MCP tool wraps (#204). Dry run is the default (returns the plan, writes nothing);
+    --execute performs it, re-reading the tray fresh immediately before acting."""
+    from src.actions.core import Actions
+    from src.orchestrator.fleet_reconcile import reconcile_execute
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:fleet-reconcile")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris fleet-reconcile: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await reconcile_execute(Actions(pool), actor=actor, execute=execute)
+    finally:
+        if owns_pool:
+            await pool.close()
+    verb = "executed" if execute else "planned (dry run — pass --execute to write)"
+    print(f"fleet-reconcile {verb}: {out}")
+    return 0
+
+
+async def cmd_heal_seat_transcript(
+    handle: str, source_paths: list[str], *, apply: bool = False, because: str = "",
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris heal-seat-transcript <handle> <source_paths...> [--because R] [--apply] —
+    the console-script door onto orchestrator.transcript_splice.heal_seat_transcript, the
+    SAME function the heal_seat_transcript MCP tool wraps (#204: THE ORIGINAL specimen
+    this whole lane exists to prevent recurring — it shipped with no CLI door at all).
+    `--apply` is required to actually write, matching every other repair verb in this
+    house; dry_run reports clean/refused per pair and where the result would land."""
+    from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:heal-seat-transcript")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris heal-seat-transcript: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _heal(pool, handle, source_paths, dry_run=not apply, because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris heal-seat-transcript: refused — {out['error']}", file=sys.stderr)
+        return 1
+    if out.get("dry_run"):
+        print(f"would heal (dry run — pass --apply to write): {out}")
+    else:
+        print(f"healed: {out}")
+    return 0
+
+
 # --- mint-seat -----------------------------------------------------------------------------------
 
 def _context_house(house: str | None) -> str | None:
@@ -3456,8 +3691,10 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   read the record       desk, show
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project, rebind-seat, correct-pin-value,
-                        heal-seat-anchor, transition-seat-project
-  operate               deploy, migrate, seed, bootstrap, retention, rematerialize
+                        heal-seat-anchor, transition-seat-project, correct-agent-house,
+                        reconcile-merge, retire-agent, heal-seat-transcript
+  operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
+                        fleet-reconcile
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -3855,6 +4092,96 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="actually write — default is a dry-run plan, same "
                                    "convention as every other repair verb in this house")
 
+    p_correct_agent_house = sub.add_parser(
+        "correct-agent-house", description=_d(
+            "heal an already-polluted agent's own project/seat_generation stamps — the "
+            "same orchestrator.agents.correct_agent_house the MCP tool wraps, given an "
+            "explicit target (a terminal has no mounted identity to be self-scoped "
+            "about; correct-house's own self-scoped act has no console door for that "
+            "reason)"),
+        epilog="example: osiris correct-agent-house Jesus --project godel")
+    p_correct_agent_house.add_argument("seat", help="a claimed handle or a raw agent id "
+                                       "— the agent whose stamps this corrects")
+    p_correct_agent_house.add_argument("--project", default=None,
+                                       help="the corrected project stamp")
+    p_correct_agent_house.add_argument("--seat-generation", type=int, default=None,
+                                       dest="seat_generation",
+                                       help="the corrected seat_generation stamp")
+    p_correct_agent_house.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                       help=f"who is performing this correction — "
+                                            f"defaults to {_CONSOLE_ACTOR!r}")
+
+    p_reconcile_merge = sub.add_parser(
+        "reconcile-merge", description=_d(
+            "repair the estate a partial first fold left stranded on an ALREADY-MERGED "
+            "dupe — the same orchestrator.merge.reconcile_merge the MCP tool wraps. "
+            "Never re-performs the merge itself (that's `merge`'s job); unmerge-then-"
+            "remerge is not a substitute"),
+        epilog="example: osiris reconcile-merge agent:deadbeef agent:c0ffee")
+    p_reconcile_merge.add_argument("dupe", help="the already-merged duplicate — type is "
+                                   "read off its own form, same rule as merge/unmerge")
+    p_reconcile_merge.add_argument("into", help="the surviving target")
+    p_reconcile_merge.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                   help=f"who is performing this reconcile — defaults to "
+                                        f"{_CONSOLE_ACTOR!r}")
+
+    p_retire_agent = sub.add_parser(
+        "retire-agent", description=_d(
+            "third-party agent retirement — the same orchestrator.agents.retire_agent "
+            "the MCP tool wraps, complementing the self-scoped `retire` (no target "
+            "param, a raw terminal has no mounted session of its own to retire). "
+            "ALWAYS releases the target's held seat and mount rows on success"),
+        epilog="example: osiris retire-agent agent:deadbeef --because "
+            "\"lineage superseded, stale test agent\"")
+    p_retire_agent.add_argument("seat", help="a claimed handle or a raw agent id — the "
+                                "agent to retire")
+    p_retire_agent.add_argument("--because", required=True,
+                                help="why this agent is being retired — never optional, "
+                                     "same rule as the MCP tool")
+    p_retire_agent.add_argument("--override-live", action="store_true",
+                                dest="override_live",
+                                help="retire even if the target reads LIVE (seen within "
+                                     "15 min) — refused otherwise")
+    p_retire_agent.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                help=f"who is performing this retirement — defaults to "
+                                     f"{_CONSOLE_ACTOR!r}")
+
+    p_fleet_reconcile = sub.add_parser(
+        "fleet-reconcile", description=_d(
+            "THE REAPER — buckets stale/anonymous agent mounts and acts on the fold-"
+            "eligible ones, the same orchestrator.fleet_reconcile.reconcile_execute the "
+            "MCP tool wraps. Dry run is the default: returns the plan, writes nothing"),
+        epilog="example: osiris fleet-reconcile\n"
+            "example, to actually write: osiris fleet-reconcile --execute")
+    p_fleet_reconcile.add_argument("--execute", action="store_true",
+                                   help="act on the plan rather than just report it — "
+                                        "default is dry-run")
+    p_fleet_reconcile.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                   help=f"who is performing this reconcile — defaults to "
+                                        f"{_CONSOLE_ACTOR!r}")
+
+    p_heal_transcript = sub.add_parser(
+        "heal-seat-transcript", description=_d(
+            "splice a seat's session, fragmented across multiple project slugs by a "
+            "mid-session cwd move, back into ONE file at its own office slug — the same "
+            "orchestrator.transcript_splice.heal_seat_transcript the MCP tool wraps. "
+            "Never touches a Seat row, anchor_cwd, or any source transcript"),
+        epilog="example: osiris heal-seat-transcript Jesus "
+            "/path/to/fragment1.jsonl /path/to/fragment2.jsonl --apply --because "
+            "\"mid-session cwd move split the transcript\"")
+    p_heal_transcript.add_argument("seat", help="the seat whose office the spliced "
+                                   "result lands at")
+    p_heal_transcript.add_argument("source_paths", nargs="+",
+                                   help="the original fragments, IN CHAIN ORDER (oldest "
+                                        "first) — needs at least two")
+    p_heal_transcript.add_argument("--because", default="",
+                                   help="why this splice is being run — required to "
+                                        "--apply, same rule as the MCP tool")
+    p_heal_transcript.add_argument("--apply", action="store_true",
+                                   help="actually write — default is a dry-run report, "
+                                        "same convention as every other repair verb in "
+                                        "this house")
+
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
             "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
@@ -4041,6 +4368,20 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_transition_seat_project(
             args.seat, because=args.because, fabricated_project=args.fabricated_project,
             real_project=args.real_project, repos=transition_repos, apply=args.apply))
+    if args.command == "correct-agent-house":
+        return asyncio.run(cmd_correct_agent_house(
+            args.seat, project=args.project, seat_generation=args.seat_generation,
+            actor=args.actor))
+    if args.command == "reconcile-merge":
+        return asyncio.run(cmd_reconcile_merge(args.dupe, args.into, actor=args.actor))
+    if args.command == "retire-agent":
+        return asyncio.run(cmd_retire_agent(
+            args.seat, args.because, override_live=args.override_live, actor=args.actor))
+    if args.command == "fleet-reconcile":
+        return asyncio.run(cmd_fleet_reconcile(execute=args.execute, actor=args.actor))
+    if args.command == "heal-seat-transcript":
+        return asyncio.run(cmd_heal_seat_transcript(
+            args.seat, args.source_paths, apply=args.apply, because=args.because))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))
