@@ -538,20 +538,17 @@ def _whisper_base(**extra: Any) -> dict[str, Any]:
     return out
 
 
-def test_render_whisper_inlines_the_fold_with_top_obligations() -> None:
+def test_render_whisper_drops_the_top_of_wall_reprint() -> None:
+    """Context-bloat diet (decision e1fbde18, Thoth msg 6884): orient() already shows the
+    wall, so the whisper no longer re-prints it — even when the payload carries
+    obligations, the key is simply ignored."""
     out = _whisper_base(obligations=[
         {"id": "12a58447", "summary": "HANDOFF — Thoth L to LI", "kind": "obligation"},
         {"id": "9dc3ce8b", "summary": "READ-SIDE ADOPTION OF THE VISIT CLASS"},
     ])
     text = osiris_hook.render_whisper(out, cwd="/home/asuramaya/.osiris/seats/seshat", env_job="")
-    assert "Top of your project's wall" in text
-    assert "[12a58447] HANDOFF — Thoth L to LI" in text
-    assert "orient() for the rest" in text
-
-
-def test_render_whisper_no_obligations_means_no_wall_line() -> None:
-    text = osiris_hook.render_whisper(_whisper_base(), cwd="/x", env_job="")
     assert "Top of your project's wall" not in text
+    assert "[12a58447]" not in text
 
 
 def test_render_whisper_hedges_an_unconfirmed_swap() -> None:
@@ -578,7 +575,7 @@ def test_render_whisper_succession_pointer_by_query() -> None:
 def test_render_whisper_succession_falls_back_with_no_query_result() -> None:
     out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii")
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
-    assert "read orient()'s open threads for the succession note" in text
+    assert "check your project's open threads for the succession note" in text
 
 
 def test_render_whisper_identity_anchor_unconditional_no_mint_needed() -> None:
@@ -630,6 +627,26 @@ def test_render_whisper_named_seat_names_the_dm_address() -> None:
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
     assert "You answer to the name Seshat XXXVIII" in text
     assert "send(to_agent='Seshat')" in text
+
+
+def test_render_whisper_collapses_to_one_orient_pointer_naming_get_status_first() -> None:
+    """Context-bloat diet (decision e1fbde18, Thoth msg 6884): the whisper used to point
+    at orient() up to 6 separate times across its own optional bits; now exactly one
+    remains, in the closing ritual line, and it names get_status() — the cheap door — before
+    orient() — the deep one — so a fresh session doesn't default to the 59K-char briefing."""
+    out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii", away={"threads": ["t1"]})
+    text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
+    assert text.count("orient()") == 1
+    assert "get_status() for a quick check, orient() for the deep briefing" in text
+
+
+def test_render_whisper_drops_the_durable_anchor_mechanics_paragraph() -> None:
+    """Same diet: the mount-again mechanics paragraph moves to orient()'s own output,
+    read on demand rather than pushed on every boot."""
+    out = _whisper_base(job_dir="/home/asuramaya/.claude/jobs/abc12345")
+    text = osiris_hook.render_whisper(
+        out, cwd="/x", env_job="/home/asuramaya/.claude/jobs/abc12345")
+    assert "YOUR DURABLE ANCHOR" not in text
 
 
 # --- _cmd_whisper: the request body must carry the env-derived attach/bridge/spawn fields
