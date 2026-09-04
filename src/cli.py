@@ -815,13 +815,34 @@ async def _cmd_launch_harness(
     # handle/house all came off `seat_facts` above via `_resolve_launch_target`), not a
     # re-derivation for the fresh session to attempt through a fallible claim_name call.
     current_holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+
+    # RESOLVE PROJECT THE SAME WAY MOUNT WILL, BEFORE BINDING — THIS DOOR TOO (task #204's
+    # launch-identity fix, Thoth msg 6935/6949, decision 68fba2e4: "chad spawned in project
+    # chad"). Same refusal as trigger.launch_seat's own harness lane (shares
+    # _resolve_launch_project, not a second copy); a SEPARATE call site (this function's own
+    # docstring), independently vulnerable, independently fixed.
+    from src.orchestrator.trigger import _resolve_launch_project, _seat_lineage_ancestor
+
+    ancestor_for_resolve = (
+        await _seat_lineage_ancestor(pool, facts["seat_id"]) or current_holder)
+    resolution = await _resolve_launch_project(
+        pool, seat_id=facts["seat_id"], office=office, ancestor=ancestor_for_resolve)
+    if resolution["refuse"] is not None:
+        r = resolution["refuse"]
+        print(f"osiris launch: refused — {facts['handle']}'s charter names "
+              f"{r['charter_project']!r} but the project this launch would resolve is "
+              f"{r['resolved_project']!r}. Run `osiris transition-seat-project "
+              f"{facts['handle']} ...` first, then relaunch.", file=sys.stderr)
+        return 1
+    resolved_project = resolution["project"]
+
     bound = await _bind_before_spawn(
         Actions(pool), target_seat=facts["seat_id"], handle=facts["handle"],
         house=facts["house"], current_holder=current_holder, office=office,
-        anchor=anchor, source="operator")
+        anchor=anchor, source="operator", resolved_project=resolved_project)
     boot_prompt = _bg_boot_prompt_bound(
         office=office, anchor=anchor, handle=facts["handle"], agent=bound["agent"],
-        generation=bound["generation"])
+        generation=bound["generation"], resolved_project=resolved_project)
 
     try:
         await spawn(launch_cwd, name=name, model=resolved_model, prompt=boot_prompt)

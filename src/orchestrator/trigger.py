@@ -2668,6 +2668,7 @@ def _launch_anchor(seat_id: str) -> str:
 async def _bind_before_spawn(
     actions: Actions, *, target_seat: str, handle: str, house: str | None,
     current_holder: str | None, office: str, anchor: str, source: str,
+    resolved_project: str | None = None,
 ) -> dict[str, Any]:
     """PIECE 1 (Thoth dispatch, msg 6692, d161a156 one layer up): mint and bind the seat's
     next generation SERVER-SIDE, before the body exists — the identity `launch_seat` already
@@ -2715,6 +2716,16 @@ async def _bind_before_spawn(
     dispatch; this function does not re-derive it, on purpose, so it carries forward exactly
     whatever staleness already existed rather than silently fixing a different bug in passing.
 
+    `resolved_project` (task #204's launch-identity fix, Thoth msg 6935/6949, decision
+    68fba2e4): the caller's own PRE-COMPUTED `project_of()` resolution (pin -> charter ->
+    lineage_works_in, never house) — the exact fix for the operator's own "chad spawned in
+    project chad" specimen, where this function used to stamp the pre-registered
+    agent_mounts row's `project` column with `house` (the fabricated handle-named house for
+    a self-managed seat), which the spawned session's own automount() then re-attached
+    through UNCHANGED (never re-derived, by the pre-registration door's own design) — so the
+    whisper and statusline both showed the fabrication forever, not just at mint. Falls back
+    to `house` only when the caller has nothing resolved (never breaks an existing caller).
+
     THE PRE-REGISTRATION IS WHAT MAKES claim_name UNNECESSARY: `save_mount(..., alive=False)`
     seeds the launch anchor's own durable row BEFORE the process exists, so the spawned
     session's own `mount(cwd=office, job_dir=anchor)` call re-attaches through the EXISTING
@@ -2757,7 +2768,8 @@ async def _bind_before_spawn(
     # no-op when follow_binding already did the work, and the actual correction when it
     # didn't.
     await bind_holder(actions, seat_id=target_seat, agent_id=heir_id, source=source)
-    await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id, project=house,
+    await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id,
+                     project=resolved_project if resolved_project is not None else house,
                      cwd=office, model=None, session_key=None, alive=False)
     return {"agent": heir_id, "generation": _generation(heir_id)[1]}
 
@@ -2800,8 +2812,46 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     return await lineage_head(pool, base)
 
 
+async def _resolve_launch_project(
+    pool: asyncpg.Pool, *, seat_id: str, office: str, ancestor: str | None,
+) -> dict[str, Any]:
+    """Resolve project THE SAME WAY MOUNT WILL, BEFORE ANY WRITE — the shared decision both
+    launch doors (trigger.launch_seat's harness lane, cli.py's `_cmd_launch_harness`) need
+    (task #204, Thoth msg 6935/6949, decision 68fba2e4: the operator's own "chad spawned in
+    project chad" specimen). `project_of()` (agents.py) itself needs an ALREADY-BOUND agent
+    to find its seat via `held_seat` — exactly what does not exist yet at this point in a
+    launch, the whole reason this wrapper exists rather than calling project_of() directly
+    pre-bind. `ancestor` (the seat's own current holder, or the lineage generation about to
+    be re-adopted — never required) supplies lineage_works_in continuity when one exists;
+    its absence (a seat's genuinely first-ever launch) is not an error, just one fewer rung.
+
+    Returns `{"project": ..., "refuse": None}` when safe to proceed, or
+    `{"project": None, "refuse": {...}}` when the seat's own charter names exactly one real
+    repo that DISAGREES with what this launch would otherwise resolve — the exact
+    fabricated-handle-project shape (Chad/Jesus) this whole fix exists to catch, caught
+    BEFORE `_bind_before_spawn` writes anything. A charter with zero or more-than-one repo
+    is never this function's call to break (project_of()'s own ambiguity law) — it resolves
+    whatever project_of()'s own chain would, unchecked."""
+    from src.orchestrator.agents import project_of, read_project_label
+    from src.orchestrator.charter import charter_of
+
+    candidate = (
+        await project_of(pool, ancestor, cwd=office) if ancestor is not None else
+        read_project_label(office))
+    charter_repos = await charter_of(pool, seat_id)
+    if len(charter_repos) == 1:
+        if candidate is not None and candidate != charter_repos[0]:
+            return {"project": None, "refuse": {
+                "charter_project": charter_repos[0], "resolved_project": candidate}}
+        # nothing else resolved (a fresh seat, no ancestor, no pin) — the charter's own
+        # single repo IS what project_of() will land on the instant this generation is
+        # bound and re-mounts, so use it now rather than leave a resolvable case as None.
+        return {"project": candidate or charter_repos[0], "refuse": None}
+    return {"project": candidate, "refuse": None}
+
+
 def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
-                          generation: int) -> str:
+                          generation: int, resolved_project: str | None = None) -> str:
     """PIECE 1's boot prompt: a STATEMENT, not an instruction (Thoth's acceptance criterion,
     msg 6692 — `claim_name` disappears from this text; if it survives, the inversion did not
     happen). The session's identity is already written (`_bind_before_spawn`, run just before
@@ -2809,12 +2859,19 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
     negotiate or re-derive. THE ONLY BOOT PROMPT NOW (Thoth dispatch 6713): the unbound
     `_bg_boot_prompt` this function was deliberately kept separate from — dispatch_dm's own
     fresh-heir fallback was its last caller — is gone; dispatch_dm now binds before spawn
-    the same way launch_seat does, through this function."""
+    the same way launch_seat does, through this function.
+
+    `resolved_project` (task #204's launch-identity fix, msg 6935): names the seat's own
+    project_of()-resolved project explicitly in the very first turn — "working <project>" —
+    so the mind never has to rationalize house vs. project from whatever mount()'s own
+    later re-derivation happens to say. Omitted entirely (never a guess) when unresolved —
+    df646654/68fba2e4: homeless is a legal state, not something to paper over with a name."""
     from src.orchestrator.agents import _to_roman
 
     label = f"{handle} {_to_roman(generation)}" if generation > 1 else handle
+    working = f", working {resolved_project}" if resolved_project else ""
     return (
-        f'You are {label}, {agent}, already bound to your seat\'s office. Call '
+        f'You are {label}, {agent}{working}, already bound to your seat\'s office. Call '
         f'mount(cwd="{office}", job_dir="{anchor}") to attach — it re-earns your binding '
         f"from the graph directly. Then inbox() for your opening brief. No one is "
         f"watching this window: work the brief to completion, a real blocker, or a "
@@ -3160,6 +3217,25 @@ async def launch_seat(
         # owns that decision now. Continuing a dormant session is resume_seat's job, never
         # an automatic branch inside launch again.
 
+        # RESOLVE PROJECT THE SAME WAY MOUNT WILL, BEFORE BINDING (task #204's launch-
+        # identity fix, Thoth msg 6935/6949, decision 68fba2e4 — the operator's own "chad
+        # spawned in project chad" specimen). See _resolve_launch_project's own docstring.
+        ancestor_for_resolve = await _seat_lineage_ancestor(pool, target_seat) or current_holder
+        resolution = await _resolve_launch_project(
+            pool, seat_id=target_seat, office=office, ancestor=ancestor_for_resolve)
+        if resolution["refuse"] is not None:
+            r = resolution["refuse"]
+            return {
+                "status": "refused-fabricated-project", "seat": target_seat,
+                "charter_project": r["charter_project"],
+                "resolved_project": r["resolved_project"],
+                "detail": f"{handle}'s charter names {r['charter_project']!r} but the "
+                          f"project this launch would resolve is "
+                          f"{r['resolved_project']!r} — run transition_seat_project (or "
+                          f"`osiris transition-seat-project {handle}`) first, then relaunch",
+            }
+        resolved_project = resolution["project"]
+
         # IDENTITY IS BOUND HERE, BEFORE THE BODY EXISTS (Piece 1, Thoth dispatch msg 6692,
         # d161a156 one layer up — replacing the prior design, which told the session to
         # re-derive its own binding via mount()+claim_name() through its first turn). THE
@@ -3172,7 +3248,8 @@ async def launch_seat(
         # writes that identity NOW, deterministically, server-side.
         bound = await _bind_before_spawn(
             actions, target_seat=target_seat, handle=handle, house=house,
-            current_holder=current_holder, office=office, anchor=anchor, source=caller)
+            current_holder=current_holder, office=office, anchor=anchor, source=caller,
+            resolved_project=resolved_project)
         # THE BOOT PROMPT ANCHORS mount() AT THE OFFICE, ALWAYS — never `launch_cwd`. Identity
         # lives at the office regardless of where the process's own cwd happens to sit (#103's
         # whole point); a tree-bound seat's session boots WITH its shell cwd at tree_cwd (the
@@ -3183,7 +3260,7 @@ async def launch_seat(
         # wrote, through the pre-registered anchor row, nothing left to negotiate.
         boot_prompt = _bg_boot_prompt_bound(
             office=office, anchor=anchor, handle=handle, agent=bound["agent"],
-            generation=bound["generation"])
+            generation=bound["generation"], resolved_project=resolved_project)
 
         # THE DORMANT-HISTORY CONFESSION (thread fc69b9b4, Ooblek specimen 2026-08-02): a
         # fresh mind can land on a transcript full of history it cannot read — `--bg` picks

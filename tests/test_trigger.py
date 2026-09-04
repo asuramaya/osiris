@@ -4312,6 +4312,52 @@ async def test_launch_harness_lane_reports_refused_spawn_when_claude_bg_fails(
     assert "claude --bg" in d["detail"]
 
 
+async def test_launch_harness_lane_refuses_a_fabricated_project_when_the_charter_disagrees(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE MCP DOOR'S OWN COPY OF THE OPERATOR'S BUG (task #204, Thoth msg 6935/6949,
+    decision 68fba2e4): trigger.launch_seat's harness lane is a SEPARATE call site from
+    cli.py's own `_cmd_launch_harness` (independently vulnerable, independently fixed,
+    same as the fabricated-tree-cwd specimen before it) — same refusal, same shared
+    _resolve_launch_project, proven here too rather than assumed from the CLI-door test
+    alone."""
+    from src.orchestrator.charter import set_charter
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "trigfabseat"\n')
+
+    await actions.create_or_find_object("SoftwareProject", "repo:trigrealrepo", "test")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw20", manager_agent="agent:hm20",
+        worker_handle="trigfabseat", house="osiris")
+    await _office(actions, worker_seat, str(office))
+    charter = await set_charter(actions, worker_seat, ["trigrealrepo"], actor="operator")
+    assert not charter.get("rejected"), charter
+
+    async def _boom(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — the project check refuses first")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm20", target=worker_seat,
+        spawn=_boom, agents_json=_fake_agents_json([[]]))
+    assert d["status"] == "refused-fabricated-project"
+    assert d["charter_project"] == "trigrealrepo"
+    assert d["resolved_project"] == "trigfabseat"
+    assert "transition_seat_project" in d["detail"]
+
+    # NEGATIVE CONTROL: pin corrected to agree with the charter — launch proceeds, and
+    # the boot prompt names the resolved project explicitly.
+    (office / ".osiris").write_text('project = "trigrealrepo"\n')
+    spawned: list[dict[str, Any]] = []
+    d2 = await trigger_module.launch_seat(
+        actions, caller="agent:hm20", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+    assert d2["status"] == "launched"
+    assert len(spawned) == 1
+    assert "working trigrealrepo" in spawned[0]["prompt"]
+
+
 async def test_launch_harness_lane_records_the_unpriced_cost_honestly(actions: Actions) -> None:
     """THE CEILING'S READ PATH (task #8): a --bg body is a real billed session, same as any
     other — its spend must land in llm_usage even when it is UNPRICED, or the ceiling never
