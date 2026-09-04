@@ -17,11 +17,21 @@ async def _rogue(
     handle: str | None = None, live: bool = False,
 ) -> None:
     """A mounted lineage in some ad hoc cwd — the pre-lift shape. Quiet by default (the
-    ceremony refuses a live one); `live=True` re-warms it for the refusal tests."""
+    ceremony refuses a live one); `live=True` re-warms it for the refusal tests.
+
+    Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
+    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
+    edge is a fixture lying about how mints actually work (thread 19d6bdcb7fa9/c5a91ea1)."""
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(a, "project", project, agent_id, now, 0.9,
                                   evidence_class="self_declared")
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", agent_id)
+    await actions.assert_property(proj, "name", project, agent_id, now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(a, proj, "works_in", agent_id, now, 0.9,
+                              evidence_class="self_declared")
     if handle:
         await actions.assert_property(a, "handle", handle, agent_id, now, 0.9,
                                       evidence_class="self_declared")

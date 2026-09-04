@@ -2094,7 +2094,7 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
 
 
 async def resync_seat_house_third_party(
-    actions: Actions, seat_id: str, new_house: str, *, source: str, reason: str,
+    actions: Actions, seat_id: str, new_house: str | None, *, source: str, reason: str,
 ) -> dict[str, Any]:
     """THE THIRD-PARTY SIBLING OF `correct_house` — task #152's khepri/deckard/metron repair
     (decision 6602d39d): `correct_house` is deliberately SELF-scoped (a head correcting its
@@ -2104,27 +2104,40 @@ async def resync_seat_house_third_party(
     `ensure_seat` mint time, never resynced by anything since) is not the seat's own act to
     make; it is an individually-diagnosed, individually-authorized correction landed BY
     someone else, on the same explicit-reason audit-trail discipline as
-    `offices.correct_pin_value`. Refuses on an empty house or an empty reason for the exact
-    same cause that function refuses an empty reason: a correction with no stated reason is
-    the silent overwrite this house rules against, not a fix. Does NOT check headship or
-    caller identity — this is explicitly a third-party act, unlike `correct_house`, and
-    callers are responsible for the authorization this docstring cannot enforce.
+    `offices.correct_pin_value`. Refuses on an empty reason for the exact same cause that
+    function refuses one: a correction with no stated reason is the silent overwrite this
+    house rules against, not a fix. Does NOT check headship or caller identity — this is
+    explicitly a third-party act, unlike `correct_house`, and callers are responsible for
+    the authorization this docstring cannot enforce.
+
+    `new_house=None` UNSETS the property (decision 68fba2e4/thread 19d6bdcb7fa9, the
+    operator's own house/project ruling: the six live fabricated-house specimens — house
+    stamped `=handle` at mint, decision 24e0b761's own class — repair to genuinely unset,
+    never a placeholder). The `assertions.value` column is NOT NULL at the schema level —
+    asyncpg maps a Python `None` parameter to SQL NULL universally, before the jsonb codec
+    ever runs, so a null-valued assertion cannot be written at all. Stored as the empty
+    STRING instead (`""`), the SAME sentinel `derive_house`/`_own_house_stamp` already
+    treat as "no house" (their own docstrings: "a genuinely EMPTY derived house... treated
+    like 'no seat yet'") — every existing reader already does a truthy check, not an
+    `is None` check, so this is not a new state to teach anything, only a new door to
+    reach the state through. The receipt always reports `None`, never `""`, for a clean
+    external contract.
 
     `still_contradicted` (correct_house's own fourth-specimen fix, decision 7a46db36):
     names any OTHER source's lingering `house` value neither branch here touches — writing
     or confirming the correct value is not the same act as invalidating a stale one."""
-    new_house = (new_house or "").strip()
-    if not new_house:
-        return {"error": "a house needs a name"}
+    if new_house is not None:
+        new_house = new_house.strip() or None
+    stored = new_house or ""  # the NOT NULL-safe encoding of "unset" — see the note above
     if not reason.strip():
         return {"error": "a correction with no reason is exactly the silent overwrite "
                          "719ed5b1 rules against — refusing"}
     facts = await seat_facts(actions.pool, seat_id)
-    was = facts.get("house")
+    was = facts.get("house") or None  # normalize a stored "" back to None for the receipt
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
     written = was != new_house
     if written:
-        await actions.assert_property(seat_obj, "house", new_house, source, datetime.now(UTC),
+        await actions.assert_property(seat_obj, "house", stored, source, datetime.now(UTC),
                                       _CONF, evidence_class=_EC)
         # SELF-HEAL AT WRITE TIME (fe8ec7ff mechanism 3a) — same reasoning as correct_house.
         from src.orchestrator.identity_heal import heal_contradicting_property
@@ -2136,9 +2149,11 @@ async def resync_seat_house_third_party(
     contradicting = await actions.pool.fetch(
         "SELECT a.value #>> '{}' AS val, a.source_id, a.observed_at "
         "FROM current_assertions a WHERE a.object_id=$1 AND a.name='house' "
-        "AND a.value #>> '{}' != $2 ORDER BY a.observed_at DESC", seat_obj, new_house)
+        "AND a.value #>> '{}' != $2 ORDER BY a.observed_at DESC",
+        seat_obj, stored)
     still_contradicted = [
-        {"value": r["val"], "source": r["source_id"], "observed_at": r["observed_at"].isoformat()}
+        {"value": (r["val"] or None), "source": r["source_id"],
+         "observed_at": r["observed_at"].isoformat()}
         for r in contradicting]
     if not written:
         return {"written": False, "seat_id": seat_id, "house": was,

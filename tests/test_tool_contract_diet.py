@@ -799,13 +799,16 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 117
+TOOL_CONTRACT_EXPECTED_COUNT = 118
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
 # (the-wall's top_of_wall hard-caps at 25, triage has no project-edge/source filter,
 # graph_lint's stale check never catches a perpetually-re-touched cluster). Genuinely
 # new capability, not padding; docstring trimmed once under the category rule.
+# 116 -> 117 (2026-09-04, Sekhmet, decision 68fba2e4/thread 19d6bdcb7fa9): resync_seat_house
+# — the MCP door onto seats.resync_seat_house_third_party (existed, unreached until the
+# house/project ruling's six-seat repair task needed it, msg 6967).
 # 115 -> 116 (2026-09-04, Imhotep, task #199's core-verbs lane, Thoth dispatch 6901):
 # transition_seat_project — the self-service TRANSITION verb (invalidate_works_in +
 # correct_pin_value + set_charter, one composed act, MCP + CLI same commit) — see the
@@ -1023,6 +1026,10 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # Thoth dispatch 6966): new tool list_unfiled_threads — see the tool-count changelog
 # above for the full rationale. Trimmed once under the category rule before raising
 # (dropped the per-clause mechanism narrative, a caller has no use for it at call time).
+# 115,446 -> 116,642 (2026-09-04, Sekhmet, decision 68fba2e4/thread 19d6bdcb7fa9): a
+# genuinely new tool, resync_seat_house -- the MCP door onto seats.resync_seat_house_
+# third_party (existed, unreached until the six-seat house repair needed it). A real
+# capability, not bloat.
 TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:

@@ -274,6 +274,10 @@ BINDING_VERBS = frozenset({
     # invalidate_works_in + correct_pin_value + set_charter, writes works_in/pin/
     # governs, a binding-mover by the same 6823 rule the seven above were added under.
     "transition_seat_project",
+    # `resync_seat_house` (decision 68fba2e4/thread 19d6bdcb7fa9, the house/project
+    # ruling's six-seat repair) — writes Seat.house third-party, the same 6823 rule
+    # correct_house/correct_agent_house were added under two lines up.
+    "resync_seat_house",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -288,6 +292,11 @@ NO_CLI_EQUIVALENT = {
         "the CALLING agent's own mounted identity (set_charter), and a raw terminal holds "
         "no such identity to be self about. charter_for (the operator-on-another's-behalf "
         "form) already has one, --repos and all.",
+    "resync_seat_house": "not yet built — the MCP door onto seats.resync_seat_house_"
+        "third_party (task #152's own repair primitive) shipped tonight (decision "
+        "68fba2e4/thread 19d6bdcb7fa9) so the six live fabricated-house specimens can be "
+        "repaired without reaching past the MCP surface; a raw CLI door is a real, "
+        "separate, not-yet-scoped gap.",
     "attach_seat": "not yet built — a real gap named by Khnum's lane-2 scoping (msg 6463): "
         "not on the jesus/chad reconciliation path his dispatch scoped him to.",
     "detach_seat": "not yet built — same scoping note as attach_seat.",
@@ -870,6 +879,10 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # of; a shared `project=None` param would silently change get_thread_list's own
     # required-project contract rather than add a mode to it.
     "list_unfiled_threads": {"binding_verb": False},
+    # resync_seat_house — the MCP door onto seats.resync_seat_house_third_party (existed,
+    # unreached until decision 68fba2e4's own six-seat repair task needed it). Writes
+    # Seat.house third-party, same family as correct_house/correct_agent_house.
+    "resync_seat_house": {"binding_verb": True},
 }
 
 
