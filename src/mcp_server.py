@@ -106,6 +106,20 @@ from src.orchestrator.swaps import classify_swap, swap_banner
 from src.parsers.base import EvidenceClass
 
 
+def _strip_redundant_titles(schema: Any) -> Any:
+    """Drop every `"title"` key from a JSON-Schema dict, at any nesting depth — see
+    BoundedMCP.list_tools's own docstring for why this is safe: the key a `title`
+    duplicates is always one level up already, no MCP client reads it, and nothing
+    else about the schema's shape or validity changes. Never mutates its input (a
+    fresh dict/list at every level) — the tool registry's own cached schema objects
+    must survive untouched for `call_tool`'s unrelated resolution path."""
+    if isinstance(schema, dict):
+        return {k: _strip_redundant_titles(v) for k, v in schema.items() if k != "title"}
+    if isinstance(schema, list):
+        return [_strip_redundant_titles(v) for v in schema]
+    return schema
+
+
 class BoundedMCP(FastMCP):
     """FastMCP with a WAIST — every tool result passes the response budget on its way out.
 
@@ -147,8 +161,29 @@ class BoundedMCP(FastMCP):
         instead of trading one for the other. Vanilla FastMCP has no such notion —
         `list_tools`/`call_tool` share one undifferentiated registry — so this overrides
         the SAME public seam `call_tool` above already overrides, no monkey-patch of
-        anything private."""
-        return [t for t in await super().list_tools() if not (t.meta or {}).get("deprecated")]
+        anything private.
+
+        THE SCHEMA-TITLE STRIP (task #199's context-bloat priority, Thoth dispatch
+        6886/6908): every parameter's auto-generated JSON-Schema `title` (pydantic's
+        default, e.g. `"title": "Rationale"` on the `rationale` param) duplicates the
+        property's own key one level up — no MCP client reads it, since the key IS the
+        name. Measured fleet-wide: 497 occurrences, ~14K wire chars. Stripped here,
+        same seam as the deprecated filter, on the SAME `list_tools()` output —
+        `call_tool` never sees this method's return value at all (it resolves off
+        `self._tools` directly, per the note above), so this cannot change what a call
+        validates against or how it executes, only what a model READS before calling.
+        Recursive and blind to key name — `title` means the same auto-generated,
+        always-redundant thing at every nesting depth (a property, an array's `items`,
+        an `anyOf` branch); no other key is touched, and the `anyOf`/`null` branches
+        pydantic emits for `Optional[...]` params stay exactly as-is (not the same
+        zero-risk shape — a strict client's validation could legitimately depend on
+        them, unlike a title no client reads)."""
+        tools = [t for t in await super().list_tools() if not (t.meta or {}).get("deprecated")]
+        return [t.model_copy(update={
+            "inputSchema": _strip_redundant_titles(t.inputSchema),
+            "outputSchema": (_strip_redundant_titles(t.outputSchema)
+                             if t.outputSchema else t.outputSchema),
+        }) for t in tools]
 
 
 # TOOL-LIST REFRESH (thread 6a78e64b leg 1, operator-directed: "three verbs deployed today
