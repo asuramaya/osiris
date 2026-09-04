@@ -5517,6 +5517,43 @@ async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
     _ = manager_seat
 
 
+async def test_stop_seat_releases_the_agent_mounts_row_it_would_otherwise_leave_stale(
+    actions: Actions,
+) -> None:
+    """THE FIX (thread 1e07af65, obligation a14f1528's own live finding): a killed
+    process's own agent_mounts row used to survive the kill untouched, reading as LIVE to
+    _launch_twin_check's is_live() for a full LIVENESS_WINDOW_MINUTES — an immediate
+    resume()/launch() right after a genuine stop saw a body that was already gone. This
+    is the exact real-world shape: job_dir derived the SAME way handshake._derive_job_dir
+    (and therefore stop_seat's own release step) computes it, not a hand-picked path."""
+    from src.orchestrator.handshake import _derive_job_dir
+    from src.orchestrator.mounts import is_live
+
+    session_id = "e1e1e1e1-0000-4000-8000-000000000000"
+    job_dir = _derive_job_dir(session_id)
+    assert job_dir is not None
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stoprel01", manager_agent="agent:stoprelm01",
+        worker_handle="Stop-Release-Test", house="osiris")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:stoprel01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        pass
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stoprelm01", target=worker_seat,
+        agents_json=_fake_census_agents_json(5252, session_id=session_id),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d.get("released_mounts", 0) >= 1
+    row = await actions.pool.fetchrow(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", job_dir)
+    assert row is not None
+    assert not is_live(row["last_seen"])  # suspended, never deleted (#178's own law)
+
+
 async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing(
     actions: Actions,
 ) -> None:

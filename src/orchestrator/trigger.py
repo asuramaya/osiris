@@ -3514,6 +3514,16 @@ async def stop_seat(
     it names an EVENT, not a gate on the chair) as a plain, append-only assertion, never a
     boolean flag a later caller has to remember to clear.
 
+    RELEASES THE SIGNAL IT OWNS (thread 1e07af65, obligation a14f1528's own live finding):
+    a killed process's `agent_mounts` row used to survive the kill untouched, reading as
+    live to `_launch_twin_check`'s `is_live()` for a full LIVENESS_WINDOW_MINUTES (15) —
+    stop made a signal it never cleaned up, so an immediate resume()/launch() right after
+    a genuine stop saw a body that was already gone. SUSPENDS, never deletes (#178's own
+    law — `mounts.release_session_mounts`, the epoch sentinel), every row this LINEAGE'S
+    OWN sessions could be filed under, not just the matched one — the same "any
+    generation, not just today's exact label" widening the lineage-fallback match above
+    already needed, for the identical staleness reason.
+
     MATCHES BY LINEAGE TOO, NOT ONLY BY EXACT HOLDER ID (obligation 2e110f63, the same
     branch `_launch_twin_check` already carries): `registry_census`'s own `matched` list
     reconciles a live body to whatever `agent_mounts.agent_id` its job_dir cache last
@@ -3576,6 +3586,14 @@ async def stop_seat(
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
+    # THE LINEAGE'S OWN SESSIONS, ALWAYS COMPUTED (not just on a match miss): the match
+    # fallback below needs it, and so does the release step after a successful kill — the
+    # SAME "any generation, not just today's exact label" reasoning applies to both, since
+    # a stale mount row can be filed under any ancestor generation's own session, not only
+    # the current holder's.
+    from src.orchestrator.succession import succession_chain
+    sessions = {str(h["session"]) for h in await succession_chain(pool, holder)
+                if h.get("session")}
     if match is None:
         # THE LINEAGE FALLBACK (obligation 2e110f63, the same branch _launch_twin_check
         # already carries): `matched` reconciles by job_dir -> agent_mounts.agent_id, a
@@ -3584,9 +3602,6 @@ async def stop_seat(
         # just filed under a stale label the exact-equality check above never finds. Ask
         # the graph directly: any of this lineage's own succession_chain sessions,
         # verified live in the census, is the same body under a different name.
-        from src.orchestrator.succession import succession_chain
-        sessions = {str(h["session"]) for h in await succession_chain(pool, holder)
-                    if h.get("session")}
         if sessions:
             match = next(
                 (v for v in census.get("verified", [])
@@ -3606,6 +3621,26 @@ async def stop_seat(
     except OSError as exc:
         return {"status": "refused-signal", "seat": target_seat, "holder": holder, "pid": pid,
                 "detail": f"the stop signal itself failed ({exc}) — nothing else changed"}
+
+    # RELEASE THE SIGNAL STOP ITSELF OWNS (thread 1e07af65): suspend (never delete, #178's
+    # own law) every agent_mounts row this lineage's own sessions could be filed under —
+    # not just the matched one — so `_launch_twin_check`'s is_live() stops reading a dead
+    # body for LIVENESS_WINDOW_MINUTES after a genuine, successful kill. Every session's
+    # own job_dir is derived the same way SessionEnd's own handler already does
+    # (handshake._derive_job_dir, NEVER the census's short job_dir_key — that's sid[:8]
+    # alone, not the real agent_mounts.job_dir path, and would never match by job_dir at
+    # all) — release_session_mounts's own `job_dir=$1 OR session_key=$2` clause still
+    # finds the right row even when the derived job_dir itself is stale or wrong, since
+    # the session_key match alone suffices.
+    from src.orchestrator.handshake import _derive_job_dir
+    from src.orchestrator.mounts import release_session_mounts
+    matched_sid = str((match or {}).get("session_id") or "")
+    release_ids = set(sessions) | ({matched_sid} if matched_sid else set())
+    for sid in release_ids:
+        jd = _derive_job_dir(sid)
+        if jd:
+            await release_session_mounts(pool, job_dir=jd, session_id=sid)
+
     now = datetime.now(UTC)
     oid = await actions.create_or_find_object("Seat", target_seat, caller)
     await actions.assert_property(oid, "stopped_at", now.isoformat(), caller, now, 0.9,
@@ -3618,10 +3653,12 @@ async def stop_seat(
                                         "operator" if caller == _OPERATOR_CALLER
                                         else "manager"),
             **({"reason": reason} if reason else {}),
-            "detail": f"stop signal sent to {holder}'s live body (pid {pid}) — "
-                      "reachability afterward is governed entirely by the SAME occupancy "
-                      "authority launch()/wake() already consult; no separate release "
-                      "step exists"}
+            "released_mounts": len(release_ids),
+            "detail": f"stop signal sent to {holder}'s live body (pid {pid}); "
+                      f"{len(release_ids)} lineage mount row(s) suspended — reachability "
+                      "afterward is governed entirely by the SAME occupancy authority "
+                      "launch()/resume() already consult, and its own agent_mounts "
+                      "signal no longer lags this stop"}
 
 
 async def _transcript_activity(
