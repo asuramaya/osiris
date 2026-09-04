@@ -2954,6 +2954,75 @@ async def cmd_correct_pin_value(
     return 0
 
 
+async def cmd_transition_seat_project(
+    handle_or_agent: str, *, because: str = "", fabricated_project: str | None = None,
+    real_project: str | None = None, repos: list[str] | None = None, apply: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris transition-seat-project <seat> [--fabricated-project P] [--real-project P]
+    [--repos R ...] [--because <reason>] [--apply] — the console-script door onto
+    transition.transition_seat_project, the SAME function the transition_seat_project
+    MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY: the MCP tool
+    is self-scoped by construction (the mounted caller's own agent_id) — a terminal has
+    no mounted identity to be self about, so this door takes an EXPLICIT target, same
+    resolution shape correct-pin-value's own console door already uses.
+
+    `--apply` is required to actually write — dry_run=True is the default, matching
+    every other repair verb in this house."""
+    from src.orchestrator.agents import resolve_handle
+    from src.orchestrator.transition import transition_seat_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:transition-seat-project")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris transition-seat-project: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        from src.actions.core import Actions
+        agent_id = await resolve_handle(Actions(pool), handle_or_agent)
+        if agent_id is None:
+            exists = await pool.fetchval(
+                "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
+                handle_or_agent)
+            agent_id = handle_or_agent if exists else None
+        if agent_id is None:
+            print(f"osiris transition-seat-project: refused — no such claimed seat or "
+                  f"live agent: {handle_or_agent!r}", file=sys.stderr)
+            return 1
+        out = await transition_seat_project(
+            pool, agent_id, fabricated_project=fabricated_project,
+            real_project=real_project, because=because, repos=repos, dry_run=not apply)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris transition-seat-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    if out.get("dry_run"):
+        print(f"PLAN for {out['seat']} — {out['fabricated_project']} -> "
+              f"{out['real_project']} (dry run, pass --apply to execute):")
+        for step, detail in out["plan"].items():
+            print(f"  {step}: {detail if detail is not None else 'already correct — no-op'}")
+        return 0
+    print(f"transitioned {out['seat']} — {out['fabricated_project']} -> "
+          f"{out['real_project']}")
+    for step, detail in out.get("steps", {}).items():
+        print(f"  {step}: {detail}")
+    return 0
+
+
 async def cmd_heal_seat_anchor(
     seat_or_handle: str, *, because: str, apply: bool = False, actor: str,
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
@@ -3387,7 +3456,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   read the record       desk, show
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project, rebind-seat, correct-pin-value,
-                        heal-seat-anchor
+                        heal-seat-anchor, transition-seat-project
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
@@ -3758,6 +3827,34 @@ def _build_parser() -> argparse.ArgumentParser:
                                help=f"who is performing this repair — defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
+    p_transition = sub.add_parser(
+        "transition-seat-project", description=_d(
+            "move a seat's project binding from a fabricated handle-project to the "
+            "real repo it already works in, in one composed act — the same "
+            "transition.transition_seat_project the MCP tool wraps (the Jesus/Chad "
+            "specimen's own hand-run sequence, now one call). Given an explicit "
+            "target (a terminal has no mounted identity to be self-scoped about)"),
+        epilog="example: osiris transition-seat-project Jesus --real-project Godel "
+            "--because \"fabricated project, real repo already worked in\" --apply")
+    p_transition.add_argument("seat", help="a claimed handle or a raw agent id — the "
+                              "seat whose binding this transitions")
+    p_transition.add_argument("--fabricated-project", default=None,
+                              help="the project to transition away from — defaults to "
+                                   "the seat's own handle (the specimen shape)")
+    p_transition.add_argument("--real-project", default=None,
+                              help="the project to transition onto — required only when "
+                                   "the seat carries more than one other live works_in "
+                                   "edge; otherwise auto-picked")
+    p_transition.add_argument("--repos", default=None,
+                              help="comma-separated charter repos to declare — defaults "
+                                   "to [real-project]")
+    p_transition.add_argument("--because", default="",
+                              help="why this transition is being made — required with "
+                                   "--apply, same rule as the MCP tool")
+    p_transition.add_argument("--apply", action="store_true",
+                              help="actually write — default is a dry-run plan, same "
+                                   "convention as every other repair verb in this house")
+
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
             "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
@@ -3939,6 +4036,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "heal-seat-anchor":
         return asyncio.run(cmd_heal_seat_anchor(args.seat, because=args.because,
                                                 apply=args.apply, actor=args.actor))
+    if args.command == "transition-seat-project":
+        transition_repos = args.repos.split(",") if args.repos else None
+        return asyncio.run(cmd_transition_seat_project(
+            args.seat, because=args.because, fabricated_project=args.fabricated_project,
+            real_project=args.real_project, repos=transition_repos, apply=args.apply))
     if args.command == "rematerialize":
         return asyncio.run(cmd_rematerialize(args.anchor_sid, dest=args.dest,
                                              force=args.force))

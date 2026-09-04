@@ -144,6 +144,14 @@ CLI_ONLY_PARAMS = {
         "here, not reconciled: the two conventions serve different callers (a human "
         "typing a flag vs. an agent passing a keyword) and forcing one shape onto both "
         "would fight one of them.",
+    ("transition-seat-project", "seat"): "the MCP tool transition_seat_project is "
+        "SELF-scoped by design (resolved off the mounted caller's own held_seat) — a "
+        "terminal has no mounted identity to be self about, so the console door takes "
+        "an EXPLICIT target instead, same resolution shape correct-pin-value's own "
+        "console door already uses.",
+    ("transition-seat-project", "apply"): "the SAME dry-run/apply concept as MCP's "
+        "`dry_run` below, INVERTED and renamed to match this house's --apply repair "
+        "convention, same declared split as heal-seat-anchor's own entry above.",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -155,6 +163,9 @@ MCP_ONLY_PARAMS = {
         "convention rather than the MCP tools' own dry_run=True default.",
     ("resume", "message"): "same gap as launch's own message param above — the CLI has "
         "no way to deliver an opening brief in one act today; not yet built",
+    ("transition_seat_project", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
+        "above) is the same concept, inverted and renamed to match this house's --apply "
+        "repair convention rather than the MCP tools' own dry_run=True default.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -229,6 +240,11 @@ BINDING_VERBS = frozenset({
     # `resume` (task #199 lane 3C, ruling 41a41437) — a brand-new tool tonight, already
     # declared in NEW_TOOL_DECLARATIONS below, not grandfathered in the snapshot.
     "resume",
+    # `transition_seat_project` (task #199's core-verbs lane, Thoth dispatch 6901) — a
+    # brand-new tool, already declared in NEW_TOOL_DECLARATIONS below: composes
+    # invalidate_works_in + correct_pin_value + set_charter, writes works_in/pin/
+    # governs, a binding-mover by the same 6823 rule the seven above were added under.
+    "transition_seat_project",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -818,6 +834,12 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.
     "backfill": {"binding_verb": False, "parameterizes": "backfill_agent_project_links"},
+    # transition_seat_project — the self-service TRANSITION verb (Thoth dispatch 6901):
+    # composes invalidate_works_in + correct_pin_value + set_charter, one act, MCP + CLI
+    # in the same commit (osiris transition-seat-project). Not a parameterization of any
+    # existing tool — it's a NEW composition over three already-declared verbs, no
+    # existing tool's underlying call could have taken this as a param.
+    "transition_seat_project": {"binding_verb": True},
 }
 
 

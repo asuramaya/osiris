@@ -5401,6 +5401,57 @@ async def invalidate_works_in(stale_project: str, because: str,
     return result
 
 
+@mcp.tool()
+async def transition_seat_project(
+    fabricated_project: str | None = None, real_project: str | None = None,
+    because: str = "", repos: list[str] | None = None, dry_run: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Move YOUR OWN seat's project binding from a fabricated handle-project to the
+    real repo project you already work in — one composed act instead of the Jesus/
+    Chad specimen's hand-run sequence. `fabricated_project` defaults to your seat's
+    own handle (the specimen shape: a fabricated project shares the handle's name).
+    `real_project` disambiguates when you carry more than one other live works_in
+    edge; omitted, it auto-picks the sole other one and refuses rather than guesses
+    when there's more than one. `repos` sets the resulting charter explicitly;
+    omitted, it defaults to `[real_project]`.
+
+    PRECONDITION: mount at the real repo's cwd FIRST — this verb transitions an
+    ALREADY-DUAL works_in binding, it does not create the first edge to the real
+    project itself.
+
+    `dry_run=True` (default) returns the PLAN (which of invalidate_works_in/
+    correct_pin_value/set_charter actually differ from the target state) without
+    writing anything. `dry_run=False` requires `because` and executes only the
+    steps the plan named — a step already matching the target is skipped, not
+    re-run as a no-op. Deliberately never calls rebind_seat: THE ANCHOR INVARIANT
+    (ruling 23771416) already pins anchor_cwd to the office path permanently: this
+    is exactly the call that broke Jesus's and Chad's own anchors, not repeated
+    here."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a project transition is a seat's own act",
+                "why": _anchorless(ctx)}
+    pool = await _pool_get()
+    from src.orchestrator.transition import transition_seat_project as _transition
+    result = await _transition(
+        pool, ident.agent_id, fabricated_project=fabricated_project,
+        real_project=real_project, because=because, repos=repos, dry_run=dry_run)
+    if not dry_run and result.get("steps", {}).get("invalidate_works_in", {}).get("invalidated"):
+        # SAME STALE-BANNER PATCH invalidate_works_in's own tool wrapper applies —
+        # a live cached identity does not follow the DB write without this.
+        base = _generation(ident.agent_id)[0]
+        real_name = result["real_project"].removeprefix("repo:")
+        fab_name = result["fabricated_project"].removeprefix("repo:")
+        for cached in _agents.values():
+            if _generation(cached.agent_id)[0] != base:
+                continue
+            await _resolve_project_seat_first(pool, cached)
+            if cached.project == fab_name:
+                cached.project = real_name
+    return result
+
+
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
