@@ -20,6 +20,7 @@ from src.cli import (
     _composition_gaps,
     _find_repo_root,
     _real_install_user_units,
+    _run_install_script,
     _synthetic_automount_probe,
     _wait_for_health,
     _wait_for_smoke,
@@ -2686,6 +2687,80 @@ async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
                                install_units=_silent_no_op)
     assert out == 1
     assert "silent no-op" in buf.getvalue()
+
+
+# --- deploy auto-installs the three machine-file installers (#204, Thoth ruling msg 6949:
+# "a read-only status line that can only report STALE was half a mechanism") -------------------
+
+def test_run_install_script_reports_source_missing(tmp_path: Path) -> None:
+    assert "SOURCE MISSING" in _run_install_script("scripts/no-such.sh", tmp_path)
+
+
+def test_run_install_script_runs_a_real_idempotent_script(tmp_path: Path) -> None:
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "install_thing.sh").write_text(
+        "#!/bin/sh\necho \"install_thing: 1 installed/updated, 0 already current\"\n")
+    out = _run_install_script("scripts/install_thing.sh", tmp_path)
+    assert out == "install_thing: 1 installed/updated, 0 already current"
+
+
+def test_run_install_script_reports_a_real_failure_not_a_crash(tmp_path: Path) -> None:
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "install_broken.sh").write_text(
+        "#!/bin/sh\necho 'boom' >&2\nexit 1\n")
+    out = _run_install_script("scripts/install_broken.sh", tmp_path)
+    assert "FAILED" in out and "boom" in out
+
+
+def _git_init(repo: Path) -> None:
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+
+
+async def test_cmd_deploy_actually_runs_install_commands_sh(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Not just a status report — deploy must actually EXECUTE the installer, the exact
+    gap Thoth's ruling named. A synthetic repo_root with its own commands/ + install
+    script, and a synthetic CLAUDE_COMMANDS_DIR target so this never touches the real
+    machine ~/.claude/commands."""
+    import io
+    import os
+    from contextlib import redirect_stdout
+
+    repo = tmp_path / "repo"
+    (repo / "commands").mkdir(parents=True)
+    (repo / "commands" / "seat.md").write_text("seat doc\n")
+    (repo / "scripts").mkdir()
+    _git_init(repo)
+    install_script = Path("scripts") / "install_commands.sh"
+    real_install = (Path(__file__).resolve().parent.parent / install_script).read_text()
+    (repo / install_script).write_text(real_install)
+    (repo / install_script).chmod(0o755)
+    target = tmp_path / "target"
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    old_env = os.environ.get("CLAUDE_COMMANDS_DIR")
+    os.environ["CLAUDE_COMMANDS_DIR"] = str(target)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            await cmd_deploy(repo_root=repo, git_status=lambda root: [],
+                             restart=_restart,
+                             pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                             wait_for_smoke=_fake_wait_for_smoke,
+                             check_whisper_probe=_fake_check_whisper_ok)
+    finally:
+        if old_env is None:
+            os.environ.pop("CLAUDE_COMMANDS_DIR", None)
+        else:
+            os.environ["CLAUDE_COMMANDS_DIR"] = old_env
+
+    out = buf.getvalue()
+    assert "1 installed/updated, 0 already current" in out
+    assert (target / "seat.md").read_text() == "seat doc\n"
 
 
 # --- boot-status -------------------------------------------------------------------------------
