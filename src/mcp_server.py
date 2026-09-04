@@ -203,7 +203,16 @@ _tool_stats_window_start: datetime | None = None
 # exactly as uncounted as before, not newly countable.
 _TOOL_STATS_BLIND_SPOTS = (
     "osiris-console (:8011, a separate uvicorn process) — not counted; "
-    "task #164's own console slowdown lived entirely here",
+    "task #164's own console slowdown lived entirely here. Confirmed live (#203, Seshat, "
+    "2026-09-03): src/api/app.py imports and calls orchestrator.console.get_console "
+    "directly, bypassing this MCP tool entirely — its own zero-MCP-traffic reading "
+    "already misled one retirement pass into hiding it as dead (decision b49a844f) "
+    "before that seat's own live-test run caught it. Separately, and worse: the "
+    "console's POST /rooms handler does NOT call this MCP tool's create_room at all — "
+    "it inlines the exact same SQL as orchestrator.compositions.create_room verbatim, a "
+    "genuine duplicate implementation (not a bypass of one canonical function, two "
+    "independent copies that can silently drift), and it contradicts this daemon's own "
+    "service file (deploy/user/osiris-console.service: 'never a write path')",
     "osiris-worker (arq cron: drain_cascade/evaluate_watch/sweep_doors/trigger_mail) — "
     "not counted, calls orchestrator functions directly",
     "osiris-pulse (heartbeat) — not counted, calls orchestrator functions directly",

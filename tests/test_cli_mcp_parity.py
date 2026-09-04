@@ -264,15 +264,24 @@ def _find_missing_cli_doors(
     cli: dict[str, set[str]], mcp: dict[str, set[str]], *,
     binding_verbs: frozenset[str] = BINDING_VERBS,
     no_cli_equivalent: dict[str, str] = NO_CLI_EQUIVALENT,
+    all_registered: frozenset[str] | None = None,
 ) -> list[str]:
     """The REVERSE of _find_problems's own direction, deliberately scoped to
     BINDING_VERBS rather than all of `mcp` — see the ruling above the table this reads.
     Returns one string per binding verb that exists on MCP, has no CLI command of the same
-    name (dashes for underscores), and carries no reason in NO_CLI_EQUIVALENT."""
+    name (dashes for underscores), and carries no reason in NO_CLI_EQUIVALENT.
+
+    `all_registered` is the UNFILTERED tool-name population (_mcp_registered_names) —
+    existence is checked against it, not against `mcp` (list_tools()'s own filtered dict),
+    so a hidden alias (meta={"deprecated": True}, thread 6778) reads as 'exists, still
+    needs its CLI-door-or-reason' rather than misreading as a deleted 'stale entry'.
+    Defaults to `frozenset(mcp)` when omitted — the old, pre-hidden-alias behavior, kept so
+    the synthetic proof tests below don't need to fabricate a second population."""
     cli_as_mcp_names = {name.replace("-", "_") for name in cli}
+    known = all_registered if all_registered is not None else frozenset(mcp)
     problems: list[str] = []
     for name in sorted(binding_verbs):
-        if name not in mcp:
+        if name not in known:
             problems.append(
                 f"{name!r} is in BINDING_VERBS but no such MCP tool exists — stale entry")
             continue
@@ -286,7 +295,8 @@ def _find_missing_cli_doors(
 
 
 async def test_every_binding_verb_has_a_cli_door_or_declares_why_not() -> None:
-    problems = _find_missing_cli_doors(_cli_commands(), await _mcp_tools())
+    problems = _find_missing_cli_doors(
+        _cli_commands(), await _mcp_tools(), all_registered=await _mcp_registered_names())
     assert problems == [], (
         "a seat/office/project binding-moving verb drifted out of CLI reach, undeclared "
         "(Thoth dispatch 6438 — BINDING_VERBS is the scoped population this lane gates; "
@@ -322,6 +332,32 @@ def test_the_reverse_detector_itself_catches_an_undeclared_missing_cli_door() ->
     assert built == []
 
 
+def test_a_hidden_alias_reads_as_exists_not_stale() -> None:
+    """THE GAP THIS LANE FIXES (Imhotep msg 6836, off decision b49a844f): a binding verb
+    hidden via meta={"deprecated": True} (thread 6778) vanishes from `mcp` (list_tools()'s
+    own filtered dict) but is still a real, callable tool — it must not read as a deleted
+    'stale entry'. Without `all_registered`, the OLD behavior stands (still useful for a
+    caller with no separate raw-registry read) and misreads it as stale."""
+    cli: dict[str, set[str]] = {}
+    mcp: dict[str, set[str]] = {}  # hidden from list_tools() — this is the whole point
+    verbs = frozenset({"some_hidden_verb"})
+
+    old_behavior = _find_missing_cli_doors(cli, mcp, binding_verbs=verbs, no_cli_equivalent={})
+    assert len(old_behavior) == 1 and "stale entry" in old_behavior[0]
+
+    with_raw_registry = _find_missing_cli_doors(
+        cli, mcp, binding_verbs=verbs, no_cli_equivalent={},
+        all_registered=frozenset({"some_hidden_verb"}))
+    assert len(with_raw_registry) == 1 and "stale entry" not in with_raw_registry[0], (
+        "known-but-hidden must still demand a CLI door or a NO_CLI_EQUIVALENT reason — "
+        "existing, not exempt from the check entirely")
+
+    declared = _find_missing_cli_doors(
+        cli, mcp, binding_verbs=verbs, no_cli_equivalent={"some_hidden_verb": "test fixture"},
+        all_registered=frozenset({"some_hidden_verb"}))
+    assert declared == []
+
+
 def _cli_commands() -> dict[str, set[str]]:
     """Every registered subcommand's own param set (positional dest + optional dest,
     `-h`/`--help` excluded) — read live off `_build_parser()`, never hand-copied."""
@@ -345,6 +381,24 @@ async def _mcp_tools() -> dict[str, set[str]]:
         t.name: set(t.inputSchema.get("properties", {}).keys()) - _MCP_ONLY_PLUMBING
         for t in tools
     }
+
+
+async def _mcp_registered_names() -> frozenset[str]:
+    """EVERY tool the server actually knows, hidden aliases included — read off the raw
+    ToolManager (the same private seam BoundedMCP.call_tool/list_tools already reach into,
+    src/mcp_server.py), never off `mcp.list_tools()`'s own filtered output. A tool shipped
+    with `meta={"deprecated": True}` (the hidden-alias mechanism, thread 6778/commit
+    e94158d) is DROPPED from list_tools() on purpose — that is what makes it invisible to
+    a model — but it stays fully resolvable by call_tool, i.e. still real. `_mcp_tools()`'s
+    filtered dict is right for the forward param-shape check (a model only ever sees the
+    unfiltered surface), but WRONG as the sole existence test for a BINDING_VERBS member:
+    reading absence-from-listing as absence-from-the-server conflates 'hidden' with
+    'deleted' — exactly the gap Imhotep's retirement wave 1 (decision b49a844f) had to
+    dodge by hand (reverting 7 BINDING_VERBS tools rather than hiding them) instead of the
+    gate telling the two cases apart on its own."""
+    from src import mcp_server as srv
+
+    return frozenset(t.name for t in srv.mcp._tool_manager.list_tools())
 
 
 def _find_problems(
