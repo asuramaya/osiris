@@ -3625,21 +3625,32 @@ async def stop_seat(
     # RELEASE THE SIGNAL STOP ITSELF OWNS (thread 1e07af65): suspend (never delete, #178's
     # own law) every agent_mounts row this lineage's own sessions could be filed under —
     # not just the matched one — so `_launch_twin_check`'s is_live() stops reading a dead
-    # body for LIVENESS_WINDOW_MINUTES after a genuine, successful kill. Every session's
-    # own job_dir is derived the same way SessionEnd's own handler already does
-    # (handshake._derive_job_dir, NEVER the census's short job_dir_key — that's sid[:8]
-    # alone, not the real agent_mounts.job_dir path, and would never match by job_dir at
-    # all) — release_session_mounts's own `job_dir=$1 OR session_key=$2` clause still
-    # finds the right row even when the derived job_dir itself is stale or wrong, since
-    # the session_key match alone suffices.
-    from src.orchestrator.handshake import _derive_job_dir
+    # body for LIVENESS_WINDOW_MINUTES after a genuine, successful kill.
+    #
+    # THE STABLE PER-SEAT ANCHOR FIRST, ALWAYS (live-fire correction, obligation a14f1528's
+    # own re-run: a first attempt here derived job_dir from the session id alone and left
+    # the REAL row untouched — resume still saw "already-live" immediately after stop).
+    # `_launch_anchor(target_seat)` is a `--bg`-launched seat's own DURABLE per-seat mount
+    # point (launch_seat's own docstring: "every generation shares ONE durable per-seat
+    # mount anchor") — the boot prompt tells every generation to mount() there, never at a
+    # session-id-derived path, so THAT is where the live row actually sits.
     from src.orchestrator.mounts import release_session_mounts
     matched_sid = str((match or {}).get("session_id") or "")
+    released_mounts = await release_session_mounts(
+        pool, job_dir=_launch_anchor(target_seat), session_id=matched_sid)
+    # THEN every lineage session's OWN job_dir, derived the same way SessionEnd's handler
+    # already does (handshake._derive_job_dir) — covers a `-p --resume` session
+    # materialized to disk at a session-id-keyed path, the one shape the stable anchor
+    # above does not reach. release_session_mounts's own `job_dir=$1 OR session_key=$2`
+    # clause still finds the right row via session_key alone even when a derived job_dir
+    # is stale or wrong.
+    from src.orchestrator.handshake import _derive_job_dir
     release_ids = set(sessions) | ({matched_sid} if matched_sid else set())
     for sid in release_ids:
         jd = _derive_job_dir(sid)
         if jd:
-            await release_session_mounts(pool, job_dir=jd, session_id=sid)
+            released_mounts += await release_session_mounts(
+                pool, job_dir=jd, session_id=sid)
 
     now = datetime.now(UTC)
     oid = await actions.create_or_find_object("Seat", target_seat, caller)
@@ -3653,9 +3664,9 @@ async def stop_seat(
                                         "operator" if caller == _OPERATOR_CALLER
                                         else "manager"),
             **({"reason": reason} if reason else {}),
-            "released_mounts": len(release_ids),
+            "released_mounts": released_mounts,
             "detail": f"stop signal sent to {holder}'s live body (pid {pid}); "
-                      f"{len(release_ids)} lineage mount row(s) suspended — reachability "
+                      f"{released_mounts} agent_mounts row(s) suspended — reachability "
                       "afterward is governed entirely by the SAME occupancy authority "
                       "launch()/resume() already consult, and its own agent_mounts "
                       "signal no longer lags this stop"}

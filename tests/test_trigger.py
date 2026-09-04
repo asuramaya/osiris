@@ -5517,25 +5517,44 @@ async def test_stop_seat_sends_sigterm_to_the_confirmed_live_holder(
     _ = manager_seat
 
 
-async def test_stop_seat_releases_the_agent_mounts_row_it_would_otherwise_leave_stale(
+async def test_stop_seat_releases_both_the_anchor_and_session_derived_mount_rows(
     actions: Actions,
 ) -> None:
-    """THE FIX (thread 1e07af65, obligation a14f1528's own live finding): a killed
-    process's own agent_mounts row used to survive the kill untouched, reading as LIVE to
-    _launch_twin_check's is_live() for a full LIVENESS_WINDOW_MINUTES — an immediate
-    resume()/launch() right after a genuine stop saw a body that was already gone. This
-    is the exact real-world shape: job_dir derived the SAME way handshake._derive_job_dir
-    (and therefore stop_seat's own release step) computes it, not a hand-picked path."""
+    """THE FIX (thread 1e07af65, obligation a14f1528's own live finding, and its own
+    live-fire correction). A killed process's own agent_mounts row used to survive the
+    kill untouched, reading as LIVE to _launch_twin_check's is_live() for a full
+    LIVENESS_WINDOW_MINUTES — an immediate resume()/launch() right after a genuine stop
+    saw a body that was already gone.
+
+    THE REAL SHAPE, confirmed by querying a live `--bg`-launched seat's own agent_mounts
+    rows directly (obligation a14f1528's second acceptance run) rather than assumed: TWO
+    rows exist for the same live session, not one — the boot prompt's own explicit
+    `mount(job_dir=_launch_anchor(seat_id))` call (the STABLE per-seat anchor) AND a
+    SECOND row the harness's own SessionStart/automount path writes at the session-id-
+    derived job_dir (`handshake._derive_job_dir`, `sid[:8]`). A first fix attempt here
+    released only the session-derived row (the one census's own exact-agent_id match
+    actually needs to find the PID) — stop still reported success, but a live re-run
+    against it STILL saw 'already-live' on resume, because releasing the newer row simply
+    unmasked the older, still-stale anchor row as `_launch_twin_check`'s own
+    `ORDER BY last_seen DESC LIMIT 1` new "most recent" live signal for that cwd. Both
+    rows must be released; this test proves both are, not just the one matching found."""
     from src.orchestrator.handshake import _derive_job_dir
     from src.orchestrator.mounts import is_live
 
     session_id = "e1e1e1e1-0000-4000-8000-000000000000"
-    job_dir = _derive_job_dir(session_id)
-    assert job_dir is not None
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:stoprel01", manager_agent="agent:stoprelm01",
         worker_handle="Stop-Release-Test", house="osiris")
-    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:stoprel01",
+    anchor_job_dir = trigger_module._launch_anchor(worker_seat)
+    session_job_dir = _derive_job_dir(session_id)
+    assert session_job_dir is not None
+    # THE STABLE ANCHOR ROW — written first, by the boot prompt's own explicit mount().
+    await save_mount(actions.pool, job_dir=anchor_job_dir, agent_id="agent:stoprel01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+    # THE SESSION-DERIVED ROW — written second (later last_seen), by the harness's own
+    # SessionStart path; census's exact-agent_id match resolves the live PID through
+    # THIS row (its job_dir basename equals sid[:8], the shape registry_census matches).
+    await save_mount(actions.pool, job_dir=session_job_dir, agent_id="agent:stoprel01",
                             project="osiris", cwd="/repo/demo", model=None, session_key=None)
 
     async def _kill(pid: int, job_dir_key: str | None) -> None:
@@ -5547,11 +5566,12 @@ async def test_stop_seat_releases_the_agent_mounts_row_it_would_otherwise_leave_
         read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
 
     assert d["status"] == "stopped"
-    assert d.get("released_mounts", 0) >= 1
-    row = await actions.pool.fetchrow(
-        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", job_dir)
-    assert row is not None
-    assert not is_live(row["last_seen"])  # suspended, never deleted (#178's own law)
+    assert d.get("released_mounts", 0) >= 2
+    for jd in (anchor_job_dir, session_job_dir):
+        row = await actions.pool.fetchrow(
+            "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", jd)
+        assert row is not None
+        assert not is_live(row["last_seen"]), f"{jd} still reads live after stop"
 
 
 async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing(
