@@ -7178,7 +7178,150 @@ async def open_thread(
     return out
 
 
+async def _thread_action_impl(
+    ref: str | list[str], action: str, *, because: str | None, artifact: str | None,
+    dry_run: bool, note: str | None, corrected_summary: str | None, kind: str | None,
+    owner: str | None, arc: str | None, ctx: Context | None,
+    subagent_id: str | None, subagent_type: str | None,
+) -> dict[str, Any]:
+    """Shared body behind `thread_action` and its four hidden single-purpose aliases
+    (resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread) — one
+    code path, five names. Each action below is copied verbatim from what was that
+    alias's own top-level function body before the fold; nothing about resolve_thread's
+    own batch mode or its dry_run=True default changed in the move (the exact shape
+    Seshat's own incident needed preserved, msg 6987)."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    if action == "resolve":
+        if isinstance(ref, list):
+            return await capture.resolve_threads_bulk(
+                Actions(pool), ref, because=because or "", artifact=artifact,
+                dry_run=dry_run, source=actor)
+        probe_tid = await capture._find_thread(pool, ref)
+        was_already_resolved = (
+            probe_tid is not None
+            and await capture._thread_resolved_in(pool, probe_tid) is not None)
+        tid = await capture.resolve_thread(
+            Actions(pool), ref, because=because, artifact=artifact, source=actor)
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        out: dict[str, Any] = {"id": str(tid), "status": "resolved"}
+        if was_already_resolved:
+            out["note"] = ("this thread was already resolved before this call — "
+                           "because/resolved_artifact now reflect THIS call's own text, "
+                           "not the original close; earlier reasoning is still readable "
+                           "in the graph's history, not overwritten there, just not what "
+                           "a current-value read shows anymore")
+        if artifact:
+            out["artifact"] = f"{artifact} — kept as resolved_artifact"
+            target = await pool.fetchrow(
+                "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+                "WHERE l.from_id=$1 AND l.type='resolved_by' LIMIT 1", tid)
+            out["resolved_by"] = (
+                f"{target['type']} {target['canonical']} — the strong closure witness"
+                if target is not None else
+                "none — the artifact did not resolve to a graph object (a file:line or "
+                "an unmatched pointer); resolved_artifact still carries it as text, and "
+                "a closed_by edge to the resolving agent was minted instead — the weak "
+                "witness, still traversable, just not naming a specific commit/decision"
+            )
+        return out
+    if action == "annotate":
+        assert isinstance(ref, str)
+        assert note is not None
+        try:
+            tid = await capture.annotate_thread(Actions(pool), ref, note, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+    if action == "correct_summary":
+        assert isinstance(ref, str)
+        assert corrected_summary is not None
+        try:
+            tid = await capture.correct_thread_summary(
+                Actions(pool), ref, corrected_summary, because=because, source=actor)
+        except ValueError as e:
+            return {"error": str(e)}
+        if tid is None:
+            return {"error": f"no thread matches {ref!r}"}
+        out = {"id": str(tid), "corrected_summary": corrected_summary.strip(),
+               "status": "corrected"}
+        if because:
+            out["because"] = because.strip()
+        return out
+    if action == "reclassify":
+        assert isinstance(ref, str)
+        assert kind is not None
+        t = await capture.reclassify_thread(
+            Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
+            source=actor)
+        if t is None:
+            return {"error": f"no thread matched {ref!r}"}
+        out = {"id": str(t), "kind": kind,
+               "status": "open (unchanged — reclassified, not resolved)"}
+        if arc:
+            if await capture.arc_in_scope_for_thread(pool, t):
+                out["arc"] = arc
+            else:
+                rows = await pool.fetch(
+                    "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+                    "WHERE l.from_id=$1 AND l.type='in_repo'", t)
+                label = ", ".join(r["canonical"] for r in rows) or "(no project)"
+                out["arc"] = capture._arc_out_of_scope_note(label)
+        return out
+    return {"error": f"unknown action {action!r} — one of resolve/annotate/"
+                     "correct_summary/reclassify"}
+
+
 @mcp.tool()
+async def thread_action(
+    ref: str | list[str], action: str, because: str | None = None,
+    artifact: str | None = None, dry_run: bool = True, note: str | None = None,
+    corrected_summary: str | None = None, kind: str | None = None,
+    owner: str | None = None, arc: str | None = None,
+    subagent_id: str | None = None,
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None
+) -> dict[str, Any]:
+    """Act on an existing THREAD — one door, four `action`s, never a fifth (open_thread
+    stays separate: it MINTS, this only acts on what already exists).
+
+    `action='resolve'` — close it. `because` is a short WHY, not a completion essay.
+    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
+    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
+    mints too. Re-resolving is allowed (latest closure witness wins, earlier reasoning
+    stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79): `because`
+    becomes mandatory, `dry_run` DEFAULTS TRUE and previews without writing — pass
+    `dry_run=False` explicitly to actually close the batch — and the whole batch refuses
+    if any ref does not resolve to exactly one thread.
+
+    `action='annotate'` — add `note` WITHOUT closing it or touching `summary`/`status`;
+    each call appends independently, never supersedes an earlier note.
+
+    `action='correct_summary'` — replace the headline in place via `corrected_summary`
+    (`summary` itself, the dedup key, is never touched); re-calling supersedes the prior
+    correction rather than piling up notes. `because` optional.
+
+    `action='reclassify'` — set `kind` ('obligation'/'question'/'task') WITHOUT changing
+    status (untouched is not resolved) — `because` records your judgment, `owner`
+    optionally claims it in the same act, `arc` backfills open_thread's own closed
+    taxonomy onto an already-open thread (osiris-scoped, dropped and named elsewhere).
+
+    `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a list only
+    for `action='resolve'`'s own batch mode)."""
+    return await _thread_action_impl(
+        ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
+        corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='resolve')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def resolve_thread(
     ref: str | list[str], because: str | None = None, artifact: str | None = None,
     dry_run: bool = True,
@@ -7186,83 +7329,31 @@ async def resolve_thread(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Close a THREAD — `ref` is its UUID or a summary substring; `because` is a short
-    WHY, not a completion essay. Event-sourced, never deleted: auditable and reversible.
-    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
-    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
-    mints too, confirmed in the receipt.
-
-    Re-resolving is allowed: `ref` matches by identity, not status, so a second call on
-    an already-resolved thread attaches a later, more specific closure witness — latest
-    wins, earlier reasoning stays in history. The receipt names it when this happens.
-
-    A LIST of refs closes a BATCH (#203, decision 880ffe79): `because` becomes mandatory,
-    `dry_run` DEFAULTS TRUE and previews without writing — pass `dry_run=False` explicitly
-    to actually close the batch — and the whole batch refuses if any ref does not resolve
-    to exactly one thread. See `capture.resolve_threads_bulk`."""
-    if isinstance(ref, list):
-        pool = await _pool_get()
-        return await capture.resolve_threads_bulk(
-            Actions(pool), ref, because=because or "", artifact=artifact, dry_run=dry_run,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    pool = await _pool_get()
-    probe_tid = await capture._find_thread(pool, ref)
-    was_already_resolved = (
-        probe_tid is not None
-        and await capture._thread_resolved_in(pool, probe_tid) is not None)
-    tid = await capture.resolve_thread(
-        Actions(pool), ref, because=because, artifact=artifact,
-        source=await _actor_for(ctx, subagent_id, subagent_type)
-    )
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    out = {"id": str(tid), "status": "resolved"}
-    if was_already_resolved:
-        out["note"] = ("this thread was already resolved before this call — "
-                       "because/resolved_artifact now reflect THIS call's own text, "
-                       "not the original close; earlier reasoning is still readable in "
-                       "the graph's history, not overwritten there, just not what a "
-                       "current-value read shows anymore")
-    if artifact:
-        out["artifact"] = f"{artifact} — kept as resolved_artifact"
-        target = await pool.fetchrow(
-            "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
-            "WHERE l.from_id=$1 AND l.type='resolved_by' LIMIT 1", tid)
-        out["resolved_by"] = (
-            f"{target['type']} {target['canonical']} — the strong closure witness"
-            if target is not None else
-            "none — the artifact did not resolve to a graph object (a file:line or an "
-            "unmatched pointer); resolved_artifact still carries it as text, and a "
-            "closed_by edge to the resolving agent was minted instead — the weak "
-            "witness, still traversable, just not naming a specific commit/decision"
-        )
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='resolve')."""
+    return await _thread_action_impl(
+        ref, "resolve", because=because, artifact=artifact, dry_run=dry_run, note=None,
+        corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='annotate')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def annotate_thread(
     ref: str, note: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Add to a THREAD's record WITHOUT closing it — the fifth door (#116: `resolve_thread`
-    closes; `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `ref` is
-    a Thread UUID, canonical, short-id prefix, or summary substring, matched regardless of
-    the thread's own status — an annotated thread stays exactly as open, resolved, or
-    deferred as it was before the call. Each call appends independently (never supersedes an
-    earlier note, never touches `summary`/`status`); nothing here revises anything. A caller
-    who means "the earlier understanding was wrong" wants a different verb (open a fresh
-    thread, or fold the correction into whatever answers this one)."""
-    pool = await _pool_get()
-    try:
-        tid = await capture.annotate_thread(
-            Actions(pool), ref, note,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    except ValueError as e:
-        return {"error": str(e)}
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='annotate')."""
+    out = await _thread_action_impl(
+        ref, "annotate", because=None, artifact=None, dry_run=True, note=note,
+        corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+    return out
 
 
 @mcp.tool()
@@ -7312,32 +7403,22 @@ async def heal_seat_transcript(
                        because=because)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='correct_summary')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def correct_thread_summary(
     ref: str, corrected_summary: str, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Correct a THREAD's own headline in place — for when the earlier understanding was
-    wrong, distinct from annotate_thread. `summary` itself is never touched (it's
-    open_thread's own dedup key); `corrected_summary` is an ordinary property, so
-    re-calling this supersedes the prior correction rather than piling up notes.
-    `because` (optional) names why. recall(ref) shows both the correction and the
-    untouched original `summary` in one call. Returns {"error": ...} when `ref` matches
-    nothing."""
-    pool = await _pool_get()
-    try:
-        tid = await capture.correct_thread_summary(
-            Actions(pool), ref, corrected_summary, because=because,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    except ValueError as e:
-        return {"error": str(e)}
-    if tid is None:
-        return {"error": f"no thread matches {ref!r}"}
-    out = {"id": str(tid), "corrected_summary": corrected_summary.strip(), "status": "corrected"}
-    if because:
-        out["because"] = because.strip()
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='correct_summary')."""
+    return await _thread_action_impl(
+        ref, "correct_summary", because=because, artifact=None, dry_run=True, note=None,
+        corrected_summary=corrected_summary, kind=None, owner=None, arc=None, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
 @mcp.tool()
@@ -8105,39 +8186,22 @@ async def settle(
     return out
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread_action(action='reclassify')",
+    "since": "task #202 wave 3 (msg 6987)",
+})
 async def reclassify_thread(
     ref: str, kind: str, because: str | None = None, owner: str | None = None,
     arc: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Triage a thread WITHOUT changing its status (untouched is not resolved). You read
-    it and judged what it IS: `kind='obligation'` adopts it as real owed work,
-    `kind='question'` demotes it back to a question, `kind='task'` marks ordinary work.
-    `ref` is a UUID, short id, or summary substring; `because` records your judgment,
-    outranking the miner's guess. Use resolve_thread instead when the work is done or
-    moot. `owner` optionally claims the thread in the same act.
-
-    `arc` backfills `open_thread`'s own closed taxonomy onto an already-open thread
-    (open_thread's near-duplicate path can't set it on an existing one). Osiris-scoped:
-    dropped and named, never refused, outside osiris."""
-    pool = await _pool_get()
-    t = await capture.reclassify_thread(
-        Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
-        source=await _actor_for(ctx, subagent_id, subagent_type))
-    if t is None:
-        return {"error": f"no thread matched {ref!r}"}
-    out = {"id": str(t), "kind": kind, "status": "open (unchanged — reclassified, not resolved)"}
-    if arc:
-        if await capture.arc_in_scope_for_thread(pool, t):
-            out["arc"] = arc
-        else:
-            rows = await pool.fetch(
-                "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
-                "WHERE l.from_id=$1 AND l.type='in_repo'", t)
-            label = ", ".join(r["canonical"] for r in rows) or "(no project)"
-            out["arc"] = capture._arc_out_of_scope_note(label)
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    thread_action(action='reclassify')."""
+    return await _thread_action_impl(
+        ref, "reclassify", because=because, artifact=None, dry_run=True, note=None,
+        corrected_summary=None, kind=kind, owner=owner, arc=arc, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
 
 
 @mcp.tool(meta={

@@ -68,6 +68,10 @@ NO_MCP_EQUIVALENT = {
     "reconcile-merge": "NOT actually MCP-less — same hidden-alias shape as "
         "correct-agent-house's own entry directly above; reconcile_merge carries the "
         "identical deprecated meta from the same retirement wave (#204).",
+    "annotate-thread": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; annotate_thread carries meta="
+        "{'deprecated': True} from the #202 wave-3 thread_action fold, still fully "
+        "callable, its own CLI door untouched by the fold.",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -870,6 +874,12 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # of; a shared `project=None` param would silently change get_thread_list's own
     # required-project contract rather than add a mode to it.
     "list_unfiled_threads": {"binding_verb": False},
+    # thread_action(action=...) — #202 wave 3 (Thoth dispatch 6987, operator's relaxed
+    # dispatch-shape rule): resolve_thread/annotate_thread/correct_thread_summary/
+    # reclassify_thread folded into one door, all four kept as hidden deprecated
+    # aliases forwarding to the shared _thread_action_impl. Not a binding-mover (acts
+    # on Thread objects only). Parameterizes resolve_thread, the largest of the four.
+    "thread_action": {"binding_verb": False, "parameterizes": "resolve_thread"},
 }
 
 

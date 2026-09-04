@@ -799,7 +799,10 @@ def _tool_chars(t: Any) -> int:
 # party retired as a hidden, deprecated alias of heal_seat_anchor — see the char ceiling's
 # own changelog above for the full mechanism. A genuine shrink, the first this ratchet has
 # recorded, not a rename or a merge-reconciliation artifact.
-TOOL_CONTRACT_EXPECTED_COUNT = 117
+TOOL_CONTRACT_EXPECTED_COUNT = 114
+# 117 -> 114 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987): resolve_thread/
+# annotate_thread/correct_thread_summary/reclassify_thread folded into thread_action
+# (action=...) — one door, four hidden deprecated aliases forwarding to it.
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1023,7 +1026,20 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # Thoth dispatch 6966): new tool list_unfiled_threads — see the tool-count changelog
 # above for the full rationale. Trimmed once under the category rule before raising
 # (dropped the per-clause mechanism narrative, a caller has no use for it at call time).
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# STALE POST-MERGE VALUE CAUGHT AND FIXED (2026-09-04, Imhotep): this constant had
+# regressed to 202,871 -- a merge driver declined to sum two branches' own deltas and
+# left the ceiling at a shared ancestor's stale value, the exact recurring class Khnum
+# and this seat have both hit before (see the changelog entries above this one for the
+# same pattern). Re-measured against the real merged tree rather than trusted: 116,137,
+# matching this comment's own claim exactly.
+TOOL_CONTRACT_CEILING_CHARS = 116137
+# 116,137 -> 113,757 (2026-09-04, Imhotep, #202 wave 3, Thoth dispatch 6987, operator's
+# relaxed dispatch-shape rule): resolve_thread/annotate_thread/correct_thread_summary/
+# reclassify_thread folded into thread_action(action=...) -- one door, four actions,
+# all four kept as hidden deprecated aliases forwarding to the shared _thread_action_
+# impl body (no logic duplicated, no behavior changed -- resolve_thread's own batch
+# mode and dry_run=True default carried over unchanged). Tool count 117 -> 114 (-3).
+TOOL_CONTRACT_CEILING_CHARS = 113757
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
