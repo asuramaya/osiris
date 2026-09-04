@@ -985,23 +985,31 @@ def test_known_tools_at_snapshot_and_declarations_never_collide() -> None:
 
 # ============================================================================================
 # THE THIRD SURFACE (Thoth ruling msg 6823, on Seshat's parked question msg 6809): a slash
-# command's prose (`~/.claude/commands/*.md`) names MCP tools and CLI commands it composes —
+# command's prose (`commands/*.md`) names MCP tools and CLI commands it composes —
 # "composes the `X` MCP tool", "shells out to `osiris Y`" — and nothing anywhere checks those
 # names still exist. This is the SAME drift class the CLI<->MCP gate above already catches
-# for its own two surfaces, just never extended to the third — decision a34a9850's own
-# earlier finding named this exact gap ("~/.claude/commands/*.md is not a git repo, not
-# inside osiris's tree... no portable pytest gate can see it"), which is still true of a
-# gate that lives ONLY in this repo's CI — but nothing stops a LIVE test run on this machine
-# from reading the real files at their real path, same as this suite already reads the
-# live CLI/MCP surfaces rather than a checked-in copy. Static shape only for most commands
-# (Thoth: "static is fine for shape"); at least one test below actually EXECUTES the CLI
-# function a slash command names and parses its real output, same discipline
-# test_cli_json_promise.py already established — the parity gate's own known blindness
-# (two static comparisons, never invoking either surface) is exactly what let specimens A
-# and B through there, and nothing here should repeat it for a third surface.
+# for its own two surfaces, just never extended to the third.
+#
+# #204's STRUCTURAL FIX (Thoth ruling msg 6918, decision 012b36fb, SUPERSEDING a34a9850):
+# this gate used to read `~/.claude/commands/*.md` LIVE, off the machine, because decision
+# a34a9850's own original reasoning was that the directory sat outside every git repo
+# entirely and "no portable pytest gate can see it" any other way. That same property — a
+# file the git diff being committed cannot contain — let one agent's unfinished edit to that
+# shared, unversioned file fail every OTHER agent's pre-commit gate: THREE workers blocked at
+# once on 2026-09-04, all on the same live seat.md race. `commands/*.md` is now the tracked
+# SOURCE OF TRUTH inside this repo; `scripts/install_commands.sh` copies it to
+# `~/.claude/commands` the same way `install_gate_hook.sh` already installs the pre-commit
+# hook. This gate reads the REPO copy — the only one a commit's own diff can ever change —
+# so it can never again fail on content outside what's actually being committed.
+#
+# Static shape only for most commands (Thoth: "static is fine for shape"); at least one test
+# below actually EXECUTES the CLI function a slash command names and parses its real output,
+# same discipline test_cli_json_promise.py already established — the parity gate's own known
+# blindness (two static comparisons, never invoking either surface) is exactly what let
+# specimens A and B through there, and nothing here should repeat it for a third surface.
 # ============================================================================================
 
-_SLASH_COMMANDS_DIR = Path.home() / ".claude" / "commands"
+_SLASH_COMMANDS_DIR = Path(__file__).resolve().parent.parent / "commands"
 
 # `` `X` MCP tool `` (an optional parenthetical between the name and "MCP tool" tolerated,
 # though none of today's docs use one) and `` `osiris word-word` `` — the two literal
@@ -1012,10 +1020,9 @@ _SLASH_CLI_REF = re.compile(r"`osiris ([a-z][a-z-]*)")
 
 
 def _slash_command_files() -> dict[str, str]:
-    """name -> raw text, read live off ~/.claude/commands/*.md — never a checked-in copy
-    (there isn't one; this directory sits outside the git repo entirely, decision
-    a34a9850's own named reason no CI gate can see it — a live test run on the real
-    machine can)."""
+    """name -> raw text, read off this repo's own tracked commands/*.md (#204: the SOURCE
+    of what scripts/install_commands.sh puts on the machine, not the machine copy itself —
+    see the module docstring above for why that distinction is the whole point)."""
     if not _SLASH_COMMANDS_DIR.is_dir():
         return {}
     return {p.stem: p.read_text() for p in sorted(_SLASH_COMMANDS_DIR.glob("*.md"))}
@@ -1030,11 +1037,11 @@ def _slash_command_references(text: str) -> tuple[set[str], set[str]]:
 
 async def test_every_slash_command_reference_names_a_real_live_verb() -> None:
     files = _slash_command_files()
-    if not files:
-        import pytest
-        pytest.skip("~/.claude/commands not present on this machine — the third surface "
-                    "this test walks lives outside the repo by design (decision a34a9850); "
-                    "nothing to check where it doesn't exist")
+    # #204: commands/ is tracked in this repo, so it exists on every checkout — a missing
+    # or empty directory here is a real defect (the repo lost its own source), never a
+    # "machine doesn't have it" case to skip past the way the old live-file check did.
+    assert files, (f"{_SLASH_COMMANDS_DIR} has no *.md files — the repo's own tracked slash "
+                   "command source is missing or empty")
     mcp = await _mcp_tools()
     # #204: a slash doc may deliberately name a HIDDEN-but-real tool (the deprecated-alias
     # mechanism, e.g. correct_agent_house/reconcile_merge — retirement wave 1, zero traffic
