@@ -863,6 +863,13 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # existing tool — it's a NEW composition over three already-declared verbs, no
     # existing tool's underlying call could have taken this as a param.
     "transition_seat_project": {"binding_verb": True},
+    # list_unfiled_threads — the H-bucket instrument gap (#203, decision a49d2730/
+    # 38755abe, Thoth dispatch 6966): a Thread filter on absence of an in_repo edge,
+    # not a binding-mover. Not a parameterization of get_thread_list — that tool's
+    # entire query JOINs on the in_repo edge this one explicitly filters the ABSENCE
+    # of; a shared `project=None` param would silently change get_thread_list's own
+    # required-project contract rather than add a mode to it.
+    "list_unfiled_threads": {"binding_verb": False},
 }
 
 

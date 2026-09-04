@@ -135,3 +135,99 @@ async def test_get_thread_list_honest_total_excludes_a_disagreement(actions: Act
     assert out["total"] == 2
     assert out["honest_total"] == 1
     assert "1 more carry a closure edge" in out["honest_total_note"]
+
+
+# --- list_unfiled_threads: the H-bucket instrument gap (decision a49d2730/38755abe) —
+# threads with NO in_repo edge at all, invisible to get_thread_list(project=...) no
+# matter which project is asked. -------------------------------------------------------
+
+async def test_list_unfiled_threads_excludes_a_filed_thread(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    await open_thread(actions, "unfiled-gate: has a project edge", repo="unfiledproj")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads()
+    finally:
+        srv._pool = saved_pool
+    summaries = {th["summary"] for th in out["threads"]}
+    assert "unfiled-gate: has a project edge" not in summaries
+
+
+async def test_list_unfiled_threads_includes_a_genuinely_unfiled_thread(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "unfiled-gate: no project edge at all")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads()
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(t)[:8] in ids
+
+
+async def test_list_unfiled_threads_excludes_a_resolved_one(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "unfiled-gate: resolved, no project edge")
+    await resolve_thread(actions, str(t), because="done")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads()
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(t)[:8] not in ids
+
+
+async def test_list_unfiled_threads_filters_by_source(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    matching = await open_thread(
+        actions, "unfiled-gate: source specimen A", source="a-test-miner")
+    await open_thread(actions, "unfiled-gate: source specimen B", source="session")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(source="a-test-miner")
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert ids == {str(matching)[:8]}
+    assert out["total"] == 1
+
+
+async def test_list_unfiled_threads_filters_by_kind(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    obl = await open_thread(actions, "unfiled-gate: an obligation", kind="obligation")
+    await open_thread(actions, "unfiled-gate: a plain thread")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(kind="obligation")
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(obl)[:8] in ids
+    assert all(th["kind"] == "obligation" for th in out["threads"])
+
+
+async def test_list_unfiled_threads_limit_zero_is_count_only(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    await open_thread(actions, "unfiled-gate: count-only specimen")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(limit=0)
+    finally:
+        srv._pool = saved_pool
+    assert out["threads"] == []
+    assert out["total"] >= 1

@@ -2992,6 +2992,65 @@ async def get_thread_list(
 
 
 @mcp.tool()
+async def list_unfiled_threads(
+    source: str | None = None, kind: str | None = None,
+    limit: int = 10, offset: int = 0,
+) -> dict[str, Any]:
+    """Threads with NO `in_repo` edge at all — genuinely unfiled, invisible to
+    `get_thread_list(project=...)` no matter which project is asked. Paginated
+    (limit/offset), real `total` count. `source` filters by the creating actor's
+    provenance id (e.g. 'half-heal-detect'); `kind` filters obligation/question/task.
+    limit=0 for count only."""
+    pool = await _pool_get()
+    clauses = [
+        "o.type='Thread' AND o.status='active' AND COALESCE("
+        "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "'open')='open'",
+        "NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')",
+    ]
+    params: list[Any] = []
+    idx = 1
+    if kind:
+        clauses.append(
+            "(SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=o.id AND a.name='kind' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $" + str(idx))
+        params.append(kind)
+        idx += 1
+    if source:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM object_events e WHERE e.object_id=o.id "
+            "AND e.event_type='create' AND e.actor=$" + str(idx) + ")")
+        params.append(source)
+        idx += 1
+    where = " AND ".join(clauses)
+    total = await pool.fetchval("SELECT count(*) FROM objects o WHERE " + where, *params) or 0
+    if limit == 0:
+        return {"threads": [], "total": total, "more": total}
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='summary' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='kind' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='owner' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner "
+        "FROM objects o WHERE " + where + " "
+        "ORDER BY o.created_at DESC "
+        "OFFSET $" + str(idx) + " LIMIT $" + str(idx + 1),
+        *params, offset, limit)
+    threads = [{"id": str(r["id"])[:8], "canonical": r["canonical"],
+               "summary": (r["summary"] or "")[:200],
+               "kind": r["kind"], "owner": r["owner"]} for r in rows]
+    more = max(0, total - offset - len(threads))
+    return {"threads": threads, "total": total, "more": more}
+
+
+@mcp.tool()
 async def get_decision_list(
     project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
