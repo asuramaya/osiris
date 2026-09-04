@@ -761,6 +761,27 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     return " ".join(bits)
 
 
+def _is_bg_spare_process() -> bool:
+    """Is THIS hook invocation running under a `claude bg-spare` pre-warmed body? (task
+    #204/msg 6997, Thoth's own live trace: pid 2979241, cmdline `claude bg-spare --bg-
+    spare .../claim.sock`, cwd the bare container root, zero turns ever, its own
+    heartbeat refreshing agent_mounts every few minutes — a harness pre-fork with no
+    conversation, no identity to mint, that whisper minted anyway.) A hook subprocess is
+    a DIRECT CHILD of the harness process that spawned it (confirmed live: the spare's
+    own MCP-server child sits at the identical process-tree depth a hook subprocess
+    would) — `os.getppid()`'s own cmdline is that harness process's real argv, the same
+    fact `ps` reads, no JSON payload marker needed (SessionStart's stdin schema carries
+    none). FAIL-OPEN, same discipline as every other check in this file: `/proc` absent
+    (non-Linux) or unreadable (permissions, a already-reaped parent) reads as "not a
+    spare" — a hook that cannot tell must never itself become the reason a real session's
+    whisper goes missing."""
+    try:
+        cmdline = Path(f"/proc/{os.getppid()}/cmdline").read_bytes()
+    except OSError:
+        return False
+    return b"bg-spare" in cmdline
+
+
 def _cmd_whisper(hook: dict[str, Any]) -> int:
     """Ported from osiris_whisper.py's own `main()` (dispatch 5441/5492 parity fix): the
     old script built its /automount POST body from several OS ENVIRONMENT variables the
@@ -768,7 +789,17 @@ def _cmd_whisper(hook: dict[str, Any]) -> int:
     seat binding at birth), the wake-orphan cure (declared parentage), and the background-
     job bridge's own continuity id. Posting the raw stdin `hook` dict alone (the shape this
     function used to have) silently dropped all three for every session since the flip —
-    a structural continuity gap, not merely a missing banner."""
+    a structural continuity gap, not merely a missing banner.
+
+    A `claude bg-spare` pre-warmed body's own SessionStart fires exactly like a real
+    session's — the harness cannot tell them apart at that layer either — but it has NO
+    conversation, ever, until claimed (task #204, Thoth msg 6997): `_is_bg_spare_process`
+    refuses to mint or mount it at all, matching handshake.py's own "a heartbeat must be
+    earned by an act, never granted by a greeting" law one layer earlier than that law
+    could otherwise apply (a spare's own automount call was reaching the server and
+    minting a real, false_mint-flagged generation before this check existed)."""
+    if _is_bg_spare_process():
+        return 0
     session_id = str(hook.get("session_id") or "")
     cwd = str(hook.get("cwd") or "")
     if not session_id or not cwd:
