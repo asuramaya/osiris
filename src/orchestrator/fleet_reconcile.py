@@ -604,11 +604,14 @@ async def reconcile_scheduled_tick(
     state row needed; the thread's own age IS how long the auto-act path has been dark,
     and `severity='alarm'` rides the same `drift_alarms` live-desk filter
     `deploy_guard.alarm_schema_drift` already proves, for free. The next NON-blind tick
-    resolves it — DELIBERATELY UNLIKE `alarm_schema_drift` (which never auto-resolves,
-    because a schema drift needs a human's deploy to fix): a blind census can genuinely
-    self-heal tick to tick as OS state changes, so auto-resolving here reports reality
-    instead of requiring a human to notice recovery and close it by hand. Both calls are
-    try/excepted — a graph hiccup must never fail the tick that already decided whether
+    resolves it, same shape as `deploy_guard.resolve_schema_drift_alarms_on_clean_check`
+    now gives `alarm_schema_drift` itself (operator ruling, DM 7035 — this comment used to
+    say that alarm never auto-resolved; that changed, and this note is corrected rather than
+    left to mislead a future reader against the actual code): a blind census, like a boot
+    guard's own drift, can genuinely self-heal tick to tick as underlying state changes, so
+    auto-resolving here reports reality instead of requiring a human to notice recovery and
+    close it by hand. Both calls are try/excepted — a graph hiccup must never fail the tick
+    that already decided whether
     to act."""
     from src.orchestrator.folds import _SANCTIONED_AUTO_FOLD_ACTOR
 

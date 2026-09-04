@@ -339,6 +339,14 @@ async def alarm_unreviewed_boot(
 
     src_note = f" (src resolves from {src_root})" if src_root else ""
     _log.critical("%s booted on an unreviewed ref: %s%s", service, drift, src_note)
+    # THE REGROWTH CURE (operator ruling, DM 7035, item 4): a new unreviewed HEAD for this
+    # SAME service is itself the newer truth about its review state — resolve every OLDER
+    # open UNREVIEWED BOOT alarm this service minted before adding a sibling, so the pile
+    # can never again grow past one open alarm per service. Fail-open at the call site: a
+    # resolver hiccup must never block the alarm this function exists to raise.
+    with contextlib.suppress(Exception):
+        await resolve_alarms_superseded_by_clean_boot(
+            pool, service=service, running_head=running_head, dry_run=False)
     actions = Actions(pool)
     await open_thread(
         actions,
@@ -424,6 +432,297 @@ async def alarm_withheld_deploy_record(
                  "this is reconciled.",
             dedup_window_secs=86400,
         )
+
+
+# --- the supersession mechanism (operator ruling relayed via Thoth DM 7032, following the
+# backlog measurement decision 6354c424): "an alarm thread is superseded by the next
+# RECORDED deploy or clean boot of the SAME SERVICE ... only the newest per service stays
+# open." Two independent legs, both fail-open, neither a second gate: -----------------------
+
+_ALARM_HEAD_RE = re.compile(r"HEAD '?([0-9a-f]{7,40})'?")
+
+
+async def _open_alarms_by_actor(
+    pool: asyncpg.Pool, *, actor: str | None, prefixes: tuple[str, ...],
+    require_head: bool = True,
+) -> list[dict[str, Any]]:
+    """Every still-open Thread minted by a boot:{service}/deploy:withheld source whose
+    summary starts with one of `prefixes`. `actor` scopes to one service's own
+    `boot:{service}` source; omitted, scans every boot/withheld source at once.
+    `require_head=True` (the boot-alarm shape, which embeds a real git HEAD in its own
+    text) skips a row `_ALARM_HEAD_RE` can't parse; `require_head=False` (SCHEMA DRIFT,
+    whose text carries alembic revision ids like '0040' — never a git SHA, and never
+    ancestry-comparable even if it were) returns every matching row with `head=None`."""
+    clauses = [
+        "o.type='Thread'", "o.status='active'",
+        "(e.actor LIKE 'boot:%' OR e.actor='deploy:withheld')",
+        "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "'open')='open'",
+    ]
+    params: list[Any] = []
+    if actor is not None:
+        clauses.append("e.actor=$1")
+        params.append(actor)
+    where = " AND ".join(clauses)
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "AS summary "
+        "FROM objects o JOIN object_events e ON e.object_id=o.id AND e.event_type='create' "
+        "WHERE " + where,
+        *params,
+    )
+    out = []
+    for r in rows:
+        summary = r["summary"] or ""
+        if not summary.startswith(prefixes):
+            continue
+        if not require_head:
+            out.append({"id": r["id"], "canonical": r["canonical"], "head": None})
+            continue
+        m = _ALARM_HEAD_RE.search(summary)
+        if not m:
+            continue
+        out.append({"id": r["id"], "canonical": r["canonical"], "head": m.group(1)})
+    return out
+
+
+async def _open_boot_alarms(
+    pool: asyncpg.Pool, *, actor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Every still-open UNREVIEWED BOOT / DEPLOY RECORD WITHHELD Thread — never SCHEMA
+    DRIFT, which is a different axis (alembic migration head, not git HEAD) with its own
+    resolver, `resolve_schema_drift_alarms_on_clean_check` below."""
+    return await _open_alarms_by_actor(
+        pool, actor=actor, prefixes=("UNREVIEWED BOOT", "DEPLOY RECORD WITHHELD"))
+
+
+async def resolve_alarms_superseded_by_deploy(
+    pool: asyncpg.Pool, *, repo_root: Path, new_head: str, dry_run: bool = True,
+) -> dict[str, Any]:
+    """THE DEPLOY LEG: called right after a real `osiris deploy` records `new_head` (cli.py's
+    `_real_record_deploy`). Any still-open UNREVIEWED BOOT (any service) or DEPLOY RECORD
+    WITHHELD alarm whose own `running_head` is now an ancestor of (or equal to) `new_head` is
+    superseded — a real deploy has since shipped that state or a state past it, so the
+    confession is stale. ANCESTRY, not equality or timestamp (measured live, decision
+    6354c424 — the backlog's own dry run): time-ordering alone falsely marks a
+    divergent-branch alarm as superseded; `_is_ancestor` is the only test that doesn't.
+    `dry_run=True` (hard default, same law as `resolve_threads_bulk`): previews {resolved:
+    [...], kept_open: [...]} and writes nothing; pass `dry_run=False` to actually close.
+    Fail-open past this function's own boundary — a single bad row is skipped, logged, never
+    raised — but WITHIN it, closes are exact: no thread is touched without a proven ancestry
+    match."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import resolve_thread
+
+    resolved: list[str] = []
+    kept_open: list[str] = []
+    failed: list[str] = []
+    try:
+        rows = await _open_boot_alarms(pool)
+    except Exception as exc:  # noqa: BLE001 — same fail-open law as every check in this module
+        _log.warning("resolve_alarms_superseded_by_deploy: could not enumerate alarms: %r", exc)
+        return {"dry_run": dry_run, "resolved": resolved, "kept_open": kept_open,
+                "failed": failed}
+    for row in rows:
+        old_head = row["head"]
+        if old_head == new_head or _is_ancestor(repo_root, old_head, new_head):
+            if dry_run:
+                resolved.append(row["canonical"])
+                continue
+            # ONE BAD ROW MUST NEVER SILENTLY TRUNCATE THE BATCH (a live specimen: an early
+            # ad hoc run against a pool with no jsonb codec crashed on item 42 of 180 and
+            # returned as if the other 138 didn't exist — misread as "there were only 41
+            # alarms" instead of "this run aborted"). Same REFUSE-only-the-bad-ROW posture
+            # resolve_threads_bulk's own per-ref handling already gives a batch — never
+            # refuse-whole-run here, since these rows are independent alarms, not a single
+            # caller-named batch with one shared identity to get right.
+            try:
+                actions = Actions(pool)
+                tid = await resolve_thread(
+                    actions, str(row["id"]),
+                    because=(f"superseded: `osiris deploy` recorded {new_head!r}, which "
+                             f"supersedes {old_head!r}"),
+                    artifact=new_head,
+                )
+            except Exception as exc:  # noqa: BLE001 — this row's failure must not sink the rest
+                _log.warning("resolve_alarms_superseded_by_deploy: %s failed: %r",
+                             row["canonical"], exc)
+                failed.append(row["canonical"])
+                continue
+            if tid:
+                resolved.append(row["canonical"])
+        else:
+            kept_open.append(row["canonical"])
+    return {"dry_run": dry_run, "resolved": resolved, "kept_open": kept_open, "failed": failed}
+
+
+async def _has_other_boot_witness(
+    pool: asyncpg.Pool, thread_id: Any, *, this_actor: str,
+) -> bool:
+    """True when a service OTHER than `this_actor` has also asserted this Thread's summary
+    (open_thread's own multi-source convergence, decision/test
+    `test_two_services_confessing_the_same_unreviewed_head_converge_on_one_thread`: two
+    services booting on the identical unrecorded HEAD share ONE Thread object). `status` is
+    SINGULAR (resolve_thread supersedes every open source's status, not just the resolving
+    source's own) — resolving a shared Thread closes it for every witness at once, so a
+    per-service resolver must never touch one it doesn't exclusively own, or it would
+    silently retract a DIFFERENT still-live service's own confession."""
+    other = await pool.fetchval(
+        "SELECT 1 FROM current_assertions a WHERE a.object_id=$1 AND a.name='summary' "
+        "AND a.source_id LIKE 'boot:%' AND a.source_id != $2 LIMIT 1",
+        thread_id, this_actor,
+    )
+    return other is not None
+
+
+async def resolve_alarms_superseded_by_clean_boot(
+    pool: asyncpg.Pool, *, service: str, running_head: str, dry_run: bool = True,
+) -> dict[str, Any]:
+    """THE CLEAN-BOOT LEG: called from each boot-check site (mcp_server.py's `_boot_check`,
+    arq_worker's `startup`) right after `check_unreviewed_boot` comes back CONFIRMED CLEAN —
+    `running_head == last_deployed`, both known; the caller must never invoke this on
+    'unknown' (missing cursor, git failure), only on a proven match, same discipline
+    `unreviewed_boot`'s own null-handling applies to alarming. A clean boot of `service` is
+    itself the ground truth that supersedes every OLDER still-open UNREVIEWED BOOT alarm this
+    SAME service minted — the later observation IS the newer truth about that service's
+    review state, whether or not any earlier boot in between also alarmed. Scoped to
+    `boot:{service}` alone (never `deploy:withheld`, which is not service-scoped, and never
+    another service's alarms — a clean osiris-mcp boot says nothing about osiris-worker).
+    `dry_run=True` hard default, same shape as the deploy leg."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import resolve_thread
+
+    resolved: list[str] = []
+    failed: list[str] = []
+    try:
+        rows = await _open_boot_alarms(pool, actor=f"boot:{service}")
+    except Exception as exc:  # noqa: BLE001 — same fail-open law as every check in this module
+        _log.warning("resolve_alarms_superseded_by_clean_boot: could not enumerate for %s: %r",
+                     service, exc)
+        return {"dry_run": dry_run, "resolved": resolved, "failed": failed}
+    this_actor = f"boot:{service}"
+    for row in rows:
+        if row["head"] == running_head:
+            continue  # this boot's OWN alarm (if it just fired) — nothing to supersede
+        try:
+            if await _has_other_boot_witness(pool, row["id"], this_actor=this_actor):
+                # a DIFFERENT service still confesses the identical head — not ours alone to close
+                continue
+        except Exception as exc:  # noqa: BLE001 — an unproven ownership check must never resolve
+            _log.warning("resolve_alarms_superseded_by_clean_boot: witness check failed for "
+                         "%s: %r", row["canonical"], exc)
+            failed.append(row["canonical"])
+            continue
+        if dry_run:
+            resolved.append(row["canonical"])
+            continue
+        try:
+            actions = Actions(pool)
+            tid = await resolve_thread(
+                actions, str(row["id"]),
+                because=(f"superseded: {service} booted clean at {running_head!r}, "
+                         "which this ledger now confirms was itself reviewed"),
+                artifact=running_head,
+            )
+        except Exception as exc:  # noqa: BLE001 — this row's failure must not sink the rest
+            _log.warning("resolve_alarms_superseded_by_clean_boot: %s failed: %r",
+                         row["canonical"], exc)
+            failed.append(row["canonical"])
+            continue
+        if tid:
+            resolved.append(row["canonical"])
+    return {"dry_run": dry_run, "resolved": resolved, "failed": failed}
+
+
+async def check_and_resolve_clean_boot(
+    pool: asyncpg.Pool, *, service: str, dry_run: bool = False,
+) -> dict[str, Any]:
+    """The IO half boot-check sites actually call: re-derives running HEAD and the deploy
+    cursor itself (same reads `check_unreviewed_boot` makes), and only proceeds to
+    `resolve_alarms_superseded_by_clean_boot` when both are known AND equal — 'unknown' or
+    'still drifted' must never resolve anything. `dry_run=False` default (unlike its two
+    building blocks) because this IS the production call site; a caller wanting a preview
+    passes `dry_run=True` explicitly. Fail-open, same law as `check_unreviewed_boot`."""
+    try:
+        from src.orchestrator.monitor import get_cursor
+
+        running = _git_head(_REPO_ROOT)
+        last_deployed = await get_cursor(pool, _DEPLOY_CURSOR_KEY)
+        if not running or not last_deployed or running != last_deployed:
+            return {"dry_run": dry_run, "resolved": [], "reason": "not a confirmed clean boot"}
+        return await resolve_alarms_superseded_by_clean_boot(
+            pool, service=service, running_head=running, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001 — same fail-open law as check_unreviewed_boot
+        _log.warning("check_and_resolve_clean_boot failed for %s: %r", service, exc)
+        return {"dry_run": dry_run, "resolved": [], "reason": f"check failed: {exc!r}"}
+
+
+async def _open_schema_drift_alarms(
+    pool: asyncpg.Pool, *, service: str,
+) -> list[dict[str, Any]]:
+    """Every still-open SCHEMA DRIFT Thread sourced from `boot:{service}`. Unlike the boot
+    alarms, no head is extracted here — SCHEMA DRIFT's own resolution rule (below) is not
+    ancestry-based ('does this migration head descend from that one' is not even a coherent
+    question for alembic revisions); it only needs to know THAT an alarm is open for this
+    service, not what value it carried."""
+    return [
+        {"id": r["id"], "canonical": r["canonical"]}
+        for r in await _open_alarms_by_actor(
+            pool, actor=f"boot:{service}", prefixes=("SCHEMA DRIFT",), require_head=False)
+    ]
+
+
+async def resolve_schema_drift_alarms_on_clean_check(
+    pool: asyncpg.Pool, *, service: str, dry_run: bool = False,
+) -> dict[str, Any]:
+    """SCHEMA DRIFT'S OWN SUPERSESSION RULE (operator ruling, DM 7035, item 3 — a deliberate,
+    explicit amendment of the earlier house law that this alarm never auto-resolves): a
+    LATER boot-time check of the SAME SERVICE reporting NO drift (migration head now
+    matches) is itself the ground truth that supersedes every older still-open SCHEMA DRIFT
+    alarm that service minted — the gap it confessed has since closed, whether by an
+    `alembic upgrade` or by the code moving back in step. Re-runs `check_schema_drift`
+    itself (same IO `check_schema_drift` already does) rather than trusting a caller-passed
+    verdict, so a stale caller-side read can never wrongly resolve a still-live drift.
+    `dry_run=False` default, same shape as `check_and_resolve_clean_boot` — this IS the
+    production call site. Fail-open, same law as every check in this module; per-row
+    failures are caught individually so one bad row cannot truncate the rest."""
+    try:
+        drift = await check_schema_drift(pool)
+        if drift:
+            return {"dry_run": dry_run, "resolved": [], "failed": [],
+                    "reason": "still drifted, nothing to resolve"}
+        rows = await _open_schema_drift_alarms(pool, service=service)
+    except Exception as exc:  # noqa: BLE001 — same fail-open law as check_schema_drift
+        _log.warning("resolve_schema_drift_alarms_on_clean_check failed for %s: %r",
+                     service, exc)
+        return {"dry_run": dry_run, "resolved": [], "failed": [],
+                "reason": f"check failed: {exc!r}"}
+    from src.actions.core import Actions
+    from src.orchestrator.capture import resolve_thread
+
+    resolved: list[str] = []
+    failed: list[str] = []
+    for row in rows:
+        if dry_run:
+            resolved.append(row["canonical"])
+            continue
+        try:
+            actions = Actions(pool)
+            tid = await resolve_thread(
+                actions, str(row["id"]),
+                because=f"superseded: {service} booted clean, the migration heads now match",
+            )
+        except Exception as exc:  # noqa: BLE001 — this row's failure must not sink the rest
+            _log.warning("resolve_schema_drift_alarms_on_clean_check: %s failed: %r",
+                         row["canonical"], exc)
+            failed.append(row["canonical"])
+            continue
+        if tid:
+            resolved.append(row["canonical"])
+    return {"dry_run": dry_run, "resolved": resolved, "failed": failed}
 
 
 async def origin_visibility(repo_root: Path) -> str:
