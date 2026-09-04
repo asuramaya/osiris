@@ -817,7 +817,7 @@ async def test_correct_own_pin_value_also_corrects_the_anchor_copy(
         reason="fold+rebind complete", office_root=tmp_path)
     assert out["written"] is True
     assert (office / ".osiris").read_text() == 'project = "Godel"\n'
-    assert out["anchor"]["corrected"] is True
+    assert out["anchor"]["written"] is True
     assert (anchor / ".osiris").read_text() == 'project = "Godel"\n'
 
 
@@ -882,7 +882,7 @@ async def test_correct_own_pin_value_also_corrects_the_workspace_copy(
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
     assert out["written"] is True
     assert (office / ".osiris").read_text() == 'project = "Godel"\n'
-    assert out["workspace"]["corrected"] is True
+    assert out["workspace"]["written"] is True
     assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
 
 
@@ -910,9 +910,9 @@ async def test_correct_own_pin_value_corrects_anchor_and_workspace_together(
         actions.pool, "agent:cov9three", "project", "Godel", reason="all three",
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
     assert (office / ".osiris").read_text() == 'project = "Godel"\n'
-    assert out["anchor"]["corrected"] is True
+    assert out["anchor"]["written"] is True
     assert (anchor / ".osiris").read_text() == 'project = "Godel"\n'
-    assert out["workspace"]["corrected"] is True
+    assert out["workspace"]["written"] is True
     assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
 
 
@@ -937,9 +937,39 @@ async def test_correct_own_pin_value_skips_the_workspace_when_it_equals_the_anch
     out = await correct_own_pin_value(
         actions.pool, "agent:cov10same", "project", "Godel", reason="anchor==workspace",
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
-    assert out["anchor"]["corrected"] is True
+    assert out["anchor"]["written"] is True
     assert "workspace" not in out
     assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'  # still fixed, once
+
+
+async def test_correct_own_pin_value_reports_an_already_correct_anchor_honestly(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Jesus's own live specimen (2026-09-04, transition_seat_project acceptance test):
+    the OFFICE pin can already be correct while a second/third copy genuinely needed a
+    write, or vice versa — each copy's own `written`/`old_value` must be reported for
+    itself, never collapsed to a blind "no error means corrected" (the bug this test
+    guards: a caller whose anchor copy was ALREADY correct used to see `corrected: True`
+    regardless, indistinguishable from a real write)."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov11honest", "Cov11honest", source="test")
+    office = tmp_path / "office" / "cov11honest"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    anchor = tmp_path / "REPOS" / "Godel"
+    anchor.mkdir(parents=True)
+    (anchor / ".osiris").write_text('project = "Godel"\n')  # already correct
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov11honest", "project", "Godel",
+        reason="office needs it, anchor already right", office_root=tmp_path / "office")
+    assert out["written"] is True                      # office: a real write
+    assert out["anchor"]["written"] is False            # anchor: honestly a no-op
+    assert out["anchor"]["old_value"] == "Godel"
+    assert (anchor / ".osiris").read_text() == 'project = "Godel"\n'  # untouched
 
 
 async def test_correct_own_pin_value_skips_a_workspace_with_no_pin_of_its_own(
