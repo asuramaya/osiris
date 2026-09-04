@@ -31,20 +31,25 @@ from src.cli import (
     cmd_boot_status,
     cmd_bootstrap,
     cmd_charter_for,
+    cmd_correct_agent_house,
     cmd_correct_pin_value,
     cmd_deploy,
     cmd_desk,
+    cmd_fleet_reconcile,
     cmd_fold_project,
     cmd_heal_seat_anchor,
+    cmd_heal_seat_transcript,
     cmd_launch,
     cmd_merge,
     cmd_migrate,
     cmd_mint_seat,
     cmd_new,
     cmd_rebind_seat,
+    cmd_reconcile_merge,
     cmd_rematerialize,
     cmd_resume,
     cmd_retention,
+    cmd_retire_agent,
     cmd_seed,
     cmd_show,
     cmd_smoke_chaos,
@@ -3366,6 +3371,212 @@ async def test_cli_parser_accepts_heal_seat_anchor(actions: Actions) -> None:
     args2 = _build_parser().parse_args(
         ["heal-seat-anchor", "Jesus", "--because", "reason", "--apply", "--actor", "operator"])
     assert args2.apply is True and args2.actor == "operator"
+
+
+# --- #204: the five CLI doors the #199 lane 3B audit found as real gaps — thin wrappers
+# on the identical orchestrator function each MCP tool wraps, same convention as
+# heal-seat-anchor/correct-pin-value above.
+
+async def test_cmd_correct_agent_house_corrects_a_named_agents_stamps(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+    from datetime import UTC, datetime
+
+    victim = await actions.create_or_find_object("Agent", "agent:clicah1", "test")
+    await actions.assert_property(victim, "project", "seats", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_correct_agent_house(
+            "agent:clicah1", project="osiris", seat_generation=None, actor="operator",
+            pool=actions.pool)
+    assert out == 0
+    assert "corrected agent:clicah1" in buf.getvalue()
+    project = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='agent:clicah1' AND a.name='project' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
+    assert project == "osiris"
+
+
+async def test_cmd_correct_agent_house_refuses_an_unresolvable_target(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_correct_agent_house(
+            "NobodyEverClaimedThis", project="x", seat_generation=None, actor="operator",
+            pool=actions.pool)
+    assert out == 1
+    assert "no such claimed seat or live agent" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_correct_agent_house(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["correct-agent-house", "Jesus", "--project", "godel", "--seat-generation", "3"])
+    assert args.command == "correct-agent-house"
+    assert (args.seat, args.project, args.seat_generation) == ("Jesus", "godel", 3)
+    assert args.actor == "console"
+
+
+async def test_cmd_reconcile_merge_repairs_an_already_merged_agent_dupe(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+    from datetime import UTC, datetime
+
+    dupe = await actions.create_or_find_object("Agent", "agent:clirm1dupe", "test")
+    await actions.assert_property(dupe, "project", "mergehouse", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    into = await actions.create_or_find_object("Agent", "agent:clirm1into", "test")
+    await actions.assert_property(into, "project", "mergehouse", "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    await actions.merge_objects(into, dupe, justification="old-style", actor="operator")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_reconcile_merge(
+            "agent:clirm1dupe", "agent:clirm1into", actor="operator", pool=actions.pool)
+    assert out == 0
+    assert "reconciled agent:clirm1dupe -> agent:clirm1into" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_reconcile_merge(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["reconcile-merge", "agent:dupe0", "agent:into0"])
+    assert args.command == "reconcile-merge"
+    assert (args.dupe, args.into) == ("agent:dupe0", "agent:into0")
+    assert args.actor == "console"
+
+
+async def test_cmd_retire_agent_retires_a_named_agent(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    await actions.create_or_find_object("Agent", "agent:clira1dead", "test")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_retire_agent(
+            "agent:clira1dead", "stale test agent", override_live=False, actor="operator",
+            pool=actions.pool)
+    assert out == 0
+    assert "retired agent:clira1dead" in buf.getvalue()
+    status = await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE canonical='agent:clira1dead'")
+    assert status == "retired"
+
+
+async def test_cmd_retire_agent_refuses_blank_because(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    await actions.create_or_find_object("Agent", "agent:clira2blank", "test")
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_retire_agent(
+            "agent:clira2blank", "", override_live=False, actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_retire_agent(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["retire-agent", "agent:dead0", "--because", "reason"])
+    assert args.command == "retire-agent"
+    assert (args.seat, args.because, args.override_live) == ("agent:dead0", "reason", False)
+    assert args.actor == "console"
+
+    args2 = _build_parser().parse_args(
+        ["retire-agent", "agent:dead0", "--because", "reason", "--override-live"])
+    assert args2.override_live is True
+
+
+async def test_cmd_fleet_reconcile_dry_run_reports_the_plan(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_fleet_reconcile(execute=False, actor="operator", pool=actions.pool)
+    assert out == 0
+    assert "planned (dry run" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_fleet_reconcile(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(["fleet-reconcile"])
+    assert args.command == "fleet-reconcile"
+    assert args.execute is False and args.actor == "console"
+
+    args2 = _build_parser().parse_args(["fleet-reconcile", "--execute"])
+    assert args2.execute is True
+
+
+async def test_cmd_heal_seat_transcript_dry_run_reports_without_writing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from tests.test_soul_store import _chained_lines, _write_transcript
+
+    lines = _chained_lines(4, seed="clihealt1")
+    sid = "clihealt-0000-0000-0000-000000000001"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[2:])
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_heal_seat_transcript(
+            "CliHealT", [str(a), str(b)], apply=False, because="", pool=actions.pool)
+    assert out == 0
+    assert "would heal" in buf.getvalue()
+
+
+async def test_cmd_heal_seat_transcript_apply_requires_because(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from tests.test_soul_store import _chained_lines, _write_transcript
+
+    lines = _chained_lines(4, seed="clihealt2")
+    sid = "clihealt-0000-0000-0000-000000000002"
+    a = _write_transcript(tmp_path / f"{sid}.jsonl", lines[:2])
+    b = _write_transcript(tmp_path / "b.jsonl", lines[2:])
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_heal_seat_transcript(
+            "CliHealT2", [str(a), str(b)], apply=True, because="", pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_heal_seat_transcript(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["heal-seat-transcript", "Jesus", "/a.jsonl", "/b.jsonl", "--because", "reason",
+         "--apply"])
+    assert args.command == "heal-seat-transcript"
+    assert (args.seat, args.source_paths, args.because, args.apply) == (
+        "Jesus", ["/a.jsonl", "/b.jsonl"], "reason", True)
 
 
 # --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own

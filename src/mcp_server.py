@@ -7248,54 +7248,9 @@ async def heal_seat_transcript(
     if ident is None:
         return {"error": "mount first — a transcript heal is a deliberate act on the record",
                 "why": _anchorless(ctx)}
-    handle = (handle or "").strip()
-    if not handle:
-        return {"error": "a handle is required"}
-    if not source_paths or len(source_paths) < 2:
-        return {"error": "source_paths needs at least two fragments to splice — a single "
-                         "file has nothing to join"}
-    from pathlib import Path
-
-    from src.ingest.soul_store import SoulStore, verify_jsonl_chain_boundary
-    from src.orchestrator.offices import _default_office_root
-
-    first_stem = Path(source_paths[0]).stem
-    if len(first_stem) != 36 or first_stem.count("-") != 4:
-        return {"error": f"source_paths[0]'s filename ({first_stem!r}) is not a session "
-                         "uuid — cannot derive the session id to splice under"}
-    full_sid = first_stem
-    anchor_sid = full_sid.split("-")[0]
-    dest = _default_office_root() / handle.lower() / f"{full_sid}.jsonl"
-
-    preflight: list[dict[str, Any]] = []
-    for a, b in zip(source_paths, source_paths[1:], strict=False):
-        reason = verify_jsonl_chain_boundary(a, b)
-        preflight.append({"a": a, "b": b, "clean": reason is None, "reason": reason})
-    out: dict[str, Any] = {
-        "handle": handle, "anchor_sid": anchor_sid, "dry_run": dry_run,
-        "preflight": preflight, "office_dest": str(dest),
-    }
-    if any(not p["clean"] for p in preflight):
-        out["error"] = "preflight refused — see `preflight` for which pair and why"
-        return out
-    if dry_run:
-        return out
-
-    because = because.strip()
-    if not because:
-        return {"error": "because is required to execute — an operator-gated act needs "
-                         "a stated reason", **out}
-
-    pool = await _pool_get()
-    store = SoulStore(pool)
-    try:
-        spliced = await store.splice_sources(anchor_sid, source_paths)
-    except ValueError as e:
-        return {"error": str(e), **out}
-    out["spliced_lines"] = spliced
-    out["verify_chain"] = await store.verify_chain(anchor_sid)
-    out["rematerialize"] = await store.rematerialize_to_disk(anchor_sid, dest=str(dest))
-    return out
+    from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
+    return await _heal(await _pool_get(), handle, source_paths, dry_run=dry_run,
+                       because=because)
 
 
 @mcp.tool()
