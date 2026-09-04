@@ -1,14 +1,17 @@
-"""RECEIPT DIET (operator's context-bloat priority, 2026-09-04, msg 6870): a receipt
+"""RECEIPT DIET (operator's context-bloat priority, 2026-09-04, msg 6870/6885): a receipt
 returns what the caller needs to ACT, and nothing it did not ask for. prior_art/listener/
 co_agents/held_work become opt-in params (send/inbox/mount) rather than always-attached
 payload — measured live against Thoth's own transcript a93f82b4 (decision 205f7071):
 inbox's own messages carry 131.6 bytes/message of prior_art on average (6.4% of the
 messages payload), send's prior_art+listener together are ~38% of its own receipt bytes.
+orient()'s own blind_spots list (msg 6885's next assignment) measured as the single
+largest static field in a 37-call sample of the same transcript: 154,059 of 751,203 total
+orient() bytes (~4.2K bytes/call) — a project-level fact, not a per-call work item.
 
 This file is the RATCHET for my assigned slice of the top-ten read-verb bloat (send,
-inbox, mount) — a byte-per-call CEILING per representative call shape, raised only as a
-deliberate, reasoned act (same convention as tests/test_tool_contract_diet.py's own
-history), never a reflex.
+inbox, mount, orient) — a byte-per-call CEILING per representative call shape, raised
+only as a deliberate, reasoned act (same convention as tests/test_tool_contract_diet.py's
+own history), never a reflex.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ import json
 from pathlib import Path
 
 from src.actions.core import Actions
-from src.orchestrator.capture import open_thread, record_decision
+from src.orchestrator.capture import open_thread, record_blind_spot, record_decision
 
 
 class _Ctx:
@@ -173,3 +176,50 @@ async def test_mount_receipt_omits_co_agents_and_held_work_by_default(
     assert receipt_bytes <= 560, (
         f"mount() receipt (no co_agents/held_work requested) grew to {receipt_bytes} "
         "bytes, over the ratchet of 560")
+
+
+async def test_orient_omits_blind_spots_list_by_default(actions: Actions) -> None:
+    """orient()'s own scoped briefing reports a blind_spots COUNT, not the full list,
+    unless asked — the measured largest static (non-work-item) field in a 37-call sample
+    of Thoth's own transcript a93f82b4 (~4.2K bytes/call). The safety fact ('something
+    here is unverifiable') survives at near-zero cost; the full list is opt-in."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.compositions import seed_default_compositions
+
+    proj = "receiptdietorient"
+    await _seed(actions.pool, proj)
+    await seed_default_compositions(actions.pool)
+    for surface in ("ios-touch", "webkit-rendering", "bluetooth-pairing"):
+        await record_blind_spot(
+            actions, surface, f"{surface} cannot be verified headless",
+            verify_with="hand the device to the operator", repo=proj)
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rd-orienter", session="rdorienter", project=proj, model=None,
+        cwd=None)
+    try:
+        before = await srv.orient(project=proj, want_blind_spots=True, ctx=ctx)
+        after = await srv.orient(project=proj, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert len(before["blind_spots"]) == 3
+    assert "blind_spots" not in after
+    assert after["blind_spots_count"] == 3
+    before_bytes = _receipt_bytes(before)
+    after_bytes = _receipt_bytes(after)
+    assert after_bytes < before_bytes, (before_bytes, after_bytes)
+    # RATCHET: measured exact AFTER value for this fixture (908 bytes; BEFORE was 1324 —
+    # a 31.4% cut from dropping the full blind_spots array down to a count). Headroom for
+    # serial-id digit growth under a full-suite run, same convention as the inbox/send/
+    # mount ratchets above. Raise only with a reason, never a reflex.
+    assert after_bytes <= 1000, (
+        f"orient() receipt (no want_blind_spots requested) grew to {after_bytes} bytes, "
+        f"over the ratchet of 1000 (before-diet equivalent was {before_bytes}) — if the "
+        "growth is genuinely load-bearing, raise the ceiling as a deliberate act with a "
+        "reason, not a reflex")

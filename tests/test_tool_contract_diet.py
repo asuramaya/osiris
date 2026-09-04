@@ -961,6 +961,11 @@ TOOL_CONTRACT_CEILING_CHARS = 132810
 # want_co_agents/want_held_work on mount) add inputSchema + a one-line note each — the
 # params exist to SHRINK receipts; +936 schema chars buys ~32% off every send/inbox call.
 TOOL_CONTRACT_CEILING_CHARS = 133746
+# 133,746 -> 133,906 (sekhmet-orient-diet, 2026-09-04): one opt-in param
+# (want_blind_spots on orient) adds inputSchema + a one-line docstring note — measured
+# to buy a 31.4% cut (1324 -> 908 bytes) on the seven-blind-spot fixture in
+# tests/test_receipt_diet.py, same trade as the prior raise above.
+TOOL_CONTRACT_CEILING_CHARS = 133906
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

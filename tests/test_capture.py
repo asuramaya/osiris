@@ -1215,16 +1215,22 @@ async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Ac
     items = (await run_composition(actions.pool, "project-briefing", proj))["items"]
     assert "blind_spots" in items
     assert "ios-touch" in [r["surface"] for r in items["blind_spots"]]
-    briefing = await _project_briefing(actions.pool, "demo")
+    briefing = await _project_briefing(actions.pool, "demo", want_blind_spots=True)
     assert briefing is not None
     assert [r["surface"] for r in briefing["blind_spots"]] == ["ios-touch"]
     assert "before trusting" in briefing["blind_spots_note"] or "green run" in briefing[
         "blind_spots_note"]
+    # DEFAULT (no want_blind_spots): a count, not the list — the largest static field
+    # measured in orient()'s own receipt (context-bloat priority, msg 6870/6885)
+    terse = await _project_briefing(actions.pool, "demo")
+    assert terse is not None
+    assert "blind_spots" not in terse
+    assert terse["blind_spots_count"] == 1
     # a project with nothing registered gets NO block — orient stays lean
     bare = await actions.create_or_find_object("SoftwareProject", "repo:bare", "session")
     await actions.assert_property(bare, "name", "bare", "session", datetime.now(UTC), 0.9)
     empty = await _project_briefing(actions.pool, "bare")
-    assert empty is not None and "blind_spots" not in empty
+    assert empty is not None and "blind_spots" not in empty and "blind_spots_count" not in empty
 
 
 async def test_project_briefing_carries_the_honest_topology_count(actions: Actions) -> None:

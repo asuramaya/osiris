@@ -2639,6 +2639,7 @@ _open_thread_wall = comp.open_thread_wall
 
 async def _project_briefing(
     pool: asyncpg.Pool, project: str, me: frozenset[str] = frozenset(), verbose: bool = False,
+    want_blind_spots: bool = False,
 ) -> dict[str, Any] | None:
     """A working agent's SCOPED bearings — its OWN project's open threads + recent decisions,
     not the whole fleet's (a sibling project surfaced that orient's flood costs more context than it
@@ -2685,10 +2686,22 @@ async def _project_briefing(
     }
     blind_spots = [dict(r) for r in (items.get("blind_spots") or []) if r.get("surface")]
     if blind_spots:  # the shape of this project's ignorance (8e26cd10) — absent stays silent
-        out["blind_spots"] = blind_spots
-        out["blind_spots_note"] = ("what this project's harness CANNOT verify from here — "
-                                   "check verify_with before trusting a green run on these "
-                                   "surfaces; register new ones with register_blind_spot()")
+        # RECEIPT DIET (context-bloat priority, msg 6870/6885): the full list rode every
+        # scoped orient() call regardless of whether the caller needed it — measured at
+        # ~4.2K bytes/call across a 37-call sample (decision <pending>), the single
+        # largest static (non-work-item) field in the payload. A fresh mind needs to know
+        # something is unverifiable here, not re-read the whole list every time; the
+        # count is the "act" signal, the list is opt-in.
+        if want_blind_spots:
+            out["blind_spots"] = blind_spots
+            out["blind_spots_note"] = ("what this project's harness CANNOT verify from here — "
+                                       "check verify_with before trusting a green run on these "
+                                       "surfaces; register new ones with register_blind_spot()")
+        else:
+            out["blind_spots_count"] = len(blind_spots)
+            out["blind_spots_note"] = (
+                f"{len(blind_spots)} surface(s) this project's harness cannot verify — "
+                "pass want_blind_spots=True for the full list")
     if more > 0:  # trailing count so a capped wall never hides work silently (membrane, #6)
         # the COUNT is structural (task #55) — a terse receipt that strips the sentence
         # below must not lose the fact a capped wall is hiding work; open_threads_more
@@ -3048,7 +3061,8 @@ async def get_mail(ctx: Context | None = None) -> dict[str, Any]:
 @mcp.tool()
 async def orient(project: str | None = None, subagent_id: str | None = None,
                  subagent_type: str | None = None, session_anchor: str | None = None,
-                 verbose: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+                 verbose: bool = False, want_blind_spots: bool = False,
+                 ctx: Context | None = None) -> dict[str, Any]:
     """Get your bearings — the mount ritual as one call. Returns a scoped briefing: open
     threads + recent decisions for a project, plus a fleet-wide not-shown count. An
     explicit `project` overrides your mount; unmounted with neither gives the whole-fleet
@@ -3056,7 +3070,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
 
     `verbose=True` restores the prose terse mode (default) trims — explanations, the
     ancestor-letter pointer, full-length summaries (capped to 160 chars terse, each still
-    carrying `id`). Every structured fact survives either way."""
+    carrying `id`). Every structured fact survives either way.
+
+    `want_blind_spots=True` returns the full list; default is a count."""
     pool = await _pool_get()
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
@@ -3253,7 +3269,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     from src.orchestrator.compositions import reader_identity_set
     me = await reader_identity_set(
         pool, agent_id=(ident.agent_id if ident else None), project=proj)
-    scoped = await _project_briefing(pool, proj, me=me, verbose=verbose) if proj else None
+    scoped = (await _project_briefing(pool, proj, me=me, verbose=verbose,
+                                      want_blind_spots=want_blind_spots)
+             if proj else None)
     if scoped is not None:
         fleet_open = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
