@@ -315,12 +315,65 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
 
 
 async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """The house an agent works in — its project. A seat belongs to a house."""
+    """RAW READ ONLY — the agent's own current `project` ASSERTION, exactly as stored,
+    fabricated or not. Despite the name, this has nothing to do with `Seat.house`
+    (`derive_house`, seats.py) — the two are unrelated properties on unrelated objects
+    that happen to share a word (decision 68fba2e4, thread 19d6bdcb7fa9: the operator's
+    own "how many houses, are they 1:1 with projects" question, live specimen — Chad's
+    statusline read "Chad" not from Seat.house at all but from exactly this field, stamped
+    "Chad" at a pre-cf201a9 mint from the handle).
+
+    KEPT DELIBERATELY NARROW: the two remaining callers (`correct_agent_house`'s own
+    before/after snapshot, `claim_name`'s generation-counting `seat_holders` comparison)
+    both need the RAW historical stamp, not a resolved display value — an audit "before"
+    field showing a resolved fallback instead of what was actually stored would misreport
+    the correction, and generation-counting must compare raw stamps to raw stamps or it
+    silently renumbers history. Every OTHER caller wants `project_of` instead — the
+    resolving reader (pin -> charter -> works_in, never a raw copy) this function's old,
+    misleading callers were migrated to."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='project' "
         "WHERE o.canonical=$1 "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+
+
+async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = None) -> str | None:
+    """THE RESOLVING READER (decision 68fba2e4, thread 19d6bdcb7fa9 — the operator's own
+    house/project ruling, live specimen: Chad's statusline showed "Chad" — a mint-time
+    fabrication — instead of the seat's own genuinely declared "cdking"). Resolution order,
+    NEVER house: (1) the PIN at `cwd`, if given — `read_project_label`'s own climb-to-repo-
+    root, wins outright the instant it resolves to anything. (2) Absent a pin (or no `cwd`
+    given at all — most callers of this function have no cwd on hand, this is not an error,
+    it just skips straight to (2)): the agent's own seat's DECLARED charter (`charter_of`),
+    when it names exactly one repo — more than one is genuine ambiguity, not this
+    function's call to break, so it falls through. (3) Absent both: the agent's own
+    LINEAGE `works_in` (`lineage_works_in`), which already enforces the ABSTAIN law (only
+    when the WHOLE lineage agrees on one project) — resolved through `merged_into`
+    (`_normalize_project_label_through_merge`) so a since-folded project answers as its
+    live survivor. (4) Absent all three: None — an honest unresolved state (df646654/
+    68fba2e4: homeless is legal, a guess is not), never `house_of`'s raw stamp and never
+    `Seat.house`. Same law `heartbeat.compute_heartbeat` already ships for the statusline
+    (commit cbbb307) — this is that logic, generalized for every other caller."""
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import held_seat
+
+    if cwd:
+        hint = read_project_label(cwd)
+        if hint:
+            return hint
+    seat = await held_seat(pool, agent_id)
+    if seat and seat.get("seat_id"):
+        repos = await charter_of(pool, seat["seat_id"])
+        if len(repos) == 1:
+            return repos[0]
+    lw = await lineage_works_in(pool, agent_id)
+    if lw.get("resolved"):
+        from src.orchestrator.project_identity import _normalize_project_label_through_merge
+        normalized, _confession = await _normalize_project_label_through_merge(
+            pool, lw["resolved"])
+        return normalized
+    return None
 
 
 async def correct_agent_house(
@@ -2576,24 +2629,34 @@ async def mint_heir(
     # them. Inherit both HERE, once, for every mint path — the register path re-stamps its
     # own reading afterwards and the byte-dup skip absorbs the overlap.
     #
-    # THE HOUSE IS THE SEAT'S, NOT THE ANCESTOR'S OWN STAMP (Thoth's fused ask, DM 1301, live
-    # case: a transient wrong-house mount compounds across every AUTOMATIC mint via
-    # house_of(ancestor_id) — mint_heir fires on every compaction/model-swap/session-death, so
-    # a single polluted stamp propagates forward forever, not just miscounting one numeral but
-    # re-stamping the heir's own project too, since this one `house` value feeds both). held_seat
-    # is already lineage-aware and already derives its `house` from the seat itself
-    # (derive_house, ruling ff6148b0) — reuse it, but ONLY when it actually resolves to
-    # something: a seat minted before any project was known (house='' at ensure_seat time,
-    # the pre-Seat-object era, or simply the very first claim) stores an empty house FOREVER
-    # — nothing ever revisits it after mint except a deliberate correct_house call — while the
-    # ancestor's own CURRENT stamp may since have been legitimately, correctly established by
-    # an ordinary mount. Trusting a genuinely empty seat-stamp over a live, real one regressed
-    # test_the_whisper_honors_a_bound_seat (a caught regression, not a hypothetical): treat an
-    # empty derived house exactly like "no seat yet" and fall back.
+    # TWO DIFFERENT QUESTIONS SHARE THIS NEIGHBORHOOD, DELIBERATELY SEPARATE VARIABLES NOW
+    # (decision 68fba2e4, thread 19d6bdcb7fa9 — the operator's own house/project ruling):
+    # `house` below stays EXACTLY the seat-derived-house-or-raw-stamp computation this
+    # function always used — GENERATION COUNTING (`seat_holders`, ~40 lines down) compares
+    # each historical holder's own raw project stamp against it, the same discipline
+    # claim_name's own `counting_house` keeps (line ~738 above) for the identical reason:
+    # counting must compare raw stamps to raw stamps, never a resolved display value, or a
+    # seat whose true history all shares one raw stamp starts undercounting the moment this
+    # function's OTHER concern (below) stops treating that stamp as authoritative.
+    #
+    # `heir_project` is the NEW, SEPARATE answer for what the heir's own project stamp
+    # should be: copying `ancestor_seat["house"]`/`house_of(ancestor_id)` here (the OLD
+    # single unified `house` this comment used to describe) was ITSELF the class of
+    # fabrication the ruling closes — Seat.house is a mint-time stamp (`=handle` for every
+    # self-managed seat, decision 24e0b761's own live specimens Chad/Jesus), not the
+    # ancestor's real project, and a single polluted copy propagated forward FOREVER
+    # through every automatic mint (every compaction, every model swap, every session
+    # death). `project_of` (no `cwd` — this call site has never read a pin and isn't
+    # gaining a new filesystem read here) resolves it instead: charter (if the ancestor's
+    # seat declared exactly one repo) then lineage works_in (merge-normalized) — house
+    # nowhere in it, homeless a legal answer. The `and not moved and not upcoming_project
+    # and not chartered` gate below, and everything move_agent_project_links/chartered
+    # compute, is UNCHANGED — only the project-stamping fallback's SOURCE moved.
     from src.orchestrator.seats import held_seat
     ancestor_seat = await held_seat(actions.pool, ancestor_id)
     house = (ancestor_seat["house"] if ancestor_seat and ancestor_seat.get("house")
             else await house_of(actions.pool, ancestor_id))
+    heir_project = await project_of(actions.pool, ancestor_id)
     # THE FALLBACK RETIRES ONCE A CHARTER EXISTS (task #143, decision 4607637a — resolving
     # bac81acd): works_in means exactly ONE thing now, the session's live/current project;
     # the seat's durable role-house lives on `governs` (re-keyed onto the Seat itself,
@@ -2629,9 +2692,10 @@ async def mint_heir(
     # forward, or the caller already knows a fresher project is coming right behind it —
     # or (task #143) the seat has since declared a charter, so `house` is stale legacy
     # inference and governs is the fact of record instead.
-    if house and not moved and not upcoming_project and not chartered:
-        await actions.assert_property(a, "project", house, heir, now, _CONF, evidence_class=_EC)
-        proj = await _resolve_or_mint_project(actions, house, heir)
+    if heir_project and not moved and not upcoming_project and not chartered:
+        await actions.assert_property(a, "project", heir_project, heir, now, _CONF,
+                                      evidence_class=_EC)
+        proj = await _resolve_or_mint_project(actions, heir_project, heir)
         if proj is not None:
             await _link_once(actions, a, proj, "works_in", heir, now)
     # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat

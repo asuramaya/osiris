@@ -2157,17 +2157,18 @@ async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: 
     assert await house_of(actions.pool, "agent:ghosttest") == "osiris"
 
 
-async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancestors_stamp(
+async def test_mint_heir_counts_by_the_seats_true_house_not_the_ancestors_stamp(
     actions: Actions,
 ) -> None:
     """Thoth's fused bug (DM 1301, live case): Thoth LVII's own mount was transiently
     polluted (a container-root cwd with no seat pin) and re-stamped its OWN project to
     'seats' — but the SEAT OBJECT's own stored house ('osiris') was never touched, only the
-    ancestor's AGENT-level property was. The old mint_heir read house_of(ancestor) for BOTH
-    the heir's inherited project stamp and the generation count, so a 58-generation reign
-    rendered as generation 2. held_seat is already lineage-aware and already derives its
-    house from the SEAT itself (derive_house, ruling ff6148b0) — reusing it here fixes both
-    at once, going forward.
+    ancestor's AGENT-level property was. The old mint_heir read house_of(ancestor) for the
+    generation count, so a 58-generation reign rendered as generation 2. held_seat is
+    already lineage-aware and already derives its house from the SEAT itself (derive_house,
+    ruling ff6148b0) — GENERATION COUNTING alone still reuses it, unchanged by decision
+    68fba2e4 (which only ever touched the heir's own PROJECT STAMP — see the sibling test
+    below for that half).
 
     Five clean prior holders establish real history, all correctly stamped 'osiris'. THEN
     the fifth (the ancestor about to auto-mint) gets its OWN stamp corrupted to 'seats' —
@@ -2202,17 +2203,21 @@ async def test_mint_heir_counts_and_inherits_the_seats_true_house_not_the_ancest
     sanity = await held_seat(actions.pool, ancestor_id)
     assert sanity is not None and sanity["house"] == "osiris", (
         "sanity check: the SEAT's own derived house must read 'osiris' regardless of the "
-        "ancestor's own polluted stamp — this is exactly what the fix reuses")
+        "ancestor's own polluted stamp — this is exactly what generation counting reuses")
 
     heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
                                      because="compaction", succession=None)
 
+    # THE PROJECT STAMP (decision 68fba2e4, thread 19d6bdcb7fa9): neither a charter nor a
+    # real works_in edge exists anywhere in this fixture (only raw `project` assertions,
+    # never a link) — house is no longer consulted for this at all, so the heir's own
+    # project stays honestly unset rather than inheriting Seat.house ('osiris', correct
+    # here only by fixture coincidence — the ruling forbids relying on that coincidence).
     heir_project = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         heir_oid)
-    assert heir_project == "osiris", (
-        "the heir must inherit the SEAT's true house, not the ancestor's polluted stamp")
+    assert heir_project is None
 
     gen = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -2630,15 +2635,16 @@ async def test_mint_heir_skips_the_house_relink_once_the_seat_has_declared_a_cha
     assert await charter_of(actions.pool, seat["seat_id"]) == ["bytebye"]
 
 
-async def test_mint_heir_still_relinks_the_house_when_the_seat_has_no_charter(
+async def test_mint_heir_stays_honestly_unset_with_no_charter_and_no_works_in_edge(
     actions: Actions,
 ) -> None:
-    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs — this sits on the
-    succession path every seat traverses): a seat that has NEVER declared a charter must
-    keep today's behavior exactly as it was. charter_of's own docs say it plainly — 'works_in
-    still names its home' until a charter exists — so the gate must default to firing, not
-    to silence, or a majority of seats (undeclared, per ruling 5's own count) would go blind
-    on their role-house with no replacement fact anywhere in the graph."""
+    """SUPERSEDES the old 'legacy house-relink must still fire' expectation (decision
+    68fba2e4, thread 19d6bdcb7fa9 — the operator's own house/project ruling): an ancestor
+    with a bare `project` assertion and no supporting works_in edge or charter used to have
+    that raw stamp copied onto the heir regardless — exactly the class of unverified-claim
+    propagation the ruling ends. 'Homeless/unknown is a valid state... much better than a
+    fabricated line' applies here too, even absent a charter — an unchartered seat is not
+    a license to guess from whatever raw stamp happens to be lying around."""
     from src.orchestrator.agents import claim_name, mint_heir
 
     now = datetime.now(UTC)
@@ -2656,9 +2662,9 @@ async def test_mint_heir_still_relinks_the_house_when_the_seat_has_no_charter(
         "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='works_in' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
-    assert live == "repo:osiris", (
-        "unchartered — the legacy house-relink must still fire, unchanged, or an "
-        "undeclared seat's role-house silently vanishes with nothing to replace it")
+    assert live is None, (
+        "no charter, no works_in edge, no pin — nothing real to inherit, so the heir "
+        "stays honestly unset rather than copying the ancestor's bare, unverified stamp")
 
 
 async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(

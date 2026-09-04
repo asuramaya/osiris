@@ -148,22 +148,12 @@ async def compute_heartbeat(
             # PIN WINS OUTRIGHT (see this function's own docstring for the full law and
             # the live specimen that caught its absence): once `resolved_project` answers
             # from the pin, nothing below ever touches it again — no cwd-based override,
-            # `house` least of all.
-            if resolved_project is None and seat.get("seat_id"):
-                from src.orchestrator.charter import charter_of
-                charter_repos = await charter_of(conn, seat["seat_id"])
-                if len(charter_repos) == 1:
-                    resolved_project = charter_repos[0]
-                elif agent:
-                    from src.orchestrator.agents import lineage_works_in
-                    from src.orchestrator.project_identity import (
-                        _normalize_project_label_through_merge,
-                    )
-                    lw = await lineage_works_in(conn, agent)
-                    if lw.get("resolved"):
-                        resolved_project, _confession = (
-                            await _normalize_project_label_through_merge(
-                                conn, lw["resolved"]))
+            # `house` least of all. Absent a pin, `project_of` (agents.py) carries the
+            # SAME charter -> lineage_works_in fallback this function used to inline —
+            # one implementation, not two copies drifting apart.
+            if resolved_project is None:
+                from src.orchestrator.agents import project_of
+                resolved_project = await project_of(conn, agent, cwd=cwd or None)
 
     from src.orchestrator import surface
 
