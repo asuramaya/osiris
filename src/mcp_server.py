@@ -62,6 +62,7 @@ from src.orchestrator import succession as comp_succession
 from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
+    cap_handoff_text,
     lineage_root,
     misfiled_by_lineage,
     nearest_handoff_ancestor,
@@ -4300,7 +4301,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             inheritance = {
                 "from": from_id,
                 "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
-                           "text": r["summary"][:800]}
+                           "text": cap_handoff_text(r["summary"])}
                           for r in picks],
                 "note": "your ancestor's own parting words — read before taking up work. "
                         "ack_handoff(ref=<id>) once you have: an unacknowledged handoff "
@@ -9368,6 +9369,31 @@ async def settle(
         if is_handoff:
             await Actions(pool).assert_property(tid, "is_handoff", "true", actor, now, 0.9,
                                                 evidence_class="self_declared")
+            # RESOLVE THE PRIOR MARKER (thread 9c1452d7, 2026-09-05): minting a new
+            # is_handoff Thread never resolved the project's own PRIOR one — three
+            # "STATE OF THE BOARD" markers stacked up unresolved for the same project
+            # because opening a new one had no matching step to close the last. A
+            # successor's orient() only ever needs the NEWEST; superseded ones should
+            # leave the open list the same call that supersedes them, not linger forever.
+            from src.orchestrator.projects import (
+                AmbiguousProjectRef,
+                _resolve_software_project,
+            )
+            try:
+                proj_row = await _resolve_software_project(pool, thread_repo)
+            except AmbiguousProjectRef:
+                proj_row = None
+            if proj_row is not None:
+                wall, _echoes = await _open_thread_wall(pool, proj_row["id"])
+                for w in wall:
+                    if w["id"] == str(tid)[:8]:
+                        continue
+                    if (w.get("is_handoff") or "").strip() == "true":
+                        await capture.resolve_thread(
+                            Actions(pool), w["id"],
+                            because="superseded by a newer is_handoff marker "
+                                    f"({str(tid)[:8]}) this same settle() call",
+                            artifact=str(tid)[:8], source=actor)
         thread_entry = {"id": str(tid)[:8], "is_handoff": is_handoff}
         if repo_defaulted:
             thread_entry["repo_defaulted"] = {

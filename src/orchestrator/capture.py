@@ -1660,9 +1660,20 @@ async def _resolve_ref(
     phrase silently falling through to ILIKE and closing whatever thread it happens to
     substring-match."""
     try:
-        return uuid.UUID(ref)
+        full = uuid.UUID(ref)
     except (ValueError, AttributeError):
-        pass
+        full = None
+    if full is not None:
+        # EXISTENCE + TYPE CHECKED, NOT ASSUMED (thread a2f07976, 2026-09-05): this leg
+        # used to return a syntactically-valid UUID unconditionally — a real id belonging
+        # to the WRONG type, or no object at all, resolved exactly like a genuine hit,
+        # unlike every other rung of this same ladder (canonical/short-id both refuse on
+        # no match). A caller passed a Decision's own id where a Thread was expected and
+        # got silent success instead of the refusal this function's own docstring promises.
+        exists = await pool.fetchval(
+            "SELECT 1 FROM objects WHERE id=$1 AND type=$2 AND status='active'",
+            full, type_)
+        return full if exists else None
     raw = (ref or "").strip().lower()
     canon_prefix = f"{type_.lower()}:"
     hex_part = raw[len(canon_prefix):] if raw.startswith(canon_prefix) else raw

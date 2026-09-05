@@ -1095,7 +1095,7 @@ async def automount(
             # uses (nearest_handoff_ancestor, agents.py), so a successor's very first breath
             # can carry the real parting words even when the immediate ancestor never wrote
             # one (a phantom, or simply silent) and a real one sits a hop or two further back.
-            from src.orchestrator.agents import nearest_handoff_ancestor
+            from src.orchestrator.agents import cap_handoff_text, nearest_handoff_ancestor
             handoff_found, _handoff_complete = await nearest_handoff_ancestor(
                 actions.pool, ident.succeeded_from)
             handoff = None
@@ -1103,7 +1103,7 @@ async def automount(
                 handoff_from, handoff_picks = handoff_found
                 handoff = {"from": handoff_from,
                           "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
-                                     "text": r["summary"][:800]}
+                                     "text": cap_handoff_text(r["summary"])}
                                     for r in handoff_picks]}
             if (newest and newest["summary"]) or handoff:
                 succession = {

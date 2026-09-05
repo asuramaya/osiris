@@ -64,7 +64,7 @@ from typing import Any
 import asyncpg
 
 from src.orchestrator.agents import nearest_handoff_ancestor
-from src.orchestrator.compositions import open_thread_wall
+from src.orchestrator.compositions import ORIENT_OPEN_THREADS, open_thread_wall
 from src.orchestrator.monitor import get_cursor
 from src.orchestrator.projects import _resolve_software_project
 
@@ -313,12 +313,22 @@ def render_handoff_briefing(data: dict[str, Any]) -> str:
         lines.append(f"  - now: {c['new_summary']}")
     lines.append("")
 
+    # Capped at ORIENT_OPEN_THREADS (thread 0f98d004, 2026-09-05): this section rendered
+    # every live thread unbounded — a real handoff hit 80,765 chars, too large for a
+    # successor's first read (the thing it was built for). Mirrors orient()'s own cap
+    # (rank_open_threads/_ORIENT_OPEN_THREADS) rather than inventing a second number;
+    # the tail is never silently dropped — an honest "N more" line always says so.
+    shown_open = data["open"][:ORIENT_OPEN_THREADS]
+    hidden_open = len(data["open"]) - len(shown_open)
     lines.append(f"## Open ({len(data['open'])} live, "
                  f"{data['open_echo_count']} echo(es) not shown)")
-    for t in data["open"]:
+    for t in shown_open:
         owner = t["owner"] or "unowned"
         lines.append(f"- **{t['id']}** [{t['kind'] or 'thread'}] (owner: {owner}): "
                      f"{t['summary']}")
+    if hidden_open > 0:
+        lines.append(f"- …{hidden_open} more not shown (capped at {ORIENT_OPEN_THREADS} — "
+                     "recall()/search() for the rest)")
     lines.append("")
 
     lines.append("## Operator-gated (blocked on the human's own word or hands)")
