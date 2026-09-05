@@ -200,6 +200,19 @@ A watch that pages a real operator needs guards the demo doesn't:
   pytest's own basetemp. `osiris_preflight`'s inode-use alarm (`_tmp_inode_pct`, 80%
   threshold) is the early warning if this class of leak ever recurs some other way —
   it is not itself the fix.
+- **Obligation hygiene, the no-regrow rule (dispatch #204 follow-on, operator ruling
+  2026-09-05, relayed Thoth DM 7161).** `osiris_obligation_hygiene_enabled` — TRUE BY
+  DEFAULT, a deliberate, named exception to every sibling scheduled writer's dark-by-
+  default convention above, per the operator's own explicit instruction ("land it with
+  the flag ON"). Every 15 minutes: an open `kind='obligation'` Thread idle 7+ days (its
+  own `last_touched` stale AND its owner silent fleet-wide across that window) draws one
+  DM nudge to its owner — or the operator's desk, when the owner is a project name or
+  resolves to no live agent; 7 more days of continued silence past that nudge marks it a
+  `hygiene_stage='stale_candidate'` and briefs the operator's desk once. NEVER auto-
+  resolved at either stage — this mechanism only nudges and surfaces, never closes or
+  reclassifies a thread on its own authority. `obligation_hygiene.hygiene_status(pool)`
+  gives counts-per-stage-per-project on demand; `hygiene_execute(execute=False)` (the
+  default) previews a tick's plan without writing anything.
 
 ## The connection envelope at scale (task #180 piece 2)
 

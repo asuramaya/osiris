@@ -707,6 +707,34 @@ async def phantom_fold_reap_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
+    """The obligation-hygiene no-regrow rule's scheduled leg (dispatch #204 follow-on,
+    operator ruling relayed Thoth DM 7161, 2026-09-05): a no-op unless
+    osiris_obligation_hygiene_enabled (the kill switch, TRUE BY DEFAULT per the operator's
+    own explicit instruction — a named exception to this file's own dark-by-default
+    convention), same shape as its seven 15-min siblings — the flag gate lives here, the
+    acting logic (obligation_hygiene_scheduled_tick) lives in obligation_hygiene.py so a
+    test can exercise it directly without touching arq. N1=7 idle days nudges the
+    obligation's own owner (or the operator, per the owner-address fallback); N2=+7 more
+    days of silence marks it a STALE-CANDIDATE and briefs the operator's desk. Never
+    auto-resolves anything. A DB hiccup logs, never sinks the cron."""
+    from src.config.settings import get_settings
+    from src.orchestrator.obligation_hygiene import obligation_hygiene_scheduled_tick
+
+    if not get_settings().osiris_obligation_hygiene_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await obligation_hygiene_scheduled_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("obligation hygiene heartbeat failed: %r", exc)
+        return 0
+    acted = len(report.get("nudged") or []) + len(report.get("staled") or [])
+    if acted:
+        _log.info("obligation hygiene heartbeat: %s", report)
+    return acted
+
+
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
     """The landing audit's scheduled leg (Thoth DM 5544): task #168 built and tested
     deploy_guard.landing_audit/stale_unmerged_branches — measured live, the mechanism was
@@ -993,6 +1021,16 @@ class WorkerSettings:
         # switch). Offset from all six so none contend for CPU at the same wall-clock second.
         cron(watched(landing_audit_heartbeat, every=900), minute={2, 17, 32, 47},
              second={35}, timeout=600, run_at_startup=True),
+        # the obligation-hygiene no-regrow rule (dispatch #204 follow-on, operator ruling
+        # relayed Thoth DM 7161, 2026-09-05): N1=7 idle days -> a DM nudge to the
+        # obligation's own owner; N2=+7 more days of silence -> a STALE-CANDIDATE marker
+        # plus a desk brief, never auto-resolved. Same 15-min cadence class as its seven
+        # siblings above — TRUE BY DEFAULT on osiris_obligation_hygiene_enabled, per the
+        # operator's own explicit instruction ("land it with the flag ON"), a named
+        # exception to every sibling's dark-by-default switch. Offset from all seven so
+        # none contend for CPU at the same wall-clock second.
+        cron(watched(obligation_hygiene_heartbeat, every=900), minute={5, 20, 35, 50},
+             second={40}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

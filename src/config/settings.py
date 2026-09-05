@@ -406,6 +406,16 @@ class Settings(BaseSettings):
     # merge is provably not an ancestor of main. Idempotent on summary text; never blocks a
     # deploy, never gates anything (landing_audit's own NEVER REFUSES law, unchanged).
     osiris_landing_audit_enabled: bool = False
+    # THE OBLIGATION HYGIENE NO-REGROW RULE'S OWN SWITCH (dispatch #204 follow-on, decision
+    # a44ab697161a, operator ruling relayed Thoth DM 7161, 2026-09-05): N1=7 idle days -> a
+    # DM nudge to the obligation's own owner (or the operator, when the owner is a project
+    # name or resolves to no live agent); N2=+7 more days of silence past that -> a
+    # STALE-CANDIDATE marker plus a desk brief. NEVER auto-resolved at either stage — this
+    # only nudges and surfaces, it never closes or reclassifies a thread on its own
+    # authority. TRUE BY DEFAULT — a DELIBERATE, NAMED EXCEPTION to every switch above's
+    # dark-by-default convention, per the operator's own explicit instruction ("land it
+    # with the flag ON").
+    osiris_obligation_hygiene_enabled: bool = True
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a
