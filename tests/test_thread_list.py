@@ -108,6 +108,38 @@ async def test_get_thread_list_kind_and_owner_filters_still_compose(
     assert out["threads"][0]["summary"] == "an obligation for thoth"
 
 
+async def test_get_thread_list_never_duplicates_a_thread_with_a_retracted_in_repo_link(
+    actions: Actions,
+) -> None:
+    """THE RAMSTEIN DOUBLE-THREAD SPECIMEN (thread 1ba9d9be), reproduced directly: a
+    thread whose `in_repo` edge was retracted and re-created (an ordinary fold/re-file,
+    not a bug in itself) used to appear TWICE — the JOIN onto `links` had no
+    `valid_until` filter, so it matched the retracted historical row AND the live one.
+    NOT the multi-current-status-row leak (ruling 1335332e) — that class is a different
+    table (`assertions`) entirely; confirmed independently already closed."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "a thread whose repo link gets refiled",
+                          repo="threadlistproj")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", "repo:threadlistproj")
+    now = datetime.now(UTC)
+    await actions.invalidate_link(t, proj, "in_repo", "test", now)
+    await actions.create_link(t, proj, "in_repo", "test", now, 0.9)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_thread_list("threadlistproj")
+    finally:
+        srv._pool = saved_pool
+    ids = [th["id"] for th in out["threads"]]
+    assert ids == [str(t)[:8]]  # exactly once, not twice
+    assert out["total"] == 1
+
+
 async def test_get_thread_list_honest_total_excludes_a_disagreement(actions: Actions) -> None:
     """THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): `total` counts by the `status`
     PROPERTY alone — a thread closed by a decision (resolves=) and then reopened by a

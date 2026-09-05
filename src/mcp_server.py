@@ -3829,7 +3829,21 @@ async def _get_thread_list_body(
 ) -> dict[str, Any]:
     """The `object_type='thread'` branch of `_get_object_list_impl` — copied verbatim
     from get_thread_list's own top-level function body before the fold (task #202 wave
-    4, decision 6fe4305c)."""
+    4, decision 6fe4305c).
+
+    THE RAMSTEIN DOUBLE-THREAD FIX (thread 1ba9d9be, root-caused live not assumed): every
+    thread in a project with a RETRACTED-then-recreated `in_repo` edge (a fold, a link
+    correction, an ordinary re-file) used to appear TWICE in this listing — the JOIN onto
+    `links` had no `valid_until` filter at all, so it matched every historical `in_repo`
+    row a Thread ever had, live or retracted, not just its current one. This was NEVER
+    the multi-current-status-row leak (ruling 1335332e) it was first suspected to be —
+    that class was independently confirmed already closed (current_flags(action=
+    'inspect') reads count=0 live, and every named ramstein specimen carries exactly one
+    current `status` row on inspection) — it is a plain missing-filter bug on a
+    completely different table (`links`, not `assertions`), unrelated to is_current.
+    Fixed here and in `_get_decision_list_body` below (same copy-paste origin, same
+    missing filter) by requiring `l.valid_until IS NULL OR l.valid_until > now()`, the
+    same convention `create_link`'s own retraction path already documents."""
     pool = await _pool_get()
     proj = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
@@ -3877,6 +3891,7 @@ async def _get_thread_list_body(
     total = await pool.fetchval(
         "SELECT count(*) FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE " + where, *params) or 0
     result: dict[str, Any] = {"project": project}
     if charter_repos:
@@ -3921,6 +3936,7 @@ async def _get_thread_list_body(
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS owner "
         "FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE " + where + " "
         "ORDER BY o.created_at DESC "
         "OFFSET $" + str(idx) + " LIMIT $" + str(idx + 1),
@@ -3952,6 +3968,7 @@ async def _get_decision_list_body(
     total = await pool.fetchval(
         "SELECT count(*) FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Decision' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='superseded_by')", project_ids) or 0
@@ -3970,6 +3987,7 @@ async def _get_decision_list_body(
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
         "FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Decision' AND o.status='active' "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='superseded_by') "

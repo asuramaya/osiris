@@ -748,6 +748,36 @@ async def test_get_decision_list_spans_the_callers_multi_repo_charter(
     assert out["charter_repos"] == ["chronohorn", "decepticons"]
 
 
+async def test_get_decision_list_never_duplicates_a_decision_with_a_retracted_in_repo_link(
+    actions: Actions,
+) -> None:
+    """The same JOIN-onto-links bug fixed for get_thread_list (thread 1ba9d9be) applied
+    identically here — same copy-paste origin, same missing `valid_until` filter."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+    from src.orchestrator.capture import record_decision
+
+    await _repo(actions, "decisionlistproj")
+    d = await record_decision(actions, "a ruling whose repo link gets refiled",
+                              repo="decisionlistproj")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", "repo:decisionlistproj")
+    now = datetime.now(UTC)
+    await actions.invalidate_link(d, proj, "in_repo", "test", now)
+    await actions.create_link(d, proj, "in_repo", "test", now, 0.9)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_decision_list("decisionlistproj")
+    finally:
+        srv._pool = saved_pool
+    ids = [dd["id"] for dd in out["decisions"]]
+    assert ids == [str(d)[:8]]  # exactly once, not twice
+    assert out["total"] == 1
+
+
 async def test_get_thread_list_never_widens_past_the_callers_own_charter(
     actions: Actions,
 ) -> None:
