@@ -269,6 +269,55 @@ async def _live_seat(actions: Actions, handle: str, agent_id: str, *, house: str
     return seat
 
 
+# --- rung 0: a seat-handle owner, checked BEFORE the project-name rung -----------------
+
+async def test_rung0_seat_handle_owner_resolves_to_that_seats_live_holder(
+    actions: Actions,
+) -> None:
+    await _live_seat(actions, "LadderSeat8", "agent:ladder-seat8-holder")
+
+    out = await resolve_owner_target(actions.pool, "ladderseat8")  # case-folded
+    assert out == {"channel": "dm", "target": "agent:ladder-seat8-holder", "reason": None}
+
+
+async def test_rung0_seat_handle_rung_runs_before_the_project_name_rung(
+    actions: Actions,
+) -> None:
+    """A stale SoftwareProject sharing the seat's own spelling must never pre-empt the
+    seat-handle rung — an owner string is a seat before it is a repo (Thoth ruling msg
+    7425, correcting decision 1014b74804da's own diagnosis: 'Thoth'/'seshat'/'imhotep'
+    etc are seat handles, not project names, and the project-name rung used to run
+    first)."""
+    await _repo(actions, "LadderSeat9")  # a SoftwareProject sharing the seat's own spelling
+    await _live_seat(actions, "LadderSeat9", "agent:ladder-seat9-holder")
+
+    out = await resolve_owner_target(actions.pool, "LadderSeat9")
+    assert out == {"channel": "dm", "target": "agent:ladder-seat9-holder", "reason": None}
+
+
+async def test_rung0_seat_handle_owner_vacant_seat_falls_to_the_desk(
+    actions: Actions,
+) -> None:
+    await ensure_seat(actions, house="test", handle="LadderSeat10", source="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderseat10")
+    assert out["channel"] == "desk"
+    assert "vacant" in out["reason"]
+
+
+async def test_rung0_seat_handle_owner_cold_seat_falls_to_the_desk(
+    actions: Actions,
+) -> None:
+    seat = await ensure_seat(actions, house="test", handle="LadderSeat11", source="test")
+    await actions.create_or_find_object("Agent", "agent:ladder-seat11-holder", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ladder-seat11-holder")
+    # no save_mount — the holder exists but has never been seen live
+
+    out = await resolve_owner_target(actions.pool, "ladderseat11")
+    assert out["channel"] == "desk"
+    assert "no live holder right now" in out["reason"]
+
+
 # --- rung 1: a project-name owner ------------------------------------------------------
 
 async def test_rung1_project_name_owner_resolves_to_its_live_seat_head(
@@ -312,6 +361,28 @@ async def test_rung1_governed_project_prefers_the_managing_seat_not_the_managed_
 
         out = await resolve_owner_target(actions.pool, "ladderproj2")
     assert out == {"channel": "dm", "target": "agent:ladder2-mgr", "reason": None}
+
+
+async def test_rung1_shared_house_project_owner_resolves_to_the_house_manager(
+    actions: Actions,
+) -> None:
+    """N>2 seats all chartering their own house's home repo is the normal shape, not a
+    conflict (Thoth ruling msg 7425) — the ladder must nudge the house's manager seat."""
+    await _repo(actions, "ladderhouse1")
+    head = await _live_seat(actions, "LadderHouseHead", "agent:ladderhouse-head",
+                            house="ladderhouse1")
+    await set_charter(actions, head["seat_id"], ["ladderhouse1"], actor="test")
+    head_oid = await actions.create_or_find_object("Seat", head["seat_id"], "test")
+    for i in range(3):
+        worker = await ensure_seat(actions, house="ladderhouse1", handle=f"LadderHouseW{i}",
+                                   source="test")
+        await set_charter(actions, worker["seat_id"], ["ladderhouse1"], actor="test")
+        worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+        await actions.create_link(worker_oid, head_oid, "managed_by", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await resolve_owner_target(actions.pool, "ladderhouse1")
+    assert out == {"channel": "dm", "target": "agent:ladderhouse-head", "reason": None}
 
 
 async def test_rung1_conflicting_project_owner_falls_to_the_desk_with_a_named_reason(

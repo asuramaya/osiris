@@ -719,6 +719,17 @@ async def roster(
       `agreement="conflict"`, returned as both rows, never silently resolved to one — now a
       word that means something.
 
+    N>2 SEATS MATCHING, THE SHARED-HOUSE CASE (Thoth ruling msg 7425, off the obligation-
+    hygiene owner-resolution ladder's own false positive on `roster(repo='osiris')`): when
+    every matched seat's own DERIVED house (`derive_house`) is the SAME house, and that
+    house's name IS this repo, it's a house's own home repo — every worker legitimately
+    charters/pins it, that's the normal shape, not several seats fighting over one thing.
+    `agreement="shared-house"`, `manager` names the house's own unmanaged head seat (the
+    one `manager_of_seat` returns None for) — the seat a caller should prefer, the same
+    role the CHARTER-seat plays in `governed`. Anything else with N>2 matches (an unrelated
+    cluster of seats that merely happen to share a repo string) stays plain `conflict`,
+    `manager=None`.
+
     NO LITERAL MATCH is a real answer, but the caveat below is a standing disclaimer printed
     on every no-match — Alfred's point exactly: a caveat that's always printed carries no
     information on the call where it's actually true (ruling 60bc15db, one level up — the
@@ -839,6 +850,7 @@ async def roster(
         for r in rows
         if name in r["chartered_repos"] or r["pin"]["declared"] == name
     ]
+    manager: str | None = None
     if not matches:
         agreement = "no-match"
     elif len(matches) == 1:
@@ -852,6 +864,25 @@ async def roster(
                 agreement = "governed"
     else:
         agreement = "conflict"
+        # SHARED-HOUSE (Thoth ruling msg 7425, off the osiris obligation-hygiene ladder's
+        # own false-positive: roster(repo='osiris') matching Khnum/Seshat/thoth/sekhmet/
+        # imhotep read as a 5-way "conflict" — two seats fighting over one repo — when it's
+        # actually the NORMAL shape of a house's own home repo: every worker legitimately
+        # charters/pins it, and the house's manager already governs it. N>2 matches, all
+        # belonging to the SAME derived house, and that house's name IS this repo, is that
+        # shape — never guessed at for anything else (a repo an unrelated cluster of seats
+        # merely happens to share stays a plain conflict).
+        matched_rows = {m["seat"]: r for m in matches for r in rows if r["seat"] == m["seat"]}
+        houses = {r["house"] for r in matched_rows.values()}
+        if len(houses) == 1:
+            (house,) = houses
+            if house and house.lower() == name.lower():
+                for r in rows:
+                    if (r["house"] and r["house"].lower() == name.lower()
+                            and await manager_of_seat(pool, r["seat"]) is None):
+                        agreement = "shared-house"
+                        manager = r["seat"]
+                        break
 
     near_misses: list[dict[str, Any]] = []
     caveats = list(_ROSTER_CAVEATS)
@@ -880,7 +911,7 @@ async def roster(
                                  "differs_by": differs})
 
     return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats,
-            "near_misses": near_misses}
+            "near_misses": near_misses, "manager": manager}
 
 
 # A CASE-FOLDED DENY-LIST, NOT A DETECTOR (Sekhmet's own list, msg 3906 — 8 project-string

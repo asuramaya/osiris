@@ -208,14 +208,28 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
     operator's desk because owners are project names or dead agents, "that makes the desk
     the pile"): a rung is tried before falling to the desk, never instead of trying at all.
 
-    Rung 0 — owner already names a currently LIVE, DM-eligible address (an `agent:id`,
-    `seat:id`, or a bare handle `resolve_seat` still finds a live holder for): unchanged
-    from before this ladder, this is the common case and needs no repair.
+    Rung 0 — AN OWNER STRING IS A SEAT BEFORE IT IS A REPO (Thoth ruling, msg 7425,
+    correcting decision 1014b74804da's "44 no-match = charter gap": 42 of those 44 turned
+    out to be bare seat handles — 'Thoth', 'seshat', 'imhotep' — not project names at all;
+    a sample thread owned by 'Thoth' was a literal duty for whoever holds that seat, not a
+    project awaiting a claimant). Checked FIRST, before the project-name rung, because a
+    seat's own bare handle and a project's bare name are indistinguishable strings — a
+    project-name lookup that happens to hit a stale/retired SoftwareProject sharing the
+    same spelling would otherwise pre-empt this every time. Case-insensitive match against
+    a live Seat's `handle`; the seat's own current holder, gated by the SAME exact-liveness
+    test rung 2 uses (`_is_exactly_live`, not `seat_occupancy`'s lineage-broadened
+    `agent_liveness`) — a DM addresses a literal agent id, so what matters is whether that
+    exact holder is live right now, not whether the seat's lineage survives under some
+    other generation.
 
     Rung 1 — owner is a PROJECT NAME: that project's live seat head — `roster(repo=...)`'s
     own single unambiguous match, occupied right now; when charter and pin disagree but one
     seat manages the other (`agreement='governed'`), the MANAGING seat, never the managed
-    one. A `no-match`/`conflict`/uninhabited seat falls through, never guessed at.
+    one; when N>2 seats all match and it's their own HOUSE's home repo
+    (`agreement='shared-house'`, roster's own third case, Thoth ruling msg 7425 — every
+    worker legitimately charters/pins the house's own repo, that's the normal shape, not a
+    conflict), the house's manager seat. A `no-match`/`conflict`/uninhabited seat falls
+    through, never guessed at.
 
     Rung 2 — owner is a DEAD/RETIRED AGENT id: its own lineage head (`lineage_head`'s
     forward `succeeded_by` walk — the SAME authority `send_message`'s reply-routing already
@@ -240,6 +254,22 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
     if not target or target.lower() == "operator":
         return {"channel": "desk", "target": None, "reason": "unowned, or owner=operator"}
 
+    seat_id = await pool.fetchval(
+        "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Seat' AND o.status='active' AND a.name='handle' "
+        "AND lower(a.value #>> '{}') = lower($1) LIMIT 1", target)
+    if seat_id is not None:
+        occ = await seat_occupancy(pool, seat_id)
+        holder = occ.get("holder")
+        if holder is not None:
+            head = await lineage_head(pool, holder)
+            if await _is_exactly_live(pool, head) and await _dm_eligible(pool, head):
+                return {"channel": "dm", "target": head, "reason": None}
+            reason = f"seat {target!r} ({seat_id}) has no live holder right now"
+        else:
+            reason = f"seat {target!r} ({seat_id}) is vacant — never held"
+        return {"channel": "desk", "target": None, "reason": reason}
+
     project = await _project_name_for(pool, target)
     if project is not None:
         out = await roster(pool, repo=project)
@@ -247,6 +277,9 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
         chosen = None
         if agreement == "governed":
             chosen = next((m for m in matches if "charter" in m["via"]), None)
+        elif agreement == "shared-house":
+            manager_seat = out.get("manager")
+            chosen = next((m for m in matches if m["seat"] == manager_seat), None)
         elif agreement == "single-match":
             chosen = matches[0]
         if chosen and chosen.get("occupancy") == "occupied" and chosen.get("holder"):

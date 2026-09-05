@@ -1732,6 +1732,54 @@ async def test_roster_repo_lookup_stays_conflict_when_the_manager_edge_points_th
     assert out["agreement"] == "conflict"
 
 
+async def test_roster_repo_lookup_shared_house_when_the_whole_house_shares_its_own_repo(
+    actions: Actions,
+) -> None:
+    """The house's own home repo — every worker legitimately charters/pins it — is NOT
+    several seats fighting over one thing (Thoth ruling msg 7425, off the obligation-
+    hygiene ladder's own false positive: roster(repo='osiris') matching 5 osiris workers
+    read as a plain `conflict` before this)."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "myhouse")
+    head = await ensure_seat(actions, house="myhouse", handle="Rlk6head", source="test")
+    await set_charter(actions, head["seat_id"], ["myhouse"], actor="test")
+    head_oid = await actions.create_or_find_object("Seat", head["seat_id"], "test")
+    worker_ids = set()
+    for i in range(3):
+        worker = await ensure_seat(actions, house="myhouse", handle=f"Rlk6w{i}", source="test")
+        await set_charter(actions, worker["seat_id"], ["myhouse"], actor="test")
+        worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+        await actions.create_link(worker_oid, head_oid, "managed_by", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+        worker_ids.add(worker["seat_id"])
+
+    out = await roster(actions.pool, repo="myhouse")
+    assert out["agreement"] == "shared-house"
+    assert out["manager"] == head["seat_id"]
+    assert {m["seat"] for m in out["matches"]} == {head["seat_id"], *worker_ids}
+
+
+async def test_roster_repo_lookup_stays_conflict_when_the_shared_house_isnt_this_repo(
+    actions: Actions,
+) -> None:
+    """Same house, N>2 matches — but the repo they share is NOT their own house's name, so
+    it stays a plain `conflict`: shared-house is narrow, not a blanket exemption for any
+    repo a house's seats happen to both claim."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import roster
+
+    await _repo(actions, "sharedexternal")
+    for i in range(3):
+        seat = await ensure_seat(actions, house="alfred", handle=f"Rlk7{i}", source="test")
+        await set_charter(actions, seat["seat_id"], ["sharedexternal"], actor="test")
+
+    out = await roster(actions.pool, repo="sharedexternal")
+    assert out["agreement"] == "conflict"
+    assert out["manager"] is None
+
+
 async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
     actions: Actions, tmp_path: Path,
 ) -> None:
