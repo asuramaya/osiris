@@ -135,7 +135,8 @@ async def ingest_files(
     repo = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source_id,
                                                case_id)
     existing = {(r["from_id"], r["to_id"]) for r in await actions.pool.fetch(
-        "SELECT from_id, to_id FROM links WHERE type='in_repo'")}
+        "SELECT from_id, to_id FROM links WHERE type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())")}
     roles = 0
     files = list_tracked_files(path)
     for f in files:

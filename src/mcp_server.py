@@ -3719,6 +3719,7 @@ async def _project_briefing(
         total = await pool.fetchval(
             "SELECT count(*) FROM objects o "
             "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
             "WHERE o.type='Decision' AND o.status='active' "
             "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
             "  AND s.name='superseded_by') "
@@ -4088,7 +4089,8 @@ async def list_unfiled_threads(
         "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
         "'open')='open'",
-        "NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')",
+        "NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))",
     ]
     params: list[Any] = []
     idx = 1
@@ -4448,6 +4450,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     fleet_map = [dict(r) for r in await pool.fetch(
         "SELECT p.canonical AS project, count(*) AS open_threads "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
         "WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
@@ -4463,7 +4466,8 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "AND (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='status' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1)"
         "  = 'open' "
-        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
     recent = [r["summary"][:160] for r in await pool.fetch(
         "SELECT (SELECT s.value #>> '{}' FROM current_assertions s WHERE s.object_id=o.id "
         "  AND s.name='summary' ORDER BY s.confidence DESC, s.observed_at DESC LIMIT 1) "
@@ -8485,7 +8489,8 @@ async def _thread_action_impl(
             else:
                 rows = await pool.fetch(
                     "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
-                    "WHERE l.from_id=$1 AND l.type='in_repo'", t)
+                    "WHERE l.from_id=$1 AND l.type='in_repo' "
+                    "AND (l.valid_until IS NULL OR l.valid_until > now())", t)
                 label = ", ".join(r["canonical"] for r in rows) or "(no project)"
                 out["arc"] = capture._arc_out_of_scope_note(label)
         return out
@@ -9046,7 +9051,8 @@ async def _resolve_acked_handoff_threads(
         where_repo = (
             " AND EXISTS (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
             "  AND p.type='SoftwareProject' AND p.canonical=$1 "
-            "  WHERE l.from_id=o.id AND l.type='in_repo')")
+            "  WHERE l.from_id=o.id AND l.type='in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
         args.append(f"repo:{repo}")
     rows = await pool.fetch(
         "SELECT o.id FROM objects o WHERE o.type='Thread' AND o.status='active' "

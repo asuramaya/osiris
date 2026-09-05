@@ -57,6 +57,37 @@ async def test_ingest_files(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 4
 
 
+async def test_ingest_files_relinks_a_file_whose_edge_was_retracted(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): the dedup-before-create-link check
+    (`existing = {(from,to) for ... WHERE type='in_repo'}`) had no `valid_until` filter,
+    so a RETRACTED edge still counted as "already linked" and silently blocked a real
+    re-link forever — the mirror image of the ramstein double-thread bug: there a dead
+    edge caused a phantom duplicate, here it would cause a phantom no-op."""
+    repo = tmp_path / "util2"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("# util2")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    await ingest_files(actions, str(repo))
+    p = actions.pool
+    file_id = await p.fetchval("SELECT id FROM objects WHERE type='File'")
+    repo_id = await p.fetchval("SELECT id FROM objects WHERE type='SoftwareProject'")
+    from datetime import UTC, datetime
+    await actions.invalidate_link(file_id, repo_id, "in_repo", "test", datetime.now(UTC))
+    assert await p.fetchval(
+        "SELECT count(*) FROM links WHERE type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())") == 0
+
+    await ingest_files(actions, str(repo))
+    assert await p.fetchval(
+        "SELECT count(*) FROM links WHERE type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())") == 1
+
+
 def test_classify_license() -> None:
     from src.ingest.files import classify_license
     assert classify_license("Permission is hereby granted, free of charge, to anyone") == "MIT"

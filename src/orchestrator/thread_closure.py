@@ -330,7 +330,8 @@ async def enumerate_threads(
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
-        "   AND l.type='in_repo') AS has_in_repo "
+        "   AND l.type='in_repo' "
+        "   AND (l.valid_until IS NULL OR l.valid_until > now())) AS has_in_repo "
         "FROM objects o WHERE o.id = ANY($1::uuid[])",
         ids,
     )

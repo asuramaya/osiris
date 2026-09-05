@@ -134,6 +134,7 @@ async def _open_untouched_threads(
         "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
         "AND ($1::text IS NULL OR p.canonical = 'repo:' || $1) "
@@ -171,6 +172,7 @@ async def _commits(
         "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS at "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE o.type='Commit' AND o.status='active' "
         "AND ($1::text IS NULL OR p.canonical = 'repo:' || $1) "
@@ -309,7 +311,7 @@ async def close_by_commits(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "AND o.merged_into IS NULL "
             "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
-            "  AND l.type='in_repo')")
+            "  AND l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()))")
 
     return {
         "repo": repo, "dry_run": dry_run,
@@ -443,7 +445,8 @@ async def _classify_miss(
                 "'agent:' || $1 || '%' LIMIT 1", tok):
             return "not_a_hash"
     proj_id = await pool.fetchval(
-        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo' LIMIT 1", thread_id)
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", thread_id)
     if proj_id is not None and proj_id not in projects_with_commits:
         return "out_of_scope_repo"
     return "genuinely_missing"

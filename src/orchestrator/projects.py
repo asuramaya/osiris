@@ -154,13 +154,15 @@ async def retire_project(
         return {"error": f"{canonical} is already {status} — nothing to retire"}
     commits = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id "
-        "WHERE l.to_id=$1 AND l.type='in_repo' AND c.type='Commit'", pid)
+        "WHERE l.to_id=$1 AND l.type='in_repo' AND c.type='Commit' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", pid)
     if commits:
         return {"error": f"{canonical} has {commits} commit(s) — live signal, "
                          "retire_project refuses"}
     open_threads = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id "
-        "WHERE l.to_id=$1 AND l.type='in_repo' AND t.type='Thread' AND t.status='active'", pid)
+        "WHERE l.to_id=$1 AND l.type='in_repo' AND t.type='Thread' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", pid)
     if open_threads:
         return {"error": f"{canonical} has {open_threads} open thread(s) pointing in — "
                          "live signal, retire_project refuses"}

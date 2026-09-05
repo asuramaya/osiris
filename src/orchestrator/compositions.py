@@ -275,6 +275,7 @@ async def _visible_reflections(
     rows = await pool.fetch(
         "SELECT DISTINCT l.from_id AS id FROM links l JOIN objects p ON p.id = l.to_id "
         "WHERE l.from_id = ANY($1::uuid[]) AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND lower(regexp_replace(p.canonical, '^repo:', '')) = lower($2)",
         ids, house)
     return {r["id"] for r in rows}
@@ -532,6 +533,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             proj_canon = "repo:" + scope_project
             filters.append("EXISTS (SELECT 1 FROM links l2 JOIN objects p2 ON p2.id=l2.to_id "
                            "WHERE l2.from_id=o.id AND l2.type='in_repo' "
+                           "AND (l2.valid_until IS NULL OR l2.valid_until > now()) "
                            "AND p2.canonical=$1 AND p2.status='active')")
             sparams.append(proj_canon)
         if scope_lineage:
@@ -800,7 +802,8 @@ async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.U
         "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
     have_files = {r["repo"] for r in await pool.fetch(
         "SELECT DISTINCT l.to_id AS repo FROM links l "
-        "JOIN objects f ON f.id=l.from_id AND f.type='File' WHERE l.type='in_repo'")}
+        "JOIN objects f ON f.id=l.from_id AND f.type='File' WHERE l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")}
     return {r["id"]: r["name"] for r in repos
             if r["name"] and r["id"] in have_files and (not want or r["name"].lower() in want)}
 
@@ -822,7 +825,8 @@ async def _fn_family(
         "SELECT DISTINCT l.to_id AS repo, a.value #>> '{}' AS role "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
         "JOIN current_assertions a ON a.object_id=f.id AND a.name='role' "
-        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap))
+        "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND l.to_id = ANY($1::uuid[])", list(rmap))
     role_repos: dict[str, set[uuid.UUID]] = {}
     for p in pairs:
         role_repos.setdefault(p["role"], set()).add(p["repo"])
@@ -862,7 +866,8 @@ async def _fn_family_drift(
         "  WHERE a.object_id=f.id AND a.name='license_type' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS lt "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
-        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap))
+        "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND l.to_id = ANY($1::uuid[])", list(rmap))
     # role -> repo -> [hashes]; a repo may have several files of one role (e.g. CI workflows),
     # so its signature is all of them combined — then signatures compare across repos.
     sigs: dict[str, dict[uuid.UUID, list[str]]] = {}
@@ -918,7 +923,9 @@ async def _fn_project(
         "        AND a.name='authored_date' "
         "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
-        "WHERE l.to_id=$1 AND l.type='in_repo' ORDER BY date DESC NULLS LAST LIMIT 15", repo)
+        "WHERE l.to_id=$1 AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY date DESC NULLS LAST LIMIT 15", repo)
     # THE UNCITED RULING (Thoth DM 2704, finding 1 of the in_repo audit): a Decision's OWN
     # in_repo edge (record_decision(repo=...) mints one via link_repo, at birth) used to
     # count for nothing here — only a decided_in citation to a commit that is itself
@@ -933,10 +940,12 @@ async def _fn_project(
         "  SELECT DISTINCT d.id FROM objects d "
         "  JOIN links dl ON dl.from_id=d.id AND dl.type='decided_in' "
         "  JOIN links rl ON rl.from_id=dl.to_id AND rl.type='in_repo' AND rl.to_id=$1 "
+        "  AND (rl.valid_until IS NULL OR rl.valid_until > now()) "
         "  WHERE d.type='Decision' "
         "  UNION "
         "  SELECT DISTINCT d.id FROM objects d "
         "  JOIN links l ON l.from_id=d.id AND l.type='in_repo' AND l.to_id=$1 "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "  WHERE d.type='Decision'"
         ") "
         "SELECT "
@@ -952,7 +961,8 @@ async def _fn_project(
         "        AND a.name='role' "
         "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS role "
         "FROM links l JOIN objects f ON f.id=l.from_id AND f.type='File' "
-        "WHERE l.to_id=$1 AND l.type='in_repo'", repo)
+        "WHERE l.to_id=$1 AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", repo)
     role_list = sorted(r["role"] for r in roles if r["role"])
     return {
         f"{name} — recent commits": [
@@ -997,7 +1007,8 @@ async def _fn_portfolio(
     for r in await pool.fetch(
         "SELECT l.to_id AS repo, o.canonical FROM links l "
         "JOIN objects o ON o.id=l.from_id AND o.type='File' "
-        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap)):
+        "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND l.to_id = ANY($1::uuid[])", list(rmap)):
         m = _EXT.search((r["canonical"] or "").lower())
         if m and r["repo"] in exts:
             exts[r["repo"]][m.group(1)] += 1
@@ -1013,7 +1024,8 @@ async def _fn_portfolio(
         "  AND a.name='rationale' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS r "
         "FROM links l JOIN objects o ON o.id=l.from_id AND o.type='Commit' "
-        "WHERE l.type='in_repo' AND l.to_id = ANY($1::uuid[])", list(rmap)):
+        "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND l.to_id = ANY($1::uuid[])", list(rmap)):
         if r["repo"] not in tf:
             continue
         ncommits[r["repo"]] += 1
@@ -1306,7 +1318,8 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
-        "   WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS project, "
+        "   WHERE l.from_id=o.id AND l.type='in_repo' "
+        "   AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) AS project, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='summary' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
@@ -1783,6 +1796,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   AS summary, "
         " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
@@ -1798,6 +1812,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
             "   AS summary "
             "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+            "AND (l.valid_until IS NULL OR l.valid_until > now()) "
             "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 "
             "WHERE o.type='Commit' AND o.status='active' "
             "ORDER BY o.created_at DESC LIMIT 300", repo)
@@ -1835,7 +1850,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
         "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
-        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
     land("rot-candidate-unscoped", "info", [
         {"subject": "fleet", "count": int(unscoped),
          "detail": f"{unscoped} open thread(s) have no in_repo edge at all — the "
@@ -2387,6 +2403,7 @@ _NOT_HALTED = (
     "NOT EXISTS (SELECT 1 FROM links hl JOIN objects hp ON hp.id=hl.to_id "
     "  JOIN current_assertions ha ON ha.object_id=hp.id AND ha.name='lifecycle' "
     "  WHERE hl.from_id=o.id AND hl.type='in_repo' AND hp.type='SoftwareProject' "
+    "    AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
     "    AND ha.value #>> '{}' = 'halted')"
 )
 
@@ -2441,6 +2458,7 @@ async def open_thread_wall(
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS untouched "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
@@ -2481,7 +2499,8 @@ async def open_thread_wall(
             "   WHERE a.object_id=o.id AND a.name='status' "
             "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
             "  AND NOT EXISTS (SELECT 1 FROM links fl WHERE fl.from_id=o.id "
-            "   AND fl.type='in_repo') "
+            "   AND fl.type='in_repo' "
+            "   AND (fl.valid_until IS NULL OR fl.valid_until > now())) "
             "  AND (COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
             "   WHERE a.object_id=o.id AND a.name='owner' "
             "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'') = $1 "
@@ -2574,6 +2593,7 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
         "   WHERE sa.object_id=o.id AND sa.evidence_class='self_declared')) AS pile "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.status='active' "
         "  AND NOT EXISTS (SELECT 1 FROM current_assertions ha WHERE ha.object_id=p.id "
         "    AND ha.name='lifecycle' AND ha.value #>> '{}' = 'halted') "
@@ -2601,7 +2621,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  (SELECT max(sa2.observed_at) FROM assertions sa2 WHERE sa2.object_id=o.id "
         "    AND sa2.evidence_class='self_declared') AS last_touched, "
         "  (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
-        "    WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS project, "
+        "    WHERE l.from_id=o.id AND l.type='in_repo' "
+        "    AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) AS project, "
         "  EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "    AND sa.evidence_class='self_declared') AS touched "
         " FROM objects o "
@@ -2675,7 +2696,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo')")
+        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "    AND (l.valid_until IS NULL OR l.valid_until > now()))")
     totals = {
         "open": trow["open"],
         "wall": trow["open"] - trow["pile"],   # a mind touched it — open = wall + pile, exactly

@@ -1163,7 +1163,8 @@ async def link_repo(
     proj = await _mint_or_find_repo(actions, repo, observed, source=source,
                                     evidence_class=evidence_class, confidence=confidence)
     exists = await actions.pool.fetchval(
-        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' LIMIT 1",
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1",
         obj_id, proj,
     )
     if not exists:
@@ -1813,7 +1814,8 @@ async def _open_obligation_thread_ids(
         if proj is not None:
             same_repo = await pool.fetch(
                 "SELECT from_id FROM links WHERE from_id = ANY($1::uuid[]) "
-                "AND to_id=$2 AND type='in_repo'",
+                "AND to_id=$2 AND type='in_repo' "
+                "AND (valid_until IS NULL OR valid_until > now())",
                 kindless_open, proj)
             kept |= {r["from_id"] for r in same_repo}
     return kept
@@ -2057,6 +2059,7 @@ async def find_near_duplicate_open_thread(
         "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='status' "
@@ -2126,6 +2129,7 @@ async def find_near_duplicate_decision(
         "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS summary "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Decision' AND o.merged_into IS NULL AND o.status='active' "
         "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "   WHERE a.object_id=o.id AND a.name='superseded_by' "
@@ -2285,7 +2289,8 @@ async def arc_in_scope_for_thread(pool: asyncpg.Pool, thread_id: uuid.UUID) -> b
     project — including the case where osiris itself was never minted, since a thread that
     IS filed somewhere cannot then match a project that doesn't exist."""
     repo_ids = await pool.fetch(
-        "SELECT DISTINCT l.to_id FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
+        "SELECT DISTINCT l.to_id FROM links l WHERE l.from_id=$1 AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())",
         thread_id)
     if not repo_ids:
         return True
@@ -2513,7 +2518,8 @@ async def open_held_work(
     if repo and proj is None:
         return []
     repo_clause = " AND EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id " \
-                 "AND l.type='in_repo' AND l.to_id=$1)" if proj is not None else ""
+                 "AND l.type='in_repo' AND l.to_id=$1 " \
+                 "AND (l.valid_until IS NULL OR l.valid_until > now()))" if proj is not None else ""
     params = (proj,) if proj is not None else ()
     rows = await pool.fetch(
         "SELECT o.id, "

@@ -111,6 +111,7 @@ async def candidates(
     args: list[Any] = []
     if project:
         scope = ("JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+                 "AND (l.valid_until IS NULL OR l.valid_until > now()) "
                  "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 ")
         args.append(project if project.startswith("repo:") else f"repo:{project}")
     # ORIENT'S OWN CALL SHAPE (limit=0, count-only — mcp_server.py's "your_pile" glance):
@@ -320,7 +321,8 @@ async def adversary_yield(
     scope, args = "", [days]
     if project:
         scope = ("AND EXISTS (SELECT 1 FROM links l JOIN objects p ON p.id=l.to_id "
-                 "  WHERE l.from_id=a.object_id AND l.type='in_repo' AND p.canonical=$2) ")
+                 "  WHERE l.from_id=a.object_id AND l.type='in_repo' "
+                 "  AND (l.valid_until IS NULL OR l.valid_until > now()) AND p.canonical=$2) ")
         args.append(project if project.startswith("repo:") else f"repo:{project}")  # type: ignore[arg-type]
     if current_producer_only:
         scope += _V2_ONLY
@@ -329,7 +331,8 @@ async def adversary_yield(
         "  SELECT a.name, o.created_at AS born, rl.proj "
         "  FROM current_assertions a JOIN objects o ON o.id = a.object_id "
         "  LEFT JOIN LATERAL (SELECT l.to_id AS proj FROM links l "
-        "    WHERE l.from_id = a.object_id AND l.type='in_repo' LIMIT 1) rl ON true "
+        "    WHERE l.from_id = a.object_id AND l.type='in_repo' "
+        "    AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) rl ON true "
         "  WHERE a.evidence_class='self_declared' "
         "    AND a.name IN ('admitted_because','retracted_because','asked_by') "
         "    AND a.observed_at > now() - make_interval(days => $1) " + scope + "), "
@@ -337,6 +340,7 @@ async def adversary_yield(
         "  SELECT l.to_id AS proj, max(sb.observed_at) AS at "
         "  FROM current_assertions sb "
         "  JOIN links l ON l.from_id = sb.object_id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "  WHERE sb.name='superseded_by' GROUP BY l.to_id) "
         "SELECT count(*) FILTER (WHERE j.name='admitted_because') AS admitted, "
         "       count(*) FILTER (WHERE j.name='retracted_because') AS dropped, "
@@ -452,7 +456,8 @@ async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:
         "       to_char(max(o.created_at),'YYYY-MM-DD HH24:MI') AS newest "
         "FROM objects o JOIN origin g ON g.object_id=o.id "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
-        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo') " +
+        "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "    AND (l.valid_until IS NULL OR l.valid_until > now())) " +
         _CANDIDATE_WHERE +
         "GROUP BY g.source_id ORDER BY n DESC")
     total = sum(int(r["n"]) for r in rows)
