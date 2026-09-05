@@ -239,17 +239,35 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
     assert bound is not None
     assert bound["seat_id"] == seat["seat_id"] and bound["handle"] == "Ptah"
 
-    # NEWEST GENERATION WINS when more than one survives un-healed (the same tiebreak
-    # follow_binding uses): bind a later generation too, DIRECTLY (create_link, not
-    # bind_holder) so the ancestor's link is never healed — simulating exactly the
-    # un-healed state this fix exists to read past.
+    # NEWEST GENERATION WINS when more than one survives un-healed ON THE SAME SEAT (the
+    # same tiebreak follow_binding uses) — bind a second ancestor-generation link on the
+    # SAME seat, directly, and a caller asking about a later generation still finds it.
+    same_seat_older = "agent:iiii0001-ii"
+    older_oid = await actions.create_or_find_object("Agent", same_seat_older, "test")
+    seat_oid = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.create_link(older_oid, seat_oid, "holds", "test", datetime.now(UTC), 0.9)
+    still_ptah = await held_seat(actions.pool, "agent:iiii0001-vii")
+    assert still_ptah is not None and still_ptah["seat_id"] == seat["seat_id"]
+
+    # A FORKED LINEAGE (decision fb85dd4f, the werner/Thoth live specimen) is NOT the same
+    # case: rows naming DIFFERENT seats means a sibling generation was wrongly grafted
+    # onto this base — raw generation-number-wins would hand a caller a seat some
+    # unrelated sibling holds. Bind yet another generation to a SECOND, different seat,
+    # directly (create_link, not bind_holder, simulating exactly the un-healed state a
+    # graft leaves behind).
     later = "agent:iiii0001-v"
     other_seat = await ensure_seat(actions, house="osiris", handle="Ptah2", source="test")
     later_oid = await actions.create_or_find_object("Agent", later, "test")
     other_seat_oid = await actions.create_or_find_object("Seat", other_seat["seat_id"], "test")
     await actions.create_link(later_oid, other_seat_oid, "holds", "test", datetime.now(UTC), 0.9)
-    newest = await held_seat(actions.pool, "agent:iiii0001-vii")  # asks about a THIRD generation
-    assert newest is not None and newest["seat_id"] == other_seat["seat_id"]  # -v outranks -i
+    # a THIRD generation, with no holds row of its own, asks — genuinely ambiguous now
+    # that two DIFFERENT seats are in play: never guess a branch, read as unbound.
+    ambiguous = await held_seat(actions.pool, "agent:iiii0001-vii")
+    assert ambiguous is None
+    # but the generation that DOES literally hold the second seat still resolves —
+    # an EXACT match on the presented id is trusted even mid-fork.
+    exact_match = await held_seat(actions.pool, later)
+    assert exact_match is not None and exact_match["seat_id"] == other_seat["seat_id"]
 
 
 async def test_bind_holder_invalidates_the_agents_own_other_active_holds(

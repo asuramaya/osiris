@@ -264,8 +264,19 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     successor (-xviii) — the old query exact-matched the presented id. Now any active link
     ANYWHERE in the lineage (the presented id, the bare root, or any `-<suffix>` generation —
     the same LIKE-prefix shape the trigger.py rate caps already use) answers; when more than
-    one survives un-healed, the NEWEST generation wins, the same tiebreak follow_binding uses
-    when it moves a link forward.
+    one survives un-healed ON THE SAME SEAT, the NEWEST generation wins, the same tiebreak
+    follow_binding uses when it moves a link forward.
+
+    A FORKED LINEAGE IS NOT THE SAME CASE (the werner/Thoth live specimen, decision
+    fb85dd4f, 2026-09-05): rows naming more than one DISTINCT seat means this lineage has
+    split — a sibling generation wrongly grafted onto the same base (Alfred's launch of
+    werner minted "Thoth" gen 38 as werner's own heir, a since-fixed defect in
+    `_seat_lineage_ancestor`) can easily out-number the TRUE chain, so raw
+    highest-generation-wins would hand a caller a seat some UNRELATED sibling holds, not
+    its own. In that case only an EXACT match on the presented `agent_id` is trusted (the
+    caller's own literal identity is the one fact that is never a guess); with no exact
+    row of its own, the split is genuinely ambiguous and this returns None rather than
+    silently pick a branch — unbound reads honestly, a wrong seat does not.
 
     `house` is DERIVED (ruling ff6148b0, decision 4c9e4bd7), never the seat's own stored
     property — see derive_house()."""
@@ -283,7 +294,13 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
         "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id, base)
     if not rows:
         return None
-    best = max(rows, key=lambda r: _generation(r["holder"])[1])
+    if len({r["seat_id"] for r in rows}) > 1:
+        exact = [r for r in rows if r["holder"] == agent_id]
+        if not exact:
+            return None
+        best = exact[0]
+    else:
+        best = max(rows, key=lambda r: _generation(r["holder"])[1])
     house = await derive_house(pool, best["seat_id"])
     return {"seat_id": best["seat_id"], "handle": best["handle"], "house": house}
 
