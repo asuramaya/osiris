@@ -1341,9 +1341,13 @@ async def rebind_seat(
 
     (a) resolve `seat_or_agent` — a claimed name (`resolve_handle`) or a raw agent id (the
         GRAVE RULE: an explicit id is intent, so a dead or unclaimed seat can still be moved).
-    (b) read the seat's DURABLE project label (`house_of` — the `project` assertion mail and
-        attribution key on). This value NEVER changes; a rebind that touched it would just be
-        the identity-fracture bug wearing a different hat.
+    (b) read the seat's DURABLE project label (`project_of` — pin→charter→lineage works_in,
+        never house; thread c5a91ea1/ruling 68fba2e4). This used to be `house_of`'s raw
+        Agent.project stamp, carried forward VERBATIM — including a fabricated one: a rebind
+        of a Chad/Jesus-shape seat (project=handle at mint) would perpetuate that fabrication
+        into the new location's pin forever, the exact class the ruling closes. `project_of`
+        resolves the seat's REAL project instead (or homeless, a legal answer) rather than
+        copying whatever the mint-time stamp happened to say.
     (c) write/refresh `new_cwd/.osiris` pinning that label.
     (d) re-point the WHOLE LINEAGE's durable `agent_mounts` rows (the `cwd` column) at
         `new_cwd` — not just the live holder's, or an earlier generation's row resurrects at
@@ -1394,7 +1398,7 @@ async def rebind_seat(
         "path (ruling 23771416). Mounts/harness metadata still moved to new_cwd below. "
         "Use bind_seat_tree if this is a work-tree relocation, not an identity one."
     )
-    from src.orchestrator.agents import _generation, house_of, resolve_handle
+    from src.orchestrator.agents import _generation, project_of, resolve_handle
     from src.orchestrator.seats import derive_house
 
     agent_id = await resolve_handle(actions, seat_or_agent) if seat_or_agent else None
@@ -1441,7 +1445,7 @@ async def rebind_seat(
             "seat": direct_seat_id, "project": label, "new_cwd": new_cwd,
             "osiris_written": osiris_path, "note": note,
         }
-    label = await house_of(actions.pool, agent_id)
+    label = await project_of(actions.pool, agent_id)
     if not label:
         return {"error": f"{agent_id} has no durable project label to preserve — it has never "
                          "been mounted in a project, so there is no anchor to move"}
