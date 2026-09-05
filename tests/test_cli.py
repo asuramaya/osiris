@@ -2108,6 +2108,58 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     assert "TOOL LIST CHANGED: +retire_assertion, ~smoke changed" in buf.getvalue()
 
 
+async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_restart(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread d96167c6: a deploy restart drops every live streamable-HTTP session
+    silently, and health/smoke can never see it (they probe a FRESH connection). Thoth's
+    plan: broadcast an fyi before the restart and another once health confirms it's back
+    — reconnect itself is the harness client's own job."""
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/deploywarn1", agent_id="agent:dw1",
+                            project="osiris", cwd="/w/x", model="claude-sonnet-5",
+                            session_key=None)
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok)
+    assert out in (0, 1)
+    rows = await actions.pool.fetch(
+        "SELECT body FROM fleet_messages WHERE from_agent='deploy:disconnect-warning' "
+        "ORDER BY id")
+    bodies = [r["body"] for r in rows]
+    assert len(bodies) == 2
+    assert "restarting osiris-mcp" in bodies[0] and "your next call reconnects" in bodies[0]
+    assert "osiris-mcp is back up" in bodies[1] and "reconnect now" in bodies[1]
+
+
+async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No mount under 'osiris' at all — send_message's own to_project validation refuses
+    (ValueError), caught and printed as a NOTE, never blocking or failing the deploy."""
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok)
+    assert out in (0, 1)
+    assert "disconnect warning failed to send" in buf.getvalue()
+    assert "reconnect notice failed to send" in buf.getvalue()
+
+
 async def test_cmd_deploy_restart_failure_is_honest(actions: Actions, tmp_path: Path) -> None:
     async def _failing_restart(units: list[str]) -> tuple[int, str]:
         return 1, "Unit osiris-mcp.service not found."
