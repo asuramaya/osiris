@@ -222,6 +222,10 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     "heal-seat-anchor": "seat:heal_anchor",
     "transition-seat-project": "seat:transition_project",
     "heal-seat-transcript": "seat:heal_transcript",
+    # #202 agent dispatcher (Thoth dispatch 7162): fleet-reconcile's own CLI door
+    # matched the bare fleet_reconcile tool 1:1 before this fold — now it matches the
+    # dispatcher action instead, same shape as seat's own entries above.
+    "fleet-reconcile": "agent:fleet_reconcile",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -385,6 +389,14 @@ BINDING_VERBS = frozenset({
     # unfork/retire), the same 6823 rule the individual verbs it absorbs were each
     # added under.
     "project",
+    # `agent` (#202 agent dispatcher, Thoth dispatch 7162) — the fifth object-type
+    # dispatcher: correct_agent_house/retire_agent/fleet_reconcile (already binding-
+    # movers above, individually) plus claim_name/file_subagent/file_subagents fold
+    # into this one door's actions, all kept as hidden deprecated aliases. Writes
+    # Agent identity/lineage state (name/house/seat_generation/retired/spawned_by
+    # filing) and reaps stale fleet mounts, the same 6823 rule the individual verbs
+    # it absorbs were each added under.
+    "agent",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -449,6 +461,14 @@ NO_CLI_EQUIVALENT = {
         "calls the underlying orchestrator function directly through its own eventual "
         "CLI door, unaffected by the MCP-layer fold — a raw `osiris project "
         "--action=...` door was deliberately never scoped, not a gap to close.",
+    "agent": "BY DESIGN, permanent — same price-minimizer #3 reasoning as seat/"
+        "project's own entries above (Thoth dispatch 7162): correct_agent_house/"
+        "retire_agent/fleet_reconcile each already have (or, for fleet-reconcile, "
+        "route through via CLI_TO_MCP_NAME) their own CLI subcommand calling the "
+        "underlying orchestrator function directly; claim_name/file_subagent/"
+        "file_subagents have no CLI door at all today, a real gap this fold doesn't "
+        "create — a raw `osiris agent --action=...` door was deliberately never "
+        "scoped, not a gap to close.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
     # binding by definition"). merge/unmerge (also added to BINDING_VERBS above) already
@@ -1176,6 +1196,22 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # `open_thread` deliberately stays OUT and separately named (it MINTS). Not a
     # binding-mover — acts on Thread objects only, same as thread_action's own entry.
     "thread": {"binding_verb": False, "parameterizes": "resolve_thread"},
+    # agent(action=...) — #202 AGENT DISPATCHER, Thoth dispatch 7162, proposal decision
+    # 65a6eb73 approved as scoped: the fifth object-type dispatcher. 6 names fold in —
+    # correct_agent_house (already hidden, zero-traffic, before this fold — repointed),
+    # retire_agent (already a hidden alias of retire_object(kind='agent') — repointed,
+    # same dual-door precedent seat/project(action='retire') established),
+    # fleet_reconcile, claim_name, file_subagent (already hidden, zero-traffic, before
+    # this fold — repointed), file_subagents — all kept as hidden deprecated aliases.
+    # Declined: retire() (self-scoped, different auth shape), walk_in (already
+    # seat(action='walk_in')), merge/unmerge/reconcile_merge (polymorphic, stay named),
+    # backfill_agent_project_links (already routed to a different dispatcher),
+    # restore_attribution (keyed on project, not agent_id), lift/identify_agent/
+    # succession_chain/unwitnessed_spawns (dead or genuinely distinct reads) — see
+    # decision 65a6eb73 for the full reasoning on each. Binding-mover: correct_house/
+    # retire/fleet_reconcile write Agent identity/lineage state and reap fleet mounts,
+    # the same 6823 rule those three already sat in BINDING_VERBS under individually.
+    "agent": {"binding_verb": True, "parameterizes": "correct_agent_house"},
 }
 
 

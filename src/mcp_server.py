@@ -5349,20 +5349,15 @@ async def dismiss_brief(message_id: int, because: str,
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "agent(action='claim_name')",
+    "since": "task #202 agent dispatcher (msg 7162)",
+})
 async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Name yourself. You mount as an anonymous hash; when you know who you are (your role, your
-    work), claim a MEANINGFUL human name — you pick it, Osiris just enforces uniqueness. A name
-    belongs to ONE lineage forever (a successor of yours inherits it as 'Name II'; a stranger
-    can't take it), so the fleet can address you by name: another agent DMs you with
-    send(to_agent='<your name>'). Refused only if the name is already held by a different
-    lineage — pick another. Global namespace; choose something distinctive."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a name attaches to YOU",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.agents import claim_name as _claim
-    return await _claim(Actions(await _pool_get()), ident.agent_id, name, source=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    agent(action='claim_name')."""
+    return await _agent_impl("claim_name", name=name, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -6616,41 +6611,207 @@ async def transition_seat_project(
                             dry_run=dry_run, ctx=ctx)
 
 
+# THE AGENT OBJECT-TYPE DISPATCHER (task #202, operator's fold-endpoint ruling, Thoth
+# dispatch 7162, proposal decision 65a6eb73 approved as scoped) — fifth object-type
+# dispatcher, folding the identity/mail-adjacent Agent-write surface: claim_name (self-
+# scoped naming), correct_agent_house (third-party house/generation correction, already
+# a hidden zero-traffic tool — this repoints its own use_instead, costs nothing further
+# on the live count), retire_agent (already a hidden alias of retire_object(kind=
+# 'agent') — repointed here too, same dual-door precedent seat/project(action='retire')
+# established), fleet_reconcile (the bulk fleet reaper, no target), file_subagent
+# (single-target hand-filing), file_subagents (bulk sweep, dry_run).
+#
+# DECLINED, with reasons named in the proposal decision (65a6eb73) rather than silently
+# dropped: retire() stays OUT (self-scoped, different auth shape, same exclusion
+# retire_object's own fold already gave it — decision 1ddf8e1c); walk_in stays OUT
+# (already a hidden alias of seat(action='walk_in'), Thoth's own dispatch named it as a
+# candidate but re-folding an already-folded name into a DIFFERENT dispatcher would be
+# incoherent); merge/unmerge/reconcile_merge stay OUT (polymorphic across Agent/Seat/
+# Project, already ruled to stay named); backfill_agent_project_links stays OUT
+# (already hidden, forwards to backfill(target=...), a different dispatcher);
+# restore_attribution stays OUT (keyed on `project`, not `agent_id` — wrong object
+# type); lift stays OUT (already dead, a compound orchestration, not a bare CRUD
+# action); identify_agent/succession_chain/unwitnessed_spawns stay OUT (pure reads,
+# distinct questions, same class search/recall/dossier already sit in).
+#
+# PARAM UNIFICATION: `agent_id` is the shared name for "which existing Agent" across
+# correct_house/retire (both originals already used it); `subagent_id` stays its own
+# name on file_subagent — a genuinely distinct domain concept (an ephemeral hand's own
+# id), not just a plumbing synonym for agent_id, same shared-slot discipline seat's own
+# handle/target split established. `name` is claim_name's own CREATE-shaped param (the
+# name being minted), never confused with an existing-object reference.
+AGENT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _dispatcher_action_schema({
+            "action": _action_const("claim_name"), "name": _s(),
+        }, ["action", "name"]),
+        _dispatcher_action_schema({
+            "action": _action_const("correct_house"), "agent_id": _s(),
+            "project": _opt_s(), "seat_generation": _opt_int_s(),
+        }, ["action", "agent_id"]),
+        _dispatcher_action_schema({
+            "action": _action_const("retire"), "agent_id": _s(), "because": _s(),
+            "override_live": _b(False),
+        }, ["action", "agent_id", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("fleet_reconcile"), "execute": _b(False),
+        }, ["action"]),
+        _dispatcher_action_schema({
+            "action": _action_const("file_subagent"), "subagent_id": _s(),
+        }, ["action", "subagent_id"]),
+        _dispatcher_action_schema({
+            "action": _action_const("file_subagents"), "project": _opt_s(),
+            "dry_run": _b(True),
+        }, ["action"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
+
+_AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    "claim_name": (["name"], ["name"]),
+    "correct_house": (["agent_id", "project", "seat_generation"], ["agent_id"]),
+    "retire": (["agent_id", "because", "override_live"], ["agent_id", "because"]),
+    "fleet_reconcile": (["execute"], []),
+    "file_subagent": (["subagent_id"], ["subagent_id"]),
+    "file_subagents": (["project", "dry_run"], []),
+}
+
+
+async def _agent_impl(
+    action: str, *,
+    name: str | None = None, agent_id: str | None = None, project: str | None = None,
+    seat_generation: int | None = None, because: str | None = None,
+    override_live: bool = False, execute: bool = False, subagent_id: str | None = None,
+    dry_run: bool = True, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Shared body behind `agent` and its 5 hidden single-purpose aliases (claim_name,
+    correct_agent_house, retire_agent, file_subagent, file_subagents — 6 names, one
+    more than "5" counts because retire_agent was already a hidden alias forwarding to
+    retire_object(kind='agent') before this fold; both doors now reach the identical
+    _retire_object_impl call) — one code path, many names. Every branch's body below is
+    copied verbatim from what was that alias's own top-level function (task #202,
+    Thoth dispatch 7162).
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    if action not in _AGENT_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_AGENT_ACTION_PARAMS)}
+    accepted, required = _AGENT_ACTION_PARAMS[action]
+    local = dict(locals())
+    missing = [p for p in required if local.get(p) in (None, "")]
+    if missing:
+        return {"error": f"action {action!r} is missing required param(s) {missing}",
+                "action_accepts": accepted, "action_requires": required}
+
+    if action == "claim_name":
+        assert name is not None  # pre-dispatch validation guaranteed this
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount(cwd, job_dir=<your anchor>) first — a name attaches "
+                             "to YOU", "why": _anchorless(ctx)}
+        from src.orchestrator.agents import claim_name as _claim
+        return await _claim(Actions(await _pool_get()), ident.agent_id, name,
+                            source=ident.agent_id)
+    if action == "correct_house":
+        assert agent_id is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a correction is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.agents import correct_agent_house as _correct_agent_house
+        return await _correct_agent_house(
+            Actions(await _pool_get()), agent_id=agent_id, project=project,
+            seat_generation=seat_generation, actor=ident.agent_id)
+    if action == "retire":
+        assert agent_id is not None and because is not None
+        return await _retire_object_impl(
+            "agent", agent_id, because=because, override_live=override_live, ctx=ctx)
+    if action == "fleet_reconcile":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first", "why": _anchorless(ctx)}
+        from src.orchestrator.fleet_reconcile import reconcile_execute
+        return await reconcile_execute(Actions(await _pool_get()), actor=ident.agent_id,
+                                       execute=execute)
+    if action == "file_subagent":
+        assert subagent_id is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — filing a hand is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.lineage import file_subagent as _file_subagent
+        return await _file_subagent(Actions(await _pool_get()), subagent_id=subagent_id,
+                                    actor=ident.agent_id)
+    if action == "file_subagents":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — filing hands is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.lineage import file_subagents as _file_subagents
+        return await _file_subagents(Actions(await _pool_get()), project=project,
+                                     dry_run=dry_run, actor=ident.agent_id)
+    raise AssertionError(f"action {action!r} passed validation but has no branch")
+
+
+@mcp.tool()
+async def agent(
+    action: str, name: str | None = None, agent_id: str | None = None,
+    project: str | None = None, seat_generation: int | None = None,
+    because: str | None = None, override_live: bool = False, execute: bool = False,
+    subagent_id: str | None = None, dry_run: bool = True, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE AGENT OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
+    many actions over Agent identity/lineage. See `describe('agent')` for the full
+    per-action shape, or call with a wrong/missing param — the error names exactly what
+    that action expects.
+
+    ACTION TABLE — action: what it does (required params beyond action):
+      claim_name: self-name your own mounted identity (name)
+      correct_house: heal an already-polluted agent's project/seat_generation stamps,
+        third-party (agent_id; at least one of project/seat_generation)
+      retire: third-party Agent retirement, always releases the held seat (agent_id,
+        because)
+      fleet_reconcile: the bulk reaper over stale/anonymous fleet mounts (dry run by
+        default; execute=True to act)
+      file_subagent: file ONE ephemeral subagent under its spawner (subagent_id)
+      file_subagents: THE SWEEP — file_subagent's own resolver over every active
+        subagent in scope (project=None is fleet-wide; dry run by default)
+
+    Not covered here: self-scoped `retire()` (different auth shape, retires the
+    CALLING agent's own session); `walk_in` (already seat(action='walk_in')); merge/
+    unmerge (polymorphic across Agent/Seat/Project, stay named)."""
+    return await _agent_impl(
+        action, name=name, agent_id=agent_id, project=project,
+        seat_generation=seat_generation, because=because, override_live=override_live,
+        execute=execute, subagent_id=subagent_id, dry_run=dry_run, ctx=ctx)
+
+
 @mcp.tool(meta={
     "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "use_instead": "agent(action='correct_house')",
+    "since": "task #202 agent dispatcher (msg 7162)",
 })
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
-    """Heal an ALREADY-POLLUTED agent's own project/seat_generation stamps — the
-    data-repair half of mount-guard #6 (commit cb47d02): the code fix stops NEW
-    pollution from a bare-office-root mount, it does not retroactively cure a stamp a
-    transient bad mount already wrote. UNLIKE correct_house, NOT self-scoped — the
-    target need not be the caller (an ancestor's already-corrupted stamp is exactly
-    the case this exists for). Append-only: asserts a new current value, never
-    touches the superseded row. Refuses on no correction named, an empty project,
-    a non-positive generation, or an unknown/inactive agent."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph "
-                         "must know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.agents import correct_agent_house as _correct_agent_house
-    return await _correct_agent_house(Actions(await _pool_get()), agent_id=agent_id,
-                                      project=project, seat_generation=seat_generation,
-                                      actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    agent(action='correct_house')."""
+    return await _agent_impl("correct_house", agent_id=agent_id, project=project,
+                             seat_generation=seat_generation, ctx=ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "retire_object(kind='agent')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "use_instead": "agent(action='retire')",
+    "since": "task #202 wave 3 (msg 6987), repointed by the #202 agent dispatcher (msg 7162)",
 })
 async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                        ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    retire_object(kind='agent')."""
+    agent(action='retire') — the same _retire_object_impl call retire_object(kind=
+    'agent') also reaches, the dual-door precedent seat/project(action='retire')
+    already established."""
     return await _retire_object_impl(
         "agent", agent_id, because=because, override_live=override_live, ctx=ctx)
 
@@ -6937,45 +7098,26 @@ async def reissue_office(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "use_instead": "agent(action='file_subagent')",
+    "since": "task #199 lane 2, retirement wave 1 (msg 6822); repointed by the #202 "
+             "agent dispatcher (msg 7162)",
 })
 async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
-    """File ONE ephemeral subagent under its spawner (ruling 0f76458c — a hand is never a
-    first-class fleet member). Attributes it to its spawner (an existing spawned_by edge, or
-    its `session` property's root agent when neither exists — refuses loudly if neither
-    resolves), stamps its X.n patronym name if it doesn't already carry one, and flips its
-    status to 'historical' when the EXACT parent generation that spawned it is no longer
-    live — a parent-live hand is filed but never status-flipped. For filing more than one at
-    once, use file_subagents (the dry-run-first sweep) instead — it computes correct
-    per-parent naming ordinals that a bare loop over this tool would collide on."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — filing a hand is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.lineage import file_subagent as _file_subagent
-    return await _file_subagent(Actions(await _pool_get()), subagent_id=subagent_id,
-                                actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    agent(action='file_subagent')."""
+    return await _agent_impl("file_subagent", subagent_id=subagent_id, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "agent(action='file_subagents')",
+    "since": "task #202 agent dispatcher (msg 7162)",
+})
 async def file_subagents(project: str | None = None, dry_run: bool = True,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """THE SWEEP (ruling 0f76458c's testbed clause): runs file_subagent's resolver over every
-    active 17-hex subagent Agent object in scope. `project=` narrows it (e.g. 'hector-vector'
-    for the testbed); omitted is fleet-wide. DRY-RUN (the default) writes nothing and returns
-    per-class counts — attributable_parent_dead / attributable_parent_live / unattributable —
-    plus a bounded sample, so a manager can see a scope's shape before committing to it. THE
-    TESTBED SEQUENCE (the operator's word): dry-run hector-vector first, receipts to the
-    manager, live only at their word, THEN a fleet-wide dry-run — never the reverse. Pass
-    dry_run=False only once the dry-run's shape has been reviewed."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — filing hands is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.lineage import file_subagents as _file_subagents
-    return await _file_subagents(Actions(await _pool_get()), project=project,
-                                 dry_run=dry_run, actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    agent(action='file_subagents')."""
+    return await _agent_impl("file_subagents", project=project, dry_run=dry_run, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -7094,25 +7236,16 @@ async def resolve_fold(candidate_id: int, decision: str,
                                    ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "agent(action='fleet_reconcile')",
+    "since": "task #202 agent dispatcher (msg 7162)",
+})
 async def fleet_reconcile(execute: bool = False,
                           ctx: Context | None = None) -> dict[str, Any]:
-    """THE REAPER — buckets stale/anonymous agent mounts into bulk_fold_swarm,
-    rollup_office_remount, drop_ephemeral_test_cwd, and leave_for_human (never touched,
-    by construction), acting on the first three only with `execute=True`. Dry run is the
-    default: returns the plan, writes nothing. With `execute=True`, re-reads the tray
-    fresh immediately before acting and returns before/after counts as proof.
-
-    Fold buckets are operator-gated, enforced one call down (fold_agent) — a
-    non-operator's fold items come back per-item errored while drop_ephemeral_test_cwd
-    still runs. Reachable independently of `osiris_fleet_reconcile_enabled`, which gates
-    only the separate scheduled tick, never this tool."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first", "why": _anchorless(ctx)}
-    from src.orchestrator.fleet_reconcile import reconcile_execute
-    return await reconcile_execute(Actions(await _pool_get()), actor=ident.agent_id,
-                                   execute=execute)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    agent(action='fleet_reconcile')."""
+    return await _agent_impl("fleet_reconcile", execute=execute, ctx=ctx)
 
 
 @mcp.tool(meta={

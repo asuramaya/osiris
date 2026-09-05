@@ -844,7 +844,16 @@ def _tool_chars(t: Any) -> int:
 # one added (thread) — net zero on count, real cost lands on the char ceiling instead
 # (see its own changelog). Recorded even at zero delta, same discipline every other
 # entry here follows: a number that doesn't move is still worth confirming it didn't.
-TOOL_CONTRACT_EXPECTED_COUNT = 76
+# 76 -> 74 (2026-09-05, Imhotep, #202 AGENT DISPATCHER, Thoth dispatch 7162, proposal
+# decision 65a6eb73 approved as scoped): 6 actions fold in, but only 3 of the 6 folded
+# names were actually LIVE before this commit (claim_name, fleet_reconcile,
+# file_subagents) — correct_agent_house and file_subagent were already hidden
+# (zero-traffic retirement, wave 1) and retire_agent was already a hidden alias of
+# retire_object(kind='agent'); repointing an already-hidden name costs nothing further
+# on the live count. -3 newly hidden, +1 new tool (agent) = -2 net (76 -> 74), measured
+# exact — corrects this session's own pre-build estimate of -4 (decision 65a6eb73),
+# which assumed all six names were live before reading each one's own meta block.
+TOOL_CONTRACT_EXPECTED_COUNT = 74
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1176,7 +1185,18 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # the flat schema thread_action carried before, the same real correctness cost seat's
 # own price-minimizer follow-through named (99,443 -> 101,729). Tool count unchanged
 # (76 -> 76): one hidden, one added. Measured exact (102,670), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 102670
+# 102,670 -> 103,032 (2026-09-05, Imhotep, #202 AGENT DISPATCHER, Thoth dispatch 7162,
+# proposal decision 65a6eb73 approved as scoped): 6 actions fold in (claim_name,
+# correct_agent_house, retire_agent, fleet_reconcile, file_subagent, file_subagents) —
+# three of the six (correct_agent_house, retire_agent, file_subagent) were ALREADY
+# hidden before this fold (zero-traffic retirement or an earlier retire_object repoint),
+# so only three tools' own full schemas actually leave the live listing (claim_name,
+# fleet_reconcile, file_subagents) against one new 2,833-char hand-built oneOf schema
+# added. Net +362, a small real cost — the six-branch schema's own additionalProperties/
+# action-const overhead outweighs three small flat schemas removed by less than either
+# prior dispatcher's own price-minimizer follow-through did. Measured exact (103,032),
+# not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 103032
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
