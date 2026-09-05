@@ -1835,18 +1835,45 @@ def prior_art_from_hits(
     stands for anything a new record could be redundant with), so both are excluded here
     even though search() itself still surfaces them, flagged, for direct lookup. LOUD,
     NEVER A REFUSAL (the SPOF principle): this only shapes data for the receipt to
-    display — the caller decides whether a hit is strong enough to flag."""
+    display — the caller decides whether a hit is strong enough to flag.
+
+    TYPE-PARTITIONED, ONE RESERVED SLOT (thread 99327a3e): 87 Practices vs 6,353
+    Decisions means a Practice essentially never survives a plain rank-order truncation
+    to `limit` — realistic-language queries surfaced ZERO Practices in the population
+    (Imhotep, 3b0b9195). A raw top-K over `hits` fills every slot from the 73:1-larger
+    Decision population before a Practice's own rank is ever reached. Fix is RANKING,
+    never authorship: when 'Practice' is in `kinds`, the last slot is reserved for the
+    single best-ranked qualifying Practice (in `hits`' own order, wherever it actually
+    sits) if one exists and isn't already among the first `limit - 1` picks — everything
+    else keeps plain rank order untouched, so a caller with Practice excluded from
+    `kinds` (record_decision's default) sees no behavior change at all."""
     exclude_s = {str(e) for e in (exclude or set())}
+
+    def _qualifies(h: dict[str, Any]) -> bool:
+        return (h.get("type") in kinds and h.get("id") not in exclude_s
+                and not h.get("superseded") and not h.get("refuted"))
+
+    def _shape(h: dict[str, Any]) -> dict[str, Any]:
+        return {"id": str(h["id"])[:8], "type": h.get("type"),
+                "summary": h.get("snippet") or "", "grade": h.get("grade"),
+                "via": h.get("via")}
+
+    reserve_practice = "Practice" in kinds and limit > 0
+    fill_limit = (limit - 1) if reserve_practice else limit
+
     out: list[dict[str, Any]] = []
+    best_practice: dict[str, Any] | None = None
     for h in hits:
-        if (h.get("type") not in kinds or h.get("id") in exclude_s
-                or h.get("superseded") or h.get("refuted")):
+        if not _qualifies(h):
             continue
-        out.append({"id": str(h["id"])[:8], "type": h.get("type"),
-                    "summary": h.get("snippet") or "",
-                    "grade": h.get("grade"), "via": h.get("via")})
+        if reserve_practice and h.get("type") == "Practice" and best_practice is None:
+            best_practice = h
+        if len(out) < fill_limit:
+            out.append(_shape(h))
+    if best_practice is not None and not any(o["type"] == "Practice" for o in out):
         if len(out) >= limit:
-            break
+            out.pop()
+        out.append(_shape(best_practice))
     return out
 
 

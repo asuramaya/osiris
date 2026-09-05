@@ -4954,6 +4954,39 @@ async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_tes
     assert unified[1]["type"] == "Practice"
 
 
+async def test_prior_art_from_hits_reserves_a_slot_for_a_buried_practice() -> None:
+    """Thread 99327a3e's own specimen: 87 Practices vs 6,353 Decisions means a real
+    Practice ranks well past a plain top-5 truncation on a realistic-language query — a
+    raw rank-order cut fills every slot from the far larger Decision population before
+    the Practice's own rank is ever reached. Fix is ranking, not authorship: the last
+    slot is reserved for the single best-ranked qualifying Practice, wherever it sits,
+    when 'Practice' is in `kinds` — a caller whose `kinds` never included Practice
+    (record_decision's own default) sees no change at all (proven above)."""
+    from src.orchestrator.capture import UNIFIED_PRIOR_ART_KINDS, prior_art_from_hits
+
+    decisions = [
+        {"id": f"decision{n:02d}-0000-0000-0000-000000000000", "type": "Decision",
+         "snippet": f"decision {n}", "grade": "self_declared", "via": "both"}
+        for n in range(10)
+    ]
+    buried_practice = {
+        "id": "practice1-0000-0000-0000-000000000000", "type": "Practice",
+        "snippet": "arm before you seal", "grade": "self_declared", "via": "id"}
+    hits = decisions + [buried_practice]  # Practice ranked 11th, past any top-5 cut
+
+    default = prior_art_from_hits(hits)  # Decision-only default: still no reservation
+    assert all(h["type"] == "Decision" for h in default)
+    assert len(default) == 5
+
+    unified = prior_art_from_hits(hits, kinds=UNIFIED_PRIOR_ART_KINDS)
+    assert len(unified) == 5
+    assert unified[:4] == [
+        {"id": h["id"][:8], "type": "Decision", "summary": h["snippet"],
+         "grade": h["grade"], "via": h["via"]} for h in decisions[:4]]
+    assert unified[4]["type"] == "Practice"
+    assert unified[4]["id"] == "practice"
+
+
 async def test_record_decision_confirms_witnesses_and_refutes_converts(
     actions: Actions,
 ) -> None:
