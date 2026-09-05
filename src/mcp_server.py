@@ -8020,59 +8020,174 @@ async def record_decision(
     return out
 
 
+# THE PRACTICE OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162, proposal
+# decision 07395004 approved as scoped — "practice(action='record'|'amend') only") —
+# the sixth and FINAL object-type dispatcher of #202's own fold arc (the operator's
+# fold-endpoint ruling: thread + agent + decision, standalone tail stays named
+# permanently). A literal "decision" dispatcher was DECLINED: amend_decision is
+# Decision's only write verb beyond record_decision itself (hot-ten, stays named) — a
+# one-action dispatcher is the exact catch-all shape the ruling forbids. Practice,
+# unlike Decision, genuinely has TWO write verbs of its own (record + amend, the same
+# shape) and record_practice is NOT hot-ten, so folding it costs nothing decision-
+# parity would otherwise protect. consult_canon/handoff_briefing (pure reads, distinct
+# questions), dismiss_brief (wrong object type, a mail message_id), and ack_handoff
+# (dual-type Thread-or-Decision by design, no siblings of its own shape) all stay
+# exactly as they are — declined in decision 07395004, not silently dropped.
+PRACTICE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _dispatcher_action_schema({
+            "action": _action_const("record"), "statement": _s(),
+            "failure_prevented": _opt_s(), "surface": _opt_s(), "repo": _opt_s(),
+            "witnesses": _opt_list_s(), **_SUBAGENT_TRIO,
+        }, ["action", "statement"]),
+        _dispatcher_action_schema({
+            "action": _action_const("amend"), "ref": _s(), "amendment": _s(),
+            **_SUBAGENT_TRIO,
+        }, ["action", "ref", "amendment"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["practice"] = PRACTICE_INPUT_SCHEMA
+
+_PRACTICE_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    "record": (["statement", "failure_prevented", "surface", "repo", "witnesses"],
+              ["statement"]),
+    "amend": (["ref", "amendment"], ["ref", "amendment"]),
+}
+
+
+async def _practice_impl(
+    action: str, *,
+    statement: str | None = None, failure_prevented: str | None = None,
+    surface: str | None = None, repo: str | None = None,
+    witnesses: list[str] | None = None, ref: str | None = None,
+    amendment: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Shared body behind `practice` and its 2 hidden single-purpose aliases
+    (record_practice, amend_practice) — one code path, three names. Every branch's
+    body below is copied verbatim from what was that alias's own top-level function
+    (task #202, Thoth dispatch 7162, proposal decision 07395004).
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    if action not in _PRACTICE_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_PRACTICE_ACTION_PARAMS)}
+    accepted, required = _PRACTICE_ACTION_PARAMS[action]
+    local = dict(locals())
+    missing = [p for p in required if local.get(p) in (None, "")]
+    if missing:
+        return {"error": f"action {action!r} is missing required param(s) {missing}",
+                "action_accepts": accepted, "action_requires": required}
+
+    if action == "record":
+        assert statement is not None  # pre-dispatch validation guaranteed this
+        pool = await _pool_get()
+        wids: list[uuid.UUID] = []
+        receipt: list[dict[str, str]] = []
+        for w in witnesses or []:
+            rid = await _resolve(pool, w)
+            if rid is not None:
+                wids.append(rid)
+                receipt.append({"ref": w, "matched": "true", "id": str(rid)[:8]})
+            else:
+                receipt.append({"ref": w, "matched": "false",
+                                "note": "matched no object — quote its UUID or 8-char "
+                                        "short id"})
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        p = await capture.record_practice(
+            Actions(pool), statement, failure_prevented=failure_prevented,
+            surface=surface, repo=repo, witnesses=wids, source=actor)
+        out: dict[str, Any] = {"id": str(p), "statement": statement,
+                               "confirmed": await capture.practice_confirmed_count(pool, p)}
+        if receipt:
+            out["witnesses_resolution"] = receipt
+        prior = await _surface_prior_art(
+            pool, f"{statement} {failure_prevented or ''}", exclude={p}, repo=repo,
+            actor=actor)
+        strong = capture.prior_art_is_strong(prior)
+        if prior:
+            out["prior_art"] = prior
+            if strong:
+                top = prior[0]
+                out["prior_art_flag"] = (
+                    f"{top.get('type') or 'Decision'} {top['id']} already covers similar "
+                    "ground — check this isn't the same lesson under different words "
+                    "before it stands as a separate Practice")
+            try:
+                await pool.execute(
+                    "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2 "
+                    "WHERE id = (SELECT id FROM search_log ORDER BY id DESC LIMIT 1)",
+                    (prior[0].get("type") or "Decision") if prior else None, strong)
+            except Exception:  # noqa: BLE001 — telemetry must never block the record
+                pass
+        return out
+    if action == "amend":
+        assert ref is not None and amendment is not None
+        pool = await _pool_get()
+        try:
+            pid = await capture.amend_practice(
+                Actions(pool), ref, amendment,
+                source=await _actor_for(ctx, subagent_id, subagent_type))
+        except ValueError as e:
+            return {"error": str(e)}
+        if pid is None:
+            return {"error": f"no practice matches {ref!r}"}
+        return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
+    raise AssertionError(f"action {action!r} passed validation but has no branch")
+
+
 @mcp.tool()
+async def practice(
+    action: str, statement: str | None = None, failure_prevented: str | None = None,
+    surface: str | None = None, repo: str | None = None,
+    witnesses: list[str] | None = None, ref: str | None = None,
+    amendment: str | None = None, subagent_id: str | None = None,
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE PRACTICE OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
+    two actions over a transferable technique (Superstition's positive twin). See
+    `describe('practice')` for the full per-action shape.
+
+    ACTION TABLE — action: what it does (required params beyond action):
+      record: write back a NEW technique (statement — the imperative one-liner, quote
+        it as you'd want a future mind to inherit it, not as narration).
+        `failure_prevented` is the concrete symptom that makes it findable mid-failure.
+        `surface` reuses BlindSpot's domain vocabulary. `witnesses` links Decision(s)/
+        Commit(s)/Thread(s) as evidence (a miss is reported, never fatal). Idempotent
+        on the normalized statement. Timeless, never moment-stamped — a later disproof
+        kills it via record_decision(refutes=...), never here. Runs the same prior-art
+        check record_decision does.
+      amend: narrow or correct a LIVE practice's guidance (ref, amendment) — without
+        touching its id, its `statement` (record's own idempotency key), or its
+        witness/confirmed count. Amendments fold directly into practices()'s own
+        listing. Refuses on an unmatched ref or a practice already REFUTED (use
+        record_decision(refutes=...) to kill one, this only adds to a practice still
+        standing)."""
+    return await _practice_impl(
+        action, statement=statement, failure_prevented=failure_prevented,
+        surface=surface, repo=repo, witnesses=witnesses, ref=ref, amendment=amendment,
+        subagent_id=subagent_id, subagent_type=subagent_type, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "practice(action='record')",
+    "since": "task #202 practice dispatcher (msg 7162)",
+})
 async def record_practice(
     statement: str, failure_prevented: str | None = None, surface: str | None = None,
     repo: str | None = None, witnesses: list[str] | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Write back a TRANSFERABLE TECHNIQUE, Superstition's positive twin. `statement` is
-    the imperative one-liner (quote it as you'd want a future mind to inherit it, not as
-    narration). `failure_prevented` is the concrete symptom that makes it findable
-    mid-failure. `surface` reuses BlindSpot's domain vocabulary. `witnesses` links
-    Decision(s)/Commit(s)/Thread(s) as evidence (a miss is reported, never fatal).
-    Idempotent on the normalized statement. Timeless, never moment-stamped — a later
-    disproof kills it via record_decision(refutes=...), never here. Runs the same
-    prior-art check record_decision does."""
-    pool = await _pool_get()
-    wids: list[uuid.UUID] = []
-    receipt: list[dict[str, str]] = []
-    for ref in witnesses or []:
-        rid = await _resolve(pool, ref)
-        if rid is not None:
-            wids.append(rid)
-            receipt.append({"ref": ref, "matched": "true", "id": str(rid)[:8]})
-        else:
-            receipt.append({"ref": ref, "matched": "false",
-                            "note": "matched no object — quote its UUID or 8-char short id"})
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    p = await capture.record_practice(
-        Actions(pool), statement, failure_prevented=failure_prevented, surface=surface,
-        repo=repo, witnesses=wids, source=actor)
-    out: dict[str, Any] = {"id": str(p), "statement": statement,
-                           "confirmed": await capture.practice_confirmed_count(pool, p)}
-    if receipt:
-        out["witnesses_resolution"] = receipt
-    prior = await _surface_prior_art(
-        pool, f"{statement} {failure_prevented or ''}", exclude={p}, repo=repo, actor=actor)
-    strong = capture.prior_art_is_strong(prior)
-    if prior:
-        out["prior_art"] = prior
-        if strong:
-            top = prior[0]
-            out["prior_art_flag"] = (
-                f"{top.get('type') or 'Decision'} {top['id']} already covers similar "
-                "ground — check this isn't the same lesson under different words before "
-                "it stands as a separate Practice")
-        try:
-            await pool.execute(
-                "UPDATE search_log SET prior_art_kind=$1, prior_art_strong=$2 "
-                "WHERE id = (SELECT id FROM search_log ORDER BY id DESC LIMIT 1)",
-                (prior[0].get("type") or "Decision") if prior else None, strong)
-        except Exception:  # noqa: BLE001 — telemetry must never block the record
-            pass
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    practice(action='record')."""
+    return await _practice_impl(
+        "record", statement=statement, failure_prevented=failure_prevented,
+        surface=surface, repo=repo, witnesses=witnesses, subagent_id=subagent_id,
+        subagent_type=subagent_type, ctx=ctx)
 
 
 @mcp.tool()
@@ -8680,29 +8795,21 @@ async def amend_decision(
     return {"id": str(did), "addendum": addendum.strip(), "status": "amended"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "practice(action='amend')",
+    "since": "task #202 practice dispatcher (msg 7162)",
+})
 async def amend_practice(
     ref: str, amendment: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Narrow or correct a LIVE practice's guidance, without touching its id, its
-    `statement` (record_practice's idempotency key), or its witness/confirmed count —
-    same shape as amend_decision. Use when a mechanism now covers part of what a
-    practice warns about. Amendments fold directly into practices()'s own listing.
-    Returns {"error": ...} when `ref` matches nothing, or names a Practice already
-    REFUTED — use record_decision(refutes=...) to kill one, this only adds to a
-    practice still standing."""
-    pool = await _pool_get()
-    try:
-        pid = await capture.amend_practice(
-            Actions(pool), ref, amendment,
-            source=await _actor_for(ctx, subagent_id, subagent_type))
-    except ValueError as e:
-        return {"error": str(e)}
-    if pid is None:
-        return {"error": f"no practice matches {ref!r}"}
-    return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    practice(action='amend')."""
+    return await _practice_impl(
+        "amend", ref=ref, amendment=amendment, subagent_id=subagent_id,
+        subagent_type=subagent_type, ctx=ctx)
 
 
 async def _lease_impl(
