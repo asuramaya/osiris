@@ -6007,6 +6007,117 @@ async def test_real_kill_pid_uses_sigterm_directly_with_no_harness_id(
     assert killed == [(4242, signal.SIGTERM)]
 
 
+# --- _clear_stale_stopped_record (Thoth dispatch 7543 item 1): the copy-quirk's own
+# pre-emption — the SAME `claude rm <id>` removal _real_kill_pid does after a stop, now
+# factored out so resume can run it BEFORE spawning too. ---------------------------------
+
+async def test_clear_stale_stopped_record_runs_claude_rm_and_reports_success(
+    monkeypatch: Any,
+) -> None:
+    calls: list[list[str]] = []
+
+    class _FakeProc:
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_exec(*argv: str, **kw: Any) -> _FakeProc:
+        calls.append(list(argv))
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    cleared = await trigger_module._clear_stale_stopped_record("wgjobkey5")
+
+    assert calls == [["claude", "rm", "wgjobkey5"]]
+    assert cleared is True
+
+
+async def test_clear_stale_stopped_record_reports_false_on_nothing_to_clear(
+    monkeypatch: Any,
+) -> None:
+    class _FakeProc:
+        async def wait(self) -> int:
+            return 1  # no record existed for this id — rm found nothing
+
+    async def _fake_exec(*argv: str, **kw: Any) -> _FakeProc:
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    cleared = await trigger_module._clear_stale_stopped_record("no-such-id")
+
+    assert cleared is False
+
+
+async def test_resume_seat_clears_a_stale_stopped_record_before_spawning(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The copy-quirk's own pre-emption (Thoth dispatch 7543 item 1): resume_seat now
+    clears any stale harness "stopped" record BEFORE calling resume_spawn, instead of
+    only detecting-and-adopting a copy after the harness has already minted one. Order
+    matters — asserted directly, not inferred from call counts."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:clearme01")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:clearme01", manager_agent="agent:hm-clear",
+        worker_handle="Clear-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/clear-test-office")
+    manc = await actions.create_or_find_object("Agent", "agent:hm-clear", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+
+    order: list[str] = []
+    cleared_keys: list[str] = []
+
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        order.append("clear")
+        cleared_keys.append(job_dir_key)
+        return True
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        order.append("spawn")
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-clear", target=worker_seat,
+        settings=_settings(enabled=True, sense=str(sense)),
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
+
+    assert order == ["clear", "spawn"]  # clear runs BEFORE the spawn, never after
+    assert cleared_keys == [FULL_SID[:8]]
+    assert any("cleared a stale stopped record" in line for line in d["resume_check"])
+
+
+async def test_resume_seat_stays_silent_when_no_stale_record_existed(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A no-op clear (nothing was there) must never be reported as if it did something —
+    the resume_check log stays exactly as it was before this fix for the common case."""
+    sense = await _lineage_holder_with_session(
+        actions, tmp_path, agent_id="agent:clearme02")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:clearme02", manager_agent="agent:hm-clear2",
+        worker_handle="Clear-Test2", house="osiris")
+    await _office(actions, worker_seat, "/tmp/clear-test-office-2")
+    manc = await actions.create_or_find_object("Agent", "agent:hm-clear2", "test")
+    await actions.assert_property(manc, "project", "osiris", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:hm-clear2", target=worker_seat,
+        settings=_settings(enabled=True, sense=str(sense)),
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
+
+    assert not any("cleared a stale stopped record" in line for line in d["resume_check"])
+
+
 # ═══ THE COLLAPSE ITSELF (2026-08-28) ══════════════════════════════════════════════════
 # The occupancy gate answered two structurally different findings with one word, and the
 # mode it emitted was never added to _WAKE_STATUS at all — so it rode an unnamed default

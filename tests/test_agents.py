@@ -3588,6 +3588,68 @@ async def test_retire_agent_releases_seat_and_mount_when_not_live(actions: Actio
     assert still_held is None
 
 
+async def test_retire_agent_clears_the_harnesss_stale_stopped_record(
+    actions: Actions, monkeypatch: Any,
+) -> None:
+    """Thoth dispatch 7543 item 1: `osiris stop` already clears the harness's own stale
+    "stopped" background record (the copy-quirk's root cause); this is the same clear for
+    a THIRD-PARTY retirement that never went through stop_seat at all — read the mount
+    row's job_dir BEFORE release_mounts drops it, then best-effort `claude rm <key>`."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import retire_agent
+
+    await actions.create_or_find_object("Agent", "agent:retireclear01", "test")
+    await mounts.save_mount(
+        actions.pool, job_dir="/home/x/.claude/jobs/abc12345", agent_id="agent:retireclear01",
+        project="osiris", cwd="/tmp/retireclear-office", model=None, session_key=None)
+    # stale, past the 15-minute liveness window — a genuinely dead third party, not a
+    # live one (retire_agent must not need override_live for this specimen)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen=now() - interval '1 hour' "
+        "WHERE agent_id='agent:retireclear01'")
+
+    calls: list[list[str]] = []
+
+    class _FakeProc:
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_exec(*argv: str, **kw: Any) -> _FakeProc:
+        calls.append(list(argv))
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    out = await retire_agent(actions, agent_id="agent:retireclear01", actor="agent:witness",
+                             because="genuinely dead, confirmed by census")
+
+    assert out["retired"] == "agent:retireclear01"
+    assert calls == [["claude", "rm", "abc12345"]]
+    assert out["stale_records_cleared"] == ["abc12345"]
+    assert out["mount_rows_released"] == 1
+
+
+async def test_retire_agent_omits_stale_records_cleared_when_there_was_nothing_to_clear(
+    actions: Actions, monkeypatch: Any,
+) -> None:
+    """No mount row at all (the common dead-third-party case) must never even attempt a
+    subprocess call, and the receipt must not claim a clear that never happened."""
+    from src.orchestrator.agents import retire_agent
+
+    await actions.create_or_find_object("Agent", "agent:retireclear02", "test")
+
+    async def _unreachable(*argv: str, **kw: Any) -> Any:
+        raise AssertionError("no mount row — claude rm must never be attempted")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _unreachable)
+
+    out = await retire_agent(actions, agent_id="agent:retireclear02", actor="agent:witness",
+                             because="genuinely dead, confirmed by census")
+
+    assert out["retired"] == "agent:retireclear02"
+    assert "stale_records_cleared" not in out
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

@@ -736,6 +736,45 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert "claude attach" in out_text
 
 
+async def test_cmd_resume_harness_clears_a_stale_stopped_record_before_spawning(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The copy-quirk's own pre-emption (Thoth dispatch 7543 item 1), CLI lane: mirrors
+    resume_seat's identical fix in trigger.py. clear_stale_record runs BEFORE resume_spawn,
+    and a genuine clear is reported in the printed NOTE."""
+    from src.cli import _cmd_resume_harness
+
+    sense = await _resumable_seat(
+        actions, tmp_path, handle="clicleartest", agent_id="agent:clicleartest01",
+        anchor_cwd="/tmp/clicleartest-office")
+
+    order: list[str] = []
+
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        order.append("clear")
+        return True
+
+    async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
+        order.append("spawn")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []
+
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    with redirect_stdout(out_buf), redirect_stderr(err_buf):
+        out = await _cmd_resume_harness(
+            "clicleartest", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
+            agents_json=_agents_json, resume_spawn=_resume_spawn,
+            settings=_resume_settings(sense), clear_stale_record=_clear_stale_record)
+
+    assert out == 0
+    assert order == ["clear", "spawn"]  # clear runs BEFORE the spawn, never after
+    assert "cleared a stale stopped record" in err_buf.getvalue()  # the NOTE goes to stderr
+
+
 async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
