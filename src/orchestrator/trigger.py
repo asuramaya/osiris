@@ -2878,6 +2878,11 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
             "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Seat' "
             "AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
             seat_id)
+        seat_handle = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Seat' "
+            "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            seat_id)
         singles.sort(reverse=True)
         for _, base in singles:
             occupied = await pool.fetchval(
@@ -2885,6 +2890,21 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
                 "AND (seat_id=$2 OR ($3::text IS NOT NULL AND cwd=$3)) LIMIT 1",
                 base, seat_id, anchor_cwd)
             if occupied:
+                return await lineage_head(pool, base)
+            # THE GRAPH, NOT THE CACHE (jenny/nebbercracker, 2026-09-05 16:52Z): agent_mounts
+            # is swept, so a real single holder whose rows aged out looked like Marquee's
+            # stray edge and the founder's lineage won again — minutes after the cache-only
+            # leg deployed. The holder's own self-declared `cwd` (== the seat's office) or
+            # `handle` (== the seat's handle) are graph assertions, never swept, and a stray
+            # edge's agent never wrote either about THIS seat.
+            named = await pool.fetchval(
+                "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+                "WHERE o.type='Agent' AND (o.canonical=$1 OR o.canonical LIKE $1 || '-%') "
+                "AND ((a.name='cwd' AND $2::text IS NOT NULL AND a.value #>> '{}' = $2) "
+                "  OR (a.name='handle' AND $3::text IS NOT NULL "
+                "      AND lower(a.value #>> '{}') = lower($3))) LIMIT 1",
+                base, anchor_cwd, seat_handle)
+            if named:
                 return await lineage_head(pool, base)
 
     source = await pool.fetchval(

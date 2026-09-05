@@ -6420,3 +6420,34 @@ async def test_resolve_launch_model_is_sticky_to_the_last_holder(actions: Action
     assert await trigger_module._resolve_launch_model(
         actions.pool, bare, model=None, facts={}, settings=st,
     ) == ("claude-haiku-4-5-20251001", "wake_default")
+
+
+async def test_bind_before_spawn_single_holder_named_in_the_graph_is_tenure(
+    actions: Actions,
+) -> None:
+    """THE JENNY/NEBBERCRACKER SPECIMEN (2026-09-05 16:52Z, minutes after the cache-only
+    occupancy leg deployed): the seat's one real holder had NO agent_mounts row left (the
+    cache is swept) but its own graph assertions name the seat — cwd == the office, handle
+    == the seat's handle. That is tenure; the founder who wrote the seat's handle is not."""
+    from datetime import UTC, datetime
+
+    seat_id = (await ensure_seat(actions, house="monsterhouse", handle="Jenny",
+                                 anchor_cwd="/tmp/offices/jenny",
+                                 source="agent:thothfounder-xiii"))["seat_id"]
+    from src.orchestrator.agents import mint_heir
+    root_oid = await actions.create_or_find_object("Agent", "agent:jennyline", "test")
+    heir, heir_oid = await mint_heir(actions, "agent:jennyline", root_oid, because="test",
+                                     succession=None)
+    assert heir == "agent:jennyline-ii"
+    now = datetime.now(UTC)
+    await actions.assert_property(heir_oid, "handle", "Jenny", heir, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat_id, agent_id=heir)  # the ONE real hold
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Jenny", house="monsterhouse",
+        current_holder="agent:jennyline-ii", office="/tmp/offices/jenny",
+        anchor="/tmp/anchors/jenny", source="operator")
+
+    assert out["agent"] == "agent:jennyline-iii"
+    assert "thothfounder" not in out["agent"]
