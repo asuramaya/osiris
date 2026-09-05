@@ -49,6 +49,23 @@ VAULT_DIR = Path(os.environ.get("OSIRIS_VAULT") or Path.home() / "osiris-vault")
 BACKUP_MAX_AGE_H = 48
 VAULT_MAX_AGE_D = 8
 DEFAULT_PORTS = ["5432", "6379"]  # the shadow-trap band: settings' fallback DSN aims here
+# THE ENOSPC INCIDENT'S OWN EARLY-WARNING (obligation a867ae37): /tmp (tmpfs, 1,048,576
+# inodes) hit 99.98% inode use at ~07:00Z 2026-09-04 — every Bash tool call in every live
+# seat failed with ENOSPC on the harness's per-call output-capture file, while MCP/Read
+# kept working (silent to anything that doesn't shell out). Root-caused: tests/conftest.py's
+# own PID-keyed `basetemp = /tmp/pt-<pid>` (Sekhmet's fix for pytest's AF_UNIX socket-path-
+# length bug, msg 2261) opts pytest OUT of ITS OWN default retention cleanup — pytest only
+# ever prunes stale runs under its own auto-generated `pytest-of-<user>/pytest-<N>/`
+# numbering; a caller-supplied --basetemp is never revisited by anyone else's run, so every
+# `pt-<pid>` tree from every gate/test invocation, fleet-wide, accumulates FOREVER. Measured
+# live during this obligation's own investigation: 92 leftover `pt-<pid>` dirs spanning ~4.7
+# hours of ordinary same-day fleet activity already accounted for 233,279 of 235,301 files
+# under /tmp (99.1%) — at real overnight peak concurrency this is squarely why the real
+# incident reached ~1M. This alarm is deliberately NOT also the fix (that's a separate,
+# larger change — pruning stale `pt-*` trees safely needs to distinguish a live run's own
+# directory from an orphaned one, not just an age cutoff) — it only guarantees the NEXT
+# climb is seen before every shell on the box dies silently, per Thoth's own ask.
+TMP_INODE_ALARM_PCT = 80.0
 
 
 def _run(cmd: list[str]) -> str:
@@ -58,10 +75,24 @@ def _run(cmd: list[str]) -> str:
         return ""
 
 
+def _tmp_inode_pct(path: str = "/tmp") -> float | None:
+    """Percent of `path`'s filesystem inodes in use — `os.statvfs`, no `df` subprocess
+    needed. None when the filesystem doesn't report inode counts at all (`f_files == 0`,
+    e.g. some overlay/network filesystems) — a genuine "can't answer", never a false 0%."""
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    if st.f_files == 0:
+        return None
+    return 100.0 * (st.f_files - st.f_ffree) / st.f_files
+
+
 def collect() -> dict:
     """Gather the survival matrix — thin collectors, all judgment lives in evaluate()."""
     m: dict = {"units": {}, "timers": {}, "containers": {}, "ports": [],
-               "backup_age_h": None, "vault_age_d": None, "unpushed": None}
+               "backup_age_h": None, "vault_age_d": None, "unpushed": None,
+               "tmp_inode_pct": _tmp_inode_pct()}
     for u in UNITS:
         m["units"][u] = {
             "enabled": _run(["systemctl", "--user", "is-enabled", u]),
@@ -182,6 +213,12 @@ def evaluate(m: dict) -> list[str]:
         fails.append("vault is empty or missing")
     elif m["vault_age_d"] > VAULT_MAX_AGE_D:
         fails.append(f"vault untouched for {m['vault_age_d']:.0f}d (max {VAULT_MAX_AGE_D}d)")
+    tmp_pct = m.get("tmp_inode_pct")
+    if tmp_pct is not None and tmp_pct >= TMP_INODE_ALARM_PCT:
+        fails.append(f"/tmp inode use at {tmp_pct:.1f}% (alarm at {TMP_INODE_ALARM_PCT:.0f}%) "
+                     "— the fleet-wide ENOSPC incident's own early-warning (obligation "
+                     "a867ae37): every Bash tool call across every live seat fails once "
+                     "this reaches 100%, silently, until it does")
     # THE MINER IS SUMMONED, NOT SCHEDULED (ceae1604). It used to walk every transcript every ten
     # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
     # crawl is gone: the adversary now runs ONCE, at a session's death rite, so a quiet hour means

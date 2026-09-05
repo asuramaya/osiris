@@ -325,22 +325,62 @@ _RATCHET_TEST_NODEID = (
 
 
 
-def _pytest_env(ambient: Mapping[str, str], extra: dict[str, str]) -> dict[str, str]:
-    """The gate's pytest subprocess env, with git's per-hook variables REMOVED.
+_SAFE_TMPDIR = "/var/tmp/osiris-scratch"
 
-    See the block comment at the pytest spawn site for the incident this exists for.
-    Short version: git exports GIT_DIR/GIT_INDEX_FILE (absolute) into hooks it runs from a
-    linked worktree, GIT_DIR overrides repository discovery for every descendant process,
-    and `git -C <dir>` does NOT rescope it -- so correctly-written test fixtures operating
-    on their own throwaway repos silently operate on the real shared one instead.
 
-    Removes the keys outright rather than blanking them: an EMPTY GIT_DIR is not "unset",
-    it is a git directory whose path is the empty string, which fails differently and
-    just as wrongly.
+def _tmpdir_nested_under_jobs_or_sessions(tmpdir: str) -> bool:
+    """Same "jobs"/"sessions" path-component check `src/ingest/sessions.py`'s `_job_id`
+    already uses to find a harness's own id in a job_dir — reused here for the opposite
+    question: does THIS path itself sit inside one of those trees, rather than naming a
+    throwaway location of its own."""
+    parts = Path(tmpdir).parts
+    return "jobs" in parts or "sessions" in parts
+
+
+def _pytest_env(
+    ambient: Mapping[str, str], extra: dict[str, str],
+) -> tuple[dict[str, str], str | None]:
+    """The gate's pytest subprocess env, with git's per-hook variables REMOVED, and TMPDIR
+    guarded against sitting inside a live jobs/sessions tree. Returns `(env, note)` — `note`
+    is None unless a relocation happened, and the caller must print it unconditionally
+    (never silently absorbed into a per-check status word) so a defensive correction is
+    always visible, not just inferred from an otherwise-unremarkable "ok".
+
+    THE JOBS-TREE INCIDENT (obligation 13d3ddbf): a gate run whose TMPDIR sits under any
+    `~/.claude/jobs/<id>` (or `.../sessions/<id>`) tree makes job-anchor tests read the
+    RUNNER's own job id instead of a synthetic test one — measured live,
+    test_spawned_wake_carries_a_durable_job_dir_anchor returned a real running session's
+    id (a93f82b4) before e14b4b0's own narrower fix (`_job_id` taking the innermost
+    component). That fix closed ONE symptom; the class remains open — a gate literally
+    measuring the box it runs on, rather than a disposable location of its own. This call
+    site already hardcodes a safe default (`_SAFE_TMPDIR`) so the gap has never fired in
+    practice, but nothing enforced that structurally: a future edit to the call site, or
+    ANY other caller of this function that supplies its own `extra`, could silently
+    reintroduce it. RELOCATES rather than refuses — a defensive correction the gate can
+    make and announce beats failing the whole commit over an environment variable it can
+    fix itself.
+
+    See the block comment at the pytest spawn site for the GIT_* incident this also
+    exists for. Short version: git exports GIT_DIR/GIT_INDEX_FILE (absolute) into hooks it
+    runs from a linked worktree, GIT_DIR overrides repository discovery for every
+    descendant process, and `git -C <dir>` does NOT rescope it -- so correctly-written
+    test fixtures operating on their own throwaway repos silently operate on the real
+    shared one instead.
+
+    Removes the GIT_* keys outright rather than blanking them: an EMPTY GIT_DIR is not
+    "unset", it is a git directory whose path is the empty string, which fails
+    differently and just as wrongly.
     """
     out = {k: v for k, v in ambient.items() if not k.startswith("GIT_")}
     out.update(extra)
-    return out
+    note = None
+    tmpdir = out.get("TMPDIR")
+    if tmpdir and _tmpdir_nested_under_jobs_or_sessions(tmpdir):
+        note = (f"TMPDIR-RELOCATED: {tmpdir!r} sits under a jobs/sessions tree "
+                f"(obligation 13d3ddbf — a gate run must never measure the box it runs "
+                f"on) — relocated to {_SAFE_TMPDIR!r} for this pytest invocation.")
+        out["TMPDIR"] = _SAFE_TMPDIR
+    return out, note
 
 
 def _is_merge_context(repo_root: Path) -> bool:
@@ -523,7 +563,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         import os
 
         test_files = sorted(selected)
-        env = dict(**{"TMPDIR": "/var/tmp/osiris-scratch"})
+        env = dict(**{"TMPDIR": _SAFE_TMPDIR})
 
         # SCRUB GIT_* BEFORE SPAWNING PYTEST -- the 2026-08-27 shared-repo corruption
         # incident (obligations 3da2dca9 / fdb04d23 / a35c042f, three workers independently).
@@ -544,12 +584,19 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         # genuinely needs git state sets it explicitly per-subprocess, so nothing legitimate
         # depends on inheriting ours. THE FIXTURES WERE NEVER WRONG -- the environment was.
 
+        pytest_env, tmpdir_note = _pytest_env(os.environ, env)
+        if tmpdir_note:
+            # UNCONDITIONAL, never folded into a per-check status word (obligation
+            # 13d3ddbf's own "says so in the verdict") — printed here, once, regardless
+            # of whether pytest itself goes on to pass, fail, skip, or time out.
+            print(f"gate_hook: {tmpdir_note}")
+
         def _run_pytest() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 [str(VENV_BIN / "pytest"), *test_files, "-q",
                  "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root,
                 capture_output=True, text=True, check=False,
-                env=_pytest_env(os.environ, env), timeout=_PYTEST_TIMEOUT_SECS,
+                env=pytest_env, timeout=_PYTEST_TIMEOUT_SECS,
             )
 
         # TOLERANCE, NOT BLINDNESS (f1f8ad62, ruling f61cad1b: the ambient-load limb LEANS

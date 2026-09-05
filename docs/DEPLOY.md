@@ -182,6 +182,24 @@ A watch that pages a real operator needs guards the demo doesn't:
   DATABASE_URL=… OSIRIS_BACKUP_DIR=/var/backups/osiris KEEP=14 deploy/backup.sh
   DATABASE_URL=…(throwaway) deploy/restore.sh /var/backups/osiris/osiris-<stamp>.dump
   ```
+- **/tmp is a shared, finite resource across the whole fleet — gate/test runs must not
+  write there.** `/tmp` is tmpfs, RAM-backed, with a FIXED inode ceiling
+  (1,048,576 on this box) shared by every concurrent agent, not disk space. The
+  2026-09-04 fleet-wide ENOSPC incident (obligation a867ae37): pytest's own basetemp —
+  every `tmp_path` fixture's real file output — landed under `/tmp/pt-<pid>` regardless
+  of `$TMPDIR`, one directory per invocation, never cleaned up (pytest's retention
+  pruning only ever revisits its own auto-numbered default basetemp, never a
+  caller-supplied one). One ordinary day of fleet activity left 92 such leftover trees
+  accounting for 99.1% of all files under `/tmp` — at real overnight concurrency this
+  reached ~1M inodes, and every Bash tool call fleet-wide (they each write a small
+  per-call output file under `/tmp`) failed with ENOSPC until it cleared, unassisted,
+  hours later. Fixed at the root (`tests/conftest.py`'s `_default_basetemp()`): basetemp
+  now honors `$TMPDIR` when set, and defaults to `/var/tmp` (real disk, no fixed inode
+  ceiling) rather than `/tmp` when it isn't — `TMPDIR=/var/tmp/osiris-scratch` is still
+  the documented convention, now actually load-bearing rather than silently ignored by
+  pytest's own basetemp. `osiris_preflight`'s inode-use alarm (`_tmp_inode_pct`, 80%
+  threshold) is the early warning if this class of leak ever recurs some other way —
+  it is not itself the fix.
 
 ## The connection envelope at scale (task #180 piece 2)
 

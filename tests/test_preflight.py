@@ -109,6 +109,38 @@ def test_a_real_schema_drift_is_named_loudly() -> None:
     assert "SCHEMA DRIFT" in fails and "0034" in fails and "alembic upgrade head" in fails
 
 
+# --- obligation a867ae37: the ENOSPC incident's own early-warning -----------------------
+
+def test_no_tmp_inode_pct_key_is_quiet() -> None:
+    """Absent (statvfs failed, or the field was never collected) is silence, same as every
+    other None-shaped field in this matrix — a genuine 'can't answer' is never a false alarm."""
+    assert evaluate(_green()) == []
+
+
+def test_low_tmp_inode_use_is_quiet() -> None:
+    m = _green()
+    m["tmp_inode_pct"] = 23.0
+    assert evaluate(m) == []
+
+
+def test_high_tmp_inode_use_is_named_loudly() -> None:
+    """The exact shape of the real incident: /tmp's per-call harness output files fail
+    ENOSPC once inode use hits 100%, silently to anything that isn't shelling out — this
+    is the signal that must fire well before that, per Thoth's own ask (msg 7096)."""
+    m = _green()
+    m["tmp_inode_pct"] = 91.4
+    fails = "\n".join(evaluate(m))
+    assert "/tmp inode use at 91.4%" in fails and "a867ae37" in fails
+
+
+def test_tmp_inode_use_right_at_the_alarm_threshold_fires() -> None:
+    """Boundary case: >= the threshold, not only strictly over it — a reading sitting
+    exactly on 80% is exactly the situation this alarm exists to catch, not a near miss."""
+    m = _green()
+    m["tmp_inode_pct"] = 80.0
+    assert any("/tmp inode use" in f for f in evaluate(m))
+
+
 # --- thread 3e96c10e: a dead check must ALARM, never quietly pass as green -------------------
 
 async def _boom() -> None:
@@ -138,6 +170,23 @@ def test_a_genuinely_unreachable_db_still_degrades_quietly() -> None:
     result, broken = _run_check("collect_schema_drift", _down())
     assert result is None
     assert broken is None
+
+
+def test_tmp_inode_pct_reads_a_real_filesystem() -> None:
+    """Proven against the real root filesystem, not a mock — os.statvfs is a thin, portable
+    stdlib call (no `df` subprocess), and this just confirms it returns a plausible
+    percentage rather than silently degrading to None on an ordinary, present path."""
+    from scripts.osiris_preflight import _tmp_inode_pct
+
+    pct = _tmp_inode_pct("/")
+    assert pct is not None
+    assert 0.0 <= pct <= 100.0
+
+
+def test_tmp_inode_pct_degrades_quietly_on_a_path_that_does_not_exist() -> None:
+    from scripts.osiris_preflight import _tmp_inode_pct
+
+    assert _tmp_inode_pct("/no/such/path/at/all") is None
 
 
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
