@@ -1223,7 +1223,7 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # its own handle). No new tool; one new optional schema param on an existing action.
 # Measured exact (103,112), not estimated.
 # -> 103451 (2026-09-05, Thoth, merge of practice-dispatcher + hygiene-owner-ladder): FIFTH stale-
-# ancestor regression to 202,871 by the merge driver; re-measured against the merged tree and pinned.
+# ancestor regression to 202,871 by the merge driver; re-measured on the merged tree, pinned.
 # Whoever merges re-measures (standing order, thoth charter 2026-09-04).
 TOOL_CONTRACT_CEILING_CHARS = 103451
 
