@@ -1222,7 +1222,10 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # workspace guess — previously unreachable for any seat whose real tree isn't named after
 # its own handle). No new tool; one new optional schema param on an existing action.
 # Measured exact (103,112), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# -> 103451 (2026-09-05, Thoth, merge of practice-dispatcher + hygiene-owner-ladder): FIFTH stale-
+# ancestor regression to 202,871 by the merge driver; re-measured against the merged tree and pinned.
+# Whoever merges re-measures (standing order, thoth charter 2026-09-04).
+TOOL_CONTRACT_CEILING_CHARS = 103451
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
