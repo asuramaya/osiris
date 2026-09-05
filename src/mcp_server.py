@@ -8197,18 +8197,84 @@ async def open_thread(
     return out
 
 
+# THE THREAD OBJECT-TYPE DISPATCHER (task #202, operator ruling on the fold endpoint,
+# Thoth dispatch 7162) — fourth object-type dispatcher, absorbing `thread_action`
+# ITSELF (already a wave-3 action-dispatcher, task #202 wave 3, Thoth dispatch 6987 —
+# resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread folded into
+# it back then) into the object-type-dispatcher naming convention and its hand-built
+# oneOf schema (price-minimizer #1) — a genuine re-platforming, not a second fold of the
+# same four names again. `open_thread` deliberately stays OUT and separately named (it
+# MINTS a new Thread; every action here only ever acts on one that already exists — the
+# same "create vs act-on-existing" boundary retire_object/seat(action='retire') already
+# draw). `_thread_action_impl` itself is UNCHANGED — still the one shared body behind
+# five names now (thread, thread_action, resolve_thread, annotate_thread,
+# correct_thread_summary, reclassify_thread — six, all forwarding to the identical impl).
+#
+# `ref` is the one param needing its own schema shape: a plain string for every action
+# except `resolve`, which ALSO accepts a list (batch mode, #203 decision 880ffe79) —
+# `_ref_or_list_s()` below, used only on that one branch.
+def _ref_or_list_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}
+
+
+THREAD_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _dispatcher_action_schema({
+            "action": _action_const("resolve"), "ref": _ref_or_list_s(),
+            "because": _opt_s(), "artifact": _opt_s(), "dry_run": _b(True),
+            **_SUBAGENT_TRIO,
+        }, ["action", "ref"]),
+        _dispatcher_action_schema({
+            "action": _action_const("annotate"), "ref": _s(), "note": _s(),
+            **_SUBAGENT_TRIO,
+        }, ["action", "ref", "note"]),
+        _dispatcher_action_schema({
+            "action": _action_const("correct_summary"), "ref": _s(),
+            "corrected_summary": _s(), "because": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "ref", "corrected_summary"]),
+        _dispatcher_action_schema({
+            "action": _action_const("reclassify"), "ref": _s(), "kind": _s(),
+            "because": _opt_s(), "owner": _opt_s(), "arc": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "ref", "kind"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["thread"] = THREAD_INPUT_SCHEMA
+
+_THREAD_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    "resolve": (["ref", "because", "artifact", "dry_run"], ["ref"]),
+    "annotate": (["ref", "note"], ["ref", "note"]),
+    "correct_summary": (["ref", "corrected_summary", "because"], ["ref", "corrected_summary"]),
+    "reclassify": (["ref", "kind", "because", "owner", "arc"], ["ref", "kind"]),
+}
+
+
 async def _thread_action_impl(
     ref: str | list[str], action: str, *, because: str | None, artifact: str | None,
     dry_run: bool, note: str | None, corrected_summary: str | None, kind: str | None,
     owner: str | None, arc: str | None, ctx: Context | None,
     subagent_id: str | None, subagent_type: str | None,
 ) -> dict[str, Any]:
-    """Shared body behind `thread_action` and its four hidden single-purpose aliases
-    (resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread) — one
-    code path, five names. Each action below is copied verbatim from what was that
-    alias's own top-level function body before the fold; nothing about resolve_thread's
-    own batch mode or its dry_run=True default changed in the move (the exact shape
-    Seshat's own incident needed preserved, msg 6987)."""
+    """Shared body behind `thread`, `thread_action`, and four hidden single-purpose
+    aliases (resolve_thread/annotate_thread/correct_thread_summary/reclassify_thread) —
+    one code path, six names. Each action below is copied verbatim from what was that
+    alias's own top-level function body before the original wave-3 fold; nothing about
+    resolve_thread's own batch mode or its dry_run=True default changed in either move
+    (the exact shape Seshat's own incident needed preserved, msg 6987).
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own —
+    added when `thread` itself was built (task #202, Thoth dispatch 7162); the original
+    wave-3 fold relied on inline `assert`s alone, now redundant with this but left in
+    place as a second belt-and-suspenders layer, not removed."""
+    if action not in _THREAD_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_THREAD_ACTION_PARAMS)}
+    accepted, required = _THREAD_ACTION_PARAMS[action]
+    local = dict(locals())
+    missing = [p for p in required if local.get(p) in (None, "")]
+    if missing:
+        return {"error": f"action {action!r} is missing required param(s) {missing}",
+                "action_accepts": accepted, "action_requires": required}
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     if action == "resolve":
@@ -8295,7 +8361,7 @@ async def _thread_action_impl(
 
 
 @mcp.tool()
-async def thread_action(
+async def thread(
     ref: str | list[str], action: str, because: str | None = None,
     artifact: str | None = None, dry_run: bool = True, note: str | None = None,
     corrected_summary: str | None = None, kind: str | None = None,
@@ -8304,29 +8370,30 @@ async def thread_action(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Act on an existing THREAD — one door, four `action`s, never a fifth (open_thread
-    stays separate: it MINTS, this only acts on what already exists).
+    """THE THREAD OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
+    four `action`s over an EXISTING Thread, never a fifth (`open_thread` stays separate:
+    it MINTS; every action here only ever acts on one that already exists).
 
-    `action='resolve'` — close it. `because` is a short WHY, not a completion essay.
-    `artifact` points at what actually closed it (a commit hash, decision id, file:line)
-    — kept as `resolved_artifact`; when it names a graph object a `resolved_by` edge
-    mints too. Re-resolving is allowed (latest closure witness wins, earlier reasoning
-    stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79): `because`
-    becomes mandatory, `dry_run` DEFAULTS TRUE and previews without writing — pass
-    `dry_run=False` explicitly to actually close the batch — and the whole batch refuses
-    if any ref does not resolve to exactly one thread.
-
-    `action='annotate'` — add `note` WITHOUT closing it or touching `summary`/`status`;
-    each call appends independently, never supersedes an earlier note.
-
-    `action='correct_summary'` — replace the headline in place via `corrected_summary`
-    (`summary` itself, the dedup key, is never touched); re-calling supersedes the prior
-    correction rather than piling up notes. `because` optional.
-
-    `action='reclassify'` — set `kind` ('obligation'/'question'/'task') WITHOUT changing
-    status (untouched is not resolved) — `because` records your judgment, `owner`
-    optionally claims it in the same act, `arc` backfills open_thread's own closed
-    taxonomy onto an already-open thread (osiris-scoped, dropped and named elsewhere).
+    ACTION TABLE — action: what it does (required params beyond action):
+      resolve: close it (ref, because is a short WHY, not a completion essay). `artifact`
+        points at what actually closed it (a commit hash, decision id, file:line) — kept
+        as `resolved_artifact`; when it names a graph object a `resolved_by` edge mints
+        too. Re-resolving is allowed (latest closure witness wins, earlier reasoning
+        stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79):
+        `because` becomes mandatory, `dry_run` DEFAULTS TRUE and previews without
+        writing — pass `dry_run=False` explicitly to actually close the batch — and the
+        whole batch refuses if any ref does not resolve to exactly one thread.
+      annotate: add `note` WITHOUT closing it or touching `summary`/`status` (ref, note)
+        — each call appends independently, never supersedes an earlier note.
+      correct_summary: replace the headline in place via `corrected_summary` (ref,
+        corrected_summary — `summary` itself, the dedup key, is never touched);
+        re-calling supersedes the prior correction rather than piling up notes.
+        `because` optional.
+      reclassify: set `kind` ('obligation'/'question'/'task') WITHOUT changing status
+        (ref, kind) — untouched is not resolved. `because` records your judgment,
+        `owner` optionally claims it in the same act, `arc` backfills open_thread's own
+        closed taxonomy onto an already-open thread (osiris-scoped, dropped and named
+        elsewhere).
 
     `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a list only
     for `action='resolve'`'s own batch mode)."""
@@ -8338,7 +8405,28 @@ async def thread_action(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "thread_action(action='resolve')",
+    "use_instead": "thread(action=...)",
+    "since": "task #202 thread dispatcher (msg 7162)",
+})
+async def thread_action(
+    ref: str | list[str], action: str, because: str | None = None,
+    artifact: str | None = None, dry_run: bool = True, note: str | None = None,
+    corrected_summary: str | None = None, kind: str | None = None,
+    owner: str | None = None, arc: str | None = None,
+    subagent_id: str | None = None,
+    subagent_type: str | None = None, session_anchor: str | None = None,
+    ctx: Context | None = None
+) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to thread(action=...)."""
+    return await _thread_action_impl(
+        ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
+        corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
+        subagent_id=subagent_id, subagent_type=subagent_type)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "thread(action='resolve')",
     "since": "task #202 wave 3 (msg 6987)",
 })
 async def resolve_thread(
@@ -8349,7 +8437,7 @@ async def resolve_thread(
     ctx: Context | None = None
 ) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    thread_action(action='resolve')."""
+    thread(action='resolve')."""
     return await _thread_action_impl(
         ref, "resolve", because=because, artifact=artifact, dry_run=dry_run, note=None,
         corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
@@ -8358,7 +8446,7 @@ async def resolve_thread(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "thread_action(action='annotate')",
+    "use_instead": "thread(action='annotate')",
     "since": "task #202 wave 3 (msg 6987)",
 })
 async def annotate_thread(
@@ -8367,7 +8455,7 @@ async def annotate_thread(
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    thread_action(action='annotate')."""
+    thread(action='annotate')."""
     out = await _thread_action_impl(
         ref, "annotate", because=None, artifact=None, dry_run=True, note=note,
         corrected_summary=None, kind=None, owner=None, arc=None, ctx=ctx,
@@ -8411,7 +8499,7 @@ async def heal_seat_transcript(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "thread_action(action='correct_summary')",
+    "use_instead": "thread(action='correct_summary')",
     "since": "task #202 wave 3 (msg 6987)",
 })
 async def correct_thread_summary(
@@ -8420,7 +8508,7 @@ async def correct_thread_summary(
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    thread_action(action='correct_summary')."""
+    thread(action='correct_summary')."""
     return await _thread_action_impl(
         ref, "correct_summary", because=because, artifact=None, dry_run=True, note=None,
         corrected_summary=corrected_summary, kind=None, owner=None, arc=None, ctx=ctx,
@@ -9248,7 +9336,7 @@ async def settle(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "thread_action(action='reclassify')",
+    "use_instead": "thread(action='reclassify')",
     "since": "task #202 wave 3 (msg 6987)",
 })
 async def reclassify_thread(
@@ -9257,7 +9345,7 @@ async def reclassify_thread(
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    thread_action(action='reclassify')."""
+    thread(action='reclassify')."""
     return await _thread_action_impl(
         ref, "reclassify", because=because, artifact=None, dry_run=True, note=None,
         corrected_summary=None, kind=kind, owner=owner, arc=arc, ctx=ctx,

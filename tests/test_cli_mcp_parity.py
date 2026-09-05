@@ -1167,6 +1167,15 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # same 6823 rule create_project/rename_project/retire_project/fork_project already
     # sat in BINDING_VERBS under individually.
     "project": {"binding_verb": True, "parameterizes": "create_project"},
+    # thread(action=...) — #202 THREAD DISPATCHER, Thoth dispatch 7162: the fourth
+    # object-type dispatcher, absorbing `thread_action` ITSELF (already a wave-3
+    # action-dispatcher, see thread_action's own entry above) into the object-type-
+    # dispatcher naming convention and its hand-built oneOf schema (price-minimizer #1)
+    # — a re-platforming, not a second fold of the same four names again.
+    # thread_action is now hidden, forwarding to the identical _thread_action_impl;
+    # `open_thread` deliberately stays OUT and separately named (it MINTS). Not a
+    # binding-mover — acts on Thread objects only, same as thread_action's own entry.
+    "thread": {"binding_verb": False, "parameterizes": "resolve_thread"},
 }
 
 
