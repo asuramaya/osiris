@@ -231,7 +231,18 @@ async def migrate_charter_to_seat(
     An Agent whose OWN lineage holds no seat right now (never attached/claimed, or reassigned/
     retired since it declared) is reported in `unresolved`, NEVER guessed — its links are left
     untouched, a named residual exactly like the propose-and-approve batch (ruling 5) this is
-    NOT: this heals a rekey, it does not clean up what was declared, however it looks."""
+    NOT: this heals a rekey, it does not clean up what was declared, however it looks.
+
+    NEVER HEALS AWAY A POST-REKEY CHARTER (charter_for's own docstring named this gap, still
+    open until now): `set_charter` REPLACES a seat's whole charter — anything not in the list
+    passed to it gets invalidated. If a seat already declared its OWN Seat-origin charter (via
+    `charter()`/`charter_for`) before this migration ever ran on it, computing the target set
+    from legacy Agent-origin links ALONE and handing that straight to `set_charter` would heal
+    away the seat's own later, more-authoritative declaration — a live seat's own word,
+    destroyed by a one-time cleanup of dead links it never asked to run again. So each seat's
+    migrated set is the UNION of the legacy Agent-origin repos being healed with whatever
+    `charter_of` already reads back for it right now — additive only, never a replacement of a
+    charter the seat itself already stands behind."""
     from src.orchestrator.seats import held_seat
 
     rows = await actions.pool.fetch(
@@ -259,8 +270,13 @@ async def migrate_charter_to_seat(
         entry = by_seat.setdefault(seat_id, {"seat_id": seat_id, "repos": set(), "pairs": []})
         entry["repos"].add(repo)
         entry["pairs"].append((agent_id, repo))
+    for v in by_seat.values():
+        already_declared = set(await charter_of(actions.pool, v["seat_id"]))
+        v["already_declared"] = sorted(already_declared - v["repos"])
+        v["repos"] |= already_declared
     plan = [{"seat_id": v["seat_id"], "repos": sorted(v["repos"]),
-             "from_agents": sorted({p[0] for p in v["pairs"]})} for v in by_seat.values()]
+             "from_agents": sorted({p[0] for p in v["pairs"]}),
+             "already_declared": v["already_declared"]} for v in by_seat.values()]
     applied = 0
     rejected_total: list[dict[str, Any]] = []
     if not dry_run:
