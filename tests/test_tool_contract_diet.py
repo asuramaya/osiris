@@ -866,10 +866,11 @@ def _tool_chars(t: Any) -> int:
 # measured exact. #202's own arc closes here — see the closing decision this commit's
 # own report resolves for the final honest tally (tools, chars, hidden aliases, the
 # named tail with one line each on why it stays).
-# 73 -> 74 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2): `graph_census` — a genuinely
-# new tool (see the char ceiling's own changelog above), not a parameterization of
-# anything existing.
-TOOL_CONTRACT_EXPECTED_COUNT = 74
+# 73 -> 74 -> 73 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2, same-reign round-trip):
+# `graph_census` shipped new, then was demoted to a hidden deprecated alias by Thoth's own
+# fold correction (see the char ceiling's own changelog above for the full account) —
+# deprecated tools this ratchet does not count at all. Net zero.
+TOOL_CONTRACT_EXPECTED_COUNT = 73
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1235,13 +1236,19 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # itself). A genuinely new capability, one new oneOf branch (target, agent_id, because,
 # override_live) plus one ACTION TABLE line — trimmed to the shortest true description
 # already. Measured exact (103,857), not estimated.
-# 103,857 -> 104,690 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2): `graph_census`, a
-# genuinely new tool — three obligations (a78b6987, 7917b404, b2208b94) were stuck on a
-# direct-DB-script workaround purely because no MCP verb could answer a plain population
-# count, itself a house-law violation (raw SQL against the kernel is a defect report,
-# never a shortcut). One new tool, one string param (`kind`), two supported kinds
-# documented in the docstring. Measured exact (104,690), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 104690
+# 103,857 -> 104,690 -> 103,857 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2, SAME
+# REIGN ROUND-TRIP): `graph_census` shipped as a genuinely new tool (three obligations —
+# a78b6987, 7917b404, b2208b94 — were stuck on a direct-DB-script workaround purely
+# because no MCP verb could answer a plain population count, itself a house-law
+# violation), then Thoth's own fold correction landed before this ceiling ever needed to
+# hold at the raised number: a NEW NAMED TOOL was the wrong shape given the operator's
+# fewer-tools direction, since `census` was already a composition Function. Re-exposed as
+# two fixed-args saved compositions (census-seat-property-contradictions, census-cohort —
+# DEFAULT_COMPOSITIONS, compositions.py) and `graph_census` itself demoted to a hidden
+# deprecated alias (meta={"deprecated": True}), which this ratchet does not count at all
+# — same mechanism run_composition/save_composition already use. Net: zero growth.
+# Measured exact (103,857), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 103857
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

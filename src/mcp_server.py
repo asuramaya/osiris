@@ -1242,16 +1242,16 @@ async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None)
     return items
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "composition(action='run', name='census-seat-property-contradictions'"
+                  " or name='census-cohort')",
+    "since": "Thoth dispatch 7543 item 2 fold correction — a new named tool was the "
+             "wrong shape; census was already a composition Function.",
+})
 async def graph_census(kind: str) -> dict[str, Any]:
-    """A small, growable set of read-only population counts over the GRAPH (Thoth dispatch
-    7543 item 2) — the smallest door for a question that is a genuine count, never a
-    raw-SQL workaround. Distinct from `src.orchestrator.census` (the OS-process liveness
-    census, unrelated) — this one is the compositions Function named `census`.
-    `kind='seat_property_contradictions'`: every (seat, property) pair currently holding
-    more than one live distinct value, fleet-wide. `kind='cohort'`: the #189 adoption
-    instrument's own cohort-aged connectivity figures (delegates to `adoption_meter`,
-    never re-derives its SQL). An unrecognized `kind` reports the valid set, never guesses."""
+    """DEPRECATED — hidden alias, still callable. Forwards to composition(action='run',
+    name='census-seat-property-contradictions'|'census-cohort')."""
     pool = await _pool_get()
     spec = {"op": "function", "name": "census", "args": {"kind": kind}}
     out = await comp.run_spec(pool, spec, None, name="census")
