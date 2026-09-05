@@ -2804,9 +2804,17 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     if not source:
         return None
     from src.orchestrator.agents import _generation, lineage_head
-    from src.orchestrator.seats import _OPERATOR_ACTORS
+    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
 
     if source in _OPERATOR_ACTORS:
+        return None
+    # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
+    # found_seat stamps this prefix + the seat's own globally-unique handle as the
+    # source precisely so it can never be mistaken for a real predecessor generation
+    # here — the same exclusion _OPERATOR_ACTORS already gets, for the same reason
+    # (an attribution label, never a lineage fact). Falls through to the caller's own
+    # `current_holder` fallback, same as no handle assertion at all.
+    if str(source).startswith(_FOUNDER_SOURCE_PREFIX):
         return None
     base = _generation(str(source))[0]
     return await lineage_head(pool, base)

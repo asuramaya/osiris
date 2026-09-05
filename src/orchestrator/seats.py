@@ -68,6 +68,23 @@ _LIVE_SECS = 900
 # reach at all — a different, larger design, not this set.
 _OPERATOR_ACTORS = {"operator", "analyst:operator", "console"}
 
+# LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d): a
+# self-managed seat's `--actor` is who TYPED `osiris new`, never a fact about which
+# agent lineage the seat belongs to — but `_seat_lineage_ancestor` (trigger.py) reads
+# the Seat's own `handle` assertion SOURCE as its founding lineage (the same trust the
+# Marquee fix, msg 6694, depends on for a genuinely lineage-founded seat). Two seats
+# founded under the SAME --actor used to carry the SAME source on that assertion,
+# so the second seat's first launch would walk the actor's own live lineage forward
+# and silently adopt whatever generation it found there (measured live: seat 3 in the
+# resume_seat acceptance test inherited seat 2's own dormant session, both founded
+# `--actor khnum`). found_seat stamps this PREFIX + the seat's own globally-unique
+# handle as the source instead — guaranteed distinct per seat, and excluded here the
+# same way _OPERATOR_ACTORS already is, so it falls through to the "no ancestor, mint
+# a fresh `agent:seat-<id>` root" case every fresh self-managed seat is supposed to
+# get. The actor itself is kept, but only as an ATTRIBUTION property (`founded_by`),
+# never as a value anything downstream treats as lineage.
+_FOUNDER_SOURCE_PREFIX = "founder:"
+
 
 # fleet-wide wedge, #172 (2026-08-18 00:08-00:23Z): pg_advisory_lock on a BORROWED pool
 # connection relies on a Python finally to unlock — a cancelled/wedged coroutine can return
