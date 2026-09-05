@@ -226,6 +226,12 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # matched the bare fleet_reconcile tool 1:1 before this fold — now it matches the
     # dispatcher action instead, same shape as seat's own entries above.
     "fleet-reconcile": "agent:fleet_reconcile",
+    # #202 practice dispatcher (Thoth dispatch 7162, proposal decision 07395004):
+    # amend-practice's own CLI door matched the bare amend_practice tool 1:1 before
+    # this fold — now it matches the dispatcher action instead, same shape as
+    # fleet-reconcile's own entry above. record_practice has no CLI door at all
+    # (nothing to reconcile there).
+    "amend-practice": "practice:amend",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -1212,6 +1218,17 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # retire/fleet_reconcile write Agent identity/lineage state and reap fleet mounts,
     # the same 6823 rule those three already sat in BINDING_VERBS under individually.
     "agent": {"binding_verb": True, "parameterizes": "correct_agent_house"},
+    # practice(action=...) — #202 PRACTICE DISPATCHER, Thoth dispatch 7162, proposal
+    # decision 07395004 approved as scoped — the sixth and FINAL object-type dispatcher
+    # of #202's own fold arc. 2 names fold in: record_practice, amend_practice — both
+    # kept as hidden deprecated aliases. A literal "decision" dispatcher was declined
+    # (amend_decision has no siblings of its own object type — record_decision stays
+    # hot-ten-named — so a one-action dispatcher would be pure renaming, the exact
+    # catch-all shape the operator's own fold-endpoint ruling forbids); Practice
+    # genuinely has two write verbs of its own, the real consolidation this fold
+    # captures instead. Not a binding-mover — acts on Practice objects only (a
+    # knowledge record, never seat/project/office/agent state).
+    "practice": {"binding_verb": False, "parameterizes": "record_practice"},
 }
 
 

@@ -853,7 +853,20 @@ def _tool_chars(t: Any) -> int:
 # on the live count. -3 newly hidden, +1 new tool (agent) = -2 net (76 -> 74), measured
 # exact — corrects this session's own pre-build estimate of -4 (decision 65a6eb73),
 # which assumed all six names were live before reading each one's own meta block.
-TOOL_CONTRACT_EXPECTED_COUNT = 74
+# 74 -> 73 (2026-09-05, Imhotep, #202 PRACTICE DISPATCHER, Thoth dispatch 7162,
+# proposal decision 07395004 approved as scoped): the SIXTH AND FINAL object-type
+# dispatcher of #202's own fold arc — the operator's fold-endpoint ruling (thread +
+# agent + decision, standalone tail stays named permanently) is now fully executed. A
+# literal "decision" dispatcher was DECLINED (amend_decision has no siblings of its own
+# object type to consolidate with — record_decision stays hot-ten-named — so a
+# one-action dispatcher would be pure renaming, the exact catch-all shape the ruling
+# forbids); practice(action='record'|'amend') is the real 2-action Practice
+# object-type consolidation instead. -2 newly hidden (record_practice, amend_practice,
+# both genuinely live before this commit) +1 new tool (practice) = -1 net (74 -> 73),
+# measured exact. #202's own arc closes here — see the closing decision this commit's
+# own report resolves for the final honest tally (tools, chars, hidden aliases, the
+# named tail with one line each on why it stays).
+TOOL_CONTRACT_EXPECTED_COUNT = 73
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1196,7 +1209,14 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # action-const overhead outweighs three small flat schemas removed by less than either
 # prior dispatcher's own price-minimizer follow-through did. Measured exact (103,032),
 # not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 103032
+# 103,032 -> 103,371 (2026-09-05, Imhotep, #202 PRACTICE DISPATCHER, Thoth dispatch
+# 7162, proposal decision 07395004 approved as scoped): the SIXTH AND FINAL object-type
+# dispatcher of #202's own fold arc. 2 actions fold in (record_practice, amend_practice),
+# both genuinely live before this commit — their two flat schemas leave the live
+# listing against one new 2,705-char hand-built oneOf schema added. +339 net, the
+# smallest of any dispatcher's own price-minimizer cost so far (a 2-action schema is
+# cheap). Measured exact (103,371), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 103371
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
