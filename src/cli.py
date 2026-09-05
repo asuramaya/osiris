@@ -3550,11 +3550,11 @@ async def cmd_mint_seat(
 # --- new -----------------------------------------------------------------------------------------
 
 async def cmd_new(
-    handle: str, path: str | None, *, project: str | None, model: str | None,
-    actor: str, pool: asyncpg.Pool | None = None,
+    handle: str, path: str | None, *, project: str | None, house: str | None,
+    model: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] — ONE
-    command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
+    """osiris new <handle> [path] [--project P] [--house H] [--model M] [--actor <who>] —
+    ONE command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
     spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
     Ooblek's own real shape, read off its own dossier before this was built rather than
     assumed — a directory + `.osiris` pin for its own code workspace (created if absent,
@@ -3608,7 +3608,7 @@ async def cmd_new(
     try:
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
         out = await _found_seat(Actions(pool), handle=handle, path=path, project=project,
-                                actor=actor, **kwargs)
+                                house=house, actor=actor, **kwargs)
     finally:
         if owns_pool:
             await pool.close()
@@ -3629,6 +3629,12 @@ async def cmd_new(
         print("project: unset — no --project given, none invented. mount will fill "
               "this in on its own once the graph unambiguously knows it; "
               "`osiris new <handle> --project <name>` declares it now.")
+    if out["house"]:
+        print(f"house: {out['house']}")
+    else:
+        print("house: unset — no --house given, none invented (ruling 68fba2e4: homeless "
+              "is a legal state, never fabricated from the handle). "
+              "`osiris new <handle> --house <name>` declares it now.")
     print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
     office = out.get("office")
     if office:
@@ -4334,7 +4340,10 @@ def _build_parser() -> argparse.ArgumentParser:
                             "defaults to ~/code/<handle>")
     p_new.add_argument("--project", default=None,
                        help="the project name written into the workspace's own .osiris "
-                            "pin — defaults to the handle")
+                            "pin — omit it and none is invented; it stays unset")
+    p_new.add_argument("--house", default=None,
+                       help="this seat's own house — omit it and none is invented; it "
+                            "stays homeless (ruling 68fba2e4: homeless is a legal state)")
     p_new.add_argument("--model", default=None,
                        help="defaults to mint_seat's own worker default")
     p_new.add_argument("--actor", default=_CONSOLE_ACTOR,
@@ -4460,8 +4469,8 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model, actor=args.actor, adopt=args.adopt, force=args.force))
     if args.command == "new":
         return asyncio.run(cmd_new(
-            args.handle, args.path, project=args.project, model=args.model,
-            actor=args.actor))
+            args.handle, args.path, project=args.project, house=args.house,
+            model=args.model, actor=args.actor))
     if args.command == "bootstrap":
         return asyncio.run(cmd_bootstrap(args.cwd, project=args.project, actor=args.actor))
     return 2  # pragma: no cover - every real subparser choice is handled above; argparse

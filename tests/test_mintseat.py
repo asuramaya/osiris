@@ -635,11 +635,15 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
                            office_root=offices)
 
     assert out["seat_minted"] is True
-    assert out["handle"] == "Henry" and out["house"] == "Henry"
+    assert out["handle"] == "Henry"
     # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
     # chad project" — decision 24e0b761): no --project given, none invented from the
-    # handle. project stays genuinely None/unset.
+    # handle. project stays genuinely None/unset. Ruling 68fba2e4/thread ef0e94d5
+    # extends the same law to house: no --house given, none invented from the handle
+    # either — the exact fabrication that made Chad/Jesus/Lilguy/atlas's Seat.house
+    # indistinguishable from a real one.
     assert out["project"] is None
+    assert out["house"] is None
     assert out["managed_by"] is None
     assert out["intended_model"] == "claude-sonnet-5"
 
@@ -746,6 +750,39 @@ async def test_found_seat_with_explicit_project_writes_it_to_both_pins(
     assert 'project = "dtfb"' in workspace_pin
     office_pin = (tmp_path / "seats" / "bartow" / ".osiris").read_text()
     assert 'project = "dtfb"' in office_pin
+
+
+async def test_found_seat_with_explicit_house_stamps_the_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    # THE MIRROR OF project's OWN TEST ABOVE: an explicit --house must still land exactly
+    # as intended — the fabrication path removed is "no --house given", never "an
+    # explicit one is ignored".
+    workspace = tmp_path / "workspace"
+    out = await found_seat(actions, handle="Loom", path=str(workspace), house="dtfb",
+                           actor="console", office_root=tmp_path / "seats")
+    assert out["house"] == "dtfb"
+
+    facts = await seat_facts(actions.pool, out["seat_id"])
+    assert facts.get("house") == "dtfb"
+
+
+async def test_found_seat_is_idempotent_on_house_a_second_call_never_regresses_it(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A second call with no --house given must not read as 'now homeless' — the
+    seat's already-real house (from the first call) survives, read fresh off the
+    graph rather than echoing whatever this particular call happened to pass."""
+    offices = tmp_path / "seats"
+    workspace = tmp_path / "workspace"
+
+    first = await found_seat(actions, handle="Loom", path=str(workspace), house="dtfb",
+                             actor="console", office_root=offices)
+    second = await found_seat(actions, handle="Loom", path=str(workspace), house=None,
+                              actor="console", office_root=offices)
+
+    assert first["house"] == "dtfb"
+    assert second["house"] == "dtfb"
 
 
 async def test_found_seat_is_idempotent_on_a_second_call(

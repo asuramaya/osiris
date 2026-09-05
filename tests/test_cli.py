@@ -4054,7 +4054,7 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Henry", str(workspace), project=None, model=None,
+        out = await cmd_new("Henry", str(workspace), project=None, house=None, model=None,
                             actor="console", pool=actions.pool)
 
     assert out == 0
@@ -4065,6 +4065,10 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     # the receipt confesses it plainly rather than staying silent.
     assert "project: unset" in text and "none invented" in text
     assert "project: Henry" not in text
+    # SAME LAW, ONE FIELD OVER (ruling 68fba2e4/thread ef0e94d5): no --house given,
+    # none invented from the handle either.
+    assert "house: unset" in text and "none invented" in text
+    assert "house: Henry" not in text
     assert f"workspace: {workspace}" in text
     assert "next: osiris launch Henry" in text
     assert workspace.is_dir()
@@ -4084,14 +4088,36 @@ async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Bartow", str(workspace), project="dtfb", model=None,
+        out = await cmd_new("Bartow", str(workspace), project="dtfb", house=None, model=None,
                             actor="console", pool=actions.pool)
 
     assert out == 0
     text = buf.getvalue()
     assert "project: dtfb" in text
-    assert "unset" not in text
+    assert "house: unset" in text
     assert (workspace / ".osiris").read_text() == 'project = "dtfb"\n'
+
+
+async def test_cmd_new_with_explicit_house_writes_it_and_prints_it(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # THE MIRROR OF project's OWN TEST ABOVE: an explicit --house still lands exactly
+    # as intended, and the receipt confesses THAT rather than "unset".
+    import io
+    from contextlib import redirect_stdout
+
+    workspace = tmp_path / "dtfb-ws2"
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_new("Loom", str(workspace), project=None, house="dtfb", model=None,
+                            actor="console", pool=actions.pool)
+
+    assert out == 0
+    text = buf.getvalue()
+    assert "house: dtfb" in text
+    assert "house: unset" not in text
 
 
 async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
@@ -4114,7 +4140,7 @@ async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_defa
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await cmd_new("Chad", None, project=None, model=None,
+        out = await cmd_new("Chad", None, project=None, house=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0  # the confession is advisory, never a refusal
     err = buf.getvalue()
@@ -4138,7 +4164,7 @@ async def test_cmd_new_stays_silent_when_a_path_is_given(
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await cmd_new("Named", str(workspace), project=None, model=None,
+        out = await cmd_new("Named", str(workspace), project=None, house=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     assert buf.getvalue() == ""
@@ -4158,7 +4184,7 @@ async def test_cmd_new_notes_the_case_drift_when_handle_capitalization_differs(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Chad", str(workspace), project=None, model=None,
+        out = await cmd_new("Chad", str(workspace), project=None, house=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     text = buf.getvalue()
@@ -4177,7 +4203,7 @@ async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("flatname", str(workspace), project=None, model=None,
+        out = await cmd_new("flatname", str(workspace), project=None, house=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     assert "note: paths use the lowercase form" not in buf.getvalue()

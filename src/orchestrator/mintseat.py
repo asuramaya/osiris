@@ -426,7 +426,8 @@ async def mint_seat(
 
 async def found_seat(
     actions: Actions, *, handle: str, path: str | None = None,
-    project: str | None = None, intended_model: str = DEFAULT_WORKER_MODEL,
+    project: str | None = None, house: str | None = None,
+    intended_model: str = DEFAULT_WORKER_MODEL,
     office_root: Path | None = None, actor: str,
 ) -> dict[str, Any]:
     """ONE ACT, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft
@@ -447,6 +448,18 @@ async def found_seat(
     fine). Neither `.osiris` pin (the workspace's own, and the office's own) is ever
     overwritten if already present — fill-missing-only, the same law every office write
     in this codebase holds.
+
+    `house`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
+    (ruling 68fba2e4 item B/thread ef0e94d5, the operator's own house/project ruling
+    extended from the pin layer to Seat.house: "a direct mint with no --house stays
+    homeless"). This mirrors `project`'s own fix immediately below exactly, and closes
+    the SAME class of bug one field over — this door used to write `house=handle`
+    unconditionally, which is precisely how Chad/Jesus/Lilguy/atlas ended up with a
+    Seat.house indistinguishable from a deliberately-chosen one by any test except
+    "does it equal the handle" (decision 68fba2e4's own measurement). `mint_seat`'s
+    org-chart path was already compliant (`house or manager_house` — a managed worker
+    inherits its real manager's real house, never invents one); this is the direct-mint
+    twin of that same law.
 
     `project`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
     (the operator, live, 2026-09-02: "the thing cannot handle 'no project' — it falsely
@@ -492,6 +505,7 @@ async def found_seat(
     root = office_root or _default_office_root()
     office_path = root / handle.lower()
     project_name = (project or "").strip() or None
+    house_name = (house or "").strip() or None
     # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,
     # flags that specific method inside an async def; a shell has already expanded a
     # literal `~` in `path` by the time argv reaches this call anyway — this only
@@ -513,6 +527,8 @@ async def found_seat(
                              "or work with the existing seat through its own manager"}
         worker_seat_id = existing_seat_id
         seat_minted = False
+        worker_facts = await seat_facts(actions.pool, worker_seat_id)
+        worker_house = worker_facts.get("house")
     else:
         near = await _near_miss(actions.pool, handle)
         if near:
@@ -531,7 +547,7 @@ async def found_seat(
         # never-launched seat is supposed to get, regardless of how many other seats
         # this same actor has founded before or since.
         seat_result = await ensure_seat(
-            actions, house=handle, handle=handle,
+            actions, house=house_name, handle=handle,
             source=f"{_FOUNDER_SOURCE_PREFIX}{handle}", anchor_cwd=str(office_path))
         if "error" in seat_result:
             return seat_result
@@ -543,6 +559,7 @@ async def found_seat(
             await actions.assert_property(
                 _founder_obj, "founded_by", actor, actor, datetime.now(UTC), _CONF,
                 evidence_class=_EC)
+        worker_house = house_name
 
     workspace.mkdir(parents=True, exist_ok=True)
     workspace_pin = workspace / ".osiris"
@@ -552,7 +569,7 @@ async def found_seat(
         workspace_pin_state = "written"
 
     office_result = await _scaffold_office(
-        actions, handle=handle, house=handle, project=project_name,
+        actions, handle=handle, house=worker_house or "", project=project_name,
         intended_model=intended_model, office_root=root, seat_id=worker_seat_id,
         manager_seat_id=None)
 
@@ -582,7 +599,7 @@ async def found_seat(
     }[occ["state"]]
 
     return {
-        "seat_id": worker_seat_id, "handle": handle, "house": handle,
+        "seat_id": worker_seat_id, "handle": handle, "house": worker_house,
         "seat_minted": seat_minted, "project": project_name, "workspace": str(workspace),
         "workspace_pin": workspace_pin_state, "office": office_result,
         "tree_cwd": tree.get("tree_cwd"),
