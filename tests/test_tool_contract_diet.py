@@ -1122,7 +1122,15 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # default, `reason` enforced only at write time). +514 for one new oneOf branch plus its
 # ACTION TABLE docstring line — a real cost of a genuinely missing door, not padding.
 # Measured exact (102,243).
-TOOL_CONTRACT_CEILING_CHARS = 102243
+# 102,243 -> 102,722 (2026-09-05, Seshat, thread 6a1dfc52's own named gap — Thoth dispatch
+# 7098 item 2): `min_age_days`/`max_age_days` added to get_object_list's thread branch and
+# list_unfiled_threads — THE AGE-BIN INSTRUMENT: no primitive exposed a Thread's own
+# creation timestamp in bulk or let a caller filter by it, so binning ~938 open obligations
+# by age required a per-object pull, not a cheap call. Trimmed both new docstring additions
+# under the category rule first (814 chars, before this bump) before raising the ceiling for
+# the remaining +479 — a real cost of a genuinely missing filter, not padding. Measured
+# exact (102,722).
+TOOL_CONTRACT_CEILING_CHARS = 102722
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
