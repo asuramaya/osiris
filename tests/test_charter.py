@@ -222,7 +222,7 @@ async def test_migrate_charter_to_seat_dry_run_writes_nothing(actions: Actions) 
     out = await migrate_charter_to_seat(actions, dry_run=True, only_seats={seat_id})
     assert out["applied"] is False
     assert out["plan"] == [{"seat_id": seat_id, "repos": ["osiris"],
-                            "from_agents": ["agent:mig1"]}]
+                            "from_agents": ["agent:mig1"], "already_declared": []}]
     assert await charter_of(actions.pool, seat_id) == []  # nothing written yet
     still_active = await actions.pool.fetchval(
         "SELECT valid_until FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs'",
@@ -345,6 +345,50 @@ async def test_migrate_charter_to_seat_is_idempotent_on_a_second_run(actions: Ac
     assert again["plan"] == []  # no active Agent-origin governs links left to find
     assert again["seats_migrated"] == 0
     assert await charter_of(actions.pool, seat_id) == ["osiris"]  # unchanged
+
+
+async def test_migrate_charter_to_seat_never_heals_away_a_post_rekey_charter_for(
+    actions: Actions,
+) -> None:
+    """charter_for's own docstring named this gap: if a seat already declared its OWN
+    Seat-origin charter (via charter_for/charter()) before the legacy migration ever runs on
+    it, computing the migrated set from Agent-origin links ALONE and handing that straight to
+    set_charter (which REPLACES the whole charter) would heal away the seat's own later,
+    more-authoritative declaration. The migration must union in, never override."""
+    await _agent(actions, "agent:mig8")
+    for r in ("osiris", "postrekey"):
+        await _repo(actions, r)
+    seat_id = await _seated(actions, "agent:mig8", "Mig8")
+    a_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='agent:mig8'")
+    p_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:osiris'")
+    await actions.create_link(a_oid, p_oid, "governs", "agent:mig8", NOW, 0.9)
+    # the seat declares its OWN post-rekey charter, on a repo the legacy links never named
+    await set_charter(actions, seat_id, ["postrekey"], actor=seat_id)
+    assert await charter_of(actions.pool, seat_id) == ["postrekey"]
+
+    out = await migrate_charter_to_seat(actions, dry_run=False, only_seats={seat_id})
+    assert out["seats_migrated"] == 1
+    # the legacy grant is healed in, but the seat's own post-rekey declaration SURVIVES
+    assert await charter_of(actions.pool, seat_id) == ["osiris", "postrekey"]
+
+
+async def test_migrate_charter_to_seat_dry_run_plan_names_what_was_already_declared(
+    actions: Actions,
+) -> None:
+    await _agent(actions, "agent:mig9")
+    for r in ("osiris", "postrekey"):
+        await _repo(actions, r)
+    seat_id = await _seated(actions, "agent:mig9", "Mig9")
+    a_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='agent:mig9'")
+    p_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:osiris'")
+    await actions.create_link(a_oid, p_oid, "governs", "agent:mig9", NOW, 0.9)
+    await set_charter(actions, seat_id, ["postrekey"], actor=seat_id)
+
+    out = await migrate_charter_to_seat(actions, dry_run=True, only_seats={seat_id})
+    row = next(r for r in out["plan"] if r["seat_id"] == seat_id)
+    assert row["repos"] == ["osiris", "postrekey"]
+    assert row["already_declared"] == ["postrekey"]
+    assert await charter_of(actions.pool, seat_id) == ["postrekey"]  # dry-run wrote nothing
 
 
 # ═══ mcp_server.py integration — orient()/charter() resolve the caller's SEAT first ═══
