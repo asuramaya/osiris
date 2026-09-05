@@ -37,8 +37,10 @@ from src.orchestrator.census import live_bodies, live_bodies_by_cwd
 from src.orchestrator.deploy_guard import (
     alarm_schema_drift,
     alarm_unreviewed_boot,
+    check_and_resolve_clean_boot,
     check_schema_drift,
     check_unreviewed_boot,
+    resolve_schema_drift_alarms_on_clean_check,
 )
 from src.orchestrator.liveness import observe_liveness
 from src.orchestrator.manifests import load_manifests
@@ -122,6 +124,12 @@ async def startup(ctx: dict[str, Any]) -> None:
             drift = await check_schema_drift(pool)
             if drift:
                 await alarm_schema_drift(pool, drift, service="osiris-worker")
+            else:
+                # THE SCHEMA-DRIFT SUPERSESSION LEG (operator ruling, DM 7035, item 3): a
+                # confirmed-clean check closes this service's own older SCHEMA DRIFT alarms.
+                with contextlib.suppress(Exception):
+                    await resolve_schema_drift_alarms_on_clean_check(
+                        pool, service="osiris-worker")
         except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
             _log.warning("deploy_guard check failed at worker boot: %r", exc)
         # THE REBOOT-IS-A-DEPLOY GUARD (thread 489a39d0): a SEPARATE try/except from the
@@ -140,6 +148,12 @@ async def startup(ctx: dict[str, Any]) -> None:
                     src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
                 await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
                                            service="osiris-worker", src_root=src_root)
+            else:
+                # THE CLEAN-BOOT LEG of the boot-watchdog supersession mechanism (operator
+                # ruling, DM 7032): a confirmed-clean boot closes this service's own older
+                # alarms. No-ops silently on 'unknown' — the function's own job to decide.
+                with contextlib.suppress(Exception):
+                    await check_and_resolve_clean_boot(pool, service="osiris-worker")
         except Exception as exc:  # noqa: BLE001 — the guard must never become the thing it guards against
             _log.warning("deploy_guard reboot check failed at worker boot: %r", exc)
 

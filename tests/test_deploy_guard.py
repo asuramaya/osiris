@@ -442,6 +442,55 @@ async def test_reboot_alarm_dedups_on_running_head_alone_across_different_waterm
     assert count == 1
 
 
+async def test_reboot_alarm_resolves_the_same_services_older_open_alarm_at_mint_time(
+    actions: Actions,
+) -> None:
+    """THE REGROWTH CURE (operator ruling, DM 7035, item 4): a NEW unreviewed head for the
+    SAME service must close that service's OLDER open alarm before minting a sibling — only
+    one open UNREVIEWED BOOT per service, ever, so the pile that grew to 171 threads cannot
+    regrow."""
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'deadbee0' was never recorded",
+        running_head="deadbee0", service="osiris-worker")
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'beefcafe' was never recorded",
+        running_head="beefcafe", service="osiris-worker")
+    open_worker = await _open_alarm_count(actions, like="UNREVIEWED BOOT%")
+    assert open_worker == 1
+    still_open_summary = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.type = 'Thread' AND a.name = 'summary' "
+        "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%' AND o.status = 'active' "
+        "AND COALESCE((SELECT a2.value #>> '{}' FROM current_assertions a2 "
+        " WHERE a2.object_id = o.id AND a2.name = 'status' "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1), 'open') = 'open'")
+    assert "beefcafe" in still_open_summary
+
+
+async def test_reboot_alarm_never_resolves_a_thread_a_different_service_still_witnesses(
+    actions: Actions,
+) -> None:
+    """THE MULTI-SERVICE SAFETY GUARD: `status` is SINGULAR (a resolve supersedes EVERY
+    open source's status, not just the resolving source's own — thread's own multi-witness
+    convergence, `test_two_services_confessing_the_same_unreviewed_head_converge_on_one_
+    thread`). Resolving a Thread two services still share would silently retract the OTHER
+    service's own live confession. osiris-worker and osiris-mcp both boot on the identical
+    unrecorded head (one shared Thread); osiris-worker then boots again on a NEWER head —
+    the shared Thread must stay open (osiris-mcp still confesses it), and osiris-worker's
+    new alarm mints as its own second Thread rather than silently retracting osiris-mcp's."""
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'deadbee0' was never recorded",
+        running_head="deadbee0", service="osiris-worker")
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'deadbee0' was never recorded",
+        running_head="deadbee0", service="osiris-mcp")
+    await alarm_unreviewed_boot(
+        actions.pool, "running HEAD 'beefcafe' was never recorded",
+        running_head="beefcafe", service="osiris-worker")
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%deadbee0%") == 1
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%beefcafe%") == 1
+
+
 async def test_two_services_confessing_the_same_unreviewed_head_converge_on_one_thread(
     actions: Actions,
 ) -> None:
@@ -561,6 +610,237 @@ async def test_withheld_record_alarm_survives_the_desk_being_unreachable(
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
         "AND a.value #>> '{}' ILIKE 'DEPLOY RECORD WITHHELD%deadbeef%'")
     assert count == 1
+
+
+# --- the supersession mechanism (operator ruling, DM 7032, following the backlog
+# measurement decision 6354c424): "superseded by the next recorded deploy or clean boot of
+# the same service; only the newest per service stays open." ------------------------------
+
+async def _open_alarm_count(actions: Actions, *, like: str = "%") -> int:
+    return await actions.pool.fetchval(
+        "SELECT count(DISTINCT o.id) FROM objects o JOIN current_assertions a "
+        "ON a.object_id = o.id "
+        "WHERE o.type = 'Thread' AND o.status = 'active' AND a.name = 'summary' "
+        "AND a.value #>> '{}' LIKE $1 "
+        "AND COALESCE((SELECT a2.value #>> '{}' FROM current_assertions a2 "
+        " WHERE a2.object_id = o.id AND a2.name = 'status' "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1), 'open') = 'open'",
+        like,
+    )
+
+
+async def test_deploy_leg_resolves_an_alarm_whose_head_is_now_an_ancestor(
+    actions: Actions, small_repo: Path,
+) -> None:
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
+
+    old = _commit(small_repo, "old")
+    new = _commit(small_repo, "new")
+    await alarm_unreviewed_boot(
+        actions.pool, f"running HEAD {old!r} was never recorded", running_head=old,
+        service="osiris-worker")
+    out = await resolve_alarms_superseded_by_deploy(
+        actions.pool, repo_root=small_repo, new_head=new, dry_run=False)
+    assert out["resolved"] and not out["kept_open"]
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%") == 0
+
+
+async def test_deploy_leg_dry_run_previews_without_writing(
+    actions: Actions, small_repo: Path,
+) -> None:
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
+
+    old = _commit(small_repo, "old")
+    new = _commit(small_repo, "new")
+    await alarm_unreviewed_boot(
+        actions.pool, f"running HEAD {old!r} was never recorded", running_head=old,
+        service="osiris-worker")
+    out = await resolve_alarms_superseded_by_deploy(
+        actions.pool, repo_root=small_repo, new_head=new, dry_run=True)
+    assert out["dry_run"] is True and out["resolved"]
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%") == 1
+
+
+async def test_deploy_leg_keeps_a_divergent_alarm_open(
+    actions: Actions, small_repo: Path,
+) -> None:
+    """The precision half of the mechanism: an alarm whose head is NOT an ancestor of the
+    newly recorded deploy (a divergent/rewritten branch, or simply a boot more recent than
+    this deploy) must never be silently swept up — only a proven ancestry match closes
+    anything."""
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
+
+    base = _commit(small_repo, "base")
+    _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
+    divergent = _commit(small_repo, "divergent")
+    await alarm_unreviewed_boot(
+        actions.pool, f"running HEAD {divergent!r} was never recorded", running_head=divergent,
+        service="osiris-worker")
+    out = await resolve_alarms_superseded_by_deploy(
+        actions.pool, repo_root=small_repo, new_head=base, dry_run=False)
+    assert not out["resolved"] and out["kept_open"]
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%") == 1
+
+
+async def test_deploy_leg_never_touches_schema_drift(
+    actions: Actions, small_repo: Path,
+) -> None:
+    """A schema-drift alarm needs a human's deploy to fix the DB, not just a later git HEAD
+    — a deploy-recorded git head is not even the right AXIS for it (alembic revisions, not
+    commits). It has its own dedicated resolver, `resolve_schema_drift_alarms_on_clean_
+    check` (operator ruling, DM 7035, item 3), tested separately below — the deploy leg
+    must not fold it in just because it shares the boot:{service} source."""
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
+
+    new = _commit(small_repo, "new")
+    await alarm_schema_drift(actions.pool, "code expects '0040', DB is at '0039'",
+                             service="osiris-worker")
+    out = await resolve_alarms_superseded_by_deploy(
+        actions.pool, repo_root=small_repo, new_head=new, dry_run=False)
+    assert not out["resolved"]
+    assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 1
+
+
+# --- schema drift's own supersession rule (operator ruling, DM 7035, item 3) --------------
+
+async def test_schema_drift_leg_resolves_on_a_confirmed_clean_check(actions: Actions) -> None:
+    from src.orchestrator.deploy_guard import resolve_schema_drift_alarms_on_clean_check
+
+    await alarm_schema_drift(actions.pool, "code expects '0040', DB is at '0039'",
+                             service="osiris-worker")
+    out = await resolve_schema_drift_alarms_on_clean_check(
+        actions.pool, service="osiris-worker", dry_run=False)
+    assert out["resolved"]
+    assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 0
+
+
+async def test_schema_drift_leg_dry_run_previews_without_writing(actions: Actions) -> None:
+    from src.orchestrator.deploy_guard import resolve_schema_drift_alarms_on_clean_check
+
+    await alarm_schema_drift(actions.pool, "code expects '0040', DB is at '0039'",
+                             service="osiris-worker")
+    out = await resolve_schema_drift_alarms_on_clean_check(
+        actions.pool, service="osiris-worker", dry_run=True)
+    assert out["dry_run"] is True and out["resolved"]
+    assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 1
+
+
+async def test_schema_drift_leg_noop_while_still_drifted(actions: Actions) -> None:
+    from src.orchestrator.deploy_guard import resolve_schema_drift_alarms_on_clean_check
+
+    await alarm_schema_drift(actions.pool, "code expects '0040', DB is at '0039'",
+                             service="osiris-worker")
+    real = await actions.pool.fetchval("SELECT version_num FROM alembic_version")
+    await actions.pool.execute("UPDATE alembic_version SET version_num = '0001'")
+    try:
+        out = await resolve_schema_drift_alarms_on_clean_check(
+            actions.pool, service="osiris-worker", dry_run=False)
+        assert not out["resolved"]
+        assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 1
+    finally:
+        await actions.pool.execute("UPDATE alembic_version SET version_num = $1", real)
+
+
+async def test_schema_drift_leg_scoped_to_the_same_service_only(actions: Actions) -> None:
+    from src.orchestrator.deploy_guard import resolve_schema_drift_alarms_on_clean_check
+
+    await alarm_schema_drift(actions.pool, "code expects '0040', DB is at '0039'",
+                             service="osiris-worker")
+    out = await resolve_schema_drift_alarms_on_clean_check(
+        actions.pool, service="osiris-mcp", dry_run=False)
+    assert not out["resolved"]
+    assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 1
+
+
+async def test_clean_boot_leg_resolves_only_the_same_services_older_alarms(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_clean_boot
+
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'deadbee0' was never recorded",
+                                running_head="deadbee0", service="osiris-worker")
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'beefcafe' was never recorded",
+                                running_head="beefcafe", service="osiris-mcp")
+    out = await resolve_alarms_superseded_by_clean_boot(
+        actions.pool, service="osiris-worker", running_head="0ff1cec1", dry_run=False)
+    assert len(out["resolved"]) == 1
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%deadbee0%") == 0
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%beefcafe%") == 1
+
+
+async def test_check_and_resolve_clean_boot_noop_on_unknown_cursor(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.deploy_guard import check_and_resolve_clean_boot
+    from src.orchestrator.monitor import set_cursor
+
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'deadbee0' was never recorded",
+                                running_head="deadbee0", service="osiris-worker")
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: None)
+    out = await check_and_resolve_clean_boot(actions.pool, service="osiris-worker")
+    assert out["resolved"] == []
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%deadbee0%") == 1
+
+
+async def test_check_and_resolve_clean_boot_noop_while_still_drifted(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.deploy_guard import check_and_resolve_clean_boot
+    from src.orchestrator.monitor import set_cursor
+
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'deadbee0' was never recorded",
+                                running_head="deadbee0", service="osiris-worker")
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "5711107d")
+    monkeypatch.setattr(guard, "_git_head", lambda root: "5711107e")
+    out = await check_and_resolve_clean_boot(actions.pool, service="osiris-worker")
+    assert out["resolved"] == []
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%deadbee0%") == 1
+
+
+async def test_check_and_resolve_clean_boot_resolves_on_a_confirmed_match(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.deploy_guard import check_and_resolve_clean_boot
+    from src.orchestrator.monitor import set_cursor
+
+    await alarm_unreviewed_boot(actions.pool, "running HEAD 'deadbee0' was never recorded",
+                                running_head="deadbee0", service="osiris-worker")
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "c1ea4000")
+    monkeypatch.setattr(guard, "_git_head", lambda root: "c1ea4000")
+    out = await check_and_resolve_clean_boot(actions.pool, service="osiris-worker")
+    assert out["resolved"]
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%deadbee0%") == 0
+
+
+async def test_a_withheld_deploy_followed_by_a_recorded_one_leaves_exactly_one_open_alarm(
+    actions: Actions, small_repo: Path,
+) -> None:
+    """THE OPERATOR'S OWN ACCEPTANCE TEST (DM 7032, item 3): a withheld deploy at a head
+    that a LATER recorded deploy supersedes must close; a second, unrelated/divergent alarm
+    already open must be left alone — proving the mechanism is selective, not a blanket
+    sweep. Two alarms go in; one comes out."""
+    from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
+
+    withheld_head = _commit(small_repo, "withheld")
+    recorded_head = _commit(small_repo, "recorded")
+    _git(small_repo, "checkout", "-q", "--orphan", "unrelated")
+    divergent_head = _commit(small_repo, "divergent")
+
+    await alarm_withheld_deploy_record(
+        actions.pool, running_head=withheld_head, reason="false-mint-live: agent:x")
+    await alarm_unreviewed_boot(
+        actions.pool, f"running HEAD {divergent_head!r} was never recorded",
+        running_head=divergent_head, service="osiris-worker")
+    assert await _open_alarm_count(actions) == 2
+
+    out = await resolve_alarms_superseded_by_deploy(
+        actions.pool, repo_root=small_repo, new_head=recorded_head, dry_run=False)
+    assert len(out["resolved"]) == 1
+    assert await _open_alarm_count(actions) == 1
 
 
 # --- wiring: both services actually call the reboot guard at their own boot too ------------

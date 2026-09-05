@@ -1908,12 +1908,23 @@ async def _real_record_deploy(pool: asyncpg.Pool, repo_root: Path) -> str | None
     reach a running service is a successful `osiris deploy` restart, so recording it here IS
     the ledger. Returns the head it recorded (or None on a read failure, which is also a
     no-op — never a deploy failure, the write side stays as fail-open as the read side)."""
-    from src.orchestrator.deploy_guard import _DEPLOY_CURSOR_KEY, _git_head
+    from src.orchestrator.deploy_guard import (
+        _DEPLOY_CURSOR_KEY,
+        _git_head,
+        resolve_alarms_superseded_by_deploy,
+    )
     from src.orchestrator.monitor import set_cursor
 
     head = _git_head(repo_root)
     if head is not None:
         await set_cursor(pool, _DEPLOY_CURSOR_KEY, head)
+        # THE DEPLOY LEG of the boot-watchdog supersession mechanism (operator ruling, DM
+        # 7032, following the backlog measurement decision 6354c424): this recorded deploy
+        # is itself the ground truth that closes every alarm it now supersedes. Fail-open —
+        # the resolver's own internal try/except already guards this, never a deploy failure.
+        with contextlib.suppress(Exception):
+            await resolve_alarms_superseded_by_deploy(
+                pool, repo_root=repo_root, new_head=head, dry_run=False)
     return head
 
 
