@@ -2697,6 +2697,10 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
             "reason": _s(),
         }, ["action", "target", "reason"]),
         _seat_action_schema({
+            "action": _action_const("resync_pin"), "target": _s(), "key": _s(),
+            "value": _opt_s(), "reason": _opt_s(), "dry_run": _b(True),
+        }, ["action", "target", "key"]),
+        _seat_action_schema({
             "action": _action_const("sweep_disk"), "target": _s(), "dry_run": _b(True),
             "because": _s(),
         }, ["action", "target"]),
@@ -2776,6 +2780,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "transition_project": (
         ["fabricated_project", "real_project", "because", "repos", "dry_run"], []),
     "resync_house": (["target", "new_house", "reason"], ["target", "reason"]),
+    "resync_pin": (
+        ["target", "key", "value", "reason", "dry_run"], ["target", "key"]),
     "sweep_disk": (["target", "dry_run", "because"], ["target"]),
     "rename": (["target", "new_handle", "because"], ["target", "new_handle", "because"]),
     "set_attended": (["target", "attended", "because"], ["target", "attended", "because"]),
@@ -3200,6 +3206,18 @@ async def _seat_impl(
         return await _correct_own_pin_value(pool, ident.agent_id, key, resolved_value,
                                             reason=reason)
 
+    if action == "resync_pin":
+        assert target is not None and key is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a correction is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.offices import correct_pin_value_third_party
+        resolved_value = None if value is _UNSET else value
+        return await correct_pin_value_third_party(
+            pool, target, key, resolved_value, reason=reason, dry_run=dry_run)
+
     if action == "revert_pin":
         ident = await _ident_for(ctx)
         if ident is None:
@@ -3312,6 +3330,7 @@ async def seat(
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
       correct_house: a head corrects its OWN house (new_house)
       correct_pin: correct an existing key in your own seat's pin (key, reason)
+      resync_pin: third-party pin correction, dry_run default (target, key)
       revert_pin: undo your seat's most recent pin write
       launch: give a seat a fresh body (target) — ALSO its own named tool, same call
       resume: continue a seat's dormant session (target) — ALSO its own named tool
@@ -3319,7 +3338,8 @@ async def seat(
       wake_preflight: check wake()'s gates before calling it (target) — ALSO named
 
     DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
-    transition_project, sweep_disk) — same convention as their standalone predecessors."""
+    transition_project, sweep_disk, resync_pin) — same convention as their standalone
+    predecessors."""
     return await _seat_impl(
         action, target=target, handle=handle, manager=manager, new_cwd=new_cwd,
         extract=extract, force=force, because=because, reason=reason, dry_run=dry_run,

@@ -474,6 +474,82 @@ def _resolved(p: Path) -> Path:
     return p.resolve()
 
 
+async def correct_pin_value_third_party(
+    pool: asyncpg.Pool, seat_id: str, key: str, value: str | None, *, reason: str = "",
+    dry_run: bool = True, office_root: Path | None = None, workspace_root: Path | None = None,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY SIBLING of `correct_own_pin_value` — decision fff496fe22b0's own
+    named gap ("correct_pin_value has NO third-party door on any surface... an operator/
+    manager cannot fix another seat's pin at all"), closed the same way task #152 closed
+    the identical gap for Seat.house: `resync_seat_house_third_party` is the precedent —
+    NOT self-scoped, NOT headship-gated, `reason` required to actually write (same law
+    `correct_pin_value` and `resync_seat_house_third_party` both already enforce), and
+    callers are responsible for the authorization this docstring cannot enforce.
+    `seat_id` names ANY seat by its own canonical, never the caller's own held one.
+
+    NEVER A PARALLEL IMPLEMENTATION: `correct_own_pin_value` already reaches all THREE
+    pin copies (office, anchor, workspace — ruling b30e2b38) correctly and is not
+    actually self-scoped in its own code — it is self-scoped only by every existing
+    caller's CONVENTION of always passing the caller's own `agent_id` (`cmd_correct_
+    pin_value`'s own CLI door already exploits this identical seam, passing an
+    explicitly-named agent instead). This door does the same: resolves `seat_id`'s own
+    HOLDER agent via `seat_occupancy` (the one authority for who holds a seat, live or
+    cold — never a caller-supplied agent id) and hands that off to `correct_own_pin_
+    value` unchanged for the real write. Refuses when the seat has no holder on record
+    — a seat never claimed by any agent has nothing this call could correct.
+
+    `dry_run=True` (default, same law `transition_seat_project` already established for
+    this exact shape) PEEKS every applicable copy (`_peek_pin_value`, read-only, the
+    SAME preflight `transition_seat_project` already uses for its own plan) and returns
+    a `plan` — which copies actually declare `key` with a value differing from the
+    target, without writing anything. `dry_run=False` requires a non-empty `reason` —
+    refused before anything is touched — then delegates the actual write wholesale to
+    `correct_own_pin_value`."""
+    from src.orchestrator.seats import seat_facts, seat_occupancy
+
+    occ = await seat_occupancy(pool, seat_id)
+    holder = occ.get("holder")
+    if not holder:
+        return {"error": f"{seat_id!r} has no holder on record — correct_pin_value_"
+                         "third_party resolves the same way correct_own_pin_value does "
+                         "(an agent whose held seat this is); a seat never claimed by "
+                         "any agent has nothing to correct"}
+
+    if not dry_run:
+        reason = (reason or "").strip()
+        if not reason:
+            return {"error": "a correction with no reason is exactly the silent "
+                             "overwrite 719ed5b1 rules against — refusing"}
+        return await correct_own_pin_value(pool, holder, key, value, reason=reason,
+                                           office_root=office_root,
+                                           workspace_root=workspace_root)
+
+    from src.orchestrator.projects import _peek_pin_value
+
+    facts = await seat_facts(pool, seat_id)
+    handle = (facts.get("handle") or "").strip()
+    root = office_root or _default_office_root()
+    office = root / handle.lower()
+    anchor_cwd = facts.get("anchor_cwd")
+    workspace = (workspace_root or (Path.home() / "code")) / handle.lower()
+
+    targets: dict[str, Path] = {"office": office}
+    seen = {_resolved(office)}
+    if anchor_cwd and _resolved(Path(anchor_cwd)) not in seen:
+        targets["anchor"] = Path(anchor_cwd)
+        seen.add(_resolved(Path(anchor_cwd)))
+    if _resolved(workspace) not in seen:
+        targets["workspace"] = workspace
+
+    plan: dict[str, Any] = {}
+    for label, path in targets.items():
+        peek = _peek_pin_value(str(path), key)
+        if peek.get("ok") and peek["value"] != value:
+            plan[label] = {"path": str(path), "old_value": peek["value"], "new_value": value}
+
+    return {"seat_id": seat_id, "handle": handle, "key": key, "dry_run": True, "plan": plan}
+
+
 def revert_pin_write(path: str) -> dict[str, Any]:
     """The reversibility half of `write_pin_additions`'s constraint 3: restore `path/.osiris`
     from the backup it took immediately before its most recent real write. Refuses (an error

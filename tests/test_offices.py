@@ -13,6 +13,7 @@ from src.orchestrator.mounts import save_mount
 from src.orchestrator.offices import (
     correct_own_pin_value,
     correct_pin_value,
+    correct_pin_value_third_party,
     establish_office,
     plan_pin_migration,
     revert_own_pin_write,
@@ -999,6 +1000,115 @@ async def test_correct_own_pin_value_skips_a_workspace_with_no_pin_of_its_own(
         reason="x", office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
     assert out["written"] is True
     assert "workspace" not in out
+
+
+# ═══ correct_pin_value_third_party — the THIRD-PARTY sibling (decision fff496fe22b0's own
+# named gap, thread 4de94895): unlike correct_own_pin_value, the caller and the target are
+# genuinely different identities — a caller names ANY seat by its own canonical, resolved
+# to its holder via seat_occupancy, never the caller's own agent_id. ═══
+
+async def test_correct_pin_value_third_party_dry_run_previews_without_writing(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp1holder", "TpOne", source="test")
+    office = tmp_path / "tpone"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
+    assert out["dry_run"] is True
+    assert out["plan"]["office"] == {
+        "path": str(office), "old_value": "Jesus", "new_value": "Godel"}
+    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'  # untouched
+
+
+async def test_correct_pin_value_third_party_dry_run_reports_no_plan_when_already_correct(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp2same", "TpTwo", source="test")
+    office = tmp_path / "tptwo"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Godel"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
+    assert out["plan"] == {}
+
+
+async def test_correct_pin_value_third_party_writes_via_correct_own_pin_value_when_confirmed(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """dry_run=False delegates the real write wholesale to correct_own_pin_value — never
+    a parallel implementation — so the same anchor/workspace sync it already does applies
+    here too, just addressed at the seat's own holder instead of the caller."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp3write", "TpThree", source="test")
+    office = tmp_path / "tpthree"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", reason="task fff496fe22b0",
+        dry_run=False, office_root=tmp_path)
+    assert out["written"] is True
+    assert (office / ".osiris").read_text() == 'project = "Godel"\n'
+
+
+async def test_correct_pin_value_third_party_refuses_a_write_with_no_reason(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp4noreas", "TpFour", source="test")
+    office = tmp_path / "tpfour"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", reason="  ",
+        dry_run=False, office_root=tmp_path)
+    assert "silent overwrite" in out["error"]
+    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'  # nothing written
+
+
+async def test_correct_pin_value_third_party_refuses_a_seat_with_no_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat that exists but was never claimed by any agent — vacant furniture, per
+    mint_seat's own law — has no holder correct_own_pin_value could ever resolve through."""
+    seat_oid = await actions.create_or_find_object("Seat", "seat:tp5vacant", "test")
+    await actions.assert_property(seat_oid, "handle", "TpFive", "test", NOW, 0.9)
+
+    out = await correct_pin_value_third_party(
+        actions.pool, "seat:tp5vacant", "project", "Godel", office_root=tmp_path)
+    assert "no holder" in out["error"]
+
+
+async def test_correct_pin_value_third_party_targets_a_different_agents_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE ACTUAL THIRD-PARTY PROOF: the calling identity never appears anywhere in this
+    call at all — only the TARGET seat's own canonical does, unlike correct_own_pin_value
+    which always resolves off whichever agent_id it's handed."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp6target", "TpSix", source="test")
+    office = tmp_path / "tpsix"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "vajra"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "mudra", reason="phantom pin repair",
+        dry_run=False, office_root=tmp_path)
+    assert out["written"] is True
+    assert out["seat_id"] == claimed["seat_id"]
+    assert (office / ".osiris").read_text() == 'project = "mudra"\n'
 
 
 # ═══ revert_own_pin_write — the self-scoped door onto revert_pin_write (ruling b30e2b38:
