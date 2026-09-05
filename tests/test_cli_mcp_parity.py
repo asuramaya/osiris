@@ -206,22 +206,46 @@ CLI_ONLY_PARAMS = {
         "original specimen).",
 }
 
+# CLI COMMAND -> ITS REAL MCP TARGET, when dash-to-underscore is the wrong mapping (task
+# #202/#204, Thoth msg 7039/7040/7059): a CLI verb whose function now lives behind an
+# object-type dispatcher's own ACTION, not a same-named standalone tool. `_find_problems`
+# below falls back to the old `cli_name.replace("-", "_")` guess for every command not
+# listed here — this table is additive, never a wholesale renaming of the mechanism.
+# `_mcp_dispatcher_action_params()` is what makes these "tool:action" pseudo-names real,
+# checkable entries in `_mcp_tools()`'s own dict, not just labels.
+CLI_TO_MCP_NAME: dict[str, str] = {
+    "stop": "seat:stop",
+    "mint-seat": "seat:mint",
+    "charter-for": "seat:charter_for",
+    "rebind-seat": "seat:rebind",
+    "correct-pin-value": "seat:correct_pin",
+    "heal-seat-anchor": "seat:heal_anchor",
+    "transition-seat-project": "seat:transition_project",
+    "heal-seat-transcript": "seat:heal_transcript",
+}
+
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
 MCP_ONLY_PARAMS = {
     ("launch", "message"): "the CLI has no way to deliver an opening brief in one act "
         "today — a real gap, named rather than hidden, not yet built",
     ("resume", "message"): "same gap as launch's own message param above — the CLI has "
         "no way to deliver an opening brief in one act today; not yet built",
-    # NOT RETARGETED to ("seat", "dry_run") (#202 seat dispatcher, msg 7039): _mcp_tools()
-    # reads a tool's params off inputSchema["properties"] directly — a flat-schema
-    # assumption that seat's hand-built oneOf-per-action schema (SEAT_INPUT_SCHEMA, no
-    # top-level "properties" key) breaks entirely, reading as an EMPTY param set. The
-    # three entries that lived here (heal_seat_anchor/transition_seat_project/
-    # heal_seat_transcript, each -> dry_run) are DELETED rather than pointed at a name
-    # this gate cannot actually check — Thoth's own dispatch (msg 7039) already assigns
-    # the (tool, action)-aware gate extension to Khnum, after per-seat lineage lands;
-    # until then, honest omission beats a table entry this gate would flag as stale on
-    # sight. transition_seat_project's own dry_run entry is deleted for the same reason.
+    # RESTORED (task #202/#204, Thoth msg 7039/7040/7059's own gate-half): these three
+    # lived here as (heal_seat_anchor, dry_run) etc. before the #202 seat dispatcher
+    # shipped, and were DELETED rather than pointed at a name the gate couldn't check yet
+    # (_mcp_tools() read seat's own flat inputSchema["properties"] as empty). Now
+    # pointed at their real "seat:action" pseudo-name via CLI_TO_MCP_NAME/
+    # _mcp_dispatcher_action_params above — the fix those deletion comments named.
+    ("seat:heal_anchor", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) "
+        "is the same concept, inverted and renamed to match this house's --apply repair "
+        "convention rather than the MCP tools' own dry_run=True default.",
+    ("seat:transition_project", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
+        "above) is the same concept, inverted and renamed to match this house's --apply "
+        "repair convention rather than the MCP tools' own dry_run=True default.",
+    ("seat:heal_transcript", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
+        "above) is the same concept, inverted and renamed to match this house's --apply "
+        "repair convention rather than the MCP tools' own dry_run=True default — "
+        "identical shape to seat:heal_anchor's own entry above.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -233,21 +257,48 @@ RENAMED_PARAMS = {
     ("launch", "handle", "launch", "target"):
         "the same seat reference, two names — found building this detector, not by a "
         "human; not yet reconciled",
-    # ("stop", "handle", ...) and ("charter-for", "seat", ...) DELETED rather than
-    # retargeted at "seat" (#202 seat dispatcher, msg 7039) — same reason as the deleted
-    # MCP_ONLY_PARAMS entries above: _mcp_tools() reads seat's params off inputSchema
-    # ["properties"], which the hand-built oneOf schema leaves empty, so any entry
-    # naming a specific seat param would read as stale on sight. Both CLI doors (stop,
-    # charter-for) are covered by NO_MCP_EQUIVALENT above instead, which only needs
-    # tool-level existence, not a param match. Khnum's (tool, action)-aware gate
-    # extension (Thoth dispatch 7039, after per-seat lineage lands) is the real fix.
+    # RESTORED (task #202/#204, Thoth msg 7039/7040/7059) — same reasoning as the three
+    # MCP_ONLY_PARAMS restorations above: pointed at the real "seat:action" pseudo-name
+    # now that _mcp_dispatcher_action_params() makes it a checkable entry.
+    ("stop", "handle", "seat:stop", "target"):
+        "the same seat reference, two names — MATCHES launch's own handle/target split "
+        "exactly (the entry above), and deliberately so: stop is launch's inverse and the "
+        "pair must read identically at the terminal. Reconciling this means reconciling "
+        "BOTH together, never one of them (Thoth LXXXVII, 2026-08-28)",
+    ("charter-for", "seat", "seat:charter_for", "target"):
+        "the same seat reference, two names — found building this detector; not yet "
+        "reconciled. mcp_param renamed from the pre-dispatcher seat_id to target — the "
+        "#202 seat dispatcher's own PARAM UNIFICATION (one shared name for 'which "
+        "existing seat/agent' across every action).",
     ("resume", "handle", "resume", "target"):
         "the same seat reference, two names — MATCHES launch's own handle/target split "
         "exactly (both entries above), and deliberately so: resume is launch's own sibling "
         "verb now, split from it by the same ruling (60c78788/41a41437); the pair must "
         "read identically at the terminal for the same reason stop/launch already do",
-    # ("heal-seat-anchor", "seat", ...) DELETED, same reason as stop/charter-for above —
-    # covered by NO_MCP_EQUIVALENT instead, pending Khnum's (tool, action)-aware gate.
+    ("heal-seat-anchor", "seat", "seat:heal_anchor", "target"):
+        "the same seat reference, two names — same shape as charter-for/seat above, "
+        "restored the same way: mcp_param renamed from seat_id to target under the #202 "
+        "seat dispatcher's own PARAM UNIFICATION. The CLI door (`osiris heal-seat-anchor "
+        "<seat> --because`) still calls identity_heal.heal_seat_anchor_third_party "
+        "directly, unchanged and unaffected by the MCP-layer fold.",
+    # NEWLY SURFACED by this lane's own (tool, action)-aware gate (task #202/#204, msg
+    # 7040/7059) — the #202 seat dispatcher's own PARAM UNIFICATION renamed EVERY
+    # folded action's object-reference param to `target`, including these two whose
+    # pre-dispatcher standalone tools used `seat`. Neither drift had ever been checked
+    # before (the old gate could only see the dispatcher's empty top-level param set),
+    # so this is the gate catching real, previously-invisible drift on its first run —
+    # not a pre-existing gap this lane merely renamed.
+    ("rebind-seat", "seat", "seat:rebind", "target"):
+        "the same seat reference, two names — the #202 seat dispatcher's PARAM "
+        "UNIFICATION renamed rebind_seat's own `seat` param to `target`; the CLI door "
+        "(`osiris rebind-seat <seat> <new_cwd>`) still calls mounts.rebind_seat "
+        "directly, unchanged and unaffected by the MCP-layer fold.",
+    ("heal-seat-transcript", "seat", "seat:heal_transcript", "target"):
+        "the same seat reference, two names — same shape as rebind-seat/seat above: "
+        "the #202 seat dispatcher's PARAM UNIFICATION renamed heal_seat_transcript's "
+        "own `seat` param to `target`; the CLI door still calls "
+        "identity_heal.heal_seat_transcript directly, unchanged and unaffected by the "
+        "MCP-layer fold.",
     ("retire-agent", "seat", "retire_object", "target"):
         "the same agent reference, two names — same shape as charter-for/seat and "
         "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
@@ -520,14 +571,48 @@ def _cli_commands() -> dict[str, set[str]]:
 async def _mcp_tools() -> dict[str, set[str]]:
     """Every registered MCP tool's own param set, plumbing stripped — read live off
     `mcp.list_tools()`'s own inputSchema, the same source `_measure_tool_contract()`
-    trusts for the ratchet."""
+    trusts for the ratchet. ALSO includes every hand-built dispatcher's own per-action
+    param sets (see `_mcp_dispatcher_action_params` below) under `"tool:action"` pseudo-
+    names, additively — a dispatcher's own bare name still maps to its (empty, since a
+    oneOf schema has no top-level `properties`) flat set, unchanged, for anything that
+    still keys off tool-level existence alone."""
     from src import mcp_server as srv
 
     tools = await srv.mcp.list_tools()
-    return {
+    out = {
         t.name: set(t.inputSchema.get("properties", {}).keys()) - _MCP_ONLY_PLUMBING
         for t in tools
     }
+    out.update(_mcp_dispatcher_action_params())
+    return out
+
+
+def _mcp_dispatcher_action_params() -> dict[str, set[str]]:
+    """THE (TOOL, ACTION) GAP #202's OWN SEAT-DISPATCHER COMMIT NAMED AND LEFT OPEN (msg
+    7039/7040/7059): `_mcp_tools()`'s flat `inputSchema["properties"]` read is empty for
+    ANY hand-built dispatcher (`src/mcp_server.py`'s `_HAND_BUILT_SCHEMAS`) — its real,
+    per-action params live one level down, inside each `oneOf` branch. Six real
+    CLI<->param reconciliation entries (heal_seat_anchor/transition_seat_project/
+    heal_seat_transcript's own `dry_run`, stop/charter-for/heal-seat-anchor's own
+    seat-reference rename) had to be DELETED rather than left stale when seat first
+    shipped, for exactly this reason — this is the fix that lets them come back, pointed
+    at a real, checkable name.
+
+    Generic over every dispatcher registered in `_HAND_BUILT_SCHEMAS` — a second
+    dispatcher gets this for free the moment it's added there, never a seat-specific
+    hardcode. Each branch's own `action` key is stripped (dispatch-selection plumbing,
+    never a real param either side would name), same discipline `_MCP_ONLY_PLUMBING`
+    already applies to `ctx`/ambient params."""
+    from src import mcp_server as srv
+
+    out: dict[str, set[str]] = {}
+    for tool_name, schema in srv._HAND_BUILT_SCHEMAS.items():
+        for branch in schema.get("oneOf", []):
+            action = branch["properties"]["action"]["const"]
+            params = (set(branch.get("properties", {}).keys()) - {"action"}
+                     - _MCP_ONLY_PLUMBING)
+            out[f"{tool_name}:{action}"] = params
+    return out
 
 
 async def _mcp_registered_names() -> frozenset[str]:
@@ -542,10 +627,17 @@ async def _mcp_registered_names() -> frozenset[str]:
     reading absence-from-listing as absence-from-the-server conflates 'hidden' with
     'deleted' — exactly the gap Imhotep's retirement wave 1 (decision b49a844f) had to
     dodge by hand (reverting 7 BINDING_VERBS tools rather than hiding them) instead of the
-    gate telling the two cases apart on its own."""
+    gate telling the two cases apart on its own.
+
+    ALSO includes every dispatcher's own `"tool:action"` pseudo-names (same population
+    `_mcp_dispatcher_action_params` builds) — a BINDING_VERBS member expressed as an
+    action pair is exactly as real as one expressed as a bare tool name, and must read
+    the same way here, never as a stale entry just because no literal tool by that
+    string exists in the raw registry."""
     from src import mcp_server as srv
 
-    return frozenset(t.name for t in srv.mcp._tool_manager.list_tools())
+    return (frozenset(t.name for t in srv.mcp._tool_manager.list_tools())
+           | frozenset(_mcp_dispatcher_action_params()))
 
 
 def _find_problems(
@@ -554,15 +646,22 @@ def _find_problems(
     cli_only_params: dict[tuple[str, str], str] = CLI_ONLY_PARAMS,
     mcp_only_params: dict[tuple[str, str], str] = MCP_ONLY_PARAMS,
     renamed_params: dict[tuple[str, str, str, str], str] = RENAMED_PARAMS,
+    cli_to_mcp_name: dict[str, str] = CLI_TO_MCP_NAME,
 ) -> list[str]:
     """The reconciler's own core check, extracted so it can be proven against synthetic
     fixtures (see test_the_detector_itself below) rather than only exercised live — the
     same "prove the mechanism, don't just assert it" discipline the merge-driver reconciler
     used. Returns one string per UNDECLARED mismatch; empty means everything either
-    matches or is named on an allowlist."""
+    matches or is named on an allowlist.
+
+    `cli_to_mcp_name` overrides the default `cli_name.replace("-", "_")` guess for a CLI
+    command whose real target is a dispatcher ACTION, not a same-named standalone tool
+    (task #202/#204: `osiris stop` <-> `seat(action='stop')`, not a tool literally named
+    `stop`'s own params at the top level) — additive, every command not listed here keeps
+    the old guess unchanged."""
     problems: list[str] = []
     for cli_name, cli_params in cli.items():
-        mcp_name = cli_name.replace("-", "_")
+        mcp_name = cli_to_mcp_name.get(cli_name, cli_name.replace("-", "_"))
         if mcp_name not in mcp:
             if cli_name not in no_mcp_equivalent:
                 problems.append(
@@ -667,6 +766,44 @@ def test_the_detector_itself_catches_a_rename_without_a_declared_pair() -> None:
         cli, mcp,
         renamed_params={("widget", "handle", "widget", "target"): "test fixture"})
     assert clean == []
+
+
+def test_the_detector_catches_a_cli_verb_with_no_tool_action_twin() -> None:
+    """THE (TOOL, ACTION)-AWARE GATE ITSELF (task #202/#204, Thoth msg 7039/7040/7059):
+    a CLI command routed at a dispatcher ACTION via CLI_TO_MCP_NAME must still be held
+    to the SAME standard as an ordinary same-named tool — an undeclared param drift
+    fails exactly like it would for a flat tool, and a genuinely missing action-name
+    twin (nothing in `mcp` under that pseudo-name at all) reads as no-MCP-equivalent,
+    never silently ignored just because the name contains a colon."""
+    cli = {"widget-verb": {"target"}}
+    mcp: dict[str, set[str]] = {}  # "gadget:verb" does not exist at all
+    problems = _find_problems(
+        cli, mcp, cli_to_mcp_name={"widget-verb": "gadget:verb"})
+    assert len(problems) == 1 and "gadget:verb" in problems[0]
+
+    # now the twin exists, but with a drifted param — same as any flat-tool mismatch
+    mcp_with_twin = {"gadget:verb": {"seat_ref"}}
+    drifted = _find_problems(
+        cli, mcp_with_twin, cli_to_mcp_name={"widget-verb": "gadget:verb"})
+    assert len(drifted) == 2  # target unexplained on CLI, seat_ref unexplained on MCP
+
+    # declared via RENAMED_PARAMS, same as any ordinary rename, clears clean
+    declared = _find_problems(
+        cli, mcp_with_twin, cli_to_mcp_name={"widget-verb": "gadget:verb"},
+        renamed_params={("widget-verb", "target", "gadget:verb", "seat_ref"):
+            "test fixture"})
+    assert declared == []
+
+
+def test_mcp_dispatcher_action_params_reads_every_branch_of_a_real_dispatcher() -> None:
+    """Proven against the LIVE seat schema, not a synthetic one — the same discipline
+    test_seat_dispatcher_schema.py already runs, applied to this lane's own extraction
+    instead of just the schema's own well-formedness."""
+    out = _mcp_dispatcher_action_params()
+    assert "seat:mint" in out and "seat:stop" in out and "seat:launch" in out
+    assert "action" not in out["seat:mint"]  # dispatch-selection plumbing, stripped
+    assert {"handle", "project", "model", "house"} <= out["seat:mint"]
+    assert "target" in out["seat:stop"]
 
 
 # ============================================================================================
