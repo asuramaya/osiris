@@ -20,7 +20,7 @@ model, SAY SO in your first reply. A rug-pull is confessed, never inherited blin
 ## Mount (orient from the graph, not from files)
 - Dev instance: Postgres `127.0.0.1:5601` / Redis `:6396` (`.claude/settings.local.json`
   exports DATABASE_URL). Daemons: `systemctl --user status osiris-pulse osiris-worker`.
-- Orient: MCP `run_composition('briefing')` (socket in `.mcp.json`) — open threads,
+- Orient: MCP `composition(action='run', name='briefing')` (socket in `.mcp.json`) — open threads,
   obligations, recent decisions. Design/ops questions: `consult_canon(q)` (canon + essays;
   try q="ops"). History: the dated `ref:history-*` nodes ARE queryable (consult_canon +
   search, both doors) — no file mirror ships; the graph is the only copy.

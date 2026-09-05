@@ -827,7 +827,19 @@ def _tool_chars(t: Any) -> int:
 # separately named, not aliases, no count change from those four. retire_object and
 # self-scoped retire() deliberately stay OUT (see the migration plan's own correction
 # addendum) — retire_object still serves kind='project'/'agent'.
-TOOL_CONTRACT_EXPECTED_COUNT = 83
+# 83 -> 76 (2026-09-05, Imhotep, #202 COMPOSITION + PROJECT DISPATCHERS, Thoth dispatch
+# 7095): two more object-type dispatchers, one branch. composition(action='save'/'run'/
+# 'list') folds save_composition/run_composition/list_compositions (the SAME cluster
+# wave 4 correctly DECLINED under the old return-coherence rule — re-scanned and
+# approved under the new rule, which tolerates divergent per-action return shapes via
+# the hand-built oneOf schema plus an action table): -3 newly hidden, +1 new tool
+# (composition) = -2 net. project(action=...) folds 8 names (create_project,
+# ingest_project, rename_project, fork_project as 'fork', project_identity_evidence,
+# assert_project_property — 6 newly hidden — plus unfork_project and retire_project,
+# BOTH already hidden before this commit, simply repointed at the new dispatcher, no
+# further count cost): -6 newly hidden, +1 new tool (project) = -5 net. Combined -7
+# (83 -> 76), measured exact.
+TOOL_CONTRACT_EXPECTED_COUNT = 76
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1122,7 +1134,13 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # default, `reason` enforced only at write time). +514 for one new oneOf branch plus its
 # ACTION TABLE docstring line — a real cost of a genuinely missing door, not padding.
 # Measured exact (102,243).
-TOOL_CONTRACT_CEILING_CHARS = 102243
+# 102,243 -> 100,470 (2026-09-05, Imhotep, #202 COMPOSITION + PROJECT DISPATCHERS, Thoth
+# dispatch 7095): removing 9 standalone tools' own full schemas from the live listing
+# (3 composition, 6 project — see the tool-count ratchet's own changelog above for the
+# exact roster) outweighs the two new small hand-built oneOf schemas added (composition:
+# 3 actions; project: 8 actions, both far smaller than seat's own 30-branch schema).
+# Measured exact (100,470), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 100470
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

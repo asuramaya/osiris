@@ -787,14 +787,21 @@ async def test_deprecated_tools_are_hidden_from_list_but_still_in_call_registry(
     were the task #199 lane 2 consolidation's own surviving self/third-party doors, now
     THEMSELVES folded into seat(action='heal_anchor'/'reconcile_identity') and hidden a
     second time — the mechanism this test proves is unchanged, only which names
-    currently sit on which side of it."""
+    currently sit on which side of it.
+
+    fork_project and ingest_project ALSO moved from `survivors` to `retired` (#202
+    PROJECT DISPATCHER, Thoth dispatch 7095): both fold into project(action='fork'/
+    'unfork'/'ingest') and are hidden the same way — no survivors remain from this
+    test's original population; kept as an empty set rather than deleted so a THIRD
+    dispatcher's own fold has an obvious place to add its own moved names."""
     from src import mcp_server as srv
 
     listed = {t.name for t in await srv.mcp.list_tools()}
     retired = {"heal_seat_anchor_third_party", "unfork_project",
               "reconcile_seat_identity_third_party", "ingest_project_third_party",
-              "heal_seat_anchor", "reconcile_seat_identity"}
-    survivors = {"fork_project", "ingest_project"}
+              "heal_seat_anchor", "reconcile_seat_identity",
+              "fork_project", "ingest_project"}
+    survivors: set[str] = set()
     assert not (retired & listed), retired & listed
     assert survivors <= listed
     for name in retired:
