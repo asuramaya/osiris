@@ -163,7 +163,7 @@ _RESET_TABLES = (
 # controller doesn't finish until every worker has finished and reported back) — the
 # same lifetime invariant that already held before this change, now spanning N
 # workers instead of one process's own tests.
-_CONTAINER: dict[str, PostgresContainer] = {}
+_CONTAINER: dict[str, PostgresContainer | RedisContainer] = {}
 
 
 # THE LIVE-DB GUARD (thread 9b9ba394): agent:repro-test-same/agent:repro-test-0 were a
@@ -355,24 +355,43 @@ def pytest_configure(config: pytest.Config) -> None:
         wi = config.workerinput  # type: ignore[attr-defined]
         _install_live_db_guard(str(wi["pg_host"]), str(wi["pg_port"]))
         return  # an xdist worker: the controller (or, outside xdist, this same
-        # process, since it then takes this same branch itself) owns the container
+        # process, since it then takes this same branch itself) owns the containers
     _install_tool_contract_ceiling_merge_driver()
     pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
     pg.start()
     _CONTAINER["pg"] = pg
     _install_live_db_guard(pg.get_container_host_ip(), str(pg.get_exposed_port(5432)))
+    # SAME PATTERN AS pg (thread 5550a8df): one container, not one per xdist worker —
+    # redis_url used to be plain session-scoped, so `-n auto` silently started N
+    # containers instead of collapsing to one, exactly the pg_dsn defect task #100's
+    # tail already fixed. Workers get separate DB INDICES inside the one container
+    # (`redis_url` fixture, below) rather than separate containers — Redis's own
+    # per-connection SELECT, no CREATE DATABASE equivalent needed. `--databases 64`
+    # raises the default 16-DB ceiling well past any plausible `-n auto` worker count
+    # on this box, the same headroom reasoning pg_dsn's per-worker CREATE DATABASE
+    # never had to make (postgres has no such fixed ceiling).
+    redis = RedisContainer("redis:7")
+    redis.with_command("redis-server --databases 64")
+    redis.start()
+    _CONTAINER["redis"] = redis
 
 
 def pytest_configure_node(node: pytest.Item) -> None:  # xdist controller-only hook
     pg = _CONTAINER["pg"]
     node.workerinput["pg_host"] = pg.get_container_host_ip()  # type: ignore[attr-defined]
     node.workerinput["pg_port"] = pg.get_exposed_port(5432)  # type: ignore[attr-defined]
+    redis = _CONTAINER["redis"]
+    node.workerinput["redis_host"] = redis.get_container_host_ip()  # type: ignore[attr-defined]
+    node.workerinput["redis_port"] = redis.get_exposed_port(6379)  # type: ignore[attr-defined]
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     pg = _CONTAINER.pop("pg", None)
     if pg is not None:
         pg.stop()
+    redis = _CONTAINER.pop("redis", None)
+    if redis is not None:
+        redis.stop()
     shutil.rmtree(_TEST_OFFICE_ROOT, ignore_errors=True)
 
 
@@ -538,18 +557,30 @@ async def case_id(actions: Actions) -> str:
 
 
 @pytest.fixture(scope="session")
-def redis_url() -> Iterator[str]:
-    """A real Redis in Docker for token buckets / budget counters."""
-    with RedisContainer("redis:7") as rc:
-        host = rc.get_container_host_ip()
-        port = rc.get_exposed_port(6379)
-        yield f"redis://{host}:{port}/0"
+def redis_url(request: pytest.FixtureRequest, worker_id: str) -> str:
+    """The shared container's DSN for THIS worker's own DB INDEX (thread 5550a8df) —
+    same shape as `pg_dsn` above: one container regardless of `-n auto` worker count,
+    each worker isolated by a distinct Redis DB number rather than a distinct
+    container. `worker_id` ("master" outside xdist, "gw0"/"gw1"/... under it) maps to
+    index 0 for master, 1+N for gwN — so a bare pytest run keeps using db 0 exactly
+    like before this change."""
+    workerinput = getattr(request.config, "workerinput", None)
+    if workerinput is not None:
+        host, port = workerinput["redis_host"], workerinput["redis_port"]
+    else:
+        redis = _CONTAINER["redis"]
+        host, port = redis.get_container_host_ip(), redis.get_exposed_port(6379)
+    db_index = 0 if worker_id == "master" else int(worker_id.removeprefix("gw")) + 1
+    return f"redis://{host}:{port}/{db_index}"
 
 
 @pytest_asyncio.fixture
 async def redis_client(redis_url: str) -> AsyncIterator[aioredis.Redis]:
     client = create_redis(redis_url)
-    await client.flushall()
+    # flushdb, never flushall (thread 5550a8df): the container is now shared across
+    # xdist workers, each on its own DB index — flushall would wipe every worker's
+    # data, not just this connection's own selected DB.
+    await client.flushdb()
     try:
         yield client
     finally:
