@@ -295,27 +295,26 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
             # direction — see test_roster_repo_lookup_stays_conflict_when_the_manager_edge_
             # points_the_other_way; widening it there would silently flip that boundary):
             #
-            # (a) one matched seat MANAGES the other, regardless of which via-signal each
-            # carries (mudra's own shape: vajra matches via both charter+pin, alfred via
-            # charter only, but alfred already manages vajra) — prefer the manager, same
-            # role `governed` gives the charter-seat.
+            # PEER CHECKED FIRST (Ptah/Ra's own live shape caught this): a peer_of bond is
+            # the FRESH, deliberate signal this exact ruling minted for this exact pair; an
+            # older, unrelated managed_by edge between the same two seats (an ordinary org
+            # fact, not a statement about who owns THIS repo) must never silently outrank
+            # it — checking manager first found Ptah already managed_by Ra from some
+            # earlier, unrelated org fact and would have nudged neither seat as a "cold
+            # manager" even though the operator explicitly ruled this pair PEERS, not
+            # manager/managed, for rotten-apple specifically.
             #
-            # (b) the two matched seats are an active peer_of pair (rotten-apple: Ptah/Ra;
+            # (a) the two matched seats are an active peer_of pair (rotten-apple: Ptah/Ra;
             # xxit: deckard/metron) — never a conflict once peered: whichever peer is live,
             # BOTH when both are (a peer pair is recognized as shared ownership, not two
             # rivals — silently picking one over the other would be exactly the guess this
             # ladder refuses to make everywhere else).
+            #
+            # (b) one matched seat MANAGES the other, regardless of which via-signal each
+            # carries (mudra's own shape: vajra matches via both charter+pin, alfred via
+            # charter only, but alfred already manages vajra) — prefer the manager, same
+            # role `governed` gives the charter-seat.
             seat_a, seat_b = matches[0]["seat"], matches[1]["seat"]
-            manager_seat = (
-                seat_b if await manager_of_seat(pool, seat_a) == seat_b else
-                seat_a if await manager_of_seat(pool, seat_b) == seat_a else None)
-            if manager_seat is not None:
-                chosen = next(m for m in matches if m["seat"] == manager_seat)
-                if chosen.get("occupancy") == "occupied" and chosen.get("holder"):
-                    return {"channel": "dm", "target": str(chosen["holder"]), "reason": None}
-                return {"channel": "desk", "target": None,
-                        "reason": f"no live seat for project {project!r} "
-                                  f"(seat {chosen['seat']} is {chosen.get('occupancy')})"}
             if await peer_of_seat(pool, seat_a) == seat_b:
                 live = [m for m in matches
                         if m.get("occupancy") == "occupied" and m.get("holder")]
@@ -327,6 +326,16 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
                 return {"channel": "desk", "target": None,
                         "reason": f"peer pair for project {project!r} "
                                   f"({seat_a}, {seat_b}) — neither peer is live"}
+            manager_seat = (
+                seat_b if await manager_of_seat(pool, seat_a) == seat_b else
+                seat_a if await manager_of_seat(pool, seat_b) == seat_a else None)
+            if manager_seat is not None:
+                chosen = next(m for m in matches if m["seat"] == manager_seat)
+                if chosen.get("occupancy") == "occupied" and chosen.get("holder"):
+                    return {"channel": "dm", "target": str(chosen["holder"]), "reason": None}
+                return {"channel": "desk", "target": None,
+                        "reason": f"no live seat for project {project!r} "
+                                  f"(seat {chosen['seat']} is {chosen.get('occupancy')})"}
 
         chosen = None
         if agreement == "governed":

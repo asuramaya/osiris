@@ -439,6 +439,31 @@ async def test_rung1_peer_pair_conflict_nudges_both_when_both_are_live(
     assert out["reason"] is None
 
 
+async def test_rung1_peer_pair_outranks_an_unrelated_managed_by_edge_on_the_same_pair(
+    actions: Actions,
+) -> None:
+    """The live Ptah/Ra shape: an older, unrelated managed_by edge between the two peered
+    seats (an ordinary org fact, not a statement about THIS repo) must never silently
+    outrank a peer_of bond this exact ruling minted for this exact project — checking
+    manager first would nudge neither seat as a "cold manager" even when a peer is live."""
+    await _repo(actions, "ladderproj11")
+    live = await _live_seat(actions, "Ladder11Live", "agent:ladder11-live")
+    await set_charter(actions, live["seat_id"], ["ladderproj11"], actor="test")
+    other = await ensure_seat(actions, house="test", handle="Ladder11Other", source="test")
+    await set_charter(actions, other["seat_id"], ["ladderproj11"], actor="test")
+    await peer_seats(actions, live["seat_id"], other["seat_id"], because="test", actor="test")
+    live_oid = await actions.create_or_find_object("Seat", live["seat_id"], "test")
+    other_oid = await actions.create_or_find_object("Seat", other["seat_id"], "test")
+    # an ORDINARY managed_by edge on the same pair, unrelated to ladderproj11 — the live
+    # seat is managed_by the cold one, the shape that would make a manager-first check
+    # nudge nobody
+    await actions.create_link(live_oid, other_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj11")
+    assert out == {"channel": "dm", "target": "agent:ladder11-live", "reason": None}
+
+
 async def test_rung1_peer_pair_conflict_falls_to_the_desk_when_neither_peer_is_live(
     actions: Actions,
 ) -> None:
