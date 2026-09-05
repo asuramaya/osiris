@@ -2147,6 +2147,7 @@ async def cmd_deploy(
             alarm_withheld_deploy_record,
             check_diverged_since_last_deploy,
         )
+        from src.orchestrator.mailbox import send_message
         from src.orchestrator.monitor import get_cursor
 
         # Captured BEFORE `record_deploy` below overwrites this same cursor to the NEW
@@ -2185,6 +2186,26 @@ async def cmd_deploy(
 
         tools_before = await list_tools()
 
+        # THE DISCONNECT WARNING (Thoth's plan, thread d96167c6, 2026-09-05): a live
+        # specimen (2026-09-01 19:10:57) restarted osiris-mcp with 15 agents live —
+        # every streamable-HTTP session died silently, 22 requests came back 404, and the
+        # OPERATOR's first symptom was "graph unreachable." health/smoke probe a FRESH
+        # connection and can never see a stale one, so the deploy ledger read clean while
+        # every live session was in fact broken. Reconnect itself is the harness client's
+        # own job (automount re-adopts on the next mount()) — the warning is the whole
+        # fix. A mail hiccup here must never block or fail the deploy itself.
+        deploy_sha = _git_head(root)
+        try:
+            await send_message(
+                pool, from_agent="deploy:disconnect-warning", from_project="osiris",
+                to_project="osiris", grade="fyi",
+                body=f"deploy {deploy_sha[:8] if deploy_sha else '?'} restarting "
+                     "osiris-mcp — your next call reconnects (streamable-HTTP sessions "
+                     "do not survive the restart; automount re-adopts on your next "
+                     "mount()).")
+        except Exception as exc:  # noqa: BLE001
+            print(f"NOTE: pre-restart disconnect warning failed to send: {exc}")
+
         rc, out = await restart(list(DEPLOY_UNITS))
         if rc != 0:
             print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
@@ -2195,6 +2216,14 @@ async def cmd_deploy(
         if health_ready:
             print(f"health: up after {health_waited:.0f}s" if health_waited
                   else "health: up immediately")
+            try:
+                await send_message(
+                    pool, from_agent="deploy:disconnect-warning", from_project="osiris",
+                    to_project="osiris", grade="fyi",
+                    body=f"deploy {deploy_sha[:8] if deploy_sha else '?'}: osiris-mcp is "
+                         "back up — reconnect now.")
+            except Exception as exc:  # noqa: BLE001
+                print(f"NOTE: post-restart reconnect notice failed to send: {exc}")
         else:
             print(f"health: NOT UP after waiting {health_waited:.0f}s (ceiling) — the "
                   "console did not come up; this is a real startup failure, not a "
