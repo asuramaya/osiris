@@ -2856,6 +2856,7 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("resync_pin"), "target": _s(), "key": _s(),
             "value": _opt_s(), "reason": _opt_s(), "dry_run": _b(True),
+            "tree_cwd": _opt_s(),
         }, ["action", "target", "key"]),
         _dispatcher_action_schema({
             "action": _action_const("sweep_disk"), "target": _s(), "dry_run": _b(True),
@@ -2938,7 +2939,7 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
         ["fabricated_project", "real_project", "because", "repos", "dry_run"], []),
     "resync_house": (["target", "new_house", "reason"], ["target", "reason"]),
     "resync_pin": (
-        ["target", "key", "value", "reason", "dry_run"], ["target", "key"]),
+        ["target", "key", "value", "reason", "dry_run", "tree_cwd"], ["target", "key"]),
     "sweep_disk": (["target", "dry_run", "because"], ["target"]),
     "rename": (["target", "new_handle", "because"], ["target", "new_handle", "because"]),
     "set_attended": (["target", "attended", "because"], ["target", "attended", "because"]),
@@ -3399,7 +3400,8 @@ async def _seat_impl(
         from src.orchestrator.offices import correct_pin_value_third_party
         resolved_value = None if value is _UNSET else value
         return await correct_pin_value_third_party(
-            pool, target, key, resolved_value, reason=reason, dry_run=dry_run)
+            pool, target, key, resolved_value, reason=reason, dry_run=dry_run,
+            tree_cwd=tree_cwd)
 
     if action == "revert_pin":
         ident = await _ident_for(ctx)

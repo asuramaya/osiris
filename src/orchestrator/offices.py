@@ -394,6 +394,7 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
 async def correct_own_pin_value(
     pool: asyncpg.Pool, agent_id: str, key: str, value: str | None, *, reason: str,
     office_root: Path | None = None, workspace_root: Path | None = None,
+    tree_cwd: str | None = None,
 ) -> dict[str, Any]:
     """THE SELF-SCOPED DOOR onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
     function takes an arbitrary filesystem `path`, which is exactly the wrong shape for a
@@ -438,9 +439,20 @@ async def correct_own_pin_value(
     already-corrected) anchor path — never a double-write when a seat's anchor happens to
     equal its workspace default. Reported under `workspace`, same shape as `anchor`. Best-
     effort like `sweep_seat_workspace`'s own default: a seat minted with an explicit
-    custom `path=` is not covered by this guess, the same accepted gap that verb's own
-    docstring names — the existence+declares-key+differs guard means a wrong guess here
-    writes nothing, it simply finds no matching file to correct."""
+    custom `path=` is not covered by this guess UNLESS that path was ever declared via
+    `bind_seat_tree` — see `tree_cwd` below — the existence+declares-key+differs guard
+    means a wrong guess here writes nothing, it simply finds no matching file to correct.
+
+    `tree_cwd` (Marquee's blind spot, Thoth dispatch relayed 2026-09-05, operator "one
+    more round"): an explicit override for the THIRD copy's own location, tried BEFORE
+    the handle-derived guess above — and, when not given, this now also reads the seat's
+    own `bind_seat_tree`-declared `tree_cwd` property first, before falling to the guess.
+    A seat whose real workspace lives under a name that isn't its own handle (the exact
+    Marquee shape: her tree lives at the DTFB project's own checkout, not
+    `.../code/marquee`) was invisible to this correction no matter how it was called,
+    because the guess is the ONLY path this function ever tried — this closes that,
+    reusing `bind_tree`'s own already-declared fact rather than asking every caller to
+    re-supply a path the graph already has."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
@@ -462,7 +474,12 @@ async def correct_own_pin_value(
             (Path(anchor_cwd) / ".osiris").is_file():
         result["anchor"] = correct_pin_value(anchor_cwd, key, value, reason=reason)
         touched.add(_resolved(Path(anchor_cwd)))
-    workspace = (workspace_root or (Path.home() / "code")) / handle
+    declared_tree = tree_cwd or await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='tree_cwd' WHERE o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
+    workspace = Path(declared_tree) if declared_tree else \
+        (workspace_root or (Path.home() / "code")) / handle
     if _resolved(workspace) not in touched and (workspace / ".osiris").is_file():
         result["workspace"] = correct_pin_value(str(workspace), key, value, reason=reason)
     return result
@@ -477,6 +494,7 @@ def _resolved(p: Path) -> Path:
 async def correct_pin_value_third_party(
     pool: asyncpg.Pool, seat_id: str, key: str, value: str | None, *, reason: str = "",
     dry_run: bool = True, office_root: Path | None = None, workspace_root: Path | None = None,
+    tree_cwd: str | None = None,
 ) -> dict[str, Any]:
     """THE THIRD-PARTY SIBLING of `correct_own_pin_value` — decision fff496fe22b0's own
     named gap ("correct_pin_value has NO third-party door on any surface... an operator/
@@ -504,7 +522,16 @@ async def correct_pin_value_third_party(
     a `plan` — which copies actually declare `key` with a value differing from the
     target, without writing anything. `dry_run=False` requires a non-empty `reason` —
     refused before anything is touched — then delegates the actual write wholesale to
-    `correct_own_pin_value`."""
+    `correct_own_pin_value`.
+
+    `tree_cwd` (Marquee's blind spot, Thoth dispatch relayed 2026-09-05, operator "one
+    more round" — the first sweep of this door could never reach a seat whose real
+    workspace isn't named after its own handle, exactly Marquee's shape: her tree lives
+    at the DTFB project's own checkout): an explicit override for the THIRD copy's own
+    location. When not given, this reads the seat's own `bind_seat_tree`-declared
+    `tree_cwd` (already carried by `seat_facts`) before falling to the handle-derived
+    guess — the same fallback order `correct_own_pin_value` now applies for the real
+    write below, so the dry-run plan and the write it previews never disagree."""
     from src.orchestrator.seats import seat_facts, seat_occupancy
 
     occ = await seat_occupancy(pool, seat_id)
@@ -522,7 +549,8 @@ async def correct_pin_value_third_party(
                              "overwrite 719ed5b1 rules against — refusing"}
         return await correct_own_pin_value(pool, holder, key, value, reason=reason,
                                            office_root=office_root,
-                                           workspace_root=workspace_root)
+                                           workspace_root=workspace_root,
+                                           tree_cwd=tree_cwd)
 
     from src.orchestrator.projects import _peek_pin_value
 
@@ -531,7 +559,9 @@ async def correct_pin_value_third_party(
     root = office_root or _default_office_root()
     office = root / handle.lower()
     anchor_cwd = facts.get("anchor_cwd")
-    workspace = (workspace_root or (Path.home() / "code")) / handle.lower()
+    declared_tree = tree_cwd or facts.get("tree_cwd")
+    workspace = Path(declared_tree) if declared_tree else \
+        (workspace_root or (Path.home() / "code")) / handle.lower()
 
     targets: dict[str, Path] = {"office": office}
     seen = {_resolved(office)}

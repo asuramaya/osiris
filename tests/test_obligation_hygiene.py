@@ -11,6 +11,8 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.config.settings import Settings
+from src.orchestrator.charter import set_charter
+from src.orchestrator.mounts import save_mount
 from src.orchestrator.obligation_hygiene import (
     N1_IDLE_DAYS,
     N2_SILENCE_DAYS,
@@ -18,7 +20,9 @@ from src.orchestrator.obligation_hygiene import (
     hygiene_execute,
     hygiene_status,
     obligation_hygiene_scheduled_tick,
+    resolve_owner_target,
 )
+from src.orchestrator.seats import bind_holder, ensure_seat
 
 NOW = datetime.now(UTC)
 _SRC = "test-source"
@@ -242,3 +246,167 @@ async def test_scheduled_tick_acts_when_the_flag_is_on(actions: Actions) -> None
     out = await obligation_hygiene_scheduled_tick(actions, settings=settings, now=NOW)
     assert out["enabled"] is True
     assert any(r["thread_id"] == str(t) for r in out["nudged"])
+
+
+# ═══ THE OWNER-RESOLUTION LADDER (operator "one more round" 2026-09-05, Thoth DM 7391) ═══
+# the first firing sent 128/151 nudges to the desk because owners are project names or dead
+# agents — "that makes the desk the pile." A rung is tried before falling to the desk, never
+# instead of trying. resolve_owner_target is pure/read-only: every test below calls it
+# directly, sending nothing.
+
+async def _repo(actions: Actions, name: str) -> None:
+    await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
+
+
+async def _live_seat(actions: Actions, handle: str, agent_id: str, *, house: str = "test",
+                     project: str | None = None) -> dict[str, Any]:
+    seat = await ensure_seat(actions, house=house, handle=handle, source="test")
+    await actions.create_or_find_object("Agent", agent_id, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent_id)
+    await save_mount(actions.pool, job_dir=f"/jobs/{handle.lower()}", agent_id=agent_id,
+                     project=project or "osiris", cwd="/w/x", model="claude-sonnet-5",
+                     session_key=None)
+    return seat
+
+
+# --- rung 1: a project-name owner ------------------------------------------------------
+
+async def test_rung1_project_name_owner_resolves_to_its_live_seat_head(
+    actions: Actions,
+) -> None:
+    await _repo(actions, "ladderproj1")
+    seat = await _live_seat(actions, "Ladder1", "agent:ladder1-holder")
+    await set_charter(actions, seat["seat_id"], ["ladderproj1"], actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj1")
+    assert out == {"channel": "dm", "target": "agent:ladder1-holder", "reason": None}
+
+
+async def test_rung1_governed_project_prefers_the_managing_seat_not_the_managed_one(
+    actions: Actions,
+) -> None:
+    """charter and pin disagree, but the pin-seat is managed_by the charter-seat — the
+    NORMAL, correctly-configured shape (a coordinator governing a repo a worker sits in),
+    not a conflict — and the ladder must nudge the MANAGER, never the managed worker."""
+    import tempfile
+    from pathlib import Path
+
+    await _repo(actions, "ladderproj2")
+    manager = await _live_seat(actions, "Ladder2Mgr", "agent:ladder2-mgr")
+    await set_charter(actions, manager["seat_id"], ["ladderproj2"], actor="test")
+    with tempfile.TemporaryDirectory() as tmp:
+        office = Path(tmp) / "office"
+        office.mkdir()
+        (office / ".osiris").write_text('project = "ladderproj2"\n')
+        worker = await ensure_seat(actions, house="test", handle="Ladder2Wkr",
+                                   source="test", anchor_cwd=str(office))
+        await actions.create_or_find_object("Agent", "agent:ladder2-wkr", "test")
+        await bind_holder(actions, seat_id=worker["seat_id"], agent_id="agent:ladder2-wkr")
+        await save_mount(actions.pool, job_dir="/jobs/ladder2wkr", agent_id="agent:ladder2-wkr",
+                         project="ladderproj2", cwd="/w/x", model="claude-sonnet-5",
+                         session_key=None)
+        worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+        manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+        await actions.create_link(worker_oid, manager_oid, "managed_by", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+        out = await resolve_owner_target(actions.pool, "ladderproj2")
+    assert out == {"channel": "dm", "target": "agent:ladder2-mgr", "reason": None}
+
+
+async def test_rung1_conflicting_project_owner_falls_to_the_desk_with_a_named_reason(
+    actions: Actions,
+) -> None:
+    await _repo(actions, "ladderproj3")
+    a = await ensure_seat(actions, house="test", handle="Ladder3A", source="test")
+    await set_charter(actions, a["seat_id"], ["ladderproj3"], actor="test")
+    b = await ensure_seat(actions, house="test", handle="Ladder3B", source="test")
+    await set_charter(actions, b["seat_id"], ["ladderproj3"], actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj3")
+    assert out["channel"] == "desk"
+    assert "ambiguous" in out["reason"] and "ladderproj3" in out["reason"]
+
+
+async def test_rung1_no_seat_claims_the_project_falls_to_the_desk(actions: Actions) -> None:
+    await _repo(actions, "ladderproj4")
+    out = await resolve_owner_target(actions.pool, "ladderproj4")
+    assert out["channel"] == "desk"
+    assert "no seat's charter or pin names" in out["reason"]
+
+
+async def test_rung1_single_match_seat_not_live_falls_to_the_desk(actions: Actions) -> None:
+    await _repo(actions, "ladderproj5")
+    seat = await ensure_seat(actions, house="test", handle="Ladder5", source="test")
+    await set_charter(actions, seat["seat_id"], ["ladderproj5"], actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj5")
+    assert out["channel"] == "desk"
+    assert "no live seat for project 'ladderproj5'" in out["reason"]
+
+
+# --- rung 2: a dead/retired agent id ----------------------------------------------------
+
+async def test_rung2_dead_agent_resolves_to_a_live_lineage_head(actions: Actions) -> None:
+    ancestor = await actions.create_or_find_object("Agent", "agent:ladder-anc1", "test")
+    heir_id = "agent:ladder-anc1-ii"
+    await actions.create_or_find_object("Agent", heir_id, "test")
+    await actions.assert_property(ancestor, "succeeded_by", heir_id, "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/ladderheir1", agent_id=heir_id,
+                     project="osiris", cwd="/w/x", model="claude-sonnet-5", session_key=None)
+
+    out = await resolve_owner_target(actions.pool, "agent:ladder-anc1")
+    assert out == {"channel": "dm", "target": heir_id, "reason": None}
+
+
+async def test_rung2_agent_with_no_successor_at_all_falls_to_the_desk(
+    actions: Actions,
+) -> None:
+    out = await resolve_owner_target(actions.pool, "agent:ladder-no-such-agent")
+    assert out["channel"] == "desk"
+    assert "no live successor" in out["reason"]
+
+
+async def test_rung2_lineage_head_exists_but_is_not_live_falls_to_the_desk(
+    actions: Actions,
+) -> None:
+    ancestor = await actions.create_or_find_object("Agent", "agent:ladder-anc2", "test")
+    heir_id = "agent:ladder-anc2-ii"
+    await actions.create_or_find_object("Agent", heir_id, "test")
+    await actions.assert_property(ancestor, "succeeded_by", heir_id, "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    # no save_mount for the heir — it exists, but nothing has ever seen it live
+
+    out = await resolve_owner_target(actions.pool, "agent:ladder-anc2")
+    assert out["channel"] == "desk"
+    assert "not currently live either" in out["reason"]
+
+
+async def test_rung0_a_directly_live_agent_owner_needs_no_ladder_rung(
+    actions: Actions,
+) -> None:
+    agent_id = "agent:ladder-already-live"
+    await actions.create_or_find_object("Agent", agent_id, "test")
+    await save_mount(actions.pool, job_dir="/jobs/ladderlive", agent_id=agent_id,
+                     project="osiris", cwd="/w/x", model="claude-sonnet-5", session_key=None)
+
+    out = await resolve_owner_target(actions.pool, agent_id)
+    assert out == {"channel": "dm", "target": agent_id, "reason": None}
+
+
+async def test_execute_uses_the_ladder_and_puts_the_reason_in_the_desk_body(
+    actions: Actions,
+) -> None:
+    """The end-to-end proof: a project-name owner with no seat resolves via _nudge_owner
+    to a desk brief whose body carries the failing rung's own reason, per the dispatch's
+    own instruction."""
+    await _repo(actions, "ladderproj6")
+    stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
+    t = await _mk_obligation(actions, "hyg-ladder-exec", owner="ladderproj6",
+                             touched_at=stale)
+
+    out = await hygiene_execute(actions, execute=True, now=NOW)
+    row = next(r for r in out["nudged"] if r["thread_id"] == str(t))
+    assert row["sent"].get("to_project") == "operator" or "error" not in row["sent"]
+    assert "error" not in row["sent"]
