@@ -5098,8 +5098,12 @@ LIVE_DESK: dict[str, Any] = {
 FLEET_STRIP: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        {"title": "pulse", "body": {"op": "function", "name": "fleet_pulse_line"}},
-        {"title": "live_agents", "body": {"op": "function", "name": "fleet_live_agents"}},
+        # 59acd4ff: the two halves are scoped differently (pulse fleet-wide, live_agents
+        # project-scoped) — label it, never silently rescope either leg (thread's own words:
+        # "the fleet-wide number is genuinely useful; say what each half covers").
+        {"title": "pulse (fleet-wide)", "body": {"op": "function", "name": "fleet_pulse_line"}},
+        {"title": "live_agents (this project only)",
+         "body": {"op": "function", "name": "fleet_live_agents"}},
     ],
 }
 
