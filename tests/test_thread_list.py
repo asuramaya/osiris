@@ -231,3 +231,118 @@ async def test_list_unfiled_threads_limit_zero_is_count_only(actions: Actions) -
         srv._pool = saved_pool
     assert out["threads"] == []
     assert out["total"] >= 1
+
+
+# --- the age-bin instrument (thread 6a1dfc52, Thoth dispatch 7098 item 2): creation age
+# exposed and filterable in bulk, so binning a pile by age is a count, not a per-object
+# pull at fleet scale. -----------------------------------------------------------------
+
+async def test_list_unfiled_threads_exposes_created_at(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "unfiled-gate: created_at specimen")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads()
+    finally:
+        srv._pool = saved_pool
+    row = next(th for th in out["threads"] if th["id"] == str(t)[:8])
+    assert "created_at" in row and "T" in row["created_at"]
+
+
+async def test_list_unfiled_threads_min_age_days_excludes_a_fresh_thread(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    await open_thread(actions, "unfiled-gate: fresh, excluded by min_age_days")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(min_age_days=7)
+    finally:
+        srv._pool = saved_pool
+    summaries = {th["summary"] for th in out["threads"]}
+    assert "unfiled-gate: fresh, excluded by min_age_days" not in summaries
+
+
+async def test_list_unfiled_threads_min_age_days_includes_an_old_thread(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "unfiled-gate: 30 days old")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '30 days' WHERE id = $1", t)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(min_age_days=7)
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(t)[:8] in ids
+
+
+async def test_list_unfiled_threads_max_age_days_excludes_an_old_thread(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "unfiled-gate: 90 days old, excluded by max_age_days")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '90 days' WHERE id = $1", t)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(max_age_days=30)
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(t)[:8] not in ids
+
+
+async def test_list_unfiled_threads_age_band_composes_min_and_max(actions: Actions) -> None:
+    """The exact shape an age histogram needs: a (min, max] band."""
+    from src import mcp_server as srv
+
+    fresh = await open_thread(actions, "unfiled-gate: age-band fresh")
+    mid = await open_thread(actions, "unfiled-gate: age-band mid (15d)")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '15 days' WHERE id = $1", mid)
+    old = await open_thread(actions, "unfiled-gate: age-band old (90d)")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '90 days' WHERE id = $1", old)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.list_unfiled_threads(min_age_days=7, max_age_days=30)
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert ids == {str(mid)[:8]}
+    assert str(fresh)[:8] not in ids
+    assert str(old)[:8] not in ids
+
+
+async def test_get_object_list_thread_branch_exposes_created_at_and_age_filter(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    t = await open_thread(actions, "aged-gate: filed and old", repo="threadlistproj")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '45 days' WHERE id = $1", t)
+    fresh = await open_thread(actions, "aged-gate: filed and fresh", repo="threadlistproj")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_object_list("thread", "threadlistproj", min_age_days=30)
+    finally:
+        srv._pool = saved_pool
+    ids = {th["id"] for th in out["threads"]}
+    assert str(t)[:8] in ids
+    assert str(fresh)[:8] not in ids
+    row = next(th for th in out["threads"] if th["id"] == str(t)[:8])
+    assert "created_at" in row and "T" in row["created_at"]

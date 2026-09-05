@@ -3707,6 +3707,7 @@ async def _charter_scoped_project_ids(
 async def _get_thread_list_body(
     project: str, kind: str | None, owner: str | None,
     limit: int, offset: int, ctx: Context | None,
+    min_age_days: float | None = None, max_age_days: float | None = None,
 ) -> dict[str, Any]:
     """The `object_type='thread'` branch of `_get_object_list_impl` — copied verbatim
     from get_thread_list's own top-level function body before the fold (task #202 wave
@@ -3746,6 +3747,14 @@ async def _get_thread_list_body(
                        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $" + str(idx))
         params.append(owner)
         idx += 1
+    if min_age_days is not None:
+        clauses.append("o.created_at <= now() - ($" + str(idx) + " * interval '1 day')")
+        params.append(min_age_days)
+        idx += 1
+    if max_age_days is not None:
+        clauses.append("o.created_at > now() - ($" + str(idx) + " * interval '1 day')")
+        params.append(max_age_days)
+        idx += 1
     where = " AND ".join(clauses)
     total = await pool.fetchval(
         "SELECT count(*) FROM objects o "
@@ -3782,7 +3791,7 @@ async def _get_thread_list_body(
     if limit == 0:
         return {**result, "threads": [], "total": total, "more": total}
     rows = await pool.fetch(
-        "SELECT o.id, o.canonical, "
+        "SELECT o.id, o.canonical, o.created_at, "
         "(SELECT a.value #>> '{}' FROM current_assertions a "
         " WHERE a.object_id=o.id AND a.name='summary' "
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
@@ -3801,6 +3810,7 @@ async def _get_thread_list_body(
     threads = []
     for r in rows:
         threads.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
+                        "created_at": r["created_at"].isoformat(),
                         "summary": (r["summary"] or "")[:200],
                         "kind": r["kind"], "owner": r["owner"]})
     more = max(0, total - offset - len(threads))
@@ -3859,13 +3869,17 @@ async def _get_decision_list_body(
 async def _get_object_list_impl(
     object_type: str, project: str, *, kind: str | None, owner: str | None,
     limit: int, offset: int, ctx: Context | None,
+    min_age_days: float | None = None, max_age_days: float | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `get_object_list` and its two hidden single-purpose aliases
     (get_thread_list/get_decision_list) — one code path, three names. Same charter-
     scoped project resolution, same {items, total, more} pagination contract, different
-    item key per branch (task #202 wave 4, decision 6fe4305c)."""
+    item key per branch (task #202 wave 4, decision 6fe4305c). `min_age_days`/
+    `max_age_days` are thread-only (the age-bin instrument, thread 6a1dfc52), ignored
+    on the decision branch."""
     if object_type == "thread":
-        return await _get_thread_list_body(project, kind, owner, limit, offset, ctx)
+        return await _get_thread_list_body(project, kind, owner, limit, offset, ctx,
+                                           min_age_days=min_age_days, max_age_days=max_age_days)
     if object_type == "decision":
         return await _get_decision_list_body(project, limit, offset, ctx)
     return {"error": f"unknown object_type {object_type!r} — one of thread/decision"}
@@ -3874,6 +3888,7 @@ async def _get_object_list_impl(
 @mcp.tool()
 async def get_object_list(
     object_type: str, project: str, kind: str | None = None, owner: str | None = None,
+    min_age_days: float | None = None, max_age_days: float | None = None,
     limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Recent Threads or Decisions for a project, paginated (charter-aware — spans the
@@ -3881,13 +3896,15 @@ async def get_object_list(
     selects the branch; `limit=0` for count only.
 
     `object_type='thread'` — OPEN threads only. Returns {threads, total, more,
-    honest_total, honest_total_note}. `kind` filter: obligation/question/task. `owner`
-    filter: agent id / 'operator'.
+    honest_total, honest_total_note}, each thread carrying `created_at`. `kind`: obligation/
+    question/task. `owner`: agent id / 'operator'. `min_age_days`/`max_age_days`: creation
+    age in days, either or both.
 
-    `object_type='decision'` — recent decisions, newest first. Returns {decisions,
-    total, more}. `kind`/`owner` are thread-only, ignored here."""
+    `object_type='decision'` — recent decisions, newest first. Returns {decisions, total,
+    more}. Other filters are thread-only, ignored here."""
     return await _get_object_list_impl(object_type, project, kind=kind, owner=owner,
-                                       limit=limit, offset=offset, ctx=ctx)
+                                       limit=limit, offset=offset, ctx=ctx,
+                                       min_age_days=min_age_days, max_age_days=max_age_days)
 
 
 @mcp.tool(meta={
@@ -3920,13 +3937,15 @@ async def get_decision_list(
 @mcp.tool()
 async def list_unfiled_threads(
     source: str | None = None, kind: str | None = None,
+    min_age_days: float | None = None, max_age_days: float | None = None,
     limit: int = 10, offset: int = 0,
 ) -> dict[str, Any]:
     """Threads with NO `in_repo` edge at all — genuinely unfiled, invisible to
     `get_thread_list(project=...)` no matter which project is asked. Paginated
-    (limit/offset), real `total` count. `source` filters by the creating actor's
-    provenance id (e.g. 'half-heal-detect'); `kind` filters obligation/question/task.
-    limit=0 for count only."""
+    (limit/offset), real `total` count, each thread carrying `created_at`. `source`
+    filters by the creating actor's provenance id (e.g. 'half-heal-detect'); `kind`:
+    obligation/question/task; `min_age_days`/`max_age_days`: creation age in days,
+    either or both. limit=0 for count only."""
     pool = await _pool_get()
     clauses = [
         "o.type='Thread' AND o.status='active' AND COALESCE("
@@ -3950,12 +3969,20 @@ async def list_unfiled_threads(
             "AND e.event_type='create' AND e.actor=$" + str(idx) + ")")
         params.append(source)
         idx += 1
+    if min_age_days is not None:
+        clauses.append("o.created_at <= now() - ($" + str(idx) + " * interval '1 day')")
+        params.append(min_age_days)
+        idx += 1
+    if max_age_days is not None:
+        clauses.append("o.created_at > now() - ($" + str(idx) + " * interval '1 day')")
+        params.append(max_age_days)
+        idx += 1
     where = " AND ".join(clauses)
     total = await pool.fetchval("SELECT count(*) FROM objects o WHERE " + where, *params) or 0
     if limit == 0:
         return {"threads": [], "total": total, "more": total}
     rows = await pool.fetch(
-        "SELECT o.id, o.canonical, "
+        "SELECT o.id, o.canonical, o.created_at, "
         "(SELECT a.value #>> '{}' FROM current_assertions a "
         " WHERE a.object_id=o.id AND a.name='summary' "
         " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
@@ -3970,6 +3997,7 @@ async def list_unfiled_threads(
         "OFFSET $" + str(idx) + " LIMIT $" + str(idx + 1),
         *params, offset, limit)
     threads = [{"id": str(r["id"])[:8], "canonical": r["canonical"],
+               "created_at": r["created_at"].isoformat(),
                "summary": (r["summary"] or "")[:200],
                "kind": r["kind"], "owner": r["owner"]} for r in rows]
     more = max(0, total - offset - len(threads))
