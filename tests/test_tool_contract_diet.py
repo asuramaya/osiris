@@ -1196,7 +1196,13 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # action-const overhead outweighs three small flat schemas removed by less than either
 # prior dispatcher's own price-minimizer follow-through did. Measured exact (103,032),
 # not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 103032
+# 103,032 -> 103,112 (2026-09-05, Khnum, Thoth dispatch 7391, "one more round" — Marquee's
+# blind spot): resync_pin gains `tree_cwd`, a genuinely new capability (an explicit
+# override, else the seat's own bind_tree-declared tree, for the third-copy correction's
+# workspace guess — previously unreachable for any seat whose real tree isn't named after
+# its own handle). No new tool; one new optional schema param on an existing action.
+# Measured exact (103,112), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 103112
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

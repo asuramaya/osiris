@@ -173,36 +173,151 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
     }
 
 
+async def _project_name_for(pool: asyncpg.Pool, owner: str) -> str | None:
+    """The bare project name `owner` names, or None when it isn't one — a SoftwareProject
+    lookup, case-insensitive, with or without the `repo:` canonical prefix."""
+    if owner.lower() == "operator":
+        return None
+    row = await pool.fetchval(
+        "SELECT replace(canonical,'repo:','') FROM objects WHERE type='SoftwareProject' AND "
+        "(lower(canonical)=lower($1) OR lower(canonical)=lower('repo:'||$1)) LIMIT 1", owner)
+    return str(row) if row else None
+
+
+async def _is_exactly_live(pool: asyncpg.Pool, agent_id: str) -> bool:
+    """agent_liveness's own two-signal freshest-of test (mounts.py), but EXACT — no
+    lineage-wide LIKE broadening across a base id's generations. A DM to a specific
+    `agent:<id>` addresses THAT generation's own mailbox literally (send_message's own
+    grave rule: an explicit id is an act of intent, never silently redirected) — a live
+    SUCCESSOR does not make an ANCESTOR's own address live, only lineage_head's forward
+    walk finds the successor worth redirecting to."""
+    from src.orchestrator.mounts import freshest_liveness_ts, is_live
+
+    mount_seen = await pool.fetchval(
+        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
+    last_active_iso = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+    return is_live(freshest_liveness_ts(mount_seen, last_active_iso))
+
+
+async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[str, Any]:
+    """THE OWNER-RESOLUTION LADDER (operator "one more round" 2026-09-05, relayed Thoth DM
+    7391 — the first firing's own live proof found 128 of 151 nudges landing on the
+    operator's desk because owners are project names or dead agents, "that makes the desk
+    the pile"): a rung is tried before falling to the desk, never instead of trying at all.
+
+    Rung 0 — owner already names a currently LIVE, DM-eligible address (an `agent:id`,
+    `seat:id`, or a bare handle `resolve_seat` still finds a live holder for): unchanged
+    from before this ladder, this is the common case and needs no repair.
+
+    Rung 1 — owner is a PROJECT NAME: that project's live seat head — `roster(repo=...)`'s
+    own single unambiguous match, occupied right now; when charter and pin disagree but one
+    seat manages the other (`agreement='governed'`), the MANAGING seat, never the managed
+    one. A `no-match`/`conflict`/uninhabited seat falls through, never guessed at.
+
+    Rung 2 — owner is a DEAD/RETIRED AGENT id: its own lineage head (`lineage_head`'s
+    forward `succeeded_by` walk — the SAME authority `send_message`'s reply-routing already
+    trusts for "where does this soul live now"), but ONLY if that HEAD's own exact address
+    is currently live — deliberately NOT `agent_liveness` (its own lineage-wide LIKE
+    broadening treats a live successor as proof the ANCESTOR's own literal mailbox is
+    "live" too, which is backwards for a DM: `send_message` addresses an `agent:<id>`
+    literally, the grave rule, so what matters is whether HEAD's own exact address has a
+    body reading it, not whether the soul survives under some other numeral). A lineage
+    that ends in another corpse is not a rung, it's the same fall-through.
+
+    Every fall-through carries a `reason` naming exactly which rung failed and why — the
+    desk brief for a fallback quotes it verbatim, per the dispatch's own instruction ("the
+    desk brief for those carries the reason"). Pure and read-only: sends nothing, so a
+    caller (real send, or a dry-run report) can call this as many times as it likes without
+    ever double-nudging a real owner."""
+    from src.orchestrator.agents import lineage_head, resolve_seat
+    from src.orchestrator.mailbox import _dm_eligible
+    from src.orchestrator.seats import roster, seat_holder_ineligible, seat_occupancy
+
+    target = (owner or "").strip()
+    if not target or target.lower() == "operator":
+        return {"channel": "desk", "target": None, "reason": "unowned, or owner=operator"}
+
+    project = await _project_name_for(pool, target)
+    if project is not None:
+        out = await roster(pool, repo=project)
+        agreement, matches = out.get("agreement"), out.get("matches") or []
+        chosen = None
+        if agreement == "governed":
+            chosen = next((m for m in matches if "charter" in m["via"]), None)
+        elif agreement == "single-match":
+            chosen = matches[0]
+        if chosen and chosen.get("occupancy") == "occupied" and chosen.get("holder"):
+            return {"channel": "dm", "target": str(chosen["holder"]), "reason": None}
+        if agreement == "no-match":
+            reason = f"no seat's charter or pin names project {project!r}"
+        elif agreement == "conflict":
+            seats = ", ".join(m["seat"] for m in matches)
+            reason = (f"ambiguous: {len(matches)} seats claim project {project!r} "
+                      f"({seats}), no governed manager to prefer")
+        elif chosen is not None:
+            reason = (f"no live seat for project {project!r} "
+                      f"(seat {chosen['seat']} is {chosen.get('occupancy')})")
+        else:
+            reason = f"no live seat for project {project!r}"
+        return {"channel": "desk", "target": None, "reason": reason}
+
+    if target.startswith("agent:"):
+        head = await lineage_head(pool, target)
+        if await _is_exactly_live(pool, head) and await _dm_eligible(pool, head):
+            return {"channel": "dm", "target": head, "reason": None}
+        reason = (f"no live successor for {target!r}" if head == target else
+                  f"lineage head {head!r} of {target!r} is not currently live either")
+        return {"channel": "desk", "target": None, "reason": reason}
+
+    if target.startswith("seat:"):
+        exists = await pool.fetchval(
+            "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+            target)
+        if not exists:
+            return {"channel": "desk", "target": None, "reason": f"no such seat: {target!r}"}
+        occ = await seat_occupancy(pool, target)
+        if (occ["state"] == "occupied" and occ["holder"]
+                and await _dm_eligible(pool, occ["holder"])):
+            return {"channel": "dm", "target": str(occ["holder"]), "reason": None}
+        return {"channel": "desk", "target": None,
+                "reason": f"seat {target!r} is {occ['state']}"}
+
+    # a bare handle/name — resolve_seat's own territory, the SAME live-holder-at-read-time
+    # resolution send_message itself uses for a plain to_agent= name.
+    ineligible = await seat_holder_ineligible(pool, target)
+    if ineligible is not None:
+        return {"channel": "desk", "target": None, "reason": ineligible}
+    resolved = await resolve_seat(Actions(pool), target)
+    agent = resolved.get("agent")
+    if agent is None:
+        return {"channel": "desk", "target": None, "reason": f"no agent named {target!r}"}
+    return {"channel": "dm", "target": resolved.get("seat_id") or agent, "reason": None}
+
+
 async def _nudge_owner(
     pool: asyncpg.Pool, owner: str | None, *, actor: str, body: str,
 ) -> dict[str, Any]:
-    """The owner-address fallback: a project-name owner, an unset owner, or an owner
-    `send_message` cannot resolve to a live agent all route to the operator's desk
-    instead of a DM — 'owner=operator when the owner is a project name or no live agent',
-    exactly as ruled."""
+    """Resolves via the owner-resolution ladder (`resolve_owner_target`), then sends
+    exactly once against that verdict — a DM when a rung resolved, the operator's desk
+    (with the failing rung's own reason appended) otherwise. A race between resolution and
+    send (the target goes cold in between) still falls back to the desk rather than losing
+    the nudge outright."""
     from src.orchestrator.mailbox import send_message
 
-    target = (owner or "").strip()
-    is_project_name = False
-    if target and target.lower() != "operator":
-        is_project_name = bool(await pool.fetchval(
-            "SELECT 1 FROM objects WHERE type='SoftwareProject' AND "
-            "(lower(canonical)=lower($1) OR lower(canonical)=lower('repo:'||$1)) LIMIT 1",
-            target))
-    if not target or target.lower() == "operator" or is_project_name:
-        return await send_message(
-            pool, from_agent=actor, from_project="osiris", to_project="operator",
-            body=body, desk_kind="fyi")
-    try:
-        return await send_message(
-            pool, from_agent=actor, from_project="osiris", to_agent=target, body=body,
-            grade="ask")
-    except ValueError:
-        # send_message's own refusal to resolve to_agent IS "no live agent" — never
-        # re-derived by a second liveness lookup.
-        return await send_message(
-            pool, from_agent=actor, from_project="osiris", to_project="operator",
-            body=body, desk_kind="fyi")
+    verdict = await resolve_owner_target(pool, owner)
+    if verdict["channel"] == "dm":
+        try:
+            return await send_message(
+                pool, from_agent=actor, from_project="osiris", to_agent=verdict["target"],
+                body=body, grade="ask")
+        except ValueError as exc:
+            verdict = {"channel": "desk", "target": None, "reason": str(exc)}
+    return await send_message(
+        pool, from_agent=actor, from_project="osiris", to_project="operator",
+        body=f"{body}\n\n(owner-address fallback: {verdict['reason']})", desk_kind="fyi")
 
 
 async def hygiene_execute(

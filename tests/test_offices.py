@@ -927,6 +927,101 @@ async def test_correct_own_pin_value_corrects_anchor_and_workspace_together(
     assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
 
 
+# ═══ tree_cwd — Marquee's blind spot (Thoth dispatch relayed 2026-09-05, operator "one
+# more round"): a seat whose real workspace isn't named after its own handle at all was
+# invisible to the third-copy correction no matter how it was called.
+
+async def test_correct_own_pin_value_explicit_tree_cwd_overrides_the_handle_guess(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov11tree", "Cov11tree", source="test")
+    office = tmp_path / "office" / "cov11tree"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    real_tree = tmp_path / "dtfb"  # named after a PROJECT, not the seat's own handle
+    real_tree.mkdir()
+    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    guessed = tmp_path / "workspace" / "cov11tree"  # never created — the guess is wrong
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov11tree", "project", "Godel", reason="marquee shape",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace",
+        tree_cwd=str(real_tree))
+    assert out["workspace"]["written"] is True
+    assert (real_tree / ".osiris").read_text() == 'project = "Godel"\n'
+    assert not guessed.exists()
+
+
+async def test_correct_own_pin_value_reads_the_seats_own_bind_tree_declared_path(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No explicit tree_cwd given — the correction still reaches the real tree by
+    reading the seat's own bind_seat_tree-declared property, before falling to the
+    handle-derived guess."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:cov12declared", "Cov12declared",
+                               source="test")
+    office = tmp_path / "office" / "cov12declared"
+    office.mkdir(parents=True)
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    real_tree = tmp_path / "dtfb2"
+    real_tree.mkdir()
+    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "tree_cwd", str(real_tree), "test", NOW, 0.9)
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov12declared", "project", "Godel", reason="declared tree",
+        office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
+    assert out["workspace"]["written"] is True
+    assert (real_tree / ".osiris").read_text() == 'project = "Godel"\n'
+
+
+async def test_correct_pin_value_third_party_dry_run_previews_an_explicit_tree_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp4tree", "TpFourTree", source="test")
+    office = tmp_path / "tpfourtree"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    real_tree = tmp_path / "dtfb3"
+    real_tree.mkdir()
+    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path,
+        tree_cwd=str(real_tree))
+    assert out["plan"]["workspace"] == {
+        "path": str(real_tree), "old_value": "Jesus", "new_value": "Godel"}
+
+
+async def test_correct_pin_value_third_party_dry_run_reads_the_seats_declared_tree_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp5declared", "TpFiveDeclared",
+                               source="test")
+    office = tmp_path / "tpfivedeclared"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "Jesus"\n')
+    real_tree = tmp_path / "dtfb4"
+    real_tree.mkdir()
+    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
+    await actions.assert_property(seat_oid, "tree_cwd", str(real_tree), "test", NOW, 0.9)
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
+    assert out["plan"]["workspace"] == {
+        "path": str(real_tree), "old_value": "Jesus", "new_value": "Godel"}
+
+
 async def test_correct_own_pin_value_skips_the_workspace_when_it_equals_the_anchor(
     actions: Actions, tmp_path: Path,
 ) -> None:
