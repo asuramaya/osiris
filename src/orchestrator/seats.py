@@ -1793,6 +1793,61 @@ async def bind_holder(
                                   evidence_class=_EC)
 
 
+async def rehold_seat(
+    actions: Actions, *, seat_id: str, agent_id: str, because: str, actor: str,
+    override: bool = False,
+) -> dict[str, Any]:
+    """THE THIRD-PARTY RE-HOLD DOOR (decision fb85dd4f's own live specimen: Thoth's
+    compaction successor lost its own seat's binding to a wrongly-grafted sibling
+    generation, and no sanctioned MCP verb could put it back — `bind_holder` is a raw
+    internal primitive, never exposed, and `reconcile_identity`'s third-party path only
+    heals house/project property contradictions, never the `holds` link itself). This is
+    that door: refuses when the seat's CURRENT holder is LIVE (`seat_occupancy`, the same
+    authority every other occupancy read in this house shares) and from a DIFFERENT
+    lineage than `agent_id` — the exact shape a careless rehold could silently steal a
+    seat out from under a genuinely different, still-working mind — unless `override=True`
+    names that as a deliberate act. `because` is required, same law as every other
+    third-party correction in this house (a correction with no stated reason is the silent
+    overwrite 719ed5b1 rules against, not a fix).
+
+    The retraction itself is `bind_holder`'s own already-sanctioned mechanism —
+    invalidate_link, never deleted, history walkable, both sides symmetric (a stray hold
+    the new holder carried elsewhere heals too) — this adds only the guard, the required
+    reason (kept on the seat as `rehold_because`), and a receipt naming both sides of the
+    change, never a second implementation of the bind itself."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "a rehold with no stated reason is exactly the silent overwrite "
+                         "719ed5b1 rules against — refusing"}
+    seat_row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
+        "AND status='active'", seat_id)
+    if seat_row is None:
+        return {"error": f"no such active seat: {seat_id!r}"}
+    agent_row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if agent_row is None:
+        return {"error": f"no such agent: {agent_id!r}"}
+
+    from src.orchestrator.agents import _generation
+
+    occ = await seat_occupancy(actions.pool, seat_id)
+    old_holder = occ["holder"]
+    if (old_holder and occ["live"] and not override
+            and _generation(old_holder)[0] != _generation(agent_id)[0]):
+        return {
+            "error": f"{seat_id} has a LIVE holder ({old_holder}) from a different "
+                     f"lineage than {agent_id!r} — refusing without override=True",
+            "old_holder": old_holder, "live": True,
+        }
+    now = datetime.now(UTC)
+    await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=actor)
+    await actions.assert_property(seat_row["id"], "rehold_because", because, actor, now,
+                                  _CONF, evidence_class=_EC)
+    return {"seat_id": seat_id, "old_holder": old_holder, "new_holder": agent_id,
+            "because": because}
+
+
 async def backfill_unbound_seats(
     actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,

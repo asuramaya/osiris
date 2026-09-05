@@ -1225,7 +1225,14 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # -> 103451 (2026-09-05, Thoth, merge of practice-dispatcher + hygiene-owner-ladder): FIFTH stale-
 # ancestor regression to 202,871 by the merge driver; re-measured on the merged tree, pinned.
 # Whoever merges re-measures (standing order, thoth charter 2026-09-04).
-TOOL_CONTRACT_CEILING_CHARS = 103451
+# 103,451 -> 103,857 (2026-09-05, Khnum, decision fb85dd4f/381c9132, Thoth dispatch): seat
+# gains a new action, `rehold` — the third-party re-hold door the werner/Thoth live
+# specimen found missing (no sanctioned MCP verb could put a mis-bound seat's holds link
+# back; reconcile_identity's third-party path only heals house/project, never the link
+# itself). A genuinely new capability, one new oneOf branch (target, agent_id, because,
+# override_live) plus one ACTION TABLE line — trimmed to the shortest true description
+# already. Measured exact (103,857), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 103857
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

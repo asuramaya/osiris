@@ -2887,6 +2887,10 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
             "agent_id": _opt_s(), "because": _opt_s(),
         }, ["action"]),
         _dispatcher_action_schema({
+            "action": _action_const("rehold"), "target": _s(), "agent_id": _s(),
+            "because": _s(), "override_live": _b(False),
+        }, ["action", "target", "agent_id", "because"]),
+        _dispatcher_action_schema({
             "action": _action_const("correct_house"), "new_house": _s(),
         }, ["action", "new_house"]),
         _dispatcher_action_schema({
@@ -2948,6 +2952,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "establish_office": (["target"], ["target"]),
     "invalidate_works_in": (["stale_project", "because"], ["stale_project", "because"]),
     "reconcile_identity": (["target", "agent_id", "because"], []),
+    "rehold": (["target", "agent_id", "because", "override_live"],
+              ["target", "agent_id", "because"]),
     "correct_house": (["new_house"], ["new_house"]),
     "correct_pin": (["key", "value", "reason"], ["key", "reason"]),
     "revert_pin": ([], []),
@@ -3362,6 +3368,17 @@ async def _seat_impl(
     if action == "reconcile_identity":
         return await _reconcile_seat_identity_impl(target, agent_id, because, ctx)
 
+    if action == "rehold":
+        assert target is not None and agent_id is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a third-party rehold is a deliberate act on "
+                             "the record", "why": _anchorless(ctx)}
+        from src.orchestrator.seats import rehold_seat as _rehold_seat
+        return await _rehold_seat(
+            Actions(await _pool_get()), seat_id=target, agent_id=agent_id, because=because,
+            actor=ident.agent_id, override=override_live)
+
     if action == "correct_house":
         assert new_house is not None and new_house is not _UNSET  # already validated
         ident = await _ident_for(ctx)
@@ -3514,6 +3531,7 @@ async def seat(
       establish_office: move a seat into its Osiris-owned home (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
+      rehold: third-party re-hold a seat's `holds` link (target, agent_id, because)
       correct_house: a head corrects its OWN house (new_house)
       correct_pin: correct an existing key in your own seat's pin (key, reason)
       resync_pin: third-party pin correction, dry_run default (target, key)

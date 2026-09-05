@@ -321,6 +321,96 @@ async def test_bind_holder_rebinding_the_same_seat_is_a_no_op_on_other_seats(
     assert rows == 1
 
 
+# ═══ REHOLD_SEAT (decision fb85dd4f's own live specimen — the third-party re-hold door) ═══
+
+async def test_rehold_seat_moves_the_holds_link_and_names_both_sides(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rehold1", source="test")
+    await actions.create_or_find_object("Agent", "agent:rehold-old", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rehold-old")
+    await actions.create_or_find_object("Agent", "agent:rehold-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:rehold-new",
+                            because="test repair", actor="test")
+    assert out == {"seat_id": seat["seat_id"], "old_holder": "agent:rehold-old",
+                   "new_holder": "agent:rehold-new", "because": "test repair"}
+    assert await _active_holds(actions, "agent:rehold-new", seat["seat_id"])
+    assert not await _active_holds(actions, "agent:rehold-old", seat["seat_id"])
+
+
+async def test_rehold_seat_refuses_without_a_reason(actions: Actions) -> None:
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rehold2", source="test")
+    await actions.create_or_find_object("Agent", "agent:rehold2-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:rehold2-new",
+                            because="", actor="test")
+    assert "error" in out
+    assert not await _active_holds(actions, "agent:rehold2-new", seat["seat_id"])
+
+
+async def test_rehold_seat_refuses_on_a_live_holder_from_a_different_lineage(
+    actions: Actions,
+) -> None:
+    """The guard the door exists for: a careless rehold must never silently steal a seat
+    out from under a genuinely different, still-working mind."""
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rehold3", source="test")
+    await actions.create_or_find_object("Agent", "agent:rehold3-live", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rehold3-live")
+    await save_mount(actions.pool, job_dir="/jobs/rehold3", agent_id="agent:rehold3-live",
+                     project="osiris", cwd="/w/x", model="claude-sonnet-5", session_key=None)
+    await actions.create_or_find_object("Agent", "agent:rehold3-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:rehold3-new",
+                            because="test repair", actor="test")
+    assert "error" in out and out["live"] is True
+    assert await _active_holds(actions, "agent:rehold3-live", seat["seat_id"])
+
+
+async def test_rehold_seat_override_live_bypasses_the_guard(actions: Actions) -> None:
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rehold4", source="test")
+    await actions.create_or_find_object("Agent", "agent:rehold4-live", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rehold4-live")
+    await save_mount(actions.pool, job_dir="/jobs/rehold4", agent_id="agent:rehold4-live",
+                     project="osiris", cwd="/w/x", model="claude-sonnet-5", session_key=None)
+    await actions.create_or_find_object("Agent", "agent:rehold4-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:rehold4-new",
+                            because="test repair, deliberate override", actor="test",
+                            override=True)
+    assert out["new_holder"] == "agent:rehold4-new"
+    assert await _active_holds(actions, "agent:rehold4-new", seat["seat_id"])
+
+
+async def test_rehold_seat_a_live_holder_from_the_same_lineage_never_refuses(
+    actions: Actions,
+) -> None:
+    """The exact fix's own shape: re-holding thoth by Thoth's own next generation is never
+    a cross-lineage theft, live or not — no override needed."""
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Rehold5", source="test")
+    await actions.create_or_find_object("Agent", "agent:rehold5", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:rehold5")
+    await save_mount(actions.pool, job_dir="/jobs/rehold5", agent_id="agent:rehold5",
+                     project="osiris", cwd="/w/x", model="claude-sonnet-5", session_key=None)
+    heir = "agent:rehold5-ii"
+    await actions.create_or_find_object("Agent", heir, "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id=heir,
+                            because="successor re-hold", actor="test")
+    assert out["new_holder"] == heir
+    assert await _active_holds(actions, heir, seat["seat_id"])
+
+
 SID = "af00c0de-0000-4000-8000-000000000000"
 
 
