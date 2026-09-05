@@ -1229,6 +1229,14 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # captures instead. Not a binding-mover — acts on Practice objects only (a
     # knowledge record, never seat/project/office/agent state).
     "practice": {"binding_verb": False, "parameterizes": "record_practice"},
+    # graph_census(kind=...) — Thoth dispatch 7543 item 2: a genuinely new tool, not a
+    # parameterization of anything existing (get_object_list's own filters answer "which
+    # objects", never "how many properties disagree" or "what does adoption_meter's
+    # cohort dict say" — no existing tool's shape could have taken `kind` as a mode).
+    # Named `graph_census` rather than the dispatch's own suggested `census` because
+    # src.orchestrator.census (the OS-process liveness census) already owns that name at
+    # module scope. Not a binding-mover — pure read, mints/writes nothing.
+    "graph_census": {"binding_verb": False},
 }
 
 

@@ -3489,6 +3489,7 @@ async def resume_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
     agents_json: Any = None, resume_spawn: Any = None,
+    clear_stale_record: Any = None,
 ) -> dict[str, Any]:
     """Continue a seat's own DORMANT session — `launch_seat`'s former auto-resume branch,
     now its own verb (ruling 41a41437, task #199 lane 3C, mirroring the CLI's own
@@ -3522,6 +3523,16 @@ async def resume_seat(
     lives that rule. `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for
     tests, parallel to `agents_json` above.
 
+    CLEARS A STALE STOPPED RECORD BEFORE SPAWNING, NOT JUST AFTER (the copy-quirk's own
+    pre-emption, Thoth dispatch 7543 item 1): `_clear_stale_stopped_record` runs right
+    before `resume_spawn`, so a leftover harness "stopped" record (a `claude stop` whose
+    `osiris stop`-side rm never landed, or one that predates that fix) is cleared before
+    the harness ever gets a chance to mint a copy — not merely adopted as one after the
+    fact. `_adopt_resumed_body`'s own post-spawn detection stays as the safety net for
+    whatever this pre-emptive clear misses. `clear_stale_record` injects
+    `_clear_stale_stopped_record` for tests, same convention as `agents_json`/
+    `resume_spawn` above.
+
     THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
     7d6815bb): a `resident-unknown` gate is an ABSENCE of signed testimony, not a positive
     finding of a different mind — it used to fall through to a fresh mint (back when this
@@ -3536,6 +3547,7 @@ async def resume_seat(
     from src.orchestrator.seats import seat_receipt
     agents_json = agents_json or _claude_agents_json
     resume_spawn = resume_spawn or _spawn_claude
+    clear_stale_record = clear_stale_record or _clear_stale_stopped_record
 
     setup = await _launch_target_setup(
         actions, caller=caller, target=target, agents_json=agents_json)
@@ -3607,6 +3619,9 @@ async def resume_seat(
             pool, from_agent=caller, from_project=await project_of(pool, caller),
             to_agent=target_seat, body=message, grade="ask")
         resume_brief_id = sent.get("id")
+    if await clear_stale_record(session_id[:8]):
+        resume_log.append(f"cleared a stale stopped record for {session_id[:8]} before "
+                          "spawning — pre-empting the copy quirk, not just adopting it")
     await resume_spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
                        model=argv_model, allowed_tools=st.osiris_wake_allowed_tools or None)
     adoption = await _adopt_resumed_body(
@@ -3672,18 +3687,35 @@ async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
             # and says so" (the harness's own --bg help text) — a NEW session id, a fresh
             # transcript, and osiris's whisper meeting a stranger. Three copies of Chad in
             # a row tonight (092b7418, 5f54e1fc, a9d4118e) until the record was removed;
-            # with it removed, `--bg --resume` continued 7451509a under its own id. `claude
-            # rm` "deletes a background session and its worktree" — the RECORD, never the
-            # transcript (all three of Chad's files stayed on disk) — so a stopped seat is
-            # resumable in place, which is the whole point of stopping instead of killing.
-            # Best effort: a failed rm leaves exactly the pre-fix state, never worse.
-            rm = await asyncio.create_subprocess_exec(
-                "claude", "rm", job_dir_key,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await rm.wait()
+            # with it removed, `--bg --resume` continued 7451509a under its own id.
+            await _clear_stale_stopped_record(job_dir_key)
             return
     import signal
     os.kill(pid, signal.SIGTERM)
+
+
+async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
+    """`claude rm <id>` — best-effort, factored out of `_real_kill_pid`'s own post-stop
+    cleanup so `resume_seat`/`_cmd_resume_harness` can run the SAME removal PRE-EMPTIVELY,
+    right before spawning, instead of only after a stop. Any stale "stopped" background
+    record left on file (a prior `claude stop`, or a body that exited on its own before
+    this house's stop-fix landed) makes `claude --bg --resume <id>` "start a copy and say
+    so" (the harness's own --bg help text) — a NEW session id, a fresh transcript, and
+    osiris's whisper meeting a stranger. `claude rm` "deletes a background session and its
+    worktree" — the RECORD, never the transcript (Chad's own three-copies-in-a-row
+    incident: all three transcripts stayed on disk) — so clearing it first pre-empts the
+    copy rather than merely adopting one after the harness has already minted it.
+
+    Returns whether a record actually existed and was cleared (rm exit 0) — informational
+    only, NEVER gates the spawn that follows: a failed/no-op rm (nothing was there to
+    clear) leaves exactly the pre-fix state, and `_adopt_resumed_body`'s own post-spawn
+    copy detection still catches anything this pre-emptive clear missed.
+
+    Injectable so no test ever spawns a real subprocess."""
+    proc = await asyncio.create_subprocess_exec(
+        "claude", "rm", job_dir_key,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    return await proc.wait() == 0
 
 
 # The human's own address, reused from the mailbox rather than invented here — one notion

@@ -120,6 +120,7 @@ ManagerCall = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 SpawnClaudeBg = Callable[..., Awaitable[None]]
 AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
 ResumeSpawn = Callable[..., Awaitable[None]]
+ClearStaleRecord = Callable[..., Awaitable[bool]]
 
 # dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-door
 # command below used to REQUIRE --actor, forcing a human at a raw terminal to type a value
@@ -1000,6 +1001,7 @@ async def cmd_launch(
 async def _cmd_resume_harness(
     handle: str, *, model: str | None, pool: asyncpg.Pool, wake_default: str | None,
     agents_json: AgentsJson, resume_spawn: ResumeSpawn, settings: Settings | None = None,
+    clear_stale_record: ClearStaleRecord | None = None,
 ) -> int:
     """A PERSISTENT `--bg --resume` TURN (Thoth dispatch 6484/6515, superseding the old
     one-shot `-p --resume` lane): same `_lineage_resume_candidate` + `_resume_guard` +
@@ -1018,16 +1020,24 @@ async def _cmd_resume_harness(
     disposable probe session, not inferred from --help text — see `_spawn_claude_bg`'s
     own docstring for the exact verification. A resumed session now genuinely persists:
     it idles after this turn rather than exiting, stays reachable by `claude attach`,
-    and is visible to the exact roster the operator was complaining could never see it."""
+    and is visible to the exact roster the operator was complaining could never see it.
+
+    CLEARS A STALE STOPPED RECORD BEFORE SPAWNING (Thoth dispatch 7543 item 1, mirrors
+    `resume_seat`'s own identical fix, trigger.py): `claude rm <sid[:8]>` runs right
+    before `resume_spawn`, pre-empting the copy quirk (a leftover harness "stopped"
+    record turning `--bg --resume` into a copy) instead of only detecting and adopting
+    one after it already happened. The post-spawn NOTE below stays as the safety net."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import seat_receipt
     from src.orchestrator.trigger import (
         _DM_RESUME_PROMPT,
         _adopt_resumed_body,
+        _clear_stale_stopped_record,
         _lineage_resume_candidate,
         _resume_guard,
         _resume_office,
     )
+    clear_stale_record = clear_stale_record or _clear_stale_stopped_record
 
     pre = await _resolve_and_guard_launch(
         handle, pool=pool, agents_json=agents_json, verb="resume")
@@ -1093,6 +1103,7 @@ async def _cmd_resume_harness(
     spawn_cwd = materialized_at or await _resume_office(
         pool, facts["seat_id"], fallback=facts["anchor_cwd"])
     name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    cleared = await clear_stale_record(resumed_session_id[:8])
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
                        allowed_tools=st.osiris_wake_allowed_tools or None)
@@ -1113,6 +1124,10 @@ async def _cmd_resume_harness(
         print("osiris resume: NOTE — no body appeared at the office within the check "
               "window; `claude agents --json` is the witness, not this receipt.",
               file=sys.stderr)
+    if cleared:
+        print(f"osiris resume: cleared a stale stopped record for "
+              f"{resumed_session_id[:8]} before spawning — pre-empting the copy quirk, "
+              "not just adopting it.", file=sys.stderr)
     print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd} — "
           f"walked {resume[5]} generation(s) back to find it "
           f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "

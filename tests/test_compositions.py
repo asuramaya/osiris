@@ -13,6 +13,7 @@ from src.ontology.catalog import ensure_type
 from src.orchestrator.compositions import (
     DEFAULT_COMPOSITIONS,
     _eval,
+    _fn_census,
     _fn_closure_health,
     _fn_desk_overview,
     _fn_desk_project,
@@ -2418,3 +2419,61 @@ async def test_fn_wall_never_double_counts_a_thread_with_a_retracted_in_repo_lin
     project_row = next(p for p in out["projects"] if p["project"] == "repo:wallproj2")
     assert project_row["open"] == 1                         # not 2
     assert len(out["top_of_wall"]) == 1  # not duplicated on the top-of-wall list too
+
+
+# ═══ THE CENSUS DOOR (Thoth dispatch 7543 item 2): the smallest read-only fix for three
+# obligations that were stuck on a direct-DB-script workaround — a real house-law
+# violation, since raw SQL against the kernel is a defect report, never a shortcut. ═══
+
+async def test_census_seat_property_contradictions_reports_a_contradicting_pair(
+    actions: Actions,
+) -> None:
+    """The exact population Alfred first named as uncounted (thread a78b6987): a SEAT
+    property with two currently-live, disagreeing values — the same shape as a
+    contradicting `governs` EDGE, but on a plain property, never invalidated, only
+    outvoted. Two sources, same timestamp, same object, same property name: both stay
+    current (mirrors test_triage_buckets_flags_contradicted_when_two_sources_disagree's
+    own proven construction)."""
+    seat = await actions.create_or_find_object("Seat", "seat:censustest", "test")
+    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "bytebye", "agent:bob", NOW, 0.9)
+
+    out = await _fn_census(actions.pool, None, {"kind": "seat_property_contradictions"})
+    assert out["kind"] == "seat_property_contradictions"
+    row = next(r for r in out["rows"] if r["seat"] == "seat:censustest")
+    assert row["property"] == "house"
+    assert row["distinct_values"] == 2
+    assert set(row["values"]) == {"alfred", "bytebye"}
+
+
+async def test_census_seat_property_contradictions_ignores_agreeing_sources(
+    actions: Actions,
+) -> None:
+    """SAME tag, SAME data from two sources is corroboration, never a contradiction — the
+    same categorical distinction triage's own contradicted bucket already draws."""
+    seat = await actions.create_or_find_object("Seat", "seat:censusagree", "test")
+    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "alfred", "agent:bob", NOW, 0.9)
+
+    out = await _fn_census(actions.pool, None, {"kind": "seat_property_contradictions"})
+    assert not any(r["seat"] == "seat:censusagree" for r in out["rows"])
+
+
+async def test_census_cohort_delegates_to_adoption_meter(actions: Actions) -> None:
+    """Thread 7917b404: this door must not re-derive adoption_meter's own cohort SQL a
+    second time — it just exposes the same figures a session without direct DB access
+    could not otherwise read."""
+    out = await _fn_census(actions.pool, None, {"kind": "cohort"})
+    assert out["kind"] == "cohort"
+    assert "cohorts" in out
+
+    from src.orchestrator.adoption_meter import adoption_meter
+    direct = await adoption_meter(actions.pool)
+    assert out["cohorts"] == direct["cohorts"]
+
+
+async def test_census_refuses_an_unknown_kind_rather_than_guessing(actions: Actions) -> None:
+    out = await _fn_census(actions.pool, None, {"kind": "not-a-real-kind"})
+    assert "error" in out
+    assert "seat_property_contradictions" in out["error"]
+    assert "cohort" in out["error"]

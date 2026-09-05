@@ -554,6 +554,26 @@ async def retire_agent(
                                   because=f"holder retired: {because}")
         if vac.get("vacated"):
             out["seat_vacated"] = vac["vacated"]
+
+    # CLEAR THE HARNESS'S OWN STOPPED RECORD TOO (Thoth dispatch 7543 item 1, the copy-quirk
+    # class): `osiris stop` already does this (_real_kill_pid's own rm step) but a
+    # third-party retirement of a `--bg` body that was never stopped through that path (or
+    # was killed some other way) leaves the SAME stale harness record behind — a future
+    # `claude --resume` against its old session id would "start a copy and say so" exactly
+    # like Chad's incident. Read the job_dir(s) before release_mounts drops the row (the
+    # only place they're recorded); best-effort, never blocks the retirement itself.
+    from src.orchestrator.trigger import _clear_stale_stopped_record
+
+    job_dirs = [r["job_dir"] for r in await actions.pool.fetch(
+        "SELECT job_dir FROM agent_mounts WHERE agent_id=$1", agent_id)]
+    cleared = []
+    for job_dir in job_dirs:
+        job_dir_key = Path(job_dir).name
+        if await _clear_stale_stopped_record(job_dir_key):
+            cleared.append(job_dir_key)
+    if cleared:
+        out["stale_records_cleared"] = cleared
+
     out["mount_rows_released"] = await mounts.release_mounts(actions.pool, agent_id)
     return out
 

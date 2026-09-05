@@ -1401,6 +1401,54 @@ _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 EDGELESS_CLOSURE_CEILING = 949
 
 
+async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
+    """THE SMALLEST DOOR (Thoth dispatch 7543 item 2): a small, growable set of read-only
+    population counts the standing tooling had no verb for — three obligations were stuck
+    on a direct-DB-script workaround (a real house-law violation: raw SQL against the
+    kernel is a defect report, never a shortcut) purely because nothing on the MCP surface
+    could answer them. `kind` selects which count; unrecognized kinds report the valid set
+    rather than guessing.
+
+    kind='seat_property_contradictions' (thread a78b6987): SEAT PROPERTIES holding
+    contradicting live values are a population Alfred first named as uncounted — the same
+    shape as a contradicting `governs` EDGE, but on a plain property, never invalidated,
+    only outvoted by a later assertion. Every (seat, property) pair with more than one
+    currently-live distinct value, fleet-wide.
+
+    kind='cohort' (thread 7917b404): the #189 adoption instrument's own cohort-aged
+    connectivity figures (ruling 3831aee4) — delegates to `adoption_meter` rather than
+    re-deriving its SQL a second time; this door exists so a session with no direct DB
+    access can still read it, not to replace the module that computes it.
+
+    NOT b2208b94 (the monsterhouse tree walk): that obligation needs an actual ingest
+    pass (close_by_commits against a live git tree), not a population count — a
+    genuinely different shape of work this door does not attempt to cover."""
+    kind = args.get("kind")
+    if kind == "seat_property_contradictions":
+        rows = await pool.fetch(
+            "SELECT o.canonical, a.name, count(DISTINCT a.value) AS distinct_values, "
+            "array_agg(DISTINCT a.value #>> '{}') AS values "
+            "FROM current_assertions a "
+            "JOIN objects o ON o.id = a.object_id AND o.type = 'Seat' "
+            "GROUP BY o.canonical, a.name "
+            "HAVING count(DISTINCT a.value) > 1 "
+            "ORDER BY o.canonical, a.name")
+        active_seats = await pool.fetchval(
+            "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
+        return {
+            "kind": kind, "active_seats": active_seats, "contradicting_pairs": len(rows),
+            "rows": [{"seat": r["canonical"], "property": r["name"],
+                     "distinct_values": r["distinct_values"], "values": r["values"]}
+                    for r in rows],
+        }
+    if kind == "cohort":
+        from src.orchestrator.adoption_meter import adoption_meter
+        meter = await adoption_meter(pool)
+        return {"kind": kind, "cohorts": meter.get("cohorts", {})}
+    return {"error": f"unknown census kind {kind!r} — pass one of: "
+                     "'seat_property_contradictions', 'cohort'"}
+
+
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
@@ -3784,6 +3832,7 @@ _FUNCTIONS: dict[str, Function] = {
     "triage": _fn_triage,
     "closure_health": _fn_closure_health,
     "reference_catalog": _fn_reference_catalog,
+    "census": _fn_census,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -3798,7 +3847,7 @@ _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "puls
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
                  "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
-                 "closure_health", "reference_catalog"}
+                 "closure_health", "reference_catalog", "census"}
 
 
 def list_functions() -> list[str]:
