@@ -2885,15 +2885,13 @@ async def _charter_scoped_project_ids(
     return [r["id"] for r in rows], charter_repos
 
 
-@mcp.tool()
-async def get_thread_list(
-    project: str, kind: str | None = None, owner: str | None = None,
-    limit: int = 10, offset: int = 0, ctx: Context | None = None,
+async def _get_thread_list_body(
+    project: str, kind: str | None, owner: str | None,
+    limit: int, offset: int, ctx: Context | None,
 ) -> dict[str, Any]:
-    """Open threads for a project, paginated (charter-aware — spans the caller's own
-    governed repos; see `charter_repos`). Returns {threads, total, more}.
-    kind filter: obligation/question/task. owner filter: agent id / 'operator'.
-    limit=0 for count only (no bodies)."""
+    """The `object_type='thread'` branch of `_get_object_list_impl` — copied verbatim
+    from get_thread_list's own top-level function body before the fold (task #202 wave
+    4, decision 6fe4305c)."""
     pool = await _pool_get()
     proj = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
@@ -2991,6 +2989,115 @@ async def get_thread_list(
             "note": "recall(ref) for full text; orient() for the ranked wall"}
 
 
+async def _get_decision_list_body(
+    project: str, limit: int, offset: int, ctx: Context | None,
+) -> dict[str, Any]:
+    """The `object_type='decision'` branch of `_get_object_list_impl` — copied verbatim
+    from get_decision_list's own top-level function body before the fold (task #202
+    wave 4, decision 6fe4305c)."""
+    pool = await _pool_get()
+    proj = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        f"repo:{project}")
+    if proj is None:
+        return {"error": f"no project {project!r}", "decisions": [], "total": 0}
+    project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
+    total = await pool.fetchval(
+        "SELECT count(*) FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "WHERE o.type='Decision' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='superseded_by')", project_ids) or 0
+    result: dict[str, Any] = {"project": project}
+    if charter_repos:
+        result["charter_repos"] = charter_repos
+    if limit == 0:
+        return {**result, "decisions": [], "total": total, "more": total}
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='summary' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
+        "(SELECT a.value #>> '{}' FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='kind' "
+        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
+        "WHERE o.type='Decision' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
+        "  AND s.name='superseded_by') "
+        "ORDER BY o.created_at DESC "
+        "OFFSET $2 LIMIT $3", project_ids, offset, limit)
+    decisions = []
+    for r in rows:
+        decisions.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
+                          "summary": (r["summary"] or "")[:200],
+                          "kind": r["kind"]})
+    more = max(0, total - offset - len(decisions))
+    return {**result, "decisions": decisions, "total": total, "more": more}
+
+
+async def _get_object_list_impl(
+    object_type: str, project: str, *, kind: str | None, owner: str | None,
+    limit: int, offset: int, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `get_object_list` and its two hidden single-purpose aliases
+    (get_thread_list/get_decision_list) — one code path, three names. Same charter-
+    scoped project resolution, same {items, total, more} pagination contract, different
+    item key per branch (task #202 wave 4, decision 6fe4305c)."""
+    if object_type == "thread":
+        return await _get_thread_list_body(project, kind, owner, limit, offset, ctx)
+    if object_type == "decision":
+        return await _get_decision_list_body(project, limit, offset, ctx)
+    return {"error": f"unknown object_type {object_type!r} — one of thread/decision"}
+
+
+@mcp.tool()
+async def get_object_list(
+    object_type: str, project: str, kind: str | None = None, owner: str | None = None,
+    limit: int = 10, offset: int = 0, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Recent Threads or Decisions for a project, paginated (charter-aware — spans the
+    caller's own governed repos; see `charter_repos`). `object_type='thread'|'decision'`
+    selects the branch; `limit=0` for count only.
+
+    `object_type='thread'` — OPEN threads only. Returns {threads, total, more,
+    honest_total, honest_total_note}. `kind` filter: obligation/question/task. `owner`
+    filter: agent id / 'operator'.
+
+    `object_type='decision'` — recent decisions, newest first. Returns {decisions,
+    total, more}. `kind`/`owner` are thread-only, ignored here."""
+    return await _get_object_list_impl(object_type, project, kind=kind, owner=owner,
+                                       limit=limit, offset=offset, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "get_object_list(object_type='thread')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
+async def get_thread_list(
+    project: str, kind: str | None = None, owner: str | None = None,
+    limit: int = 10, offset: int = 0, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    get_object_list(object_type='thread')."""
+    return await _get_thread_list_body(project, kind, owner, limit, offset, ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "get_object_list(object_type='decision')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
+async def get_decision_list(
+    project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    get_object_list(object_type='decision')."""
+    return await _get_decision_list_body(project, limit, offset, ctx)
+
+
 @mcp.tool()
 async def list_unfiled_threads(
     source: str | None = None, kind: str | None = None,
@@ -3048,55 +3155,6 @@ async def list_unfiled_threads(
                "kind": r["kind"], "owner": r["owner"]} for r in rows]
     more = max(0, total - offset - len(threads))
     return {"threads": threads, "total": total, "more": more}
-
-
-@mcp.tool()
-async def get_decision_list(
-    project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
-) -> dict[str, Any]:
-    """Recent decisions for a project, paginated (charter-aware — spans the caller's own
-    governed repos; see `charter_repos`). Returns {decisions, total, more}.
-    limit=0 for count only."""
-    pool = await _pool_get()
-    proj = await pool.fetchval(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-        f"repo:{project}")
-    if proj is None:
-        return {"error": f"no project {project!r}", "decisions": [], "total": 0}
-    project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
-    total = await pool.fetchval(
-        "SELECT count(*) FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
-        "WHERE o.type='Decision' AND o.status='active' "
-        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='superseded_by')", project_ids) or 0
-    result: dict[str, Any] = {"project": project}
-    if charter_repos:
-        result["charter_repos"] = charter_repos
-    if limit == 0:
-        return {**result, "decisions": [], "total": total, "more": total}
-    rows = await pool.fetch(
-        "SELECT o.id, o.canonical, "
-        "(SELECT a.value #>> '{}' FROM current_assertions a "
-        " WHERE a.object_id=o.id AND a.name='summary' "
-        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS summary, "
-        "(SELECT a.value #>> '{}' FROM current_assertions a "
-        " WHERE a.object_id=o.id AND a.name='kind' "
-        " ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
-        "FROM objects o "
-        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id = ANY($1) "
-        "WHERE o.type='Decision' AND o.status='active' "
-        "AND NOT EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id=o.id "
-        "  AND s.name='superseded_by') "
-        "ORDER BY o.created_at DESC "
-        "OFFSET $2 LIMIT $3", project_ids, offset, limit)
-    decisions = []
-    for r in rows:
-        decisions.append({"id": str(r["id"])[:8], "canonical": r["canonical"],
-                          "summary": (r["summary"] or "")[:200],
-                          "kind": r["kind"]})
-    more = max(0, total - offset - len(decisions))
-    return {**result, "decisions": decisions, "total": total, "more": more}
 
 
 @mcp.tool()
@@ -5842,41 +5900,79 @@ async def retry_ambiguous_abstentions(
         link_type=link_type)
 
 
+async def _current_flags_impl(
+    action: str, *, dry_run: bool, limit: int, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `current_flags` and its two hidden single-purpose aliases
+    (stale_current_flags/repair_stale_current_flags) — one code path, three names. Each
+    branch below is copied verbatim from what was that alias's own top-level function
+    body before the fold (task #202 wave 4, decision 6fe4305c)."""
+    if action == "inspect":
+        from src.orchestrator.retirement import stale_current_flags as _stale_current_flags
+        return await _stale_current_flags(Actions(await _pool_get()), limit=limit)
+    if action == "repair":
+        if not dry_run:
+            ident = await _ident_for(ctx)
+            if ident is None:
+                return {"error": "mount first — a write to the kernel's own materialization "
+                                 "is a mind's act, and the graph must know whose",
+                        "why": _anchorless(ctx)}
+            actor = ident.agent_id
+        else:
+            actor = None
+        from src.orchestrator.retirement import repair_stale_current_flags as _repair
+        return await _repair(Actions(await _pool_get()), dry_run=dry_run, limit=limit,
+                             actor=actor)
+    return {"error": f"unknown action {action!r} — one of inspect/repair"}
+
+
 @mcp.tool()
+async def current_flags(
+    action: str, dry_run: bool = True, limit: int = 50, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE current_assertions.is_current KERNEL-INTEGRITY DOOR (thread 09bde57e), two
+    actions over the same anomaly: every row where `is_current=true` (migration 0047's
+    maintained flag) YET a real `supersedes` FK already points at it from another
+    assertion — a stale flag current_assertions is still trusting.
+
+    `action='inspect'` — pure read, finds the anomaly, fixes nothing. `count` is the
+    TRUE total population (never capped); `sample` is bounded by `limit` (default 50),
+    oldest-observed first. Not a per-object lookup like list_assertions.
+
+    `action='repair'` — THE BACKFILL for `inspect`'s own population. `dry_run=True`
+    (default): list-only, names how many rows WOULD flip and their ids, writes nothing —
+    safe to call unmounted-curious. `dry_run=False` is the operator's own call, never
+    automatic: flips `is_current=false` on up to `limit` (pass a higher value than the
+    shared default of 50 for a real repair pass — the pre-fold repair door defaulted to
+    500) stale rows in one batched UPDATE, oldest-observed first. Batched because the
+    live population is five figures (123,914 at last count, d8225e71) — walk it in
+    repeated calls, not one UPDATE touching all of it. Idempotent: a row already flipped
+    drops out on its own, so re-running after a partial run or a failure is always safe."""
+    return await _current_flags_impl(action, dry_run=dry_run, limit=limit, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "current_flags(action='inspect')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
 async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
-    """THE READ DOOR (thread 09bde57e): every assertion row where `is_current=true`
-    (migration 0047's maintained flag) YET a real `supersedes` FK already points at it from
-    another assertion — a stale flag current_assertions is still trusting. This is a kernel-
-    integrity read, not a per-object lookup like list_assertions: `count` is the TRUE total
-    population (never capped); `sample` is bounded by `limit`, oldest-observed first. Pure
-    read — finds the anomaly, fixes nothing; see obligation 09bde57e for the backfill this
-    surfaces the need for."""
-    from src.orchestrator.retirement import stale_current_flags as _stale_current_flags
-    return await _stale_current_flags(Actions(await _pool_get()), limit=limit)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    current_flags(action='inspect')."""
+    return await _current_flags_impl("inspect", dry_run=True, limit=limit, ctx=None)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "current_flags(action='repair')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
 async def repair_stale_current_flags(
     dry_run: bool = True, limit: int = 500, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE BACKFILL for stale_current_flags' own population (thread 09bde57e). `dry_run=True`
-    (default): list-only, names how many rows WOULD flip and their ids, writes nothing —
-    safe to call unmounted-curious. `dry_run=False` is the operator's own call, never
-    automatic: flips `is_current=false` on up to `limit` stale rows in one batched UPDATE,
-    oldest-observed first. Batched because the live population is five figures (123,914 at
-    last count, d8225e71) — walk it in repeated calls, not one UPDATE touching all of it.
-    Idempotent: a row already flipped drops out on its own, so re-running after a partial
-    run or a failure is always safe."""
-    if not dry_run:
-        ident = await _ident_for(ctx)
-        if ident is None:
-            return {"error": "mount first — a write to the kernel's own materialization is "
-                             "a mind's act, and the graph must know whose", "why": _anchorless(ctx)}
-        actor = ident.agent_id
-    else:
-        actor = None
-    from src.orchestrator.retirement import repair_stale_current_flags as _repair
-    return await _repair(Actions(await _pool_get()), dry_run=dry_run, limit=limit, actor=actor)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    current_flags(action='repair')."""
+    return await _current_flags_impl("repair", dry_run=dry_run, limit=limit, ctx=ctx)
 
 
 @mcp.tool()
@@ -6065,40 +6161,79 @@ async def unwitnessed_spawns(agent_id: str | None = None,
     return {"agent_id": target, "unwitnessed": hits, "count": len(hits)}
 
 
-@mcp.tool()
-async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
-    """THE ARCHAEOLOGIST'S TRAY (thread b975851b) — sweep the registry and disk for
-    anonymous agents that evidence says were never distinct minds (view-aliases: a mount
-    row with no transcript and no daemon receipt, co-resident with a session that has a
-    body; restart-mints: an anonymous mount in a named lineage's own home) and queue them
-    as review-gated merge candidates. PROPOSALS ONLY — nothing folds. Returns the pending
-    tray (score-ranked, each with its cited signals); judge each with resolve_fold.
-    Rejected pairs are remembered and never re-proposed. Also carries `unresumed_heads`
-    (ef88e2bb) — a SEPARATE non-fold class, never resolve_fold'd — a human call each time."""
+async def _fold_review_impl(
+    action: str, *, candidate_id: int | None, decision: str | None, ctx: Context | None,
+) -> dict[str, Any]:
+    """Shared body behind `fold_review` and its two hidden single-purpose aliases
+    (fold_candidates/resolve_fold) — one code path, three names. Each branch below is
+    copied verbatim from what was that alias's own top-level function body before the
+    fold (task #202 wave 4, decision 6fe4305c)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first", "why": _anchorless(ctx)}
-    from src.orchestrator.folds import find_agent_fold_candidates
-    return await find_agent_fold_candidates(await _pool_get())
+    if action == "list":
+        from src.orchestrator.folds import find_agent_fold_candidates
+        return await find_agent_fold_candidates(await _pool_get())
+    if action == "resolve":
+        if candidate_id is None or decision is None:
+            return {"error": "action='resolve' requires both candidate_id and decision"}
+        from src.orchestrator.folds import resolve_fold_candidate
+        return await resolve_fold_candidate(Actions(await _pool_get()),
+                                            candidate_id=candidate_id, decision=decision,
+                                            actor=ident.agent_id)
+    return {"error": f"unknown action {action!r} — one of list/resolve"}
 
 
 @mcp.tool()
+async def fold_review(
+    action: str, candidate_id: int | None = None, decision: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE ARCHAEOLOGIST'S TRAY, propose then judge (thread b975851b), two actions over
+    the same agent-identity-merge tray.
+
+    `action='list'` — sweep the registry and disk for anonymous agents that evidence
+    says were never distinct minds (view-aliases: a mount row with no transcript and no
+    daemon receipt, co-resident with a session that has a body; restart-mints: an
+    anonymous mount in a named lineage's own home) and queue them as review-gated merge
+    candidates. PROPOSALS ONLY — nothing folds. Returns the pending tray (score-ranked,
+    each with its cited signals); judge each with `action='resolve'`. Rejected pairs are
+    remembered and never re-proposed. Also carries `unresumed_heads` (ef88e2bb) — a
+    SEPARATE non-fold class, never resolved via this door — a human call each time.
+
+    `action='resolve'` — judge ONE proposal from the tray (`candidate_id`, `decision`
+    both required). `decision='merged'` executes the ESTATE-carrying fold (mail, mount
+    rows, threads land on the living head) — OPERATOR-GATED, ENFORCED: inherits
+    fold_agent's own operator-actor gate unchanged, never a second copy to drift.
+    `decision='rejected'` links the pair not_same_as, never re-proposed — OPEN to any
+    mounted caller, deliberately: a rejection judges two things are NOT the same mind,
+    carrying none of 'merged's blast radius."""
+    return await _fold_review_impl(action, candidate_id=candidate_id, decision=decision,
+                                   ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "fold_review(action='list')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
+async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    fold_review(action='list')."""
+    return await _fold_review_impl("list", candidate_id=None, decision=None, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "fold_review(action='resolve')",
+    "since": "task #202 wave 4 (msg 7034)",
+})
 async def resolve_fold(candidate_id: int, decision: str,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """Judge ONE agent-fold proposal from the tray (fold_candidates): decision='merged'
-    executes the ESTATE-carrying fold (mail, mount rows, threads land on the living
-    head) — OPERATOR-GATED, ENFORCED: inherits fold_agent's own operator-actor gate
-    unchanged, never a second copy to drift. decision='rejected' links the pair
-    not_same_as, never re-proposed — OPEN to any mounted caller, deliberately: a
-    rejection judges two things are NOT the same mind, carrying none of 'merged's blast
-    radius."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first", "why": _anchorless(ctx)}
-    from src.orchestrator.folds import resolve_fold_candidate
-    return await resolve_fold_candidate(Actions(await _pool_get()),
-                                        candidate_id=candidate_id, decision=decision,
-                                        actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    fold_review(action='resolve')."""
+    return await _fold_review_impl("resolve", candidate_id=candidate_id, decision=decision,
+                                   ctx=ctx)
 
 
 @mcp.tool()

@@ -930,6 +930,19 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # retire() and retire_assertion deliberately excluded (see the wave-3 proposal,
     # decision 1ddf8e1c) — different auth shape / genuinely unrelated param shape.
     "retire_object": {"binding_verb": True, "parameterizes": "retire_seat"},
+    # current_flags(action=...) — #202 wave 4 (Thoth dispatch 7034, decision 6fe4305c):
+    # stale_current_flags/repair_stale_current_flags folded into one door (both hidden
+    # deprecated aliases). Not a binding-mover — acts on current_assertions kernel flags,
+    # never seat/project/office state.
+    "current_flags": {"binding_verb": False, "parameterizes": "repair_stale_current_flags"},
+    # fold_review(action=...) — #202 wave 4: fold_candidates/resolve_fold folded into one
+    # door (both hidden deprecated aliases). Not a binding-mover itself — resolve_fold's
+    # decision='merged' branch still inherits fold_agent's own separate operator gate
+    # unchanged, no new binding-write of its own added by the fold.
+    "fold_review": {"binding_verb": False, "parameterizes": "fold_candidates"},
+    # get_object_list(object_type=...) — #202 wave 4: get_thread_list/get_decision_list
+    # folded into one door (both hidden deprecated aliases). Pure read, not a binding-mover.
+    "get_object_list": {"binding_verb": False, "parameterizes": "get_thread_list"},
 }
 
 
