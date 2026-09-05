@@ -1195,9 +1195,9 @@ async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
     await save_composition(actions.pool, "fleet-strip", FLEET_STRIP)
     res = await run_composition(actions.pool, "fleet-strip")
     assert res["kind"] == "data"           # a `sections` op always packages as data
-    assert isinstance(res["items"]["pulse"], str)
-    assert "live" in res["items"]["pulse"]
-    assert "agent:feedface" in str(res["items"]["live_agents"])
+    assert isinstance(res["items"]["pulse (fleet-wide)"], str)
+    assert "live" in res["items"]["pulse (fleet-wide)"]
+    assert "agent:feedface" in str(res["items"]["live_agents (this project only)"])
 
 
 # --- fleet_live / "fleet-live" (rung 2, ruling d42c543b, Thoth msg 1926/1936) — /fleet's
