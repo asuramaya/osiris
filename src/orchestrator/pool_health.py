@@ -29,6 +29,8 @@ from typing import Any
 
 import asyncpg
 
+from src.db.pool import pool_acquire_wait_stats
+
 # Mirrors src/config/settings.py's own defaults — kept here as a fallback ONLY for a
 # caller with no live Settings object to hand (never authoritative; `caps` always prefers
 # a live `get_settings()` read when available, see `pg_activity_by_app`'s own body).
@@ -85,6 +87,13 @@ async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
         "headroom": (max_connections - fixed_budget) if max_connections is not None else None,
         "pg_autotune": await _last_scheduled_run(pool, "job:pg-autotune"),
         "retention_reaper": await _last_scheduled_run(pool, "job:retention-reaper"),
+        # THE ANSWER pg_stat_activity structurally cannot give (thread e4a5755a):
+        # queueing for a free connection happens client-side, before any backend is
+        # touched, so it's invisible to any Postgres-side view — src/db/pool.py's own
+        # acquire()-timing wrapper is the only place this can be measured. `{"count":
+        # 0}` when THIS pool's own acquire was never wrapped (a caller other than
+        # src.db.pool.create_pool) or has never been called yet.
+        "acquire_wait": pool_acquire_wait_stats(pool),
     }
 
 
