@@ -746,13 +746,16 @@ def test_write_attribution_banner_silent_when_agreement_says_so() -> None:
 
 def test_write_attribution_banner_ignores_a_stale_disagreement_flag(
 ) -> None:
-    """Thoth LXXVI's live catch on his own mount: `write_attribution_agreement` is
-    stamped by register_agent BEFORE `_resolve_project_seat_first` runs (deliberately —
-    see that function's own docstring), so a SEATED session's flag can be "disagrees"
-    against the PRE-seat-override project even though `ident.project` is already the
-    POST-override, final value by the time this banner would render. The stored flag
-    said "disagrees"; the two values THIS message would show are equal ("osiris" and
-    "osiris") — the banner must stay silent rather than show itself agreeing with itself."""
+    """Thoth LXXVI's live catch on his own mount: `write_attribution_agreement` compares
+    `ident.project` against the write-attribution MAJORITY project (an independent signal
+    derived from actual write history, thread 6a00e942) — a genuine disagreement there
+    can still exist for reasons that have nothing to do with the register_agent/seat-
+    correction ordering (fixed separately, thread 178e5a41): an agent whose own writes
+    mostly went to a different project than its current seat's house is a real
+    disagreement, not a staleness artifact. Either way, the banner must never show a
+    "disagrees" flag next to two values that are, by the time it renders, equal — the
+    stored flag said "disagrees"; the two values THIS message would show are equal
+    ("osiris" and "osiris") — stay silent rather than show itself agreeing with itself."""
     from src.orchestrator.agents import write_attribution_banner
 
     ident = AgentIdentity(agent_id="agent:wa04", session="wa04", project="osiris",

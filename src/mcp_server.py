@@ -944,9 +944,22 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     polluted stamp go on leaking into every read, the very thing this function exists to
     stop. An UNSEATED session (no holds binding yet — nothing to trust but its own
     resolution) keeps whatever cwd produced, None included; that's an honest 'not mounted to
-    a definite project', not an error. Mutates `ident` in place; call AFTER register_agent
-    (the write gate must still see the FRESH cwd-derived value, unclobbered — a legitimate
-    cwd-derived project still gets asserted for a session that isn't seated yet).
+    a definite project', not an error. Mutates `ident` in place.
+
+    CALLED BEFORE register_agent, NOT AFTER (thread 178e5a41, Thoth dispatch 6713/6724 —
+    this docstring used to say the opposite and that was the bug: register_agent's own
+    project mint read `ident.project` two lines before this correction ran, so a seated
+    session with a non-project-shaped cwd — the bare office slug, the canonical case —
+    minted a phantom SoftwareProject off the pre-correction guess before anyone fixed it).
+    SAFE BEFORE THE MINT FOR EVERY ARRIVAL, proven by a schema constraint: `links.from_id`/
+    `to_id` are `NOT NULL REFERENCES objects(id)`, so a `holds` link cannot exist unless its
+    Agent object already does — a seated result here is proof the object predates THIS
+    call, whichever door resolved `ident.agent_id` (an earlier claim_name, `_bind_before_
+    spawn`, or `office_claim`'s own resolution to an EXISTING lineage head — never a fresh
+    id). An unseated identity is an unconditional no-op regardless of when this runs —
+    `held_seat` cannot match a row that cannot exist yet for an id nothing has ever bound —
+    so a legitimate cwd-derived project for a not-yet-seated session is never at risk
+    either way.
 
     A thin wrapper (msg 1888, the mount/project-resolution pollution build) around
     `seats.resolve_and_persist_seated_project` — the SAME seat-first check
@@ -1029,10 +1042,27 @@ async def _reattach(
     if claimed_office is not None:
         ident.agent_id = claimed_office
         mint_reason = "office-birth"
+    # SEAT-FIRST, BEFORE THE MINT (thread 178e5a41, Thoth dispatch 6713/6724): used to run
+    # AFTER register_agent, two lines too late — register_agent's own project mint
+    # (`_resolve_or_mint_project`, inside its own body) read `ident.project` while it was
+    # still resolve_identity's pre-correction cwd-basename guess, so a seated session with
+    # an office-slug cwd (the bare seats container's own basename, never a real project
+    # name) minted a phantom SoftwareProject before this correction ever ran. Reordered:
+    # SAFE FOR EVERY DOOR, proven by a schema constraint, not merely traced (decision
+    # 92613074/the follow-up to Thoth's own question, "enumerate the ones that DON'T
+    # pre-bind"): `links.from_id`/`to_id` are `NOT NULL REFERENCES objects(id)` — a
+    # `holds` link cannot exist unless the Agent object it names already does. So
+    # `_resolve_project_seat_first` finding a seat is ITSELF proof the underlying object
+    # predates this call (bound by an earlier claim_name, `_bind_before_spawn`, or
+    # `office_claim`'s own resolution to an EXISTING lineage head — never a fresh id) —
+    # never a same-call race with the mint. For a genuinely unseated/fresh identity, this
+    # is an unconditional no-op (`held_seat` returns None — the row it would need to
+    # match cannot exist for an id nothing has ever bound), so ordering never changes that
+    # population's behavior either.
+    await _resolve_project_seat_first(pool, ident)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, rec.cwd, ident.project),
                          mint_reason=mint_reason)
-    await _resolve_project_seat_first(pool, ident)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -2431,6 +2461,15 @@ async def mount(
     if claimed_office is not None:
         ident.agent_id = claimed_office
         mount_mint_reason = "office-birth"
+    # SEAT-FIRST, BEFORE THE MINT (thread 178e5a41, Thoth dispatch 6713/6724) — same fix,
+    # same reasoning as `_reattach`'s own identical reorder just above in this file: a
+    # `holds` link cannot exist unless its Agent object already does (`links.from_id`/
+    # `to_id` are `NOT NULL REFERENCES objects(id)`), so a seated result here is proof the
+    # object predates THIS call, whichever door (bound/forked/viewed/ledgered/bridged/
+    # office_claim) resolved `ident.agent_id`; an unseated/visitor identity is an
+    # unconditional no-op (`held_seat` finds nothing to match), safe to run even before
+    # the registered/visitor branch below decides whether register_agent runs at all.
+    await _resolve_project_seat_first(pool, ident)
     # THE VISITOR GATE, PORTED (#48 piece 2, decision 424c4158): automount() (ruling
     # 120fcc81) has never once minted a stranger from a bare greeting — a genuinely
     # unmatched arrival gets a registry row and NOTHING ELSE, identity earned at the first
@@ -2468,8 +2507,9 @@ async def mount(
     # greatfold.py's `agent_class='visit'` — that property marks an object ALREADY minted
     # and later found to be noise; this gate prevents the mint from happening at all, so
     # there is no object to mark. Deliberately not reused — a second vocabulary for the
-    # same idea is its own kind of drift.
-    await _resolve_project_seat_first(pool, ident)
+    # same idea is its own kind of drift. (`_resolve_project_seat_first` already ran,
+    # above, before the registered/visitor branch — moved there so register_agent's own
+    # project mint sees the corrected value instead of running two lines ahead of it.)
     if job_dir:
         # THE SESSION LEDGER, write side (16e3cee9): the anchor form (sid8) suffices —
         # the ledger keys on the first 8 chars, the harness's own jobs scheme
