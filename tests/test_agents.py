@@ -1587,6 +1587,27 @@ def test_generation_math_is_hex_safe() -> None:
     assert _generation("agent:x-ii") == ("agent:x", 2)
 
 
+def test_generation_overflow_suffix_round_trips_instead_of_re_basing() -> None:
+    """THE REPEATING OVERFLOW (Thoth's own lineage, msg 7606, "-g40-g40-g40"): once a
+    lineage passes 39 generations, `_to_roman` mints a plain `g<N>` suffix (its own
+    documented fallback) — but `_generation` used to be unable to read it back, so the
+    very next mint treated `...-g40` as a brand-new root starting at generation 1,
+    climbing another 39 generations to hit the SAME fallback again. `_generation` must
+    round-trip the g-suffix so `next_generation` climbs linearly past it instead."""
+    from src.orchestrator.agents import _generation, next_generation
+
+    assert next_generation("agent:x-xxxix") == "agent:x-g40"           # the first overflow
+    assert _generation("agent:x-g40") == ("agent:x", 40)               # read back correctly
+    assert next_generation("agent:x-g40") == "agent:x-g41"             # climbs, never resets
+    assert _generation("agent:x-g41") == ("agent:x", 41)
+    assert next_generation("agent:x-g99") == "agent:x-g100"
+    # never a false positive on something that merely LOOKS like the pattern
+    assert _generation("agent:x-g0") == ("agent:x-g0", 1)              # n<=39, not this fallback
+    assert _generation("agent:x-g5") == ("agent:x-g5", 1)              # n<=39, not this fallback
+    assert _generation("agent:x-g040") == ("agent:x-g040", 1)          # leading zero, not emitted
+    assert _generation("agent:x-green") == ("agent:x-green", 1)        # not digits after 'g'
+
+
 async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
     """A never-retired identity re-mounting is an ordinary re-attach — no reanimation flag, no
     stamp. The guard must fire ONLY on a winning retired=true, or every re-mount cries wolf."""

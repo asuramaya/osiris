@@ -172,12 +172,32 @@ def _from_roman(s: str) -> int | None:
 
 
 def _generation(canonical: str) -> tuple[str, int]:
-    """(root, generation) — agent:x is generation 1; agent:x-ii is (agent:x, 2)."""
+    """(root, generation) — agent:x is generation 1; agent:x-ii is (agent:x, 2).
+
+    THE REPEATING OVERFLOW (Thoth's own lineage, msg 7606, 2026-09-05 — the
+    "-g40-g40-g40" specimen): `_to_roman`'s numeric fallback for generation 40+
+    (`f"g{n}"`, see its own docstring) was never parsed back BY THIS FUNCTION — only
+    `_from_roman`'s i/v/x alphabet was recognized. So the instant a lineage first
+    passed 39 generations, `next_generation` correctly minted `...-g40`, but the VERY
+    NEXT call to `_generation` on that id found a suffix ("g40") `_from_roman` can't
+    read, fell through to `return canonical, 1`, and treated the whole `...-g40` string
+    as a brand-new ROOT starting over at generation 1. Climbing another 39 generations
+    from there hit the same fallback again — a second `-g40` — and so on, forever,
+    every 39 generations: Thoth's real generation count was ~118 by the time this
+    fired a THIRD time and minted `...-g40-g40-g40`. Parsing the `g<N>` suffix here
+    (N>39, the only range `_to_roman` ever emits it for, and only in the exact digit
+    form it emits — no leading zeros, nothing `_to_roman` itself wouldn't produce)
+    closes the loop: `next_generation` on `...-g40` now correctly yields `...-g41`,
+    not another reset."""
     root, sep, suffix = canonical.rpartition("-")
     if sep and root:
         g = _from_roman(suffix)
         if g is not None and g >= 2:
             return root, g
+        if suffix.startswith("g") and suffix[1:].isdigit():
+            n = int(suffix[1:])
+            if n > 39 and str(n) == suffix[1:]:
+                return root, n
     return canonical, 1
 
 
