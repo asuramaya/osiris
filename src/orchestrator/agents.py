@@ -323,14 +323,20 @@ async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
     statusline read "Chad" not from Seat.house at all but from exactly this field, stamped
     "Chad" at a pre-cf201a9 mint from the handle).
 
-    KEPT DELIBERATELY NARROW: the two remaining callers (`correct_agent_house`'s own
-    before/after snapshot, `claim_name`'s generation-counting `seat_holders` comparison)
-    both need the RAW historical stamp, not a resolved display value — an audit "before"
-    field showing a resolved fallback instead of what was actually stored would misreport
-    the correction, and generation-counting must compare raw stamps to raw stamps or it
-    silently renumbers history. Every OTHER caller wants `project_of` instead — the
-    resolving reader (pin -> charter -> works_in, never a raw copy) this function's old,
-    misleading callers were migrated to."""
+    KEPT DELIBERATELY NARROW: the three remaining callers (`correct_agent_house`'s own
+    before/after snapshot, `claim_name`'s generation-counting `seat_holders` comparison,
+    `mint_heir`'s own identical generation count) all need the RAW historical stamp, not
+    a resolved display value — an audit "before" field showing a resolved fallback
+    instead of what was actually stored would misreport the correction, and generation-
+    counting must compare raw stamps to raw stamps or it silently renumbers history.
+    Every OTHER caller wants `project_of` instead — the resolving reader (pin -> charter
+    -> works_in, never a raw copy) this function's old, misleading callers (`rebind_seat`
+    most recently, thread c5a91ea1) were migrated to. ONE further caller stays on
+    purpose, not migration-eligible: `compositions._caller_house` — deliberately
+    NOT this function's own concern, it answers a security-relevant HOUSE/ACL question
+    (ruling ff6148b0, cross-house reflection visibility), only falling back to this raw
+    project stamp when a caller has no derived Seat.house at all; migrating that fallback
+    to `project_of` would answer a different question than the one it asks."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='project' "

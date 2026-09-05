@@ -26,6 +26,20 @@ from src.orchestrator.offices import _default_office_root
 NOW = datetime.now(UTC)
 
 
+async def _seed_works_in(actions: Actions, agent_id: str, project: str, source: str,
+                         when: datetime) -> None:
+    """A real works_in edge alongside the raw `project` stamp fixtures here already write —
+    project_of (agents.py) resolves through lineage_works_in, never a bare stamp with
+    nothing behind it, so a fixture missing this edge is a fixture lying about how real
+    mounts actually work (thread c5a91ea1/19d6bdcb7fa9)."""
+    a = await actions.create_or_find_object("Agent", agent_id, source)
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
+    await actions.assert_property(proj, "name", project, source, when, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(a, proj, "works_in", source, when, 0.9,
+                              evidence_class="self_declared")
+
+
 async def test_rebind_moves_the_anchor_preserving_everything(
     actions: Actions, tmp_path: Path
 ) -> None:
@@ -86,6 +100,8 @@ async def test_rebind_moves_every_generation_of_the_lineage(
     oid = await actions.create_or_find_object("Agent", "agent:multi", "agent:multi")
     await actions.assert_property(oid, "project", "multihouse", "agent:multi",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:multi", "multihouse", "agent:multi",
+                         datetime.now(UTC))
     await claim_name(actions, "agent:multi", "Multi", source="agent:multi")
     await mounts.save_mount(actions.pool, job_dir="/j/multi-1", agent_id="agent:multi",
                             project="multihouse", cwd=str(a_dir), model="claude-fable-5",
@@ -111,6 +127,8 @@ async def test_rebind_of_a_raw_agent_id_works(actions: Actions, tmp_path: Path) 
     oid = await actions.create_or_find_object("Agent", "agent:rawid01", "agent:rawid01")
     await actions.assert_property(oid, "project", "rawhouse", "agent:rawid01",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:rawid01", "rawhouse", "agent:rawid01",
+                         datetime.now(UTC))
     await mounts.save_mount(actions.pool, job_dir="/j/rawid01", agent_id="agent:rawid01",
                             project="rawhouse", cwd=str(a_dir), model=None, session_key="k")
 
@@ -241,6 +259,7 @@ async def test_rebind_seat_carries_the_harness_half(actions: Actions, tmp_path: 
     now = datetime.now(UTC)
     await actions.assert_property(a, "project", "movinghouse", "agent:wwww0001", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:wwww0001", "movinghouse", "agent:wwww0001", now)
     await save_mount(actions.pool, job_dir="/jobs/wwww0001", agent_id="agent:wwww0001",
                      project="movinghouse", cwd=old_cwd, model=None, session_key=None)
     root = tmp_path / "projects"
@@ -285,6 +304,7 @@ async def test_extraction_takes_only_the_seats_own_lineage(
     a = await actions.create_or_find_object("Agent", "agent:cafe77aa", "agent:cafe77aa")
     await actions.assert_property(a, "project", "butlerhouse", "agent:cafe77aa", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:cafe77aa", "butlerhouse", "agent:cafe77aa", now)
     await actions.assert_property(a, "session", "cafe77aa", "agent:cafe77aa", now, 0.9,
                                   evidence_class="self_declared")
     await save_mount(actions.pool, job_dir="/jobs/cafe77aa", agent_id="agent:cafe77aa",
@@ -330,6 +350,7 @@ async def test_extraction_carries_a_registry_less_lineage_by_transcript_evidence
     a = await actions.create_or_find_object("Agent", "agent:beadfeed", "agent:beadfeed")
     await actions.assert_property(a, "project", "orphanhouse", "agent:beadfeed", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:beadfeed", "orphanhouse", "agent:beadfeed", now)
     await actions.assert_property(a, "session", "beadfeed", "agent:beadfeed", now, 0.9,
                                   evidence_class="self_declared")
     root = tmp_path / "projects"
@@ -386,6 +407,7 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
     a = await actions.create_or_find_object("Agent", "agent:dddd77bb", "agent:dddd77bb")
     await actions.assert_property(a, "project", "anchorhouse", "agent:dddd77bb", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:dddd77bb", "anchorhouse", "agent:dddd77bb", now)
     await save_mount(actions.pool, job_dir="/jobs/dddd77bb", agent_id="agent:dddd77bb",
                      project="anchorhouse", cwd=old, model=None, session_key=None)
     seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves",
@@ -454,6 +476,7 @@ async def test_rebind_off_office_root_moves_the_footprint_but_never_anchor_cwd(
     a = await actions.create_or_find_object("Agent", "agent:jeeves3", "agent:jeeves3")
     await actions.assert_property(a, "project", "anchorhouse", "agent:jeeves3", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:jeeves3", "anchorhouse", "agent:jeeves3", now)
     await save_mount(actions.pool, job_dir="/jobs/jeeves3", agent_id="agent:jeeves3",
                      project="anchorhouse", cwd=office, model=None, session_key=None)
     seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves3",
@@ -760,6 +783,7 @@ async def test_wholesale_rebind_repoints_the_co_residents_too(
     a = await actions.create_or_find_object("Agent", "agent:abbe0001", "agent:abbe0001")
     await actions.assert_property(a, "project", "movers", "agent:abbe0001", now, 0.9,
                                   evidence_class="self_declared")
+    await _seed_works_in(actions, "agent:abbe0001", "movers", "agent:abbe0001", now)
     await save_mount(actions.pool, job_dir="/jobs/abbe0001", agent_id="agent:abbe0001",
                      project="movers", cwd=old, model=None, session_key=None)
     await save_mount(actions.pool, job_dir="/jobs/cafe0002", agent_id="agent:cafe0002",
@@ -796,6 +820,7 @@ async def test_rebind_refuses_a_third_party_rebind_of_a_live_seat(
     a_dir.mkdir()
     oid = await actions.create_or_find_object("Agent", "agent:rbg1worker", "test")
     await actions.assert_property(oid, "project", "rbg1", "test", NOW, 0.9)
+    await _seed_works_in(actions, "agent:rbg1worker", "rbg1", "test", NOW)
     await mounts.save_mount(actions.pool, job_dir="/j/dddddddd", agent_id="agent:rbg1worker",
                             project="rbg1", cwd=str(a_dir), model=None, session_key=None)
     out = await rebind_seat(
@@ -818,6 +843,7 @@ async def test_rebind_self_of_a_live_seat_stays_open(actions: Actions, tmp_path:
     a_dir.mkdir()
     oid = await actions.create_or_find_object("Agent", "agent:rbg2self", "test")
     await actions.assert_property(oid, "project", "rbg2", "test", NOW, 0.9)
+    await _seed_works_in(actions, "agent:rbg2self", "rbg2", "test", NOW)
     await mounts.save_mount(actions.pool, job_dir="/j/eeeeeeee", agent_id="agent:rbg2self",
                             project="rbg2", cwd=str(a_dir), model=None, session_key=None)
     out = await rebind_seat(
@@ -835,6 +861,7 @@ async def test_rebind_self_of_a_live_seat_stays_open(actions: Actions, tmp_path:
 async def test_rebind_force_without_because_refuses(actions: Actions, tmp_path: Path) -> None:
     oid = await actions.create_or_find_object("Agent", "agent:rbg3", "test")
     await actions.assert_property(oid, "project", "rbg3", "test", NOW, 0.9)
+    await _seed_works_in(actions, "agent:rbg3", "rbg3", "test", NOW)
     await mounts.save_mount(actions.pool, job_dir="/j/rbg3", agent_id="agent:rbg3",
                             project="rbg3", cwd=str(tmp_path / "a"), model=None,
                             session_key=None)
@@ -852,6 +879,7 @@ async def test_rebind_force_overrides_a_third_party_live_refusal(
     a_dir.mkdir()
     oid = await actions.create_or_find_object("Agent", "agent:rbg4worker", "test")
     await actions.assert_property(oid, "project", "rbg4", "test", NOW, 0.9)
+    await _seed_works_in(actions, "agent:rbg4worker", "rbg4", "test", NOW)
     await mounts.save_mount(actions.pool, job_dir="/j/ffffffff", agent_id="agent:rbg4worker",
                             project="rbg4", cwd=str(a_dir), model=None, session_key=None)
     out = await rebind_seat(

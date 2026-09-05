@@ -2219,8 +2219,17 @@ async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
     Path(old_cwd).mkdir()
 
     a = await actions.create_or_find_object("Agent", "agent:rebindo1", "agent:rebindo1")
+    now = datetime.now(UTC)
     await actions.assert_property(a, "project", "rebindland", "agent:rebindo1",
-                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+                                  now, 0.9, evidence_class="self_declared")
+    # project_of (agents.py) resolves through lineage_works_in, never a bare project
+    # stamp with nothing behind it — a real mount always pairs the two (thread c5a91ea1).
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rebindland",
+                                               "agent:rebindo1")
+    await actions.assert_property(proj, "name", "rebindland", "agent:rebindo1", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(a, proj, "works_in", "agent:rebindo1", now, 0.9,
+                              evidence_class="self_declared")
     await claim_name(actions, "agent:rebindo1", "Rebindo", source="agent:rebindo1")
     await srv.mounts.save_mount(actions.pool, job_dir="/jobs/rebindo1", agent_id="agent:rebindo1",
                                 project="rebindland", cwd=old_cwd, model="claude-sonnet-5",
