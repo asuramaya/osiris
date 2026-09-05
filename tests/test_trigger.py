@@ -4059,6 +4059,53 @@ async def test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage(
     assert row["canonical"] == "agent:38cf08a9-ii"
 
 
+async def test_bind_before_spawn_confesses_a_legacy_lineage_source_without_changing_it(
+    actions: Actions,
+) -> None:
+    """MSG 7059's OWN RULING: the 17-seat mint_seat landmine (a manager's own id shared
+    as the `handle` assertion source across every worker it minted) gets NO behavior
+    change for seats that already exist — this specimen's ancestor resolution is
+    UNCHANGED from test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage right
+    above it, same inputs, same output agent/generation. The only difference: the
+    receipt now carries a one-line `legacy_lineage_warning` naming the pre-fix source,
+    so a human watching launches can catch the exposure without this function ever
+    refusing or rewriting anything about the mint itself."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
+                                 source="agent:38cf08a9"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee", house="dealer-to-fb",
+        current_holder="agent:38cf08a9", office="/tmp/marquee",
+        anchor="/tmp/anchors/marquee", source="agent:thoth01")
+
+    assert out["agent"] == "agent:38cf08a9-ii"  # UNCHANGED from the plain-lineage case
+    assert "legacy_lineage_warning" in out
+    assert "agent:38cf08a9" in out["legacy_lineage_warning"]
+    assert seat_id in out["legacy_lineage_warning"]
+
+
+async def test_bind_before_spawn_never_confesses_a_post_fix_founder_source(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE NEGATIVE CONTROL: a seat founded AFTER this fix (a real _FOUNDER_SOURCE_PREFIX
+    source, same as the console/no-handle-assertion cases) never carries the confession
+    — there is nothing to confess, since _seat_lineage_ancestor already excludes it and
+    this mints a genuinely fresh root, not an inherited one."""
+    from src.orchestrator.mintseat import found_seat
+
+    seat_id = (await found_seat(actions, handle="Postfixa", path=str(tmp_path / "ws"),
+                                actor="khnum", office_root=tmp_path / "seats"))["seat_id"]
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Postfixa", house="Postfixa",
+        current_holder=None, office="/tmp/postfixa", anchor="/tmp/anchors/postfixa",
+        source="agent:thoth01")
+
+    assert "legacy_lineage_warning" not in out
+    assert out["agent"] == f"agent:seat-{seat_id.removeprefix('seat:')}"
+
+
 async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds_edge(
     actions: Actions,
 ) -> None:

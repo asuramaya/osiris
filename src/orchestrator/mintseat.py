@@ -315,14 +315,29 @@ async def mint_seat(
             return {"error": f"cross-house mint refused: {manager!r} (house "
                              f"{manager_house!r}) may not mint a seat in house {house!r} — "
                              "only the operator's own hand crosses a house boundary"}
+        # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d,
+        # msg 7059's own follow-on ruling): the SAME defect found_seat had — two seats
+        # minted under the same manager/actor sharing that actor's own id as their
+        # `handle` assertion source, which _seat_lineage_ancestor later trusts as each
+        # seat's founding lineage — measured live at production scale for mint_seat: 17
+        # real managed seats all share their minting manager's own agent id this way,
+        # all resolving to that manager's CURRENT lineage head today. `handle` is
+        # globally unique (claim_name enforces it), so prefixing it can never collide
+        # across seats no matter how many workers one manager mints.
         seat_result = await ensure_seat(
-            actions, house=resolved_house, handle=handle, source=actor,
-            anchor_cwd=str(office_path))
+            actions, house=resolved_house, handle=handle,
+            source=f"{_FOUNDER_SOURCE_PREFIX}{handle}", anchor_cwd=str(office_path))
         if "error" in seat_result:
             return seat_result
         worker_seat_id = seat_result["seat_id"]
         worker_house = resolved_house
         seat_minted = bool(seat_result["minted"])
+        if seat_minted:
+            _founder_obj = await actions.create_or_find_object(
+                "Seat", worker_seat_id, actor)
+            await actions.assert_property(
+                _founder_obj, "founded_by", actor, actor, now, _CONF,
+                evidence_class=_EC)
 
     # THE OFFICE SCAFFOLD (assignment 3's templates): a fresh mint always scaffolds; an
     # ADOPTED seat scaffolds FILL-MISSING-ONLY (ruling 7cffda8f — an operator-made shell
