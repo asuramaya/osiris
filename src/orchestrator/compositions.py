@@ -1183,13 +1183,21 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     # "visitor" at all and would happily match the shorter, ILIKE-friendliest sidechain label.
     from src.actions.core import Actions
     from src.orchestrator.agents import resolve_seat
+    from src.orchestrator.seats import seat_holder_ineligible
 
-    seat = await resolve_seat(Actions(pool), ref)
-    if seat.get("agent"):
-        oid = await pool.fetchval(
-            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", seat["agent"])
-        if oid is not None:
-            return uuid.UUID(str(oid))
+    # THE SAME GUARD send()/doors() USE (60bc15db specimen 3, rulings 1a64ae9a/aee67e6d):
+    # a name whose unique seat has only ineligible holders would otherwise fall to
+    # resolve_seat's un-seated-lineage fallback and confidently resolve a dossier/focus_
+    # object lookup to some OTHER, older, unmarked generation. Falls through to the
+    # generic name-matching legs below rather than refusing outright — this resolver has
+    # other real legs left to try, unlike a pure address-resolution door.
+    if await seat_holder_ineligible(pool, ref) is None:
+        seat = await resolve_seat(Actions(pool), ref)
+        if seat.get("agent"):
+            oid = await pool.fetchval(
+                "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", seat["agent"])
+            if oid is not None:
+                return uuid.UUID(str(oid))
     for predicate, order in (
         ("lower(a.value #>> '{}') = lower($1)",
          "(SELECT count(*) FROM current_assertions x WHERE x.object_id=a.object_id) DESC"),
