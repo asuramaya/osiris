@@ -109,9 +109,11 @@ async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict
         "   AND a.name='on_disk_path' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS path, "
         " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
-        "  WHERE l.to_id=p.id AND l.type='in_repo') AS commits, "
+        "  WHERE l.to_id=p.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now())) AS commits, "
         " (SELECT count(*) FROM links l JOIN objects m ON m.id=l.from_id "
-        "  WHERE l.to_id=p.id AND l.type='in_repo') AS activity "
+        "  WHERE l.to_id=p.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now())) AS activity "
         "FROM objects p WHERE p.type='SoftwareProject' AND p.status='active' "
         "ORDER BY commits DESC, activity DESC")
     last_ingested = {
@@ -417,6 +419,7 @@ async def _member_texts(pool: asyncpg.Pool, repo_id: Any) -> str:
         "   AS status, "
         " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE l.to_id=$1 AND o.status='active' AND o.type IN ('Thread','Decision') "
         "ORDER BY (o.type = 'Thread' AND EXISTS (SELECT 1 FROM current_assertions s "
         "  WHERE s.object_id=o.id AND s.name='status' AND s.value #>> '{}' = 'open')) DESC, "

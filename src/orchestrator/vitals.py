@@ -81,6 +81,7 @@ async def operator_debts(db: _DB, *, hood: str | None = None) -> dict[str, int]:
         "  (SELECT replace(p.canonical,'repo:','') FROM links l "
         "    JOIN objects p ON p.id=l.to_id "
         "    WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
+        "    AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "    ORDER BY l.created_at DESC LIMIT 1) AS hood "
         "  FROM objects o WHERE o.type='Thread' AND o.status='active' "
         "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "

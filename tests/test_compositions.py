@@ -996,6 +996,31 @@ async def test_fn_wall_orient_surface_shows_the_corrected_summary_by_default(
     assert out["wall"][0]["summary"] == "the census undercounts, not the pulse"
 
 
+async def test_open_thread_wall_never_double_counts_a_thread_with_a_retracted_in_repo_link(
+    actions: Actions,
+) -> None:
+    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): `open_thread_wall`'s own main JOIN onto
+    `links` (the single-project wall `_fn_wall(pool, subject, {})` renders, same surface
+    orient() shows) had no `valid_until` filter — the same defect class as the ramstein
+    double-thread specimen (thread 1ba9d9be), on a DIFFERENT implementation of a near-
+    identical query than get_thread_list's own (already fixed). A thread whose `in_repo`
+    edge was retracted and re-created must appear on the wall exactly once."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import _fn_wall
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wallrefile", "test")
+    await actions.assert_property(proj, "name", "wallrefile", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "a thread whose repo link gets refiled",
+                            repo="wallrefile", source="agent:me")
+    await actions.invalidate_link(tid, proj, "in_repo", "agent:me", NOW)
+    await actions.create_link(tid, proj, "in_repo", "agent:me", NOW, 0.9)
+
+    out = await _fn_wall(actions.pool, proj, {})
+    assert len(out["wall"]) == 1  # exactly once, not twice
+    assert out["wall"][0]["summary"] == "a thread whose repo link gets refiled"
+
+
 # The end-to-end proof that a composition's own output fed chrome.py's render_composition
 # with no adapter RETIRED alongside it (task #96, second cut, 2026-07-30) — the shared
 # {kind,items} contract now runs solely through osiris.js's table()/renderResult, exercised
@@ -2367,3 +2392,29 @@ async def test_fn_wall_totals_declares_unfiled_repo_less_threads(actions: Action
     project_row = next(p for p in out["projects"] if p["project"] == "repo:wallproj")
     assert project_row["open"] == 1                        # only the filed one, by construction
     assert "unfiled" in out["totals"]["reads"]
+
+
+async def test_fn_wall_never_double_counts_a_thread_with_a_retracted_in_repo_link(
+    actions: Actions,
+) -> None:
+    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): `_fn_wall`'s per-project GROUP BY and
+    its fleet-wide `totals` both JOIN onto `links` with no `valid_until` filter — the same
+    defect class as the ramstein double-thread specimen (thread 1ba9d9be), one level up:
+    there it duplicated a LIST, here it would have inflated a COUNT that feeds the exact
+    'the numbers don't add up' complaint (operator, 2026-07-12) this module's own totals
+    were built to end. A thread whose `in_repo` edge was retracted and re-created (an
+    ordinary fold/re-file) must count exactly once, in exactly one project's bucket."""
+    from src.orchestrator.capture import open_thread
+
+    t = await open_thread(actions, "a thread whose repo link gets refiled",
+                          repo="wallproj2", source="agent:me")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", "repo:wallproj2")
+    await actions.invalidate_link(t, proj, "in_repo", "agent:me", NOW)
+    await actions.create_link(t, proj, "in_repo", "agent:me", NOW, 0.9)
+
+    out = await _fn_wall(actions.pool, None, {})
+    assert out["totals"]["open"] == 1                       # not 2
+    project_row = next(p for p in out["projects"] if p["project"] == "repo:wallproj2")
+    assert project_row["open"] == 1                         # not 2
+    assert len(out["top_of_wall"]) == 1  # not duplicated on the top-of-wall list too

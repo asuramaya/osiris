@@ -87,6 +87,20 @@ async def test_retire_project_refuses_a_project_with_a_commit(actions: Actions) 
     assert row["status"] == "active"
 
 
+async def test_retire_project_ignores_a_retracted_commit_link(actions: Actions) -> None:
+    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): the commit-count refusal check counted
+    ANY `in_repo` edge, live or retracted — so a project whose only commit link was
+    invalidated (e.g. by a fold that moved the commit to its surviving project) would
+    still read as having "live signal" and refuse a legitimate retirement forever."""
+    pid = await actions.create_or_find_object("SoftwareProject", "repo:had-commits", "test")
+    await actions.assert_property(pid, "name", "had-commits", "test", NOW, 0.9)
+    c = await actions.create_or_find_object("Commit", "commit:c-retracted", "test")
+    await actions.create_link(c, pid, "in_repo", "test", NOW, 0.9)
+    await actions.invalidate_link(c, pid, "in_repo", "test", NOW)
+    out = await retire_project(actions, project="had-commits", actor="agent:test", because="reap")
+    assert out["retired_project"] == "repo:had-commits"
+
+
 async def test_retire_project_refuses_a_project_with_an_open_thread(actions: Actions) -> None:
     pid = await actions.create_or_find_object("SoftwareProject", "repo:has-thread", "test")
     await actions.assert_property(pid, "name", "has-thread", "test", NOW, 0.9)

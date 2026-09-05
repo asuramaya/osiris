@@ -60,7 +60,8 @@ async def _snapshot(pool: Any) -> dict[str, Any]:
             "        AND a.name='name' "
             "        ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name, "
             " (SELECT count(*) FROM links l JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
-            "  WHERE l.to_id=o.id AND l.type='in_repo') AS c "
+            "  WHERE l.to_id=o.id AND l.type='in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now())) AS c "
             "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active'")
         if r["name"]
     }

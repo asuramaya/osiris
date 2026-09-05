@@ -51,6 +51,7 @@ async def _existing_shas(pool: Any, project_id: Any) -> set[str]:
     rows = await pool.fetch(
         "SELECT replace(c.canonical, 'commit:', '') AS short FROM objects c "
         "JOIN links l ON l.from_id=c.id AND l.type='in_repo' AND l.to_id=$1 "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE c.type='Commit' AND c.status='active'", project_id)
     return {r["short"] for r in rows}
 

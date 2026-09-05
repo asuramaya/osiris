@@ -1148,6 +1148,7 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS d, "
         " (SELECT replace(p.canonical,'repo:','') FROM links l JOIN objects p ON p.id=l.to_id "
         "   WHERE l.from_id=o.id AND l.type='in_repo' AND p.type='SoftwareProject' "
+        "   AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "   ORDER BY l.created_at DESC LIMIT 1) AS proj "
         "FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' "

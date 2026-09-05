@@ -116,14 +116,16 @@ async def mine_threads(
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date, "
         # the OWNER, carried from the commit that raised the thread — the seat that will one day
         # have to judge this guess. It was always one join away.
-        " (SELECT l.to_id FROM links l WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS repo "
+        " (SELECT l.to_id FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "   AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) AS repo "
         "FROM objects o WHERE o.type='Commit'"
     )
     # create_link is a plain append — dedup the noted_in edge so a re-mine never inflates
     existing = {(r["from_id"], r["to_id"]) for r in
                 await pool.fetch("SELECT from_id, to_id FROM links WHERE type='noted_in'")}
     filed = {(r["from_id"], r["to_id"]) for r in
-             await pool.fetch("SELECT from_id, to_id FROM links WHERE type='in_repo'")}
+             await pool.fetch("SELECT from_id, to_id FROM links WHERE type='in_repo' "
+                              "AND (valid_until IS NULL OR valid_until > now())")}
     threads = 0
     produced: set[str] = set()
     for r in rows:
