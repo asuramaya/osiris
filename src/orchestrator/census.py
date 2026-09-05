@@ -85,6 +85,18 @@ def _proc_exe(pid: int) -> str | None:
         return None
 
 
+def _proc_cmdline(pid: int) -> bytes:
+    """The raw NUL-separated argv `osiris_hook.py`'s own `_is_bg_spare_process` already
+    reads for its PARENT (`b"bg-spare" in cmdline`) — same probe, any pid, so a
+    server-side reader (the deploy gate) can ask the same question about a MATCHED
+    harness body instead of only a process's own view of itself. Empty bytes on the same
+    vanished-process race the sibling probes above absorb — never raises."""
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return b""
+
+
 def _is_claude_body(exe: str | None) -> bool:
     """Confirms `exe` is really the packaged claude binary (`.../claude/versions/<ver>`) and
     not some other process that happens to share `claude`'s truncated 15-char `comm` field —

@@ -1982,7 +1982,10 @@ async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
         return False, f"whisper probe: REFUSED — /automount round-trip failed: {exc}"
 
 
-async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+async def _real_check_false_mint_live(
+    pool: asyncpg.Pool, *, agents_json: Any = None, read_exe: Any = None,
+    read_cwd: Any = None, read_cmdline: Any = None,
+) -> list[dict[str, Any]]:
     """DEPLOY GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb, 2026-08-18:
     "prevent weird forking like that and reject it architecturally"): a generation
     carrying false_mint=true with a LIVE mount is a candidate for the exact zero-turn
@@ -2007,21 +2010,55 @@ async def _real_check_false_mint_live(pool: asyncpg.Pool) -> list[dict[str, Any]
     resurrect a bodiless generation, manufacturing the exact phantom a correct fold
     already cleaned up (the inverse of #190's Deckard case). Returns one dict per
     offending canonical (empty = clean); `cmd_deploy` owns picking the remedy text per
-    bucket, never this function (a query has no business writing prose)."""
-    from src.orchestrator.agents import is_occupied_by_a_live_body
+    bucket, never this function (a query has no business writing prose).
 
+    TWO SPECIMENS THAT MUST NEVER BLOCK (Thoth msg 7542 item 3 — five deploys,
+    abc056a/89d4605/cc3e4a3/eda0459/f66654a, ran unrecorded over agent:2464d3ad-ii): the
+    bg-spare mount-row heartbeat bug (task #204, msg 6997, test_osiris_hook.py's own
+    comment) left a false_mint=true generation's `agent_mounts` row refreshing for a
+    while after phantom-fold had ALREADY correctly retired it — a heartbeat earned by a
+    process that was never the mind it claimed to be. (1) A candidate already carrying
+    `retired=true` is a generation the fleet deliberately closed; whatever its stale
+    mount row still says, it can never be the halcyon "genuinely live body wrongly
+    folded" shape this gate exists to catch, so it is excluded from the query itself.
+    (2) Independently — for a candidate that isn't (yet) retired — if EVERY harness body
+    `registry_census` matches to it is itself a `claude bg-spare` pre-warm process
+    (checked the same way the whisper hook checks itself, `_is_bg_spare_process`'s own
+    `/proc/<pid>/cmdline` probe, just server-side against an arbitrary pid instead of
+    self), it is excluded too: a spare backing the row is never a genuine occupant, no
+    matter how fresh `last_seen` reads."""
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    from src.orchestrator.census import _proc_cmdline
+    from src.orchestrator.mounts import registry_census
+
+    read_cmdline = read_cmdline or _proc_cmdline
     rows = await pool.fetch(
         "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
         "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='false_mint' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "  = 'true' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='retired' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  IS DISTINCT FROM 'true' "
         "AND EXISTS (SELECT 1 FROM agent_mounts m WHERE m.agent_id=o.canonical "
         "  AND m.last_seen > now() - interval '900 seconds') "
         "ORDER BY o.canonical")
+    if not rows:
+        return []
+    census = await registry_census(
+        pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+    matched = census.get("matched", [])
     out: list[dict[str, Any]] = []
     for r in rows:
-        occupied = await is_occupied_by_a_live_body(pool, r["canonical"])
-        out.append({"agent_id": r["canonical"], "harness_confirmed_live": occupied})
+        cid = r["canonical"]
+        occupied = await is_occupied_by_a_live_body(
+            pool, cid, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
+        if occupied:
+            pids = [m["pid"] for m in matched
+                   if m.get("agent_id") == cid and isinstance(m.get("pid"), int)]
+            if pids and all(b"bg-spare" in read_cmdline(p) for p in pids):
+                continue  # every body backing this candidate is a spare, not an occupant
+        out.append({"agent_id": cid, "harness_confirmed_live": occupied})
     return out
 
 
