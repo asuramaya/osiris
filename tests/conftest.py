@@ -322,9 +322,35 @@ _TEST_OFFICE_ROOT = Path(tempfile.mkdtemp(prefix=f"osiris-test-seats-{os.getpid(
 os.environ["OSIRIS_OFFICE_ROOT"] = str(_TEST_OFFICE_ROOT)
 
 
+def _default_basetemp() -> str:
+    """THE ENOSPC INCIDENT'S OWN ROOT CAUSE (obligation a867ae37, found while building its
+    own early-warning instrument): this PID-keyed basetemp used to be a LITERAL "/tmp/..."
+    path, never derived from `$TMPDIR` — so every gate run following the house's own
+    documented convention ("TMPDIR=/var/tmp/osiris-scratch .venv/bin/pytest ...") still
+    wrote its basetemp (every tmp_path fixture's actual files) straight onto the
+    constrained tmpfs regardless, UNCLEANED, forever (pytest's own retention-pruning only
+    ever revisits its OWN auto-numbered default basetemp naming, never a caller-supplied
+    one — a fresh PID every invocation means no run ever revisits, let alone prunes, a
+    previous run's now-orphaned directory). Confirmed live: 92 leftover `/tmp/pt-<pid>`
+    trees from one ordinary day of fleet activity already accounted for 233,279 of
+    235,301 files under /tmp (99.1%) at measurement time.
+
+    `$TMPDIR` now WINS when the caller (gate_hook.py, or a human following the same
+    convention) sets it, same respect-for-caller-intent `pytest_configure` already gives
+    an explicit `--basetemp`; absent that, `/var/tmp` (real disk, 507G free, no fixed
+    inode ceiling the way tmpfs has) is the new default rather than `/tmp` — the same
+    non-tmpfs choice gate_hook.py's own `_SAFE_TMPDIR` already encodes, now the
+    UNCONDITIONAL default instead of something a caller has to remember to request. The
+    PID-keyed shortening itself (msg 2261's own AF_UNIX sun_path-length fix) is
+    unchanged — `/var/tmp` costs 4 more bytes than `/tmp`, comfortably inside the margin
+    that fix bought back."""
+    base = os.environ.get("TMPDIR") or "/var/tmp"
+    return f"{base}/pt-{os.getpid()}"
+
+
 def pytest_configure(config: pytest.Config) -> None:
     if config.option.basetemp is None:
-        config.option.basetemp = f"/tmp/pt-{os.getpid()}"
+        config.option.basetemp = _default_basetemp()
     if hasattr(config, "workerinput"):
         wi = config.workerinput  # type: ignore[attr-defined]
         _install_live_db_guard(str(wi["pg_host"]), str(wi["pg_port"]))

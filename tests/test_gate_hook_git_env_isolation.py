@@ -39,7 +39,7 @@ def _local_email(repo: Path) -> str:
 
 
 def test_pytest_env_drops_every_git_variable() -> None:
-    scrubbed = gate_hook._pytest_env(
+    scrubbed, note = gate_hook._pytest_env(
         {"GIT_DIR": "/real/.git", "GIT_INDEX_FILE": "/real/.git/index",
          "GIT_WORK_TREE": "/real", "PATH": "/usr/bin", "HOME": "/home/x"},
         {"TMPDIR": "/var/tmp/osiris-scratch"})
@@ -48,11 +48,12 @@ def test_pytest_env_drops_every_git_variable() -> None:
     assert scrubbed["PATH"] == "/usr/bin"
     assert scrubbed["HOME"] == "/home/x"
     assert scrubbed["TMPDIR"] == "/var/tmp/osiris-scratch"
+    assert note is None  # a safe TMPDIR relocates nothing and says nothing
 
 
 def test_git_vars_are_removed_not_blanked() -> None:
     """An empty GIT_DIR is not "unset" -- it is a git dir whose path is "", equally wrong."""
-    scrubbed = gate_hook._pytest_env({"GIT_DIR": "/real/.git"}, {})
+    scrubbed, _note = gate_hook._pytest_env({"GIT_DIR": "/real/.git"}, {})
     assert "GIT_DIR" not in scrubbed
 
 
@@ -72,10 +73,49 @@ def test_scrubbed_env_cannot_write_through_to_the_real_repo(tmp_path: Path) -> N
 
     subprocess.run(["git", "-C", str(real), "config", "user.email", "real@real"], check=True)
 
+    scrubbed_env, _note = gate_hook._pytest_env(poisoned, {})
     subprocess.run(["git", "-C", str(iso), "config", "user.email", "scrubbed@scrubbed"],
-                   env=gate_hook._pytest_env(poisoned, {}), check=True)
+                   env=scrubbed_env, check=True)
     assert _local_email(real) == "real@real", "the real repo was still written through to"
     assert _local_email(iso) == "scrubbed@scrubbed", "the isolated repo missed its own write"
+
+
+# --- obligation 13d3ddbf: the gate must never measure the box it runs on ------------------
+
+def test_pytest_env_relocates_a_tmpdir_nested_under_a_jobs_tree() -> None:
+    """THE INCIDENT: a gate run whose TMPDIR sits under a live jobs/sessions tree makes
+    job-anchor tests read the RUNNER's own job id instead of a synthetic test one
+    (measured live, test_spawned_wake_carries_a_durable_job_dir_anchor). Relocates rather
+    than refuses, and says so via the returned note — never silent, never a hard failure
+    over an environment variable the gate can fix itself."""
+    scrubbed, note = gate_hook._pytest_env(
+        {"PATH": "/usr/bin"},
+        {"TMPDIR": "/home/user/.claude/jobs/abc123/tmp"})
+    assert scrubbed["TMPDIR"] == gate_hook._SAFE_TMPDIR
+    assert note is not None
+    assert "13d3ddbf" in note and "jobs/abc123" in note
+
+
+def test_pytest_env_relocates_a_tmpdir_nested_under_a_sessions_tree() -> None:
+    scrubbed, note = gate_hook._pytest_env(
+        {"PATH": "/usr/bin"}, {"TMPDIR": "/home/user/.dsh/sessions/workspace/run-1/tmp"})
+    assert scrubbed["TMPDIR"] == gate_hook._SAFE_TMPDIR
+    assert note is not None
+
+
+def test_pytest_env_leaves_an_ordinary_tmpdir_alone() -> None:
+    """THE NEGATIVE CONTROL: the safe default this call site already hardcodes (and any
+    other genuinely throwaway location) must never be second-guessed or relocated."""
+    scrubbed, note = gate_hook._pytest_env(
+        {"PATH": "/usr/bin"}, {"TMPDIR": gate_hook._SAFE_TMPDIR})
+    assert scrubbed["TMPDIR"] == gate_hook._SAFE_TMPDIR
+    assert note is None
+
+
+def test_pytest_env_is_quiet_with_no_tmpdir_at_all() -> None:
+    scrubbed, note = gate_hook._pytest_env({"PATH": "/usr/bin"}, {})
+    assert "TMPDIR" not in scrubbed
+    assert note is None
 
 
 def test_no_tests_collected_is_its_own_verdict_not_a_failure(tmp_path: Path) -> None:
