@@ -839,6 +839,11 @@ def _tool_chars(t: Any) -> int:
 # BOTH already hidden before this commit, simply repointed at the new dispatcher, no
 # further count cost): -6 newly hidden, +1 new tool (project) = -5 net. Combined -7
 # (83 -> 76), measured exact.
+# 76 -> 76 (2026-09-05, Imhotep, #202 THREAD DISPATCHER, Thoth dispatch 7162):
+# thread_action re-platformed as thread(action=...) — one hidden (thread_action itself),
+# one added (thread) — net zero on count, real cost lands on the char ceiling instead
+# (see its own changelog). Recorded even at zero delta, same discipline every other
+# entry here follows: a number that doesn't move is still worth confirming it didn't.
 TOOL_CONTRACT_EXPECTED_COUNT = 76
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
@@ -1148,7 +1153,30 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # exact roster) outweighs the two new small hand-built oneOf schemas added (composition:
 # 3 actions; project: 8 actions, both far smaller than seat's own 30-branch schema).
 # Measured exact (100,470), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# STALE POST-MERGE VALUE CAUGHT AND FIXED AGAIN (2026-09-05, Imhotep, branched off
+# main@bf3123a for the #202 THREAD DISPATCHER build): this constant had regressed to
+# 202,871 on main@bf3123a itself (merge sekhmet-thread-list-fanout) — the FOURTH
+# occurrence of the exact same recurring class this changelog already names three times
+# above (the 202,871 catch near the top of this file, the 116,137 catch, and the 113,162
+# catch): a merge driver declining to reconcile two branches' own deltas and leaving the
+# ceiling at a shared ancestor's stale value instead of the real merged tree's own total.
+# Re-measured against a clean bf3123a checkout rather than trusted: 101,001 (this
+# session's own 100,470 and Seshat's own 102,722 both landed in that merge; the real
+# combined tree measures neither number, same lesson each of the three prior catches
+# already drew — pinned to the measurement, not summed or averaged).
+# 101,001 -> 102,670 (2026-09-05, Imhotep, #202 THREAD DISPATCHER, Thoth dispatch 7162):
+# thread_action ITSELF (already a wave-3 action-dispatcher) re-platformed into the
+# object-type-dispatcher naming convention as `thread(action=...)`, its own flat
+# auto-generated schema replaced by a hand-built oneOf (price-minimizer #1) — a genuine
+# re-platforming, not a second fold of the same four names again (thread_action's own
+# four hidden aliases — resolve_thread/annotate_thread/correct_thread_summary/
+# reclassify_thread — are untouched, still forwarding to the same _thread_action_impl).
+# +1,669 net: the hand-built oneOf's own additionalProperties=False and subagent-
+# attribution trio on every one of the four branches cost more per-branch overhead than
+# the flat schema thread_action carried before, the same real correctness cost seat's
+# own price-minimizer follow-through named (99,443 -> 101,729). Tool count unchanged
+# (76 -> 76): one hidden, one added. Measured exact (102,670), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 102670
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
