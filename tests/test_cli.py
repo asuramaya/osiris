@@ -1939,6 +1939,101 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
     assert "NOT recording this deploy" in text
 
 
+async def test_check_false_mint_live_excludes_an_already_retired_candidate(
+    actions: Actions,
+) -> None:
+    """THE 2464d3ad SPECIMEN (msg 7542 item 3): task #204's bg-spare heartbeat bug left a
+    false_mint=true generation's mount row refreshing for a while AFTER phantom-fold had
+    already correctly retired it — five real deploys (abc056a/89d4605/cc3e4a3/eda0459/
+    f66654a) ran unrecorded over exactly this shape. A candidate already carrying
+    retired=true can never be the halcyon "live body wrongly folded" this gate exists
+    for, whatever its stale mount row still says — excluded before the census read even
+    runs."""
+    from src.cli import _real_check_false_mint_live
+    from src.orchestrator import mounts
+
+    victim = await actions.create_or_find_object("Agent", "agent:retired01", "test")
+    await actions.assert_property(victim, "false_mint", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await actions.assert_property(victim, "retired", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/retired1", agent_id="agent:retired01",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    out = await _real_check_false_mint_live(actions.pool)
+    assert out == []
+
+
+async def test_check_false_mint_live_excludes_a_bg_spare_backed_candidate(
+    actions: Actions,
+) -> None:
+    """A NOT-YET-RETIRED false_mint candidate whose only matching harness body is a
+    `claude bg-spare` pre-warm process (verified via /proc/<pid>/cmdline, the exact same
+    check the whisper hook runs on itself) is excluded too — a spare backing the row is
+    never a genuine occupant."""
+    from src.cli import _real_check_false_mint_live
+    from src.orchestrator import mounts
+
+    victim = await actions.create_or_find_object("Agent", "agent:sparebak1", "test")
+    await actions.assert_property(victim, "false_mint", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/spareba1", agent_id="agent:sparebak1",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "spareba1-0000-4000-8000-000000000000", "pid": 777,
+                 "cwd": "/repo/demo", "name": None}]
+
+    def _exe(pid: int) -> str:
+        return "/home/x/.local/share/claude/versions/2.1.210"
+
+    def _cwd(pid: int) -> str:
+        return "/repo/demo"
+
+    def _cmdline(pid: int) -> bytes:
+        assert pid == 777
+        return b"claude\x00bg-spare\x00--bg-spare\x00/tmp/x/y.claim.sock\x00"
+
+    out = await _real_check_false_mint_live(
+        actions.pool, agents_json=_agents_json, read_exe=_exe, read_cwd=_cwd,
+        read_cmdline=_cmdline)
+    assert out == []
+
+
+async def test_check_false_mint_live_still_confirms_a_genuine_halcyon_specimen(
+    actions: Actions,
+) -> None:
+    """Neither new exclusion over-suppresses: not retired, and the matching harness body
+    is an ORDINARY session (no bg-spare in its cmdline) — still reported, confirmed."""
+    from src.cli import _real_check_false_mint_live
+    from src.orchestrator import mounts
+
+    victim = await actions.create_or_find_object("Agent", "agent:realhal1", "test")
+    await actions.assert_property(victim, "false_mint", True, "test", datetime.now(UTC),
+                                  0.9, evidence_class="self_declared")
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/realhal1", agent_id="agent:realhal1",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "realhal1-0000-4000-8000-000000000000", "pid": 888,
+                 "cwd": "/repo/demo", "name": "[OS] Realhal"}]
+
+    def _exe(pid: int) -> str:
+        return "/home/x/.local/share/claude/versions/2.1.210"
+
+    def _cwd(pid: int) -> str:
+        return "/repo/demo"
+
+    def _cmdline(pid: int) -> bytes:
+        assert pid == 888
+        return b"claude\x00--resume\x00realhal1\x00"
+
+    out = await _real_check_false_mint_live(
+        actions.pool, agents_json=_agents_json, read_exe=_exe, read_cwd=_cwd,
+        read_cmdline=_cmdline)
+    assert out == [{"agent_id": "agent:realhal1", "harness_confirmed_live": True}]
+
+
 async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
