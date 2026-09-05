@@ -1859,6 +1859,16 @@ async def nearest_handoff_ancestor(
     return None, False  # max_hops exhausted — stopped looking, not "nothing to find"
 
 
+def cap_handoff_text(text: str, limit: int = 800) -> str:
+    """Truncate a handoff pick's `summary` for succession_note/boot-whisper display,
+    marking it with '…' when actually shortened (thread 5cb2c7be) — the same
+    never-silent-truncation law mcp_server.py's own `_cap_text` already enforces for
+    open_threads/recent_decisions; this call site's inline `[:800]` predates that law
+    and truncated real 900-3500 char records with no marker, indistinguishable from a
+    complete note."""
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 _LOCK_TIMEOUT = "5s"  # #172: a genuinely wedged holder fails waiters loud, not silent
 
 

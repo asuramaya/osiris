@@ -2678,6 +2678,31 @@ async def peer_ledger(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> list[dict
             "owner": r["owner"], "opened": r["created_at"].isoformat()} for r in rows]
 
 
+async def _resolve_active_seat(pool: asyncpg.Pool, ref: str) -> asyncpg.Record | None:
+    """A Seat by canonical, by its `handle` property, or by raw object id — one lookup
+    shared by attach_seat/detach_seat/peer_seats/unpeer/hold_action (thread 8673ddb7,
+    2026-09-05). Each of these five carried an IDENTICAL exact `canonical=$1`-only lookup,
+    narrower than `rebind_seat`'s own resolver (mounts.py, task #105) which already accepts
+    all three forms — the same defect specimen `attach_seat` was filed under (#117: a
+    resolver-format gap dressed as a doesn't-exist error) reproduced four more times rather
+    than fixed once. Returns `{id, canonical}` or None; never ambiguous — canonical and
+    handle are each unique among active Seats, and a raw id is exact by definition."""
+    ref = (ref or "").strip()
+    row = await pool.fetchrow(
+        "SELECT o.id, o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND (o.canonical=$1 OR EXISTS (SELECT 1 FROM current_assertions a "
+        " WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))", ref)
+    if row is not None:
+        return row
+    try:
+        oid = uuid.UUID(ref)
+    except (ValueError, AttributeError):
+        return None
+    return await pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE type='Seat' AND status='active' "
+        "AND id=$1", oid)
+
+
 async def peer_seats(
     actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
 ) -> dict[str, Any]:
@@ -2696,14 +2721,10 @@ async def peer_seats(
     seat_a = (seat_a or "").strip()
     seat_b = (seat_b or "").strip()
     async with _peer_lock(actions.pool, seat_a, seat_b):
-        row_a = await actions.pool.fetchrow(
-            "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-            "AND status='active'", seat_a)
+        row_a = await _resolve_active_seat(actions.pool, seat_a)
         if row_a is None:
             return {"error": f"no such active seat: {seat_a!r}"}
-        row_b = await actions.pool.fetchrow(
-            "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-            "AND status='active'", seat_b)
+        row_b = await _resolve_active_seat(actions.pool, seat_b)
         if row_b is None:
             return {"error": f"no such active seat: {seat_b!r}"}
         if row_a["id"] == row_b["id"]:
@@ -2737,14 +2758,10 @@ async def unpeer(
     if not because:
         return {"error": "because is required — unpeering two seats is a deliberate act "
                          "on the record"}
-    row_a = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (seat_a or "").strip())
+    row_a = await _resolve_active_seat(actions.pool, seat_a)
     if row_a is None:
         return {"error": f"no such active seat: {seat_a!r}"}
-    row_b = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (seat_b or "").strip())
+    row_b = await _resolve_active_seat(actions.pool, seat_b)
     if row_b is None:
         return {"error": f"no such active seat: {seat_b!r}"}
     link = await actions.pool.fetchrow(
@@ -2793,16 +2810,13 @@ async def hold_action(
     held = (held or "").strip()
     if holder == held:
         return {"error": f"{holder!r} cannot hold its own act"}
-    row_holder = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", holder)
+    row_holder = await _resolve_active_seat(actions.pool, holder)
     if row_holder is None:
         return {"error": f"no such active seat: {holder!r}"}
-    row_held = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", held)
+    row_held = await _resolve_active_seat(actions.pool, held)
     if row_held is None:
         return {"error": f"no such active seat: {held!r}"}
+    holder, held = row_holder["canonical"], row_held["canonical"]
     peer = await peer_of_seat(actions.pool, holder)
     if peer != held:
         return {"error": f"{holder!r} and {held!r} are not an active peer_of pair — a "
@@ -2843,9 +2857,7 @@ async def detach_seat(
     if not because:
         return {"error": "because is required — detaching a seat from its manager is a "
                          "deliberate act on the record"}
-    row = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (seat or "").strip())
+    row = await _resolve_active_seat(actions.pool, seat)
     if row is None:
         return {"error": f"no such active seat: {seat!r}"}
     link = await actions.pool.fetchrow(
@@ -2884,14 +2896,10 @@ async def attach_seat(
     if not evidence:
         return {"error": "evidence is required — attaching a seat to a manager is a "
                          "deliberate act on the record"}
-    worker_row = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (worker or "").strip())
+    worker_row = await _resolve_active_seat(actions.pool, worker)
     if worker_row is None:
         return {"error": f"no such active seat: {worker!r}"}
-    manager_row = await actions.pool.fetchrow(
-        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
-        "AND status='active'", (manager or "").strip())
+    manager_row = await _resolve_active_seat(actions.pool, manager)
     if manager_row is None:
         return {"error": f"no such active seat: {manager!r}"}
     if worker_row["id"] == manager_row["id"]:
