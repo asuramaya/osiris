@@ -636,9 +636,13 @@ async def test_consolidated_fork_project_direction_param_reverses_the_edge(
         srv._agents.pop(key, None)
 
     listed = {t.name for t in await srv.mcp.list_tools()}
+    # fork_project ALSO hidden now (#202 project dispatcher, Thoth dispatch 7095) —
+    # both fold into project(action='fork'/'unfork'); still fully callable, same
+    # mechanism this test's own two calls above just exercised.
     assert "unfork_project" not in listed
-    assert "fork_project" in listed
+    assert "fork_project" not in listed
     assert srv.mcp._tool_manager.get_tool("unfork_project") is not None
+    assert srv.mcp._tool_manager.get_tool("fork_project") is not None
 
 
 # --- create_project (#139's CREATE half — NOT a seventh mint door) ---------------------

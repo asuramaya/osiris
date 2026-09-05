@@ -18,7 +18,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import httpx
@@ -131,6 +131,54 @@ def _strip_redundant_titles(schema: Any) -> Any:
 # after module load — the same late-binding every function body in this file already
 # relies on).
 _HAND_BUILT_SCHEMAS: dict[str, dict[str, Any]] = {}
+
+
+# GENERIC HAND-BUILT-SCHEMA HELPERS — shared across every dispatcher's own oneOf schema
+# (seat, project, composition, ...), defined here (before ANY dispatcher's own module-level
+# schema constant) so a dispatcher whose code sits earlier in the file than seat's own
+# still resolves these names at import time, not merely at call time.
+def _dispatcher_action_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """One oneOf branch: `action` pinned to a const, plus this action's own properties/
+    required — never the union's params, never another action's shape leaking in.
+    `additionalProperties: False` — a real client that mistypes a param for this action
+    gets a rejection here, before the call ever reaches a dispatcher's own _*_impl
+    pre-dispatch validation (belt and suspenders, not a duplicate: this catches an
+    unknown param name, the runtime check catches a missing required one)."""
+    return {"type": "object", "properties": properties, "required": required,
+            "additionalProperties": False}
+
+
+def _s(desc: str = "") -> dict[str, Any]:
+    return {"type": "string"}
+
+
+def _opt_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
+
+
+def _b(default: bool) -> dict[str, Any]:
+    return {"type": "boolean", "default": default}
+
+
+def _list_s() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def _opt_list_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+            "default": None}
+
+
+def _opt_int_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": None}
+
+
+def _obj_s() -> dict[str, Any]:
+    return {"type": "object"}
+
+
+def _action_const(name: str) -> dict[str, Any]:
+    return {"type": "string", "const": name}
 
 
 class BoundedMCP(FastMCP):
@@ -1594,22 +1642,133 @@ async def list_rooms() -> list[dict[str, Any]]:
     return await comp.list_rooms(pool)
 
 
+# THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
+# dispatch 7073/7095) — the second object-type dispatcher, save_composition/
+# run_composition/list_compositions folded into composition(action=...). Re-scanned and
+# approved AFTER the seat dispatcher's own traffic day: the old rule (through wave 4)
+# required return-type/param coherence to fold; the new rule tolerates divergent
+# per-action return shapes via a hand-built oneOf schema plus an action-table docstring
+# — this cluster was correctly DECLINED under the old rule, correctly re-approved under
+# the new one. Small on purpose (3 actions) — no PARAM UNIFICATION needed, none of the
+# three originals used a divergent name for the same concept.
+COMPOSITION_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _dispatcher_action_schema({
+            "action": _action_const("save"), "name": _s(), "spec": _obj_s(),
+            "kind": _s(), "room": _opt_s(),
+        }, ["action", "name", "spec"]),
+        _dispatcher_action_schema({
+            "action": _action_const("run"), "name": _s(), "subject": _opt_s(),
+            "fields": _opt_list_s(), "take": _opt_int_s(), "depth": _opt_int_s(),
+            "offset": _opt_int_s(),
+        }, ["action", "name"]),
+        _dispatcher_action_schema({
+            "action": _action_const("list"),
+        }, ["action"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["composition"] = COMPOSITION_INPUT_SCHEMA
+
+_COMPOSITION_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    "save": (["name", "spec", "kind", "room"], ["name", "spec"]),
+    "run": (["name", "subject", "fields", "take", "depth", "offset"], ["name"]),
+    "list": ([], []),
+}
+
+
+async def _composition_impl(
+    action: str, *,
+    name: str | None = None, spec: dict[str, Any] | None = None, kind: str = "lens",
+    room: str | None = None, subject: str | None = None, fields: list[str] | None = None,
+    take: int | None = None, depth: int | None = None, offset: int | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Shared body behind `composition` and its 3 hidden single-purpose aliases
+    (save_composition, run_composition, list_compositions) — one code path, three
+    names. Every branch's body below is copied verbatim from what was that alias's own
+    top-level function (task #202, Thoth dispatch 7073/7095). Return type is a union
+    (dict for save/run, list for list) matching the three originals' own divergent
+    shapes — the new fold rule (post f9182ad7) tolerates this via the hand-built oneOf
+    schema plus this action table, unlike the old rule that required return coherence.
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    if action not in _COMPOSITION_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_COMPOSITION_ACTION_PARAMS)}
+    accepted, required = _COMPOSITION_ACTION_PARAMS[action]
+    local = dict(locals())
+    missing = [p for p in required if local.get(p) in (None, "")]
+    if missing:
+        return {"error": f"action {action!r} is missing required param(s) {missing}",
+                "action_accepts": accepted, "action_requires": required}
+
+    if action == "save":
+        assert name is not None and spec is not None  # pre-dispatch validation guaranteed this
+        pool = await _pool_get()
+        rid = await comp.resolve_room(pool, room)
+        cid = await comp.save_composition(pool, name, spec, kind, room_id=rid)
+        return {"id": str(cid), "name": name}
+    if action == "run":
+        assert name is not None  # pre-dispatch validation guaranteed this
+        pool = await _pool_get()
+        ident = await _ident_for(ctx)
+        sid = await _resolve(pool, subject) if subject else None
+        res = await comp.run_composition(pool, name, sid,
+                                         caller=(ident.agent_id if ident else None),
+                                         fields=fields, take=take, depth=depth, offset=offset)
+        await _set_console(pool, by="claude", composition=name,
+                           **({"focused_object_id": sid} if sid else {}))
+        return res
+    if action == "list":
+        pool = await _pool_get()
+        return await comp.list_compositions(pool)
+    raise AssertionError(f"action {action!r} passed validation but has no branch")
+
+
 @mcp.tool()
+async def composition(
+    action: str, name: str | None = None, spec: dict[str, Any] | None = None,
+    kind: str = "lens", room: str | None = None, subject: str | None = None,
+    fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
+    offset: int | None = None, ctx: Context | None = None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
+    door, three actions over saved compositions (reusable, forkable queries/lenses over
+    the graph). See `describe('composition')` for the full per-action shape.
+
+    ACTION TABLE — action: what it does (required params beyond action):
+      save: save a reusable query/lens (name, spec — kind defaults 'lens', room scopes
+        to a stance). `spec` is a small closed op-tree (no `join` — use intersect/
+        traverse instead; fuzzy matching is a Function): subject (the focus object);
+        select (object_type?, where=[{property,op,value}], op in eq|contains|
+        matches_all|lt|gt|present|absent); traverse (from, direction=both|out|in,
+        hops<=3); collect (from, properties, transform=country|lower); subtract/union/
+        intersect (over sets); aggregate (from, group_by<=3 dims, metric={type: count|
+        sum|avg|min|max|cardinality, field}); order (from, by, dir); take (from, n).
+        Worked examples: consult_canon('composition spec').
+      run: run a saved composition, optionally against a subject object (UUID or name),
+        AND light it up on the operator's live screen (name). `fields`/`take`/`depth`
+        bound a large result at the source; `offset` pages past the first `take`.
+      list: the saved compositions (lenses/watches) — the user's questions, as objects.
+    """
+    return await _composition_impl(
+        action, name=name, spec=spec, kind=kind, room=room, subject=subject,
+        fields=fields, take=take, depth=depth, offset=offset, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "composition(action='save')",
+    "since": "task #202 composition dispatcher (msg 7073/7095)",
+})
 async def save_composition(
     name: str, spec: dict[str, Any], kind: str = "lens", room: str | None = None
 ) -> dict[str, str]:
-    """Save a COMPOSITION — a reusable, forkable query/lens over the graph. `spec` is a
-    small closed op-tree (no `join` — use intersect/traverse instead; fuzzy matching is a
-    Function): subject (the focus object); select (object_type?, where=[{property,op,
-    value}], op in eq|contains|matches_all|lt|gt|present|absent); traverse (from,
-    direction=both|out|in, hops<=3); collect (from, properties, transform=country|lower);
-    subtract/union/intersect (over sets); aggregate (from, group_by<=3 dims, metric={type:
-    count|sum|avg|min|max|cardinality, field}); order (from, by, dir); take (from, n).
-    `room` scopes it to a stance. Worked examples: consult_canon('composition spec')."""
-    pool = await _pool_get()
-    rid = await comp.resolve_room(pool, room)
-    cid = await comp.save_composition(pool, name, spec, kind, room_id=rid)
-    return {"id": str(cid), "name": name}
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    composition(action='save')."""
+    return cast(dict[str, str],
+               await _composition_impl("save", name=name, spec=spec, kind=kind, room=room))
 
 
 # --- the shared console (real-time Claude↔front sync) -----------------------
@@ -1657,38 +1816,33 @@ async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str,
             "properties": {p["name"]: p["value"] for p in props}}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "composition(action='run')",
+    "since": "task #202 composition dispatcher (msg 7073/7095)",
+})
 async def run_composition(
     name: str, subject: str | None = None,
     fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
     offset: int | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Run a saved composition, optionally against a subject object (UUID or name), AND
-    light it up on the operator's live screen. Returns an object set, value list, or
-    aggregate rows.
-
-    `fields`/`take`/`depth` bound a large result at the source: `fields` keeps only
-    named columns, `take` caps each list to N, `depth` caps nested-level walking before
-    collapsing to a count. Omit all three for the full result. `offset` pages past the
-    first `take` (stable ordering) — `take` alone could only ever show the first N."""
-    pool = await _pool_get()
-    ident = await _ident_for(ctx)
-    sid = await _resolve(pool, subject) if subject else None
-    res = await comp.run_composition(pool, name, sid,
-                                     caller=(ident.agent_id if ident else None),
-                                     fields=fields, take=take, depth=depth, offset=offset)
-    # drive the front end: show this composition (and its subject, so a subject-lens reproduces)
-    await _set_console(pool, by="claude", composition=name,
-                       **({"focused_object_id": sid} if sid else {}))
-    return res
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    composition(action='run')."""
+    return cast(dict[str, Any],
+               await _composition_impl("run", name=name, subject=subject, fields=fields,
+                                       take=take, depth=depth, offset=offset, ctx=ctx))
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "composition(action='list')",
+    "since": "task #202 composition dispatcher (msg 7073/7095)",
+})
 async def list_compositions() -> list[dict[str, Any]]:
-    """The saved compositions (lenses/watches) — the user's questions, as objects."""
-    pool = await _pool_get()
-    return await comp.list_compositions(pool)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    composition(action='list')."""
+    return cast(list[dict[str, Any]], await _composition_impl("list"))
 
 
 @mcp.tool()
@@ -2615,42 +2769,6 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
 _UNSET = "__seat_dispatcher_unset__"
 
 
-def _seat_action_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    """One oneOf branch: `action` pinned to a const, plus this action's own properties/
-    required — never the union's params, never another action's shape leaking in.
-    `additionalProperties: False` — a real client that mistypes a param for this action
-    gets a rejection here, before the call ever reaches _seat_impl's own pre-dispatch
-    validation (belt and suspenders, not a duplicate: this catches an unknown param
-    name, the runtime check catches a missing required one)."""
-    return {"type": "object", "properties": properties, "required": required,
-            "additionalProperties": False}
-
-
-def _s(desc: str = "") -> dict[str, Any]:
-    return {"type": "string"}
-
-
-def _opt_s() -> dict[str, Any]:
-    return {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
-
-
-def _b(default: bool) -> dict[str, Any]:
-    return {"type": "boolean", "default": default}
-
-
-def _list_s() -> dict[str, Any]:
-    return {"type": "array", "items": {"type": "string"}}
-
-
-def _opt_list_s() -> dict[str, Any]:
-    return {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
-            "default": None}
-
-
-def _action_const(name: str) -> dict[str, Any]:
-    return {"type": "string", "const": name}
-
-
 # THE SUBAGENT-ATTRIBUTION TRIO: subagent_id/subagent_type carry attribution for an
 # ephemeral hand, session_anchor pins a specific mounted connection — all three genuinely
 # optional, but part of the real accepted surface for every branch whose original
@@ -2672,123 +2790,123 @@ _SESSION_ANCHOR_ONLY = {"session_anchor": _opt_s()}
 SEAT_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "oneOf": [
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("mint"), "handle": _s(), "project": _opt_s(),
             "model": _opt_s(), "house": _opt_s(),
         }, ["action", "handle"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("stop"), "target": _opt_s(), "reason": _s(),
             **_SUBAGENT_TRIO,
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("walk_in"), "handle": _s(),
             "wants_office": {"type": "boolean"}, "cwd": _opt_s(), "job_dir": _opt_s(),
             "model": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "handle", "wants_office"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("pause"), "paused": _b(True), "target": _opt_s(),
             "reason": _s(), **_SESSION_ANCHOR_ONLY,
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("vacate"), "target": _s(), "because": _s(),
         }, ["action", "target", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("retire"), "target": _s(), "because": _s(),
             "override_live": _b(False),
         }, ["action", "target"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("rebind"), "target": _s(), "new_cwd": _s(),
             "extract": _b(False), "force": _b(False), "because": _s(),
         }, ["action", "target", "new_cwd"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("bind_tree"), "target": _s(), "tree_cwd": _s(),
             "because": _s(),
         }, ["action", "target", "tree_cwd", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("attach"), "target": _s(), "manager": _s(),
             "because": _s(),
         }, ["action", "target", "manager", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("detach"), "target": _s(), "because": _s(),
         }, ["action", "target", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("charter"), "repos": _opt_list_s(),
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("charter_for"), "target": _s(), "repos": _list_s(),
             "because": _s(),
         }, ["action", "target", "repos", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("heal_anchor"), "target": _opt_s(), "because": _opt_s(),
             "dry_run": _b(True),
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("heal_transcript"), "target": _s(),
             "source_paths": _list_s(), "dry_run": _b(True), "because": _s(),
         }, ["action", "target", "source_paths"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("transition_project"), "fabricated_project": _opt_s(),
             "real_project": _opt_s(), "because": _s(), "repos": _opt_list_s(),
             "dry_run": _b(True),
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("resync_house"), "target": _s(), "new_house": _opt_s(),
             "reason": _s(),
         }, ["action", "target", "reason"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("resync_pin"), "target": _s(), "key": _s(),
             "value": _opt_s(), "reason": _opt_s(), "dry_run": _b(True),
         }, ["action", "target", "key"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("sweep_disk"), "target": _s(), "dry_run": _b(True),
             "because": _s(),
         }, ["action", "target"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("rename"), "target": _s(), "new_handle": _s(),
             "because": _s(),
         }, ["action", "target", "new_handle", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("set_attended"), "target": _s(), "attended": _s(),
             "because": _s(),
         }, ["action", "target", "attended", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("reissue_office"), "target": _s(), "because": _s(),
             "adopt": _b(False),
         }, ["action", "target", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("establish_office"), "target": _s(),
         }, ["action", "target"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("invalidate_works_in"), "stale_project": _s(),
             "because": _s(),
         }, ["action", "stale_project", "because"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("reconcile_identity"), "target": _opt_s(),
             "agent_id": _opt_s(), "because": _opt_s(),
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("correct_house"), "new_house": _s(),
         }, ["action", "new_house"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("correct_pin"), "key": _s(), "value": _opt_s(),
             "reason": _s(),
         }, ["action", "key", "reason"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("revert_pin"),
         }, ["action"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("launch"), "target": _s(), "message": _s(),
             "model": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "target"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("resume"), "target": _s(), "message": _s(),
             "model": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "target"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("wake"), "target": _s(), "message": _s(),
             **_SUBAGENT_TRIO,
         }, ["action", "target", "message"]),
-        _seat_action_schema({
+        _dispatcher_action_schema({
             "action": _action_const("wake_preflight"), "target": _s(),
         }, ["action", "target"]),
     ],
@@ -5740,6 +5858,230 @@ async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
     return {"count": len(rows), "trees": rows}
 
 
+# THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
+# dispatch 7095) — third object-type dispatcher (after seat, composition), one door
+# over SoftwareProject lifecycle. 8 standalone tools fold in: create_project,
+# ingest_project (self/third-party ingest already unified beneath it — see
+# _ingest_project_impl below, unchanged), rename_project, fork_project
+# (action='fork'/'unfork', its own pre-existing `direction` param), retire_project
+# (already a hidden alias forwarding to retire_object(kind='project') before this fold —
+# repointed here, same underlying _retire_object_impl call, the same dual-door
+# precedent seat(action='retire') already established for kind='seat'; retire_object
+# itself stays live, kind='agent' still has no dispatcher), project_identity_evidence
+# (read-only, kept alongside rename/fork since its whole purpose is informing those two
+# calls), assert_project_property.
+#
+# PARAM UNIFICATION: none needed — every original already used `project` consistently
+# for "which existing project" (unlike seat's own four-divergent-names problem). `name`
+# is reserved for the two params that mean something different per action (the CREATE
+# action's new project name; the ASSERT_PROPERTY action's property name) — same
+# shared-slot convention seat's own `key`/`value` already established, disambiguated by
+# the action table, never by a second param name.
+PROJECT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _dispatcher_action_schema({
+            "action": _action_const("create"), "name": _s(), "because": _s(),
+        }, ["action", "name", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("ingest"), "project": _opt_s(), "because": _opt_s(),
+            "dry_run": _b(True),
+        }, ["action"]),
+        _dispatcher_action_schema({
+            "action": _action_const("rename"), "project": _s(), "new_name": _s(),
+            "because": _s(),
+        }, ["action", "project", "new_name", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("fork"), "project": _s(), "fork_into": _s(),
+            "because": _s(),
+        }, ["action", "project", "fork_into", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("unfork"), "project": _s(), "fork_into": _s(),
+            "because": _s(),
+        }, ["action", "project", "fork_into", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("retire"), "project": _s(), "because": _s(),
+        }, ["action", "project", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("identity_evidence"), "seat_id": _s(),
+            "operator_citation": _opt_s(),
+        }, ["action", "seat_id"]),
+        _dispatcher_action_schema({
+            "action": _action_const("assert_property"), "project": _s(), "name": _s(),
+            "value": _s(),
+        }, ["action", "project", "name", "value"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["project"] = PROJECT_INPUT_SCHEMA
+
+_PROJECT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    "create": (["name", "because"], ["name", "because"]),
+    "ingest": (["project", "because", "dry_run"], []),
+    "rename": (["project", "new_name", "because"], ["project", "new_name", "because"]),
+    "fork": (["project", "fork_into", "because"], ["project", "fork_into", "because"]),
+    "unfork": (["project", "fork_into", "because"], ["project", "fork_into", "because"]),
+    "retire": (["project", "because"], ["project", "because"]),
+    "identity_evidence": (["seat_id", "operator_citation"], ["seat_id"]),
+    "assert_property": (["project", "name", "value"], ["project", "name", "value"]),
+}
+
+
+async def _project_impl(
+    action: str, *,
+    project: str | None = None, name: str | None = None, because: str | None = None,
+    dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
+    seat_id: str | None = None, operator_citation: str | None = None,
+    value: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Shared body behind `project` and its 7 hidden single-purpose aliases
+    (create_project, ingest_project, rename_project, fork_project, unfork_project,
+    retire_project, project_identity_evidence, assert_project_property — 8 names, one
+    more than "7" counts because retire_project was already a hidden alias forwarding
+    to retire_object(kind='project') before this fold; both doors now reach the
+    identical _retire_object_impl call) — one code path, many names. Every branch's
+    body below is copied verbatim from what was that alias's own top-level function
+    (task #202, Thoth dispatch 7095).
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    if action not in _PROJECT_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_PROJECT_ACTION_PARAMS)}
+    accepted, required = _PROJECT_ACTION_PARAMS[action]
+    local = dict(locals())
+    missing = [p for p in required if local.get(p) in (None, "")]
+    if missing:
+        return {"error": f"action {action!r} is missing required param(s) {missing}",
+                "action_accepts": accepted, "action_requires": required}
+
+    if action == "create":
+        assert name is not None and because is not None  # pre-dispatch validation
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — creating a project is a deliberate act on "
+                             "the record", "why": _anchorless(ctx)}
+        from src.orchestrator.project_identity import create_project as _create_project
+        return await _create_project(Actions(await _pool_get()), name=name, because=because,
+                                     actor=ident.agent_id)
+    if action == "ingest":
+        return await _ingest_project_impl(project, because, dry_run, ctx)
+    if action == "rename":
+        assert project is not None and new_name is not None and because is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a rename is a deliberate act on the record",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.project_identity import (
+            project_identity_evidence as _project_identity_evidence,
+        )
+        from src.orchestrator.project_identity import rename_evidence_verdict
+        from src.orchestrator.project_identity import rename_project as _rename_project
+        from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
+        evidence_by_seat: dict[str, Any] = {}
+        try:
+            row = await _resolve_software_project(pool, project)
+        except AmbiguousProjectRef:
+            row = None  # the real refusal below (inside _rename_project) names the
+                        # candidates properly; evidence-gathering here is best-effort only
+        if row is not None:
+            seat_rows = await pool.fetch(
+                "SELECT s.canonical FROM links l JOIN objects s ON s.id=l.from_id "
+                "WHERE l.to_id=$1 AND l.type='governs' "
+                "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
+            for r in seat_rows:
+                evidence_by_seat[r["canonical"]] = await _project_identity_evidence(
+                    pool, seat_id=r["canonical"])
+        out = await _rename_project(Actions(pool), project=project, new_name=new_name,
+                                    because=because, actor=ident.agent_id)
+        if evidence_by_seat:
+            rename_evidence = {
+                seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
+                for seat, ev in evidence_by_seat.items()
+            }
+            out["rename_evidence"] = rename_evidence
+            out["rename_evidence_note"] = (
+                "a verdict is SELF-CONSISTENCY, not independent verification: \"confirms\" "
+                "means this seat's own non-remote tiers (charter/pin/write-attribution) all "
+                "agree with new_name, never that new_name is objectively correct — remote is "
+                "deliberately non-authoritative here, so it can dissent alone and still read "
+                "\"confirms\"; and #137's own mechanism can corrupt a seat's pin itself, not "
+                "only the graph's name property, in which case every non-remote tier already "
+                "carries the same drift and this check reads clean")
+            disagreeing = [s for s, v in rename_evidence.items() if v["verdict"] == "disagrees"]
+            if disagreeing:
+                out["evidence_disagrees"] = True
+                out["warning"] = (
+                    f"{new_name!r} was written, but {len(disagreeing)} governing seat "
+                    f"evidence disagrees with it: {', '.join(disagreeing)} — their own pin/"
+                    "charter/remote still names something else; go fix those, this write "
+                    "did not")
+        return out
+    if action in ("fork", "unfork"):
+        assert project is not None and fork_into is not None and because is not None
+        return await _fork_project_impl(project, fork_into, because, action, ctx)
+    if action == "retire":
+        assert project is not None and because is not None
+        return await _retire_object_impl(
+            "project", project, because=because, override_live=False, ctx=ctx)
+    if action == "identity_evidence":
+        assert seat_id is not None  # pre-dispatch validation guaranteed this
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — reading identity evidence needs a resolvable "
+                             "caller", "why": _anchorless(ctx)}
+        from src.orchestrator.project_identity import (
+            project_identity_evidence as _project_identity_evidence,
+        )
+        return await _project_identity_evidence(
+            await _pool_get(), seat_id=seat_id, operator_citation=operator_citation)
+    if action == "assert_property":
+        assert project is not None and name is not None and value is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — asserting a project property is a deliberate "
+                             "act on the record", "why": _anchorless(ctx)}
+        from src.orchestrator.projects import (
+            assert_project_property as _assert_project_property,
+        )
+        return await _assert_project_property(Actions(await _pool_get()), project=project,
+                                              name=name, value=value, actor=ident.agent_id)
+    raise AssertionError(f"action {action!r} passed validation but has no branch")
+
+
+@mcp.tool()
+async def project(
+    action: str, project: str | None = None, name: str | None = None, because: str = "",
+    dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
+    seat_id: str | None = None, operator_citation: str | None = None,
+    value: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
+    door, many actions over SoftwareProject lifecycle. See `describe('project')` for
+    the full per-action shape, or call with a wrong/missing param — the error names
+    exactly what that action expects.
+
+    ACTION TABLE — action: what it does (required params beyond action):
+      create: declare a NEW SoftwareProject, never a duplicate (name, because)
+      ingest: land a project's own git history and close the threads it witnesses
+        (project=None + because=None is SELF-SERVICE, resolves your own pin; project
+        given + because given is the THIRD-PARTY shape instead)
+      rename: declare a project's new NAME, non-canonical (project, new_name, because)
+      fork: declare two already-active projects a FORK pair (project, fork_into, because)
+      unfork: reverse a fork pair's live edge (project, fork_into, because)
+      retire: retire a dead project stub, third-party (project, because)
+      identity_evidence: READ-ONLY, gather a seat's project-identity evidence across
+        five tiers — read this BEFORE rename/fork (seat_id)
+      assert_property: the sanctioned write for a single project-scoped property
+        (project, name, value) — never name='status', that's retire's own path
+
+    `name` means something different per action: the new project's name on `create`,
+    the property name on `assert_property` — never the same slot's value twice."""
+    return await _project_impl(
+        action, project=project, name=name, because=because, dry_run=dry_run,
+        new_name=new_name, fork_into=fork_into, seat_id=seat_id,
+        operator_citation=operator_citation, value=value, ctx=ctx)
+
+
 async def _ingest_project_impl(
     project: str | None, because: str | None, dry_run: bool, ctx: Context | None,
 ) -> dict[str, Any]:
@@ -5775,26 +6117,23 @@ async def _ingest_project_impl(
                                  actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='ingest')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def ingest_project(
     project: str | None = None, dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """SELF-SERVICE (thread 5126) — land YOUR OWN project's git history and close the
-    threads it witnesses, one call, same authority shape as reconcile_seat_identity.
-    `project` omitted resolves to your mounted pin; refuses cleanly if none is pinned.
-    `dry_run=True` (default) writes NOTHING — the receipt names what would land (commits
-    on disk vs already graphed) plus a closure preview over what's already graphed.
-    `dry_run=False` actually ingests, then closes.
-
-    `because=<reason>` is the THIRD-PARTY shape instead: `project` becomes required (no
-    pin to fall back on for someone else's tree), the reason lands on the receipt,
-    does not check caller authority beyond being mounted."""
-    return await _ingest_project_impl(project, because, dry_run, ctx)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    project(action='ingest')."""
+    return await _project_impl("ingest", project=project, because=because,
+                               dry_run=dry_run, ctx=ctx)
 
 
-@mcp.tool(meta={"deprecated": True, "use_instead": "ingest_project(because=...)",
-                "since": "task #199 lane 2, thread 6778/6788"})
+@mcp.tool(meta={"deprecated": True, "use_instead": "project(action='ingest')",
+                "since": "task #199 lane 2, thread 6778/6788 (repointed #202 msg 7095)"})
 async def ingest_project_third_party(
     project: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -5949,105 +6288,43 @@ async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) ->
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "retire_object(kind='project')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "use_instead": "project(action='retire')",
+    "since": "task #202 wave 3 (msg 6987), repointed by the #202 project dispatcher (msg 7095)",
 })
 async def retire_project(project: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    retire_object(kind='project')."""
+    project(action='retire') — the same _retire_object_impl call retire_object(kind=
+    'project') also reaches, the dual-door precedent seat(action='retire') already
+    established for kind='seat'."""
     return await _retire_object_impl(
         "project", project, because=because, override_live=False, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='identity_evidence')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def project_identity_evidence(seat_id: str, operator_citation: str | None = None,
                                     ctx: Context | None = None) -> dict[str, Any]:
-    """READ-ONLY. Gathers whichever of five evidence tiers have signal for `seat_id`'s
-    project identity — operator citation, declared charter, self-authored CLAUDE.md/
-    charter.md, the seat's `.osiris` pin, a live git remote check, and write-attribution
-    — and reports each tier's answer plus per-candidate agreement/disagreement. Never
-    picks a winner: no tier ranks first across the whole population. Read this BEFORE
-    calling rename_project/fork_project. `operator_citation` = a decision id/quote
-    already in hand for tier 1 (never parsed from prose)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — reading identity evidence needs a resolvable "
-                         "caller", "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import (
-        project_identity_evidence as _project_identity_evidence,
-    )
-    return await _project_identity_evidence(
-        await _pool_get(), seat_id=seat_id, operator_citation=operator_citation)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    project(action='identity_evidence')."""
+    return await _project_impl("identity_evidence", seat_id=seat_id,
+                               operator_citation=operator_citation, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='rename')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def rename_project(project: str, new_name: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a SoftwareProject's new NAME — `canonical` never changes, only the mutable
-    `name` property (old value kept in assertion history). Zero edges move; only
-    `agent_mounts.project` re-addresses. Out of scope: a seat's own `.osiris` pin file —
-    graph-only. `because` is mandatory; this never infers, only declares what a human
-    already decided (read project_identity_evidence FIRST).
-
-    PRE-WRITE CHECK: every Seat governing this project gets project_identity_evidence
-    run against `new_name`, classified no-signal/confirms/disagrees in `rename_evidence`.
-    Write proceeds regardless; `evidence_disagrees=True` plus a `warning` land when any
-    seat's evidence disagrees.
-
-    Refuses loudly on: blank `new_name`/`because`; unresolved/ambiguous `project`; a
-    non-active project; `new_name` colliding with a DIFFERENT active project (`merge` is
-    the deliberate verb for that, never a silent one here)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a rename is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.project_identity import (
-        project_identity_evidence as _project_identity_evidence,
-    )
-    from src.orchestrator.project_identity import rename_evidence_verdict
-    from src.orchestrator.project_identity import rename_project as _rename_project
-    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
-    evidence_by_seat: dict[str, Any] = {}
-    try:
-        row = await _resolve_software_project(pool, project)
-    except AmbiguousProjectRef:
-        row = None  # the real refusal below (inside _rename_project) names the
-                    # candidates properly; evidence-gathering here is best-effort only
-    if row is not None:
-        seat_rows = await pool.fetch(
-            "SELECT s.canonical FROM links l JOIN objects s ON s.id=l.from_id "
-            "WHERE l.to_id=$1 AND l.type='governs' "
-            "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
-        for r in seat_rows:
-            evidence_by_seat[r["canonical"]] = await _project_identity_evidence(
-                pool, seat_id=r["canonical"])
-    out = await _rename_project(Actions(pool), project=project, new_name=new_name,
-                                because=because, actor=ident.agent_id)
-    if evidence_by_seat:
-        rename_evidence = {
-            seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
-            for seat, ev in evidence_by_seat.items()
-        }
-        out["rename_evidence"] = rename_evidence
-        out["rename_evidence_note"] = (
-            "a verdict is SELF-CONSISTENCY, not independent verification: \"confirms\" "
-            "means this seat's own non-remote tiers (charter/pin/write-attribution) all "
-            "agree with new_name, never that new_name is objectively correct — remote is "
-            "deliberately non-authoritative here, so it can dissent alone and still read "
-            "\"confirms\"; and #137's own mechanism can corrupt a seat's pin itself, not "
-            "only the graph's name property, in which case every non-remote tier already "
-            "carries the same drift and this check reads clean")
-        disagreeing = [s for s, v in rename_evidence.items() if v["verdict"] == "disagrees"]
-        if disagreeing:
-            out["evidence_disagrees"] = True
-            out["warning"] = (
-                f"{new_name!r} was written, but {len(disagreeing)} governing seat "
-                f"evidence disagrees with it: {', '.join(disagreeing)} — their own pin/"
-                "charter/remote still names something else; go fix those, this write "
-                "did not")
-    return out
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    project(action='rename')."""
+    return await _project_impl("rename", project=project, new_name=new_name,
+                               because=because, ctx=ctx)
 
 
 async def _fork_project_impl(
@@ -6075,73 +6352,53 @@ async def _fork_project_impl(
                                  because=because, actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='fork')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def fork_project(
     project: str, fork_into: str, because: str, direction: str = "fork",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Declare two already-active SoftwareProjects a FORK pair: `fork_into` is the
-    successor, naming `project` as its ancestor via one `forked_from` edge. No estate
-    moves — every existing edge on both objects stays put; this records a new
-    relationship, never merges two into one (`merge` is that verb). Never mints either
-    side — both must already exist. Read project_identity_evidence BEFORE calling this.
-
-    `direction="unfork"` reverses: invalidates the live `forked_from` edge — trivially
-    reversible since nothing ever moved. `unfork_project` still works as a hidden alias.
-
-    Refuses loudly on: blank `because`; project==fork_into (fork only); an unresolved
-    ref; either side not active (fork); an already-connected pair (fork) or no live edge
-    to invalidate (unfork)."""
+    """DEPRECATED — hidden alias, still callable. Forwards to project(action='fork') or
+    project(action='unfork'), by `direction` (kept for this alias's own back-compat
+    signature; the dispatcher itself exposes fork/unfork as two separate actions,
+    never a direction param — see PROJECT_INPUT_SCHEMA)."""
     return await _fork_project_impl(project, fork_into, because, direction, ctx)
 
 
-@mcp.tool(meta={"deprecated": True, "use_instead": "fork_project(direction='unfork')",
-                "since": "task #199 lane 2, thread 6778/6788"})
+@mcp.tool(meta={"deprecated": True, "use_instead": "project(action='unfork')",
+                "since": "task #199 lane 2, thread 6778/6788 (repointed #202 msg 7095)"})
 async def unfork_project(project: str, fork_into: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    fork_project(direction="unfork")."""
+    project(action='unfork')."""
     return await _fork_project_impl(project, fork_into, because, "unfork", ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='create')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def create_project(name: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a NEW SoftwareProject (#139's create half) — layers task #107's name-shape
-    validation with task #137's case-insensitive de-dup, never a fresh, unguarded mint
-    (this was deliberately NOT built as a seventh mint door). If `name` already resolves
-    (exact match or a case-insensitive canonical twin, the ramstein/RAMstein shape) the
-    EXISTING object is returned, `created=False` — never a duplicate.
-
-    Refuses LOUDLY on: a blank `because` (creating a project is testimony, same as
-    rename_project/fork_project) or a path-shaped/malformed `name`."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — creating a project is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
-    from src.orchestrator.project_identity import create_project as _create_project
-    return await _create_project(Actions(await _pool_get()), name=name, because=because,
-                                 actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    project(action='create')."""
+    return await _project_impl("create", name=name, because=because, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "project(action='assert_property')",
+    "since": "task #202 project dispatcher (msg 7095)",
+})
 async def assert_project_property(project: str, name: str, value: str,
                                   ctx: Context | None = None) -> dict[str, Any]:
-    """The sanctioned write for a SINGLE project-scoped property (task #74) — closes the
-    gap that forced in-process scripts for anything beyond a status flip during the reap.
-    `project` resolves the same way retire_project does (UUID, 8-char short id, canonical
-    `repo:<name>`, or its `name` property) — SoftwareProject ONLY. NOT self-scoped, and
-    OPEN BY DESIGN: any mounted caller may stamp any named project's property, no
-    authority gate.
-
-    Refuses LOUDLY on: blank project/name/value; an unresolved project; `name=='status'`
-    (status has its own compensating-event path — retire_project, not a bare assertion)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — asserting a project property is a deliberate "
-                         "act on the record", "why": _anchorless(ctx)}
-    from src.orchestrator.projects import assert_project_property as _assert_project_property
-    return await _assert_project_property(Actions(await _pool_get()), project=project,
-                                          name=name, value=value, actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    project(action='assert_property')."""
+    return await _project_impl("assert_property", project=project, name=name, value=value,
+                               ctx=ctx)
 
 
 @mcp.tool()

@@ -143,9 +143,13 @@ async def test_consolidated_ingest_project_because_param_takes_the_third_party_s
         srv._agents.pop(key, None)
 
     listed = {t.name for t in await srv.mcp.list_tools()}
+    # ingest_project ALSO hidden now (#202 project dispatcher, Thoth dispatch 7095) —
+    # both fold into project(action='ingest'); still fully callable, same mechanism
+    # this test's own two calls above just exercised.
     assert "ingest_project_third_party" not in listed
-    assert "ingest_project" in listed
+    assert "ingest_project" not in listed
     assert srv.mcp._tool_manager.get_tool("ingest_project_third_party") is not None
+    assert srv.mcp._tool_manager.get_tool("ingest_project") is not None
 
 
 async def test_alarm_tick_mails_the_owning_seat_when_enabled(actions: Actions) -> None:

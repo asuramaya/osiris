@@ -377,6 +377,14 @@ BINDING_VERBS = frozenset({
     # across nearly every action, the same 6823 rule the individual verbs it absorbs
     # were each added under.
     "seat",
+    # `project` (#202 project dispatcher, Thoth dispatch 7095) — the third object-type
+    # dispatcher: create_project/rename_project/retire_project/fork_project (already
+    # binding-movers above, individually) plus ingest_project/project_identity_evidence/
+    # assert_project_property fold into this one door's actions, all kept as hidden
+    # deprecated aliases. Writes SoftwareProject lifecycle state (create/rename/fork/
+    # unfork/retire), the same 6823 rule the individual verbs it absorbs were each
+    # added under.
+    "project",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -434,6 +442,13 @@ NO_CLI_EQUIVALENT = {
         "unaffected by the MCP-layer fold — a raw `osiris seat --action=...` door was "
         "deliberately never scoped, not a gap to close.",
     "fork_project": "not yet built — same scoping note as create_project.",
+    "project": "BY DESIGN, permanent — same price-minimizer #3 reasoning as seat's own "
+        "entry above (ruling f9182ad7, Thoth dispatch 7095): every action "
+        "project(action=...) covers is declared not-yet-built above (create_project/"
+        "rename_project/retire_project/fork_project's own NO_CLI_EQUIVALENT entries) or "
+        "calls the underlying orchestrator function directly through its own eventual "
+        "CLI door, unaffected by the MCP-layer fold — a raw `osiris project "
+        "--action=...` door was deliberately never scoped, not a gap to close.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
     # binding by definition"). merge/unmerge (also added to BINDING_VERBS above) already
@@ -1133,6 +1148,25 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # correction addendum). Binding-mover: writes holds/house/handle/managed_by/pin/
     # works_in across nearly every action.
     "seat": {"binding_verb": True, "parameterizes": "mint_seat"},
+    # composition(action=...) — #202 COMPOSITION DISPATCHER, operator ruling f9182ad7,
+    # Thoth dispatch 7073/7095: the second object-type dispatcher, re-scanned and
+    # approved AFTER the seat dispatcher's own traffic day (the old fold rule required
+    # return-type coherence and correctly declined this cluster; the new rule tolerates
+    # a hand-built oneOf schema's divergent per-action shapes instead). 3 standalone
+    # tools fold in as hidden deprecated aliases: save_composition, run_composition,
+    # list_compositions. Not a binding-mover — acts on Composition objects (saved
+    # queries/lenses), never seat/project/office state.
+    "composition": {"binding_verb": False, "parameterizes": "save_composition"},
+    # project(action=...) — #202 PROJECT DISPATCHER, Thoth dispatch 7095: the third
+    # object-type dispatcher. 8 names fold in (7 standalone tools + retire_project,
+    # already a hidden alias before this fold, repointed): create_project,
+    # ingest_project, rename_project, fork_project (action='fork'), unfork_project
+    # (action='unfork'), retire_project, project_identity_evidence,
+    # assert_project_property — all kept as hidden deprecated aliases. Binding-mover:
+    # create/rename/fork/unfork/retire all write SoftwareProject lifecycle state, the
+    # same 6823 rule create_project/rename_project/retire_project/fork_project already
+    # sat in BINDING_VERBS under individually.
+    "project": {"binding_verb": True, "parameterizes": "create_project"},
 }
 
 
