@@ -228,8 +228,14 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
     one; when N>2 seats all match and it's their own HOUSE's home repo
     (`agreement='shared-house'`, roster's own third case, Thoth ruling msg 7425 — every
     worker legitimately charters/pins the house's own repo, that's the normal shape, not a
-    conflict), the house's manager seat. A `no-match`/`conflict`/uninhabited seat falls
-    through, never guessed at.
+    conflict), the house's manager seat. A genuine 2-seat `conflict` gets one more look,
+    narrowly (operator ruling, decision 2ee59140, msg 7428) — NEVER folded into roster's
+    own `governed` split, which stays charter-manages-pin-specific and tested against the
+    reverse direction: if one matched seat MANAGES the other regardless of which via-signal
+    each carries, the manager, same role as `governed`; if the two are an active `peer_of`
+    pair, whichever peer is live, BOTH when both are (a peer pair is shared ownership, never
+    a coin flip — `target` is then a list, and `_nudge_owner` sends the same nudge to each).
+    Anything else stays a genuine `conflict`, falls through, never guessed at.
 
     Rung 2 — owner is a DEAD/RETIRED AGENT id: its own lineage head (`lineage_head`'s
     forward `succeeded_by` walk — the SAME authority `send_message`'s reply-routing already
@@ -248,7 +254,13 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
     ever double-nudging a real owner."""
     from src.orchestrator.agents import lineage_head, resolve_seat
     from src.orchestrator.mailbox import _dm_eligible
-    from src.orchestrator.seats import roster, seat_holder_ineligible, seat_occupancy
+    from src.orchestrator.seats import (
+        manager_of_seat,
+        peer_of_seat,
+        roster,
+        seat_holder_ineligible,
+        seat_occupancy,
+    )
 
     target = (owner or "").strip()
     if not target or target.lower() == "operator":
@@ -274,6 +286,48 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
     if project is not None:
         out = await roster(pool, repo=project)
         agreement, matches = out.get("agreement"), out.get("matches") or []
+
+        if agreement == "conflict" and len(matches) == 2:
+            # TWO RESOLUTIONS ROSTER ITSELF NEVER CLASSIFIES (operator ruling, decision
+            # 2ee59140, relayed Thoth msg 7428) — narrowly scoped to THIS ladder, never
+            # folded into roster's own `governed`/`conflict` split (that split is
+            # deliberately charter-manages-pin-specific, tested against the reverse
+            # direction — see test_roster_repo_lookup_stays_conflict_when_the_manager_edge_
+            # points_the_other_way; widening it there would silently flip that boundary):
+            #
+            # (a) one matched seat MANAGES the other, regardless of which via-signal each
+            # carries (mudra's own shape: vajra matches via both charter+pin, alfred via
+            # charter only, but alfred already manages vajra) — prefer the manager, same
+            # role `governed` gives the charter-seat.
+            #
+            # (b) the two matched seats are an active peer_of pair (rotten-apple: Ptah/Ra;
+            # xxit: deckard/metron) — never a conflict once peered: whichever peer is live,
+            # BOTH when both are (a peer pair is recognized as shared ownership, not two
+            # rivals — silently picking one over the other would be exactly the guess this
+            # ladder refuses to make everywhere else).
+            seat_a, seat_b = matches[0]["seat"], matches[1]["seat"]
+            manager_seat = (
+                seat_b if await manager_of_seat(pool, seat_a) == seat_b else
+                seat_a if await manager_of_seat(pool, seat_b) == seat_a else None)
+            if manager_seat is not None:
+                chosen = next(m for m in matches if m["seat"] == manager_seat)
+                if chosen.get("occupancy") == "occupied" and chosen.get("holder"):
+                    return {"channel": "dm", "target": str(chosen["holder"]), "reason": None}
+                return {"channel": "desk", "target": None,
+                        "reason": f"no live seat for project {project!r} "
+                                  f"(seat {chosen['seat']} is {chosen.get('occupancy')})"}
+            if await peer_of_seat(pool, seat_a) == seat_b:
+                live = [m for m in matches
+                        if m.get("occupancy") == "occupied" and m.get("holder")]
+                if live:
+                    target_out: str | list[str] = (
+                        str(live[0]["holder"]) if len(live) == 1
+                        else [str(m["holder"]) for m in live])
+                    return {"channel": "dm", "target": target_out, "reason": None}
+                return {"channel": "desk", "target": None,
+                        "reason": f"peer pair for project {project!r} "
+                                  f"({seat_a}, {seat_b}) — neither peer is live"}
+
         chosen = None
         if agreement == "governed":
             chosen = next((m for m in matches if "charter" in m["via"]), None)
@@ -334,18 +388,22 @@ async def _nudge_owner(
     pool: asyncpg.Pool, owner: str | None, *, actor: str, body: str,
 ) -> dict[str, Any]:
     """Resolves via the owner-resolution ladder (`resolve_owner_target`), then sends
-    exactly once against that verdict — a DM when a rung resolved, the operator's desk
-    (with the failing rung's own reason appended) otherwise. A race between resolution and
-    send (the target goes cold in between) still falls back to the desk rather than losing
-    the nudge outright."""
+    against that verdict — a DM when a rung resolved (ONE send, except a live peer_of pair
+    where BOTH peers are live: `target` is then a list and each gets the SAME nudge, per
+    the operator's own ruling that a peer pair is shared ownership, never a coin flip), the
+    operator's desk (with the failing rung's own reason appended) otherwise. A race between
+    resolution and send (the target goes cold in between) still falls back to the desk
+    rather than losing the nudge outright."""
     from src.orchestrator.mailbox import send_message
 
     verdict = await resolve_owner_target(pool, owner)
     if verdict["channel"] == "dm":
+        targets = verdict["target"] if isinstance(verdict["target"], list) else [verdict["target"]]
         try:
-            return await send_message(
-                pool, from_agent=actor, from_project="osiris", to_agent=verdict["target"],
-                body=body, grade="ask")
+            sent = [await send_message(
+                pool, from_agent=actor, from_project="osiris", to_agent=t,
+                body=body, grade="ask") for t in targets]
+            return sent[0] if len(sent) == 1 else {"sent_to": targets, "receipts": sent}
         except ValueError as exc:
             verdict = {"channel": "desk", "target": None, "reason": str(exc)}
     return await send_message(

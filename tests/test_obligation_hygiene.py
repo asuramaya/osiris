@@ -22,7 +22,7 @@ from src.orchestrator.obligation_hygiene import (
     obligation_hygiene_scheduled_tick,
     resolve_owner_target,
 )
-from src.orchestrator.seats import bind_holder, ensure_seat
+from src.orchestrator.seats import bind_holder, ensure_seat, peer_seats
 
 NOW = datetime.now(UTC)
 _SRC = "test-source"
@@ -383,6 +383,75 @@ async def test_rung1_shared_house_project_owner_resolves_to_the_house_manager(
 
     out = await resolve_owner_target(actions.pool, "ladderhouse1")
     assert out == {"channel": "dm", "target": "agent:ladderhouse-head", "reason": None}
+
+
+async def test_rung1_conflict_resolves_to_the_manager_regardless_of_via_signal(
+    actions: Actions,
+) -> None:
+    """The mudra shape (operator ruling, decision 2ee59140): one seat matches via BOTH
+    charter and pin, another matches via charter only, but the first is already managed_by
+    the second — roster's own `governed` check never fires here (it requires the CHARTER
+    seat specifically to manage the PIN seat), yet the ladder must still prefer the
+    manager, not fall to a plain 'ambiguous' desk brief."""
+    await _repo(actions, "ladderproj7")
+    managed = await _live_seat(actions, "Ladder7Managed", "agent:ladder7-managed")
+    await set_charter(actions, managed["seat_id"], ["ladderproj7"], actor="test")
+    manager = await _live_seat(actions, "Ladder7Manager", "agent:ladder7-manager")
+    await set_charter(actions, manager["seat_id"], ["ladderproj7"], actor="test")
+    managed_oid = await actions.create_or_find_object("Seat", managed["seat_id"], "test")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    await actions.create_link(managed_oid, manager_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj7")
+    assert out == {"channel": "dm", "target": "agent:ladder7-manager", "reason": None}
+
+
+async def test_rung1_peer_pair_conflict_resolves_to_the_live_peer(
+    actions: Actions,
+) -> None:
+    """Two seats peer_of-bonded on a project (rotten-apple: Ptah/Ra; xxit: deckard/metron,
+    operator ruling decision 2ee59140) — never a conflict once peered."""
+    await _repo(actions, "ladderproj8")
+    live = await _live_seat(actions, "Ladder8Live", "agent:ladder8-live")
+    await set_charter(actions, live["seat_id"], ["ladderproj8"], actor="test")
+    cold = await ensure_seat(actions, house="test", handle="Ladder8Cold", source="test")
+    await set_charter(actions, cold["seat_id"], ["ladderproj8"], actor="test")
+    await peer_seats(actions, live["seat_id"], cold["seat_id"], because="test", actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj8")
+    assert out == {"channel": "dm", "target": "agent:ladder8-live", "reason": None}
+
+
+async def test_rung1_peer_pair_conflict_nudges_both_when_both_are_live(
+    actions: Actions,
+) -> None:
+    await _repo(actions, "ladderproj9")
+    a = await _live_seat(actions, "Ladder9A", "agent:ladder9-a")
+    await set_charter(actions, a["seat_id"], ["ladderproj9"], actor="test")
+    b = await _live_seat(actions, "Ladder9B", "agent:ladder9-b")
+    await set_charter(actions, b["seat_id"], ["ladderproj9"], actor="test")
+    await peer_seats(actions, a["seat_id"], b["seat_id"], because="test", actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj9")
+    assert out["channel"] == "dm"
+    assert set(out["target"]) == {"agent:ladder9-a", "agent:ladder9-b"}
+    assert out["reason"] is None
+
+
+async def test_rung1_peer_pair_conflict_falls_to_the_desk_when_neither_peer_is_live(
+    actions: Actions,
+) -> None:
+    await _repo(actions, "ladderproj10")
+    a = await ensure_seat(actions, house="test", handle="Ladder10A", source="test")
+    await set_charter(actions, a["seat_id"], ["ladderproj10"], actor="test")
+    b = await ensure_seat(actions, house="test", handle="Ladder10B", source="test")
+    await set_charter(actions, b["seat_id"], ["ladderproj10"], actor="test")
+    await peer_seats(actions, a["seat_id"], b["seat_id"], because="test", actor="test")
+
+    out = await resolve_owner_target(actions.pool, "ladderproj10")
+    assert out["channel"] == "desk"
+    assert "neither peer is live" in out["reason"]
 
 
 async def test_rung1_conflicting_project_owner_falls_to_the_desk_with_a_named_reason(
