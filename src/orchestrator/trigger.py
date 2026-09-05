@@ -2811,9 +2811,10 @@ async def _resolve_launch_model(
 
 async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """The generation to mint `_bind_before_spawn`'s heir OF — resolved from the seat's OWN
-    lineage: TENURE first (a lineage that held the seat across 2+ generations, see the
-    inline note), then the handle assertion's source (Thoth's correction, msg 6694), never a
-    lone `holds` edge. The handle-source leg reads the seat's own
+    lineage: TENURE first (a lineage that held the seat across 2+ generations, OR a single
+    generation with real occupancy evidence behind it — see the inline note), then the
+    handle assertion's source (Thoth's correction, msg 6694), never a lone `holds` edge with
+    nothing else to back it. The handle-source leg reads the seat's own
     `handle` assertion's source_id (the property least likely to ever be written by a
     lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
     (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
@@ -2855,6 +2856,36 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     if tenured:
         tenured.sort(reverse=True)
         return await lineage_head(pool, tenured[0][2])
+
+    # ONE GENERATION CAN STILL BE TENURE, WITH REAL OCCUPANCY EVIDENCE BEHIND IT (msg
+    # 7540, closing 24f4ac4c as a code fix): "prefer resume" alone left cassandra/jenny/
+    # khepri/nebbercracker exposed to the same founder-side mis-mint werner/till hit,
+    # because a founder-side `osiris launch` never even reaches this branch's caller
+    # (`_bind_before_spawn` runs unconditionally). The threshold stays 2+ generations —
+    # lowering it would readmit the Marquee specimen (one stray `holds` edge is not
+    # tenure) — but a SINGLE real holder earns the same trust a second generation would
+    # if it left a mount trace: a row in `agent_mounts` (current or past — the table is
+    # the durable registry either way, never a second "is it live" check) whose `cwd`
+    # is the seat's own office (`anchor_cwd`), or whose `seat_id` names this seat
+    # directly (stamped once at `claim_name`, seats.py's own binding act). Marquee's
+    # staleholder never mounted into anything and never claimed the seat — it cannot
+    # produce either row and never will. Ties broken the same way tenure is: most
+    # recent hold first.
+    singles = [(v[-1], b) for b, v in tenure.items() if len(v) == 1]
+    if singles:
+        anchor_cwd = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id WHERE o.canonical=$1 AND o.type='Seat' "
+            "AND a.name='anchor_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+            seat_id)
+        singles.sort(reverse=True)
+        for _, base in singles:
+            occupied = await pool.fetchval(
+                "SELECT 1 FROM agent_mounts WHERE (agent_id=$1 OR agent_id LIKE $1 || '-%') "
+                "AND (seat_id=$2 OR ($3::text IS NOT NULL AND cwd=$3)) LIMIT 1",
+                base, seat_id, anchor_cwd)
+            if occupied:
+                return await lineage_head(pool, base)
 
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "

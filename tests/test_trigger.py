@@ -6210,6 +6210,76 @@ async def test_bind_before_spawn_a_single_stale_edge_is_not_tenure(actions: Acti
     assert out["agent"] == "agent:realmind2-ii"
 
 
+async def test_bind_before_spawn_a_single_holder_with_a_mount_in_the_office_is_tenure(
+    actions: Actions,
+) -> None:
+    """msg 7540, closing 24f4ac4c as a code fix: "prefer resume" alone still left
+    cassandra/jenny/khepri/nebbercracker exposed to a founder-side launch. A single real
+    holder now earns tenure too, IF it left occupancy evidence behind — here, a durable
+    `agent_mounts` row whose cwd is the seat's own office (never live at read time, the
+    "durable" half of "live or durable")."""
+    seat_id = (await ensure_seat(actions, house="alfred", handle="Cassandra2",
+                                 anchor_cwd="/home/x/.osiris/seats/cassandra2",
+                                 source="agent:thothfounder-xiii"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:cassline")
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now() - interval '10 days')",
+        "/home/x/.claude/jobs/cassline-job", "agent:cassline", "osiris",
+        "/home/x/.osiris/seats/cassandra2")
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Cassandra2", house="alfred",
+        current_holder="agent:cassline", office="/home/x/.osiris/seats/cassandra2",
+        anchor="/tmp/anchors/cass2", source="agent:alfred01")
+
+    assert out["agent"] == "agent:cassline-ii"  # cassandra's own lineage, never Thoth's
+    assert "thothfounder" not in out["agent"]
+
+
+async def test_bind_before_spawn_a_single_holder_with_no_occupancy_evidence_is_not_tenure(
+    actions: Actions,
+) -> None:
+    """The Marquee guard survives the new leg too: one holds edge with NO mount trace
+    behind it (never mounted into the office, never claimed the seat) still falls through
+    to the handle-source lineage — lowering the threshold to admit it would readmit the
+    exact specimen the 2+-generation design was built to exclude."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee3",
+                                 anchor_cwd="/home/x/.osiris/seats/marquee3",
+                                 source="agent:realmind3"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:staleholder3")
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee3", house="dealer-to-fb",
+        current_holder="agent:staleholder3", office="/home/x/.osiris/seats/marquee3",
+        anchor="/tmp/anchors/m3", source="agent:thoth01")
+    assert out["agent"] == "agent:realmind3-ii"
+
+
+async def test_bind_before_spawn_a_seat_id_stamped_mount_is_also_occupancy_evidence(
+    actions: Actions,
+) -> None:
+    """The second evidence leg — `agent_mounts.seat_id` stamped directly onto this seat
+    (claim_name's own binding act) — counts even when the mount's `cwd` doesn't match the
+    seat's recorded office (a seat resumed from a worktree, say)."""
+    seat_id = (await ensure_seat(actions, house="alfred", handle="Jenny2",
+                                 anchor_cwd="/home/x/.osiris/seats/jenny2",
+                                 source="agent:thothfounder-xiii"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:jennyline")
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, seat_id, last_seen) "
+        "VALUES ($1, $2, $3, $4, $5, now() - interval '3 days')",
+        "/home/x/.claude/jobs/jenny-job", "agent:jennyline", "osiris",
+        "/some/other/worktree", seat_id)
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Jenny2", house="alfred",
+        current_holder="agent:jennyline", office="/home/x/.osiris/seats/jenny2",
+        anchor="/tmp/anchors/jenny2", source="agent:alfred01")
+
+    assert out["agent"] == "agent:jennyline-ii"
+    assert "thothfounder" not in out["agent"]
+
+
 async def test_resolve_launch_model_is_sticky_to_the_last_holder(actions: Actions) -> None:
     """Alfred's finding (msg 7462): a seat with no `intended_model` stamp came back on the
     global haiku default after the reboot although its whole lineage ran Sonnet 5. The
