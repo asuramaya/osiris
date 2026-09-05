@@ -4747,8 +4747,14 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # process backs, that project is carrying a ghost (a closed tab mid-decay) or a phantom
     # mount (registered, never backed by an actual session) — invisible to any ping-window,
     # visible the instant this is asked. Best-effort: an OS read that fails never breaks fleet().
+    # NON-BLOCKING (thread 0d7a4d3c): measured live, ~25-43ms per call on this fleet
+    # (pgrep -x claude + a /proc read per candidate pid) — synchronous inside this
+    # async function, that's ~25-43ms the shared event loop cannot serve any other
+    # concurrent tool call or request. asyncio.to_thread costs one thread-pool hop,
+    # negligible next to the OS read itself.
     try:
-        os_bodies = {p: len(pids) for p, pids in census.live_bodies().items()}
+        raw_bodies = await asyncio.to_thread(census.live_bodies)
+        os_bodies = {p: len(pids) for p, pids in raw_bodies.items()}
     except Exception:  # noqa: BLE001
         os_bodies = {}
     # PER-IDENTITY, NOT NETTED (thread #174, rotten-apple's own specimen, 2026-08-18): a
@@ -4759,8 +4765,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # `live_bodies_by_cwd()` is cwd-grained (unlike `os_bodies` above, which stays
     # project-grained for its existing consumers/tree render); matching each LIVE node's own
     # `agent_mounts.cwd` against it catches both directions with no netting to cancel through.
+    # NON-BLOCKING (thread 0d7a4d3c): its own separate pgrep+/proc scan, same reasoning
+    # as os_bodies above — a second synchronous OS read in the same request otherwise.
     try:
-        bodies_by_cwd = census.live_bodies_by_cwd() or {}
+        bodies_by_cwd = await asyncio.to_thread(census.live_bodies_by_cwd) or {}
     except Exception:  # noqa: BLE001
         bodies_by_cwd = {}
 
