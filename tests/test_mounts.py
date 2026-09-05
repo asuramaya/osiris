@@ -65,6 +65,38 @@ async def test_agent_liveness_answers_for_the_soul_not_the_numeral(
     mounts._GREETS.clear()
 
 
+async def test_agent_liveness_ever_mounted_survives_a_stale_row(actions: Actions) -> None:
+    """`ever_mounted` (thread ee412c7e, Alfred's post-reboot finding 2): a real
+    agent_mounts row existing at all — however stale — is a distinct, positive fact from
+    `live`. A mind whose row went cold across a reboot must still read ever_mounted=True,
+    the fact a caller needs to avoid the false 'never mounted' claim; a truly unknown
+    identity reads ever_mounted=False, same as live=False."""
+    await mounts.save_mount(actions.pool, job_dir="/j/coldsoul", agent_id="agent:coldsoul01",
+                            project="p", cwd="/w", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '2 hours' "
+        "WHERE agent_id='agent:coldsoul01'")
+    out = await mounts.agent_liveness(actions.pool, "agent:coldsoul01")
+    assert out["live"] is False and out["ever_mounted"] is True
+    never = await mounts.agent_liveness(actions.pool, "agent:trulyneverm1")
+    assert never["live"] is False and never["ever_mounted"] is False
+
+
+async def test_agent_liveness_ever_mounted_survives_the_mount_row_itself_vanishing(
+    actions: Actions,
+) -> None:
+    """The real specimen (Alfred's post-reboot finding 2): the agent_mounts row can be
+    GONE (a sweep, or a reboot leaving the cache empty), not merely stale — mount_seen
+    alone would then wrongly read ever_mounted=False. A durable anchor_sid assertion
+    (record_session_anchor, stamped once per real session, never swept) is the fact that
+    must survive: proof a real session bound to this identity at least once."""
+    a = await actions.create_or_find_object("Agent", "agent:sweptmount1", "test")
+    await actions.assert_property(a, "anchor_sid:cafebabe", "cafebabe00001234", "test",
+                                  datetime.now(UTC), 0.9, evidence_class=_SD)
+    out = await mounts.agent_liveness(actions.pool, "agent:sweptmount1")
+    assert out["live"] is False and out["ever_mounted"] is True
+
+
 async def test_agent_liveness_falls_back_to_last_active_like_fleet_always_has(
     actions: Actions,
 ) -> None:

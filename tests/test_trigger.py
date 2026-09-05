@@ -1173,6 +1173,32 @@ async def test_wake_gate_preflight_reports_queued_live_when_only_last_active_fre
     assert "has never mounted" not in d["detail"]
 
 
+async def test_wake_gate_preflight_reports_cold_mounted_before_not_never_mounted(
+    actions: Actions,
+) -> None:
+    """Alfred's post-reboot finding 2 (msg 7462, thread ee412c7e): agent:fb47aea8-xiv had
+    mounted and sent DMs that same morning, but its agent_mounts row was gone by the time
+    send() ran (the sweep, or a reboot leaving the cache empty — 'the registry went
+    stale') — send() answered 'never-mounted' anyway, a false claim of zero history. NO
+    agent_mounts row at all (so wakeable_identity misses, exactly like the real
+    specimen), but a durable anchor_sid assertion (record_session_anchor, stamped once
+    per real session and never swept) proves a real session bound to this identity
+    before — must report 'cold-mounted-before', never the false-absence 'never-mounted'."""
+    from datetime import UTC, datetime
+
+    a = await actions.create_or_find_object(
+        "Agent", "agent:coldmount1", "agent:coldmount1")
+    await actions.assert_property(a, "anchor_sid:deadbeef", "deadbeef12345678",
+                                  "agent:coldmount1", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    d = await trigger_module.wake_gate_preflight(
+        actions.pool, "agent:coldmount1", settings=_settings(enabled=True))
+    assert d["mode"] == "cold-mounted-before"
+    assert d["status"] == "no-live-body"
+    assert "has never mounted" not in d["detail"]
+    assert "mounted before" in d["detail"]
+
+
 async def test_wake_preflight_mcp_tool_resolves_a_seat_and_never_touches_dispatch(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1939,6 +1965,39 @@ async def test_needs_input_gates_until_the_operators_word(
                            sender="agent:sender", settings=st, spawn=_spawn,
                            windows=_no_windows)
     assert d2["mode"] == "resumed" and spawned == [real_office]
+
+
+async def test_a_47_day_old_desk_brief_no_longer_gates(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Alfred's post-reboot finding 3 (msg 7462, thread ee412c7e): a 47-day-old
+    undismissed desk brief braked a September peer DM as 'queued-needs-input' — the
+    'kept working since' check is itself reboot-fragile (agent_mounts can read no fresh
+    row for a lineage that hasn't remounted yet this boot), so a brief old enough is
+    dropped as a gate outright, 7 days per Thoth's own proposed default (msg 7542 item
+    4), whatever the mount-freshness check alone could or couldn't prove."""
+    from src.orchestrator.offices import _default_office_root
+
+    sense = await _stale_resumable_owner(actions, tmp_path)  # mount last_seen: 1h ago
+    real_office = str(_default_office_root() / "staleowner")
+    await send_message(actions.pool, from_agent="agent:abcd1234", from_project="demo",
+                       to_project=OPERATOR_ADDR, body="which retraction tier?",
+                       desk_kind="decision")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET created_at = now() - interval '47 days' "
+        "WHERE to_project=$1 AND desk_kind='decision'", OPERATOR_ADDR)
+    msg_id = await _dm_to_owner(actions)
+    spawned: list[str] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        spawned.append(repo)
+
+    st = _settings(enabled=True, sense=str(sense))
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=st, spawn=_spawn,
+                          windows=_no_windows)
+    assert d["mode"] != "queued-needs-input"
+    assert d["mode"] == "resumed" and spawned == [real_office]
 
 
 async def test_an_fyi_brief_never_gates(actions: Actions, tmp_path: Path) -> None:

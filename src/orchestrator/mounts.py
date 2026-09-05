@@ -631,7 +631,23 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
         "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%') "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id, base)
     ts = freshest_liveness_ts(mount_seen, last_active_iso)
-    return {"live": is_live(ts), "last_seen": ts.isoformat() if ts is not None else None}
+    # `ever_mounted` (Alfred's post-reboot finding 2, msg 7462, thread ee412c7e): distinct
+    # from `live` on purpose, and deliberately NOT keyed on `mount_seen` alone — agent_
+    # mounts is a CACHE (the same distinction msg 7540/7606's tenure fix draws: a durable
+    # DOOR REGISTRY row, but one the sweep (mounts.py's own doomed-row deletion) or a
+    # server reboot can leave with no row at all for a lineage that genuinely mounted and
+    # sent DMs hours earlier). `anchor_sid:*` (record_session_anchor, stamped once per
+    # real session at handshake time, on the ANONYMOUS-canonical case excepted) is never
+    # swept — the durable, permanent proof "a real session bound to this identity at
+    # least once," the same class of signal the tenure fix's graph-assertion leg trusts
+    # over the mount cache for the identical reason.
+    ever_mounted = mount_seen is not None or bool(await pool.fetchval(
+        "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Agent' AND (o.canonical=$1 OR o.canonical=$2 "
+        "  OR o.canonical LIKE $2 || '-%') AND a.name LIKE 'anchor_sid:%' LIMIT 1",
+        agent_id, base))
+    return {"live": is_live(ts), "last_seen": ts.isoformat() if ts is not None else None,
+            "ever_mounted": ever_mounted}
 
 
 async def project_last_seen(pool: asyncpg.Pool, project: str) -> str | None:
