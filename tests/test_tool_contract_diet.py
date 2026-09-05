@@ -1116,7 +1116,13 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # genuinely accepted them — without this, a real client validating against the schema
 # would have wrongly rejected a legitimate attributed call. seat now costs 13,114 chars,
 # a real cost of correctness, not padding. Measured exact (101,729).
-TOOL_CONTRACT_CEILING_CHARS = 101729
+# 101,729 -> 102,243 (2026-09-05, Sekhmet, thread 4de94895 / decision fff496fe22b0's own
+# named gap): new `resync_pin` action on the seat dispatcher, the third-party sibling of
+# `correct_pin` — mirrors `resync_house`'s own third-party shape exactly (dry_run
+# default, `reason` enforced only at write time). +514 for one new oneOf branch plus its
+# ACTION TABLE docstring line — a real cost of a genuinely missing door, not padding.
+# Measured exact (102,243).
+TOOL_CONTRACT_CEILING_CHARS = 102243
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
