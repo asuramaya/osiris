@@ -110,7 +110,7 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
     # `roadmap_open`/`desk_decisions` (ruling c5b184cd, thread d56e7073/#44) ARE here — real
     # domain logic (echo-filtering, fleet_messages) neither op-tree nor `group` can express.
-    assert list_functions() == ["canon", "closure_health", "coinvest", "desk_decisions",
+    assert list_functions() == ["canon", "census", "closure_health", "coinvest", "desk_decisions",
                                 "desk_overview", "desk_project", "echoes", "family",
                                 "family_drift", "fleet_live", "fleet_live_agents",
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",

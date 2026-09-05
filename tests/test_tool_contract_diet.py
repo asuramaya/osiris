@@ -866,7 +866,10 @@ def _tool_chars(t: Any) -> int:
 # measured exact. #202's own arc closes here — see the closing decision this commit's
 # own report resolves for the final honest tally (tools, chars, hidden aliases, the
 # named tail with one line each on why it stays).
-TOOL_CONTRACT_EXPECTED_COUNT = 73
+# 73 -> 74 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2): `graph_census` — a genuinely
+# new tool (see the char ceiling's own changelog above), not a parameterization of
+# anything existing.
+TOOL_CONTRACT_EXPECTED_COUNT = 74
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1232,7 +1235,13 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # itself). A genuinely new capability, one new oneOf branch (target, agent_id, because,
 # override_live) plus one ACTION TABLE line — trimmed to the shortest true description
 # already. Measured exact (103,857), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 103857
+# 103,857 -> 104,690 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2): `graph_census`, a
+# genuinely new tool — three obligations (a78b6987, 7917b404, b2208b94) were stuck on a
+# direct-DB-script workaround purely because no MCP verb could answer a plain population
+# count, itself a house-law violation (raw SQL against the kernel is a defect report,
+# never a shortcut). One new tool, one string param (`kind`), two supported kinds
+# documented in the docstring. Measured exact (104,690), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 104690
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

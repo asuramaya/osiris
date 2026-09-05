@@ -1243,6 +1243,23 @@ async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None)
 
 
 @mcp.tool()
+async def graph_census(kind: str) -> dict[str, Any]:
+    """A small, growable set of read-only population counts over the GRAPH (Thoth dispatch
+    7543 item 2) — the smallest door for a question that is a genuine count, never a
+    raw-SQL workaround. Distinct from `src.orchestrator.census` (the OS-process liveness
+    census, unrelated) — this one is the compositions Function named `census`.
+    `kind='seat_property_contradictions'`: every (seat, property) pair currently holding
+    more than one live distinct value, fleet-wide. `kind='cohort'`: the #189 adoption
+    instrument's own cohort-aged connectivity figures (delegates to `adoption_meter`,
+    never re-derives its SQL). An unrecognized `kind` reports the valid set, never guesses."""
+    pool = await _pool_get()
+    spec = {"op": "function", "name": "census", "args": {"kind": kind}}
+    out = await comp.run_spec(pool, spec, None, name="census")
+    items: dict[str, Any] = out["items"]
+    return items
+
+
+@mcp.tool()
 async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
                      offset: int = 0) -> dict[str, Any]:
     """The graph audits ITSELF — report-only, never writes. Checks: contradiction,
