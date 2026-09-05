@@ -16,6 +16,9 @@ This guide takes you from an empty environment to a running Osiris instance with
   - [DeepSeek Harness (DSH)](https://github.com/deepseek-ai)
   - Claude Code
   - Cursor, Windsurf, OpenDevin, or any standard MCP client
+- **Test-suite only** (not needed to run the service, only for `uv run pytest`):
+  - Node.js — `test_js_syntax.py` shells out to `node --check` on the static UI's `.js` files
+  - `zstd` — `test_dsh_adapter.py` builds its fixtures via a real `zstd`-compressed session
 
 ---
 

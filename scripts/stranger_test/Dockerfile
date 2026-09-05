@@ -16,9 +16,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # git + ca-certificates/curl satisfy the (undocumented!) implicit prerequisite of having git
 # at all — INSTALL.md's prerequisites list omits git even though step 1 is `git clone`, see
-# the harness report. docker.io gives us dockerd+cli for the nested engine.
+# the harness report. docker.io gives us dockerd+cli for the nested engine. nodejs/zstd are
+# INSTALL.md's own "test-suite only" prerequisites (decision fb8e723c, thread 6d62ba2f) —
+# test_js_syntax.py shells out to `node --check`, test_dsh_adapter.py to `zstd`; without
+# them here step 7a's `uv run pytest` wall-hits on a genuinely clean stranger box.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl docker.io \
+      git ca-certificates curl docker.io nodejs zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # uv, via the officially linked install method (docs/INSTALL.md links docs.astral.sh/uv,
