@@ -2781,9 +2781,39 @@ async def _bind_before_spawn(
     return out
 
 
+async def _resolve_launch_model(
+    pool: asyncpg.Pool, seat_id: str, *, model: str | None, facts: dict[str, Any],
+    settings: Any,
+) -> tuple[str | None, str]:
+    """(model, where it came from) for a launch/resume spawn. Precedence: the caller's own
+    explicit param -> the seat's stamped `intended_model` -> the model the seat's LAST
+    holder actually ran on (`source_model` on the newest generation that ever held it) ->
+    the trigger's global `osiris_wake_model`. Alfred's post-reboot finding (msg 7462): till
+    and werner ran Sonnet 5 for their whole lineage and came back on the haiku default
+    because neither seat carried an `intended_model` stamp — a seat's model is sticky across
+    successions, and the receipt (`model_source`) now says which leg supplied it."""
+    if model:
+        return model, "explicit"
+    stamped = facts.get("intended_model")
+    if stamped:
+        return str(stamped), "intended_model"
+    last = await pool.fetchval(
+        "SELECT sm.value #>> '{}' FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "JOIN current_assertions sm ON sm.object_id=f.id AND sm.name='source_model' "
+        "WHERE t.canonical=$1 AND l.type='holds' AND f.type='Agent' "
+        "ORDER BY l.id DESC LIMIT 1", seat_id)
+    if last:
+        return str(last), "last_holder"
+    default = settings.osiris_wake_model or None
+    return default, "wake_default"
+
+
 async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """The generation to mint `_bind_before_spawn`'s heir OF — resolved from the seat's OWN
-    lineage, never from its `holds` edge (Thoth's correction, msg 6694). Reads the seat's own
+    lineage: TENURE first (a lineage that held the seat across 2+ generations, see the
+    inline note), then the handle assertion's source (Thoth's correction, msg 6694), never a
+    lone `holds` edge. The handle-source leg reads the seat's own
     `handle` assertion's source_id (the property least likely to ever be written by a
     lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
     (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
@@ -2804,15 +2834,34 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
     caller's own `or current_holder` fallback), because a CLI actor sentinel is exactly
     that: a label for WHO deliberately typed a command, never a fact about which agent
     lineage built this seat."""
+    from src.orchestrator.agents import _generation, lineage_head
+    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
+
+    # TENURE FIRST (the werner/till specimen, 2026-09-05, decision fb85dd4f): a lineage that
+    # has held this seat across TWO OR MORE generations IS the seat's own lineage — one
+    # stale `holds` edge (Marquee's unrelated staleholder) cannot fake tenure, while the
+    # handle assertion's author CAN be a founder who never sat here (Thoth XIII wrote
+    # werner's and till's handles when it founded those seats; msg 7059's "confess, never
+    # change" ruling let Alfred's post-reboot launches mint both bodies as Thoth's own
+    # generations 37 and 38). Most generations wins; the most recent hold breaks a tie.
+    rows = await pool.fetch(
+        "SELECT f.canonical, l.id FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND f.type='Agent' ORDER BY l.id", seat_id)
+    tenure: dict[str, list[int]] = {}
+    for i, r in enumerate(rows):
+        tenure.setdefault(_generation(str(r["canonical"]))[0], []).append(i)
+    tenured = [(len(v), max(v), b) for b, v in tenure.items() if len(v) >= 2]
+    if tenured:
+        tenured.sort(reverse=True)
+        return await lineage_head(pool, tenured[0][2])
+
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
         "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
     if not source:
         return None
-    from src.orchestrator.agents import _generation, lineage_head
-    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
-
     if source in _OPERATOR_ACTORS:
         return None
     # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
@@ -3151,7 +3200,8 @@ async def launch_seat(
     # a model per worker), and only then the trigger's own global default. The old order
     # skipped the stamp entirely, which is why a seat pinned to sonnet-5 could spawn on
     # whatever osiris_wake_model happened to be that day, silently.
-    argv_model = model or facts.get("intended_model") or st.osiris_wake_model or None
+    argv_model, model_source = await _resolve_launch_model(
+        actions.pool, target_seat, model=model, facts=facts, settings=st)
     name = f"[{_house_tag(house)}] {handle}"
 
     out: dict[str, Any]
@@ -3215,6 +3265,7 @@ async def launch_seat(
         out = {
             "status": "launched", "window": spawned, "seat": res.get("seat_id", target_seat),
             "body_exists": bool(spawned), "can_receive": alive, "spawned_model": argv_model,
+            "model_source": model_source,
             "detail": ("body created and live" if alive else
                        "body created; mount NOT yet confirmed — the claude is booting and "
                        "will self-bind via its attach token; confirm with pty_list / "
@@ -3349,7 +3400,7 @@ async def launch_seat(
         out = {
             "status": "launched", "window": name, "seat": target_seat,
             "body_exists": True, "can_receive": alive_row is not None,
-            "spawned_model": argv_model,
+            "spawned_model": argv_model, "model_source": model_source,
             "detail": ("body created and live" if alive_row is not None else
                        "body created; mount NOT yet confirmed — the claude is booting and "
                        "will self-bind via its own boot prompt; confirm with `claude agents "
@@ -3464,7 +3515,8 @@ async def resume_seat(
     office, facts = setup["office"], setup["facts"]
 
     st = settings or get_settings()
-    argv_model = model or facts.get("intended_model") or st.osiris_wake_model or None
+    argv_model, model_source = await _resolve_launch_model(
+        actions.pool, target_seat, model=model, facts=facts, settings=st)
 
     # THE RESUME LANE (mechanism moved verbatim from launch_seat's own former harness
     # branch, task #199 lane 3C — behavior UNCHANGED, only where it lives). `holder` (not
@@ -3536,7 +3588,7 @@ async def resume_seat(
     out = {
         "status": "launched", "mode": "resumed", "seat": target_seat,
         "session": session_id, "body_exists": True, "can_receive": True,
-        "spawned_model": argv_model, "attach": attach,
+        "spawned_model": argv_model, "model_source": model_source, "attach": attach,
         "resume_check": resume_log,
         "detail": f"resumed session {session_id[:8]} as a ONE-SHOT turn — walked "
                   f"{len(resume_log)} generation(s) back to find it "

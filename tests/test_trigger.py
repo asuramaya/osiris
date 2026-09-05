@@ -6162,3 +6162,80 @@ def test_job_id_anchors_on_the_innermost_jobs_component():
     assert _job_id("/home/u/.claude/jobs/outer111/tmp/x/jobs/inner222") == "inner222"
     assert _job_id("/home/u/.claude/jobs/outer111") == "outer111"
     assert _job_id(None) is None
+
+
+async def test_bind_before_spawn_trusts_tenure_over_the_handle_assertions_author(
+    actions: Actions,
+) -> None:
+    """THE WERNER/TILL SPECIMEN (2026-09-05, decision fb85dd4f): both seats were FOUNDED
+    by Thoth XIII in July, so their `handle` assertions are sourced from Thoth's lineage,
+    while their own lineages (c1b99f6e / fb47aea8) held them across eleven generations
+    each. Alfred's post-reboot launches minted both bodies as Thoth's own generations 37
+    and 38 — msg 7059's "confess, never change" ruling let the founder's lineage win. A
+    lineage that has held the seat across 2+ generations IS the seat's own; one stale
+    edge cannot fake tenure, but a founder's authorship of the handle proves nothing."""
+    seat_id = (await ensure_seat(actions, house="alfred", handle="Werner",
+                                 source="agent:thothfounder-xiii"))["seat_id"]
+    from src.orchestrator.agents import mint_heir
+    root_oid = await actions.create_or_find_object("Agent", "agent:wernerline", "test")
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:wernerline")
+    heir, _ = await mint_heir(actions, "agent:wernerline", root_oid, because="test",
+                              succession=None)
+    await bind_holder(actions, seat_id=seat_id, agent_id=heir)
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Werner", house="alfred",
+        current_holder=heir, office="/tmp/werner", anchor="/tmp/anchors/werner",
+        source="agent:alfred01")
+
+    assert out["agent"] == "agent:wernerline-iii"  # werner's own lineage, never Thoth's
+    assert "thothfounder" not in out["agent"]
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert row["canonical"] == "agent:wernerline-iii"
+
+
+async def test_bind_before_spawn_a_single_stale_edge_is_not_tenure(actions: Actions) -> None:
+    """The Marquee guard survives: ONE holds edge from an unrelated agent is not tenure, so
+    the handle-source lineage still wins there (the test above this file already pins)."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee2",
+                                 source="agent:realmind2"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:staleholder2")
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Marquee2", house="dealer-to-fb",
+        current_holder="agent:staleholder2", office="/tmp/m2", anchor="/tmp/anchors/m2",
+        source="agent:thoth01")
+    assert out["agent"] == "agent:realmind2-ii"
+
+
+async def test_resolve_launch_model_is_sticky_to_the_last_holder(actions: Actions) -> None:
+    """Alfred's finding (msg 7462): a seat with no `intended_model` stamp came back on the
+    global haiku default after the reboot although its whole lineage ran Sonnet 5. The
+    last holder's `source_model` now sits between the stamp and the default, and the
+    receipt names the leg."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    seat_id = (await ensure_seat(actions, house="alfred", handle="Till2",
+                                 source="agent:founder"))["seat_id"]
+    oid = await actions.create_or_find_object("Agent", "agent:tillline-xiv", "test")
+    await actions.assert_property(oid, "source_model", "claude-sonnet-5", "test",
+                                  datetime.now(UTC), 0.6, evidence_class="direct_observation")
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:tillline-xiv")
+    st = SimpleNamespace(osiris_wake_model="claude-haiku-4-5-20251001")
+
+    assert await trigger_module._resolve_launch_model(
+        actions.pool, seat_id, model=None, facts={}, settings=st,
+    ) == ("claude-sonnet-5", "last_holder")
+    assert await trigger_module._resolve_launch_model(
+        actions.pool, seat_id, model=None, facts={"intended_model": "claude-opus-5"},
+        settings=st) == ("claude-opus-5", "intended_model")
+    assert await trigger_module._resolve_launch_model(
+        actions.pool, seat_id, model="x", facts={}, settings=st) == ("x", "explicit")
+    bare = (await ensure_seat(actions, house="alfred", handle="Nobody2",
+                              source="console"))["seat_id"]
+    assert await trigger_module._resolve_launch_model(
+        actions.pool, bare, model=None, facts={}, settings=st,
+    ) == ("claude-haiku-4-5-20251001", "wake_default")
