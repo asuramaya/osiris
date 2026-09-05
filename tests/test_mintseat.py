@@ -70,6 +70,51 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     assert await _linked(actions, out["seat_id"], manager)
 
 
+async def test_mint_seat_stamps_a_per_seat_founder_source_not_the_shared_manager(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d,
+    msg 7059's own follow-on): mint_seat used to carry the minting manager's own agent
+    id as the source on EVERY worker's `handle` assertion — measured live at
+    production scale: 17 real managed seats share one manager's id this way, all
+    resolving to that manager's CURRENT lineage head under _seat_lineage_ancestor.
+    Each fresh worker now gets its own `_FOUNDER_SOURCE_PREFIX + handle` source
+    instead (handle is globally unique), with the manager kept only as a `founded_by`
+    ATTRIBUTION property — never anything lineage-shaped again."""
+    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX
+
+    manager = await _seat(actions, "Steward", "osiris")
+    offices = tmp_path / "seats"
+
+    out_a = await mint_seat(actions, manager="Steward", handle="Workera",
+                            office_root=offices / "a", actor="agent:steward01")
+    out_b = await mint_seat(actions, manager="Steward", handle="Workerb",
+                            office_root=offices / "b", actor="agent:steward01")
+
+    async def _handle_source(seat_id: str) -> str:
+        return await actions.pool.fetchval(
+            "SELECT h.source_id FROM current_assertions h JOIN objects o "
+            "ON o.id=h.object_id WHERE o.canonical=$1 AND o.type='Seat' "
+            "AND h.name='handle' ORDER BY h.confidence DESC, h.observed_at DESC "
+            "LIMIT 1", seat_id)
+
+    source_a = await _handle_source(out_a["seat_id"])
+    source_b = await _handle_source(out_b["seat_id"])
+    assert source_a == f"{_FOUNDER_SOURCE_PREFIX}Workera"
+    assert source_b == f"{_FOUNDER_SOURCE_PREFIX}Workerb"
+    assert source_a != source_b  # never shared across seats, no matter the manager
+
+    async def _founded_by(seat_id: str) -> str:
+        return await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+            "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='founded_by'", seat_id)
+
+    assert await _founded_by(out_a["seat_id"]) == "agent:steward01"
+    assert await _founded_by(out_b["seat_id"]) == "agent:steward01"
+    assert await _linked(actions, out_a["seat_id"], manager)  # managed_by is unaffected
+    assert await _linked(actions, out_b["seat_id"], manager)
+
+
 async def test_a_intended_model_is_configurable(actions: Actions, tmp_path: Path) -> None:
     await _seat(actions, "Steward", "osiris")
     offices = tmp_path / "seats"

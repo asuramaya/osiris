@@ -2739,7 +2739,11 @@ async def _bind_before_spawn(
     from src.orchestrator.seats import bind_holder
 
     now = datetime.now(UTC)
-    ancestor = await _seat_lineage_ancestor(actions.pool, target_seat) or current_holder
+    lineage_ancestor = await _seat_lineage_ancestor(actions.pool, target_seat)
+    ancestor = lineage_ancestor or current_holder
+    legacy_warning = (
+        await _legacy_lineage_confession(actions.pool, target_seat, lineage_ancestor)
+        if lineage_ancestor else None)
     if ancestor:
         ancestor_oid = await actions.create_or_find_object("Agent", ancestor, source)
         heir_id, _heir_oid = await mint_heir(
@@ -2771,7 +2775,10 @@ async def _bind_before_spawn(
     await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id,
                      project=resolved_project if resolved_project is not None else house,
                      cwd=office, model=None, session_key=None, alive=False)
-    return {"agent": heir_id, "generation": _generation(heir_id)[1]}
+    out: dict[str, Any] = {"agent": heir_id, "generation": _generation(heir_id)[1]}
+    if legacy_warning:
+        out["legacy_lineage_warning"] = legacy_warning
+    return out
 
 
 async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
@@ -2818,6 +2825,37 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
         return None
     base = _generation(str(source))[0]
     return await lineage_head(pool, base)
+
+
+async def _legacy_lineage_confession(
+    pool: asyncpg.Pool, seat_id: str, lineage_ancestor: str,
+) -> str | None:
+    """A ONE-LINE, RECEIPT-ONLY WARNING, never a refusal, never a behavior change (msg
+    7059's own ruling): 17 real managed seats, minted before `_FOUNDER_SOURCE_PREFIX`
+    existed, still carry their minting manager's own agent id as their `handle`
+    assertion's source — the same actor-as-lineage shape e6ac651d fixed for new mints,
+    left DELIBERATELY untouched here for seats that already exist (existing chains are
+    not rewritten without a further ruling). Every one of them measured correct today
+    (each resolves to its own real, distinct lineage) purely because none has gone
+    through this exact ancestor branch on a genuine first-ever launch since msg 6692
+    landed — a fact about their history, not a guarantee. This confesses the exposure
+    on the receipt whenever it's actually exercised, so a human watching launches can
+    catch a legacy seat before it silently inherits the wrong lineage, without this
+    function refusing or altering anything about the mint itself."""
+    from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
+
+    source = await pool.fetchval(
+        "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
+        "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
+        "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+    if not source or source in _OPERATOR_ACTORS or str(source).startswith(_FOUNDER_SOURCE_PREFIX):
+        return None
+    return (f"legacy lineage source: {seat_id}'s ancestor ({lineage_ancestor!r}) was "
+            f"resolved from a pre-fix handle-assertion source ({source!r}) — the actor "
+            "or manager that minted this seat, never a verified prior generation of its "
+            "own (e6ac651d/msg 7059). Correct today only because this source's own "
+            "lineage has never been reused as another seat's own ancestor; not "
+            "guaranteed to stay that way.")
 
 
 async def _resolve_launch_project(

@@ -158,7 +158,9 @@ class BoundedMCP(FastMCP):
             assert tool is not None  # call_tool already raised if the name were unknown
             return tool.fn_metadata.convert_result(fit(result, tool=name))
         finally:
-            _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000)
+            action = arguments.get("action")
+            _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000,
+                              action if isinstance(action, str) else "")
 
     async def list_tools(self) -> list[MCPTool]:
         """HIDDEN ALIASES (task #199 lane 2, thread 6778 — the consolidation-without-an-
@@ -255,7 +257,7 @@ async def _nudge_tool_list_refresh(ctx: Context | None) -> None:
 # caller's real cost across dozens of rows. Resolved CACHE-ONLY from `_agents` (never a new
 # `_ident_for` reattach, which can hit Postgres) — see `_caller_for` below.
 _TOOL_STATS_FLUSH_INTERVAL_S = 60
-_tool_call_stats: dict[tuple[str, str], dict[str, float]] = {}
+_tool_call_stats: dict[tuple[str, str, str], dict[str, float]] = {}
 _tool_stats_flush_task: asyncio.Task[None] | None = None
 _tool_stats_window_start: datetime | None = None
 # WHAT THIS CANNOT SEE — lives in tool_traffic()'s own output (`blind_spots`), not only in a
@@ -311,8 +313,8 @@ def _caller_for(ctx: Context | None) -> str:
     return _generation(ident.agent_id)[0] if ident is not None else "unattributed"
 
 
-def _record_tool_call(name: str, caller: str, ms: float) -> None:
-    row = _tool_call_stats.setdefault((name, caller), {"count": 0.0, "total_ms": 0.0})
+def _record_tool_call(name: str, caller: str, ms: float, action: str = "") -> None:
+    row = _tool_call_stats.setdefault((name, caller, action), {"count": 0.0, "total_ms": 0.0})
     row["count"] += 1
     row["total_ms"] += ms
 
@@ -345,10 +347,10 @@ async def _flush_tool_stats_once() -> None:
     try:
         pool = await _pool_get()
         await pool.executemany(
-            "INSERT INTO mcp_tool_stats (tool_name, caller, window_start, window_end, "
-            "call_count, total_ms) VALUES ($1, $2, $3, $4, $5, $6)",
-            [(tool, caller, window_start, window_end, int(v["count"]), v["total_ms"])
-             for (tool, caller), v in batch.items()],
+            "INSERT INTO mcp_tool_stats (tool_name, caller, action, window_start, "
+            "window_end, call_count, total_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            [(tool, caller, action, window_start, window_end, int(v["count"]), v["total_ms"])
+             for (tool, caller, action), v in batch.items()],
         )
     except Exception:  # noqa: BLE001 — telemetry must never break serving
         import logging
@@ -582,14 +584,13 @@ _pool: asyncpg.Pool | None = None
 @mcp.tool()
 async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
     """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE — call count + total/avg wall-clock time,
-    newest-cost-first, cut two ways: `persisted`/`current_unflushed_window` by TOOL
-    (summed across callers), `persisted_by_caller`/`current_unflushed_by_caller` by
-    CALLER (summed across tools — is a tool's cost concentrated in one caller or spread
-    across many). `persisted` reads flushed 60s windows from `mcp_tool_stats` going
-    back `window_minutes`; the `current_unflushed_*` pair is the live in-memory
-    counters since the last flush — may be a partial window. Failures count too, so a
-    broken tool doesn't read as cheap. `blind_spots` names what this can never see —
-    read it before trusting a total."""
+    newest-cost-first, cut three ways: by TOOL (`persisted`/`current_unflushed_window`),
+    by CALLER (`..._by_caller`), by (TOOL, ACTION) under a dispatcher (`..._by_action`,
+    empty action = ordinary call). `persisted` reads flushed 60s windows back `window_minutes`;
+    `current_unflushed_*` is live since the last flush. Failures count too.
+    `retired_alias_traffic`: the alias-decay instrument — a hidden alias's own traffic
+    next to the dispatcher action that absorbed it; `eligible_for_removal` needs BOTH
+    at zero. `blind_spots` names what this can't see."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
     tool_rows = await pool.fetch(
@@ -602,6 +603,11 @@ async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY caller ORDER BY total_ms DESC", since,
     )
+    action_rows = await pool.fetch(
+        "SELECT tool_name, action, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "FROM mcp_tool_stats WHERE window_start >= $1 AND action <> '' "
+        "GROUP BY tool_name, action ORDER BY total_ms DESC", since,
+    )
 
     def _fmt(calls: int, total_ms: float) -> dict[str, Any]:
         return {"calls": calls, "total_ms": round(total_ms, 1),
@@ -610,16 +616,24 @@ async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
     persisted = [{"tool": r["tool_name"], **_fmt(r["calls"], r["total_ms"])} for r in tool_rows]
     persisted_by_caller = [
         {"caller": r["caller"], **_fmt(r["calls"], r["total_ms"])} for r in caller_rows]
+    persisted_by_action = [
+        {"tool": r["tool_name"], "action": r["action"], **_fmt(r["calls"], r["total_ms"])}
+        for r in action_rows]
 
     by_tool: dict[str, dict[str, float]] = {}
     by_caller: dict[str, dict[str, float]] = {}
-    for (tool, caller), v in _tool_call_stats.items():
+    by_action: dict[tuple[str, str], dict[str, float]] = {}
+    for (tool, caller, action), v in _tool_call_stats.items():
         t = by_tool.setdefault(tool, {"count": 0.0, "total_ms": 0.0})
         t["count"] += v["count"]
         t["total_ms"] += v["total_ms"]
         c = by_caller.setdefault(caller, {"count": 0.0, "total_ms": 0.0})
         c["count"] += v["count"]
         c["total_ms"] += v["total_ms"]
+        if action:
+            a = by_action.setdefault((tool, action), {"count": 0.0, "total_ms": 0.0})
+            a["count"] += v["count"]
+            a["total_ms"] += v["total_ms"]
     live = [
         {"tool": name, **_fmt(int(v["count"]), v["total_ms"])}
         for name, v in sorted(by_tool.items(), key=lambda kv: -kv[1]["total_ms"])
@@ -628,12 +642,37 @@ async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
         {"caller": name, **_fmt(int(v["count"]), v["total_ms"])}
         for name, v in sorted(by_caller.items(), key=lambda kv: -kv[1]["total_ms"])
     ]
+    live_by_action = [
+        {"tool": tool, "action": action, **_fmt(int(v["count"]), v["total_ms"])}
+        for (tool, action), v in sorted(by_action.items(), key=lambda kv: -kv[1]["total_ms"])
+    ]
+
+    persisted_calls = {r["tool_name"]: int(r["calls"]) for r in tool_rows}
+    persisted_action_calls = {(r["tool_name"], r["action"]): int(r["calls"])
+                              for r in action_rows}
+    retired_alias_traffic = []
+    for alias, action in sorted(_RETIRED_ALIAS_ACTIONS.items()):
+        own_calls = (persisted_calls.get(alias, 0)
+                    + int(by_tool.get(alias, {}).get("count", 0)))
+        action_calls = (persisted_action_calls.get((_RETIRED_ALIAS_DISPATCHER, action), 0)
+                       + int(by_action.get((_RETIRED_ALIAS_DISPATCHER, action), {})
+                             .get("count", 0)))
+        retired_alias_traffic.append({
+            "alias": alias, "own_name_calls": own_calls,
+            "absorbed_into": f"{_RETIRED_ALIAS_DISPATCHER}(action={action!r})",
+            "absorbed_action_calls": action_calls,
+            "eligible_for_removal": own_calls == 0 and action_calls == 0,
+        })
+
     return {
         "window_minutes": window_minutes,
         "persisted": persisted,
         "current_unflushed_window": live,
         "persisted_by_caller": persisted_by_caller,
         "current_unflushed_by_caller": live_by_caller,
+        "persisted_by_action": persisted_by_action,
+        "current_unflushed_by_action": live_by_action,
+        "retired_alias_traffic": retired_alias_traffic,
         "measures": "MCP tool calls on this one shared osiris-mcp process only",
         "blind_spots": list(_TOOL_STATS_BLIND_SPOTS),
     }
@@ -2791,6 +2830,32 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "wake": (["target", "message"], ["target", "message"]),
     "wake_preflight": (["target"], ["target"]),
 }
+
+# THE FOLD MAP (task #202/#204, Thoth msg 7039/7040/7059, piece 2/3 of the gate-half):
+# a hidden alias's OWN traffic reads permanently zero the moment its real callers switch
+# to `seat(action=...)` instead — the exact reading that would misfire the alias-decay
+# rule ("removed only at zero traffic") the moment it looks at these names in isolation.
+# This is the single source of truth for "which dispatcher action absorbed this retired
+# name" — shared by tool_traffic()'s alias-decay instrument below AND the (tool, action)
+# parity gate in tests/test_cli_mcp_parity.py, so the two never drift against each
+# other. `seat_edge` itself folded TWO actions (attach/detach) and is intentionally
+# absent here — it has no single successor action, both are named directly instead.
+_RETIRED_ALIAS_ACTIONS: dict[str, str] = {
+    "mint_seat": "mint", "stop": "stop", "walk_in": "walk_in", "pause_seat": "pause",
+    "vacate_seat": "vacate", "rebind_seat": "rebind", "bind_seat_tree": "bind_tree",
+    "charter": "charter", "charter_for": "charter_for",
+    "heal_seat_anchor": "heal_anchor", "heal_seat_transcript": "heal_transcript",
+    "transition_seat_project": "transition_project", "resync_seat_house": "resync_house",
+    "sweep_seat_disk": "sweep_disk", "rename_seat": "rename",
+    "set_seat_attended": "set_attended", "reissue_office": "reissue_office",
+    "establish_office": "establish_office", "invalidate_works_in": "invalidate_works_in",
+    "reconcile_seat_identity": "reconcile_identity", "correct_house": "correct_house",
+    "correct_pin_value": "correct_pin", "revert_own_pin_write": "revert_pin",
+}
+# every retired name above dispatches through this one tool today — a SECOND dispatcher
+# folding some of these same names further would need its own map, not a rename of this
+# constant (kept as a dict value, not hardcoded "seat" at each read site, for that day).
+_RETIRED_ALIAS_DISPATCHER = "seat"
 
 
 async def _seat_impl(

@@ -40,9 +40,12 @@ def test_record_tool_call_accumulates_count_and_ms_per_tool_and_caller() -> None
     srv._record_tool_call("orient", "agent:thoth", 7.5)
     srv._record_tool_call("orient", "agent:seshat", 9.0)
     srv._record_tool_call("mount", "agent:thoth", 3.0)
-    assert srv._tool_call_stats[("orient", "agent:thoth")] == {"count": 2, "total_ms": 20.0}
-    assert srv._tool_call_stats[("orient", "agent:seshat")] == {"count": 1, "total_ms": 9.0}
-    assert srv._tool_call_stats[("mount", "agent:thoth")] == {"count": 1, "total_ms": 3.0}
+    assert srv._tool_call_stats[("orient", "agent:thoth", "")] == {
+        "count": 2, "total_ms": 20.0}
+    assert srv._tool_call_stats[("orient", "agent:seshat", "")] == {
+        "count": 1, "total_ms": 9.0}
+    assert srv._tool_call_stats[("mount", "agent:thoth", "")] == {
+        "count": 1, "total_ms": 3.0}
 
 
 def test_record_tool_call_counts_a_failed_call_too() -> None:
@@ -51,7 +54,21 @@ def test_record_tool_call_counts_a_failed_call_too() -> None:
     calls as cheap. This test proves the accumulator itself has no success-only bias;
     BoundedMCP.call_tool's own try/finally wiring is what actually guarantees the call."""
     srv._record_tool_call("dossier", "agent:thoth", 4.0)
-    assert srv._tool_call_stats[("dossier", "agent:thoth")]["count"] == 1
+    assert srv._tool_call_stats[("dossier", "agent:thoth", "")]["count"] == 1
+
+
+def test_record_tool_call_keeps_action_a_separate_dimension() -> None:
+    """task #202/#204 (msg 7040/7059): an object-type dispatcher's own bare tool_name
+    must never collapse every action into one bucket — (tool, caller, action) is three
+    independent axes, not two plus a label. Ordinary, non-dispatcher calls default to
+    action='' and stay exactly as before (proven by the two tests above, unchanged)."""
+    srv._record_tool_call("seat", "agent:thoth", 5.0, "mint")
+    srv._record_tool_call("seat", "agent:thoth", 3.0, "stop")
+    srv._record_tool_call("seat", "agent:thoth", 2.0, "mint")
+    assert srv._tool_call_stats[("seat", "agent:thoth", "mint")] == {
+        "count": 2, "total_ms": 7.0}
+    assert srv._tool_call_stats[("seat", "agent:thoth", "stop")] == {
+        "count": 1, "total_ms": 3.0}
 
 
 def test_caller_for_is_cache_only_never_reattaches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,3 +166,60 @@ async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spot
     assert any("get_console" in s and "app.py" in s for s in out["blind_spots"])
     assert any("duplicate implementation" in s and "create_room" in s for s in out["blind_spots"])
     assert "MCP tool calls" in out["measures"]
+
+
+@pytest.mark.asyncio
+async def test_tool_traffic_breaks_a_dispatcher_down_by_action(
+    actions: Actions, _use_test_pool: None,
+) -> None:
+    """task #202/#204 (msg 7040/7059): `seat` alone folds 30 actions into one tool_name —
+    persisted_by_action/current_unflushed_by_action are the cut that keeps attribution
+    at the real, per-verb grain under a dispatcher, exactly the way persisted_by_caller
+    already does for WHO instead of WHAT."""
+    await actions.pool.execute(
+        "INSERT INTO mcp_tool_stats (tool_name, caller, action, window_start, "
+        "window_end, call_count, total_ms) VALUES "
+        "('seat', 'agent:thoth', 'mint', now() - interval '30 seconds', now(), 3, 90.0), "
+        "('seat', 'agent:thoth', 'stop', now() - interval '30 seconds', now(), 1, 5.0), "
+        "('orient', 'agent:thoth', '', now() - interval '30 seconds', now(), 2, 20.0)")
+    srv._record_tool_call("seat", "agent:seshat", 6.0, "mint")
+
+    out = await srv.tool_traffic(window_minutes=5)
+
+    assert out["persisted_by_action"] == [
+        {"tool": "seat", "action": "mint", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0},
+        {"tool": "seat", "action": "stop", "calls": 1, "total_ms": 5.0, "avg_ms": 5.0},
+    ]  # 'orient' with action='' is excluded — not a dispatcher call
+    assert out["current_unflushed_by_action"] == [
+        {"tool": "seat", "action": "mint", "calls": 1, "total_ms": 6.0, "avg_ms": 6.0}]
+
+
+@pytest.mark.asyncio
+async def test_tool_traffic_alias_decay_instrument_reads_the_absorbed_action_not_the_bare_name(
+    actions: Actions, _use_test_pool: None,
+) -> None:
+    """THE ALIAS-DECAY RULE (msg 7059: 'an alias is removed only at zero traffic') would
+    misfire the moment a fold lands: mint_seat's own bare tool_name reads permanently
+    zero after the #202 seat dispatcher shipped, because every real caller now goes
+    through seat(action='mint') instead — a naive zero-traffic reading on the alias
+    alone would wrongly call it dead. This instrument reads BOTH halves: the alias's own
+    (expected-zero) traffic and the dispatcher action that actually absorbed it, and
+    only calls a name eligible for removal when both are genuinely zero."""
+    await actions.pool.execute(
+        "INSERT INTO mcp_tool_stats (tool_name, caller, action, window_start, "
+        "window_end, call_count, total_ms) VALUES "
+        "('seat', 'agent:thoth', 'mint', now() - interval '30 seconds', now(), 4, 40.0)")
+
+    out = await srv.tool_traffic(window_minutes=5)
+    by_alias = {r["alias"]: r for r in out["retired_alias_traffic"]}
+
+    mint = by_alias["mint_seat"]
+    assert mint["own_name_calls"] == 0  # the alias itself is never called directly anymore
+    assert mint["absorbed_into"] == "seat(action='mint')"
+    assert mint["absorbed_action_calls"] == 4  # real usage, just under the new name
+    assert mint["eligible_for_removal"] is False  # real traffic exists, just relocated
+
+    stop = by_alias["stop"]  # never called at all, either as itself or as an action
+    assert stop["own_name_calls"] == 0
+    assert stop["absorbed_action_calls"] == 0
+    assert stop["eligible_for_removal"] is True
