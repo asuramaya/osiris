@@ -230,22 +230,57 @@ async def test_fold_seat_by_handle_claim_alone(actions: Actions, tmp_path: Path)
     assert "claimed the name" in out["will_fold"][0]["evidence"]
 
 
-async def test_a_rebased_lineage_is_never_swallowed_by_its_ancestors_prefix(
+async def test_a_generation_overflow_chain_is_one_family_nothing_to_fold(
         actions: Actions, tmp_path: Path) -> None:
+    """SUPERSEDES the old "-g40 is a rebase into a new lineage" premise (msg 7623): that
+    premise was itself the bug (commit 9cd1054/thread ee412c7e's sibling fix) — `-g40`
+    is generation 40 of the SAME soul, not a different one, and `-g40-ii` is generation
+    41 of it, whatever segments sit in between. fold_seat's own family grouping
+    (`_generation`'s base) now correctly folds all four labels into ONE family, so there
+    is genuinely nothing external left to fold into the living head — will_fold is
+    empty, not a list of "ancestors to absorb." The negative control below proves the
+    dash-boundary discipline this replaces still holds for a GENUINELY different root."""
     offices, projects = tmp_path / "offices", tmp_path / "projects"
     _office(offices, "khnum", "riverhouse")
-    await _agent(actions, "agent:aaaa1111")            # the old base...
-    await _agent(actions, "agent:aaaa1111-iii")        # ...and its generations
-    await _agent(actions, "agent:aaaa1111-g40")        # the REBASE — the living lineage
-    await _agent(actions, "agent:aaaa1111-g40-ii")
+    await _agent(actions, "agent:aaaa1111")
+    await _agent(actions, "agent:aaaa1111-iii")
+    await _agent(actions, "agent:aaaa1111-g40")         # the overflow reset, same soul
+    await _agent(actions, "agent:aaaa1111-g40-ii")       # generation 41, same soul
     _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111-iii"),
                 age_secs=3600)
     _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:aaaa1111-g40-ii"))
     out = await fold_seat(actions, handle="khnum", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["living_head"] == "agent:aaaa1111-g40-ii"
-    assert [f["label"] for f in out["will_fold"]] == ["agent:aaaa1111",
-                                                      "agent:aaaa1111-iii"]
+    assert out["will_fold"] == []
+
+
+async def test_a_differently_rooted_agent_sharing_a_string_prefix_is_never_swallowed(
+        actions: Actions, tmp_path: Path) -> None:
+    """The negative control Thoth's ruling asked for: an agent whose canonical merely
+    LIKE-matches a family's SQL sweep pattern (`base || '-%'`) but whose OWN
+    `_generation()` root is itself — "realbogus" is neither a valid roman numeral nor a
+    g<N> overflow marker — must never be swept into that family's fold, whatever a raw
+    LIKE query alone would match. fold_seat's own exact-base filter
+    (`_generation(row)[0] != base: continue`) is what protects this; this pins it still
+    holds under the recursive-unwind `_generation` (modeled on
+    test_fold_seat_by_handle_claim_alone's own shape: a DIFFERENT root, bbbb2222,
+    claims the seat's name, so aaaa1111's whole family folds into it)."""
+    offices = tmp_path / "offices"
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _office(offices, "khnum", "riverhouse")
+    old, new = datetime.now(UTC) - timedelta(days=9), datetime.now(UTC)
+    await _agent(actions, "agent:aaaa1111", handle="Khnum VIII", at=old)
+    await _agent(actions, "agent:aaaa1111-iii")
+    await _agent(actions, "agent:aaaa1111-realbogus")  # LIKE-matches, but a distinct root
+    await _agent(actions, "agent:bbbb2222-ii", handle="Khnum", at=new)
+    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+                          office_root=offices, projects_root=projects)
+    assert out["resident"] == "agent:bbbb2222-ii"
+    folded = [f["label"] for f in out["will_fold"]]
+    assert folded == ["agent:aaaa1111", "agent:aaaa1111-iii"]  # the real family, swept in
+    assert "agent:aaaa1111-realbogus" not in folded  # LIKE-matched, but a distinct root
 
 
 async def test_demote_visits_touches_only_the_tieless(actions: Actions) -> None:

@@ -2621,28 +2621,32 @@ def test_rank_open_threads_owner_match_is_lineage_aware() -> None:
     ]
 
 
-def test_rank_open_threads_string_parse_misses_a_multi_hop_lineage() -> None:
+def test_rank_open_threads_string_parse_misses_a_renamed_lineage() -> None:
     """The gap `owner_lineage_roots` closes (decision — Thoth's dispatch, measured live
     2026-08-16: 18 of 71 distinct open-thread owners disagreed, every one a real lineage).
-    `_generation()` strips only the LAST `-<roman>` segment: for a multi-hop id like
-    `agent:x-g40-g40-vii` (Thoth's own real shape across this reign), the string parse
-    lands on `agent:x-g40-g40`, a DIFFERENT string than an earlier generation's own
-    string-parsed root (`agent:x-g40` for `agent:x-g40-iii`) — even though both are, in
-    truth, the exact same lineage. Ownership never hides a row (every claim still shows,
-    RANKING is the only effect) — so without `owner_roots`, the earlier-generation claim
-    still shows but sorts BELOW a genuinely unrelated claim, exactly as if it belonged to
-    a stranger — the WITHOUT-fix baseline this fix corrects (proven by the sibling test
-    using a real owner_roots map, where it sorts back above)."""
+    `_generation()` reads ONLY the canonical STRING — it can unwind a numbering artifact
+    (msg 7606/7623's own overflow-chain fix folded that class of miss back in), but a
+    lineage that changed to a genuinely DIFFERENT root string — a rename, a merge, an
+    identity repair — shares no substring at all with its predecessor, and no string
+    parser can ever bridge that; only the graph's own `succeeded_from` edges can. That is
+    what `owner_lineage_roots` walks and this fallback path does not. Ownership never
+    hides a row (every claim still shows, RANKING is the only effect) — so without
+    `owner_roots`, the earlier (differently-named) generation's claim still shows but
+    sorts BELOW a genuinely unrelated claim, exactly as if it belonged to a stranger —
+    the WITHOUT-fix baseline this fix corrects (proven by the sibling test using a real
+    owner_roots map, where it sorts back above)."""
     from src.mcp_server import _rank_open_threads
 
-    me = frozenset({"agent:x-g40-g40-vii"})
+    me = frozenset({"agent:newsoul-ii"})
     rows = [
         {"summary": "a-strangers-claim", "kind": "obligation", "owner": "agent:unrelated"},
-        {"summary": "mine-across-the-hop", "kind": "obligation", "owner": "agent:x-g40-iii"},
+        {"summary": "mine-before-the-rename", "kind": "obligation",
+         "owner": "agent:oldsoul-iii"},
     ]
     shown, _ = _rank_open_threads(rows, me)  # no owner_roots — string-parse fallback
-    assert [r["summary"] for r in shown] == ["a-strangers-claim", "mine-across-the-hop"], (
-        "under the OLD string-parse, the multi-hop claim ranks no higher than a stranger's")
+    assert [r["summary"] for r in shown] == ["a-strangers-claim", "mine-before-the-rename"], (
+        "no string parse, however unwound, can connect two genuinely different root "
+        "strings — only the edge-walked owner_roots can")
 
 
 async def test_owner_lineage_roots_resolves_a_multi_hop_lineage_the_string_parse_misses(

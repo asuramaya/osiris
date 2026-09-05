@@ -1608,6 +1608,36 @@ def test_generation_overflow_suffix_round_trips_instead_of_re_basing() -> None:
     assert _generation("agent:x-green") == ("agent:x-green", 1)        # not digits after 'g'
 
 
+def test_generation_unwinds_a_whole_chain_of_overflow_resets() -> None:
+    """test_greatfold's own catch (msg 7623) on the first cut of the overflow fix: a
+    single-segment check missed the composite shape a REAL mint sequence produces — a
+    roman suffix immediately after a g-reset (`...-g40-ii`, two more generations minted
+    normally before the fix landed). `_generation` must peel the WHOLE chain from the
+    right, landing on the TRUE root and TRUE total generation — ground truth here comes
+    from literally simulating the OLD buggy next_generation from generation 1 and
+    reading off the true step count at each landmark id, not a naive sum (a segment
+    past the first one only ever adds `value - 1`, since the old bug re-based each
+    reset's LOCAL count at 1, not 0)."""
+    from src.orchestrator.agents import _generation, next_generation
+
+    assert _generation("agent:x-g40-ii") == ("agent:x", 41)
+    assert _generation("agent:x-g40-xxxix") == ("agent:x", 78)
+    assert _generation("agent:x-g40-g40") == ("agent:x", 79)
+    assert _generation("agent:x-g40-g40-ii") == ("agent:x", 80)
+    assert _generation("agent:ad1a1cb0-g40-g40-xxxviii") == ("agent:ad1a1cb0", 116)
+    assert _generation("agent:ad1a1cb0-g40-g40-xxxix") == ("agent:ad1a1cb0", 117)
+    assert _generation("agent:ad1a1cb0-g40-g40-g40") == ("agent:ad1a1cb0", 118)
+    # next_generation heals the shape going forward: one clean new segment from the
+    # true root and true total, never another append onto the broken chain
+    assert next_generation("agent:x-g40-ii") == "agent:x-g42"
+    # a chain that starts with an ordinary roman (no reset yet) is unaffected
+    assert _generation("agent:x-iii") == ("agent:x", 3)
+    # still never misparses a real hex/UUID tail — i/v/x are not hex digits, so no
+    # segment of one can ever falsely round-trip, chain or no chain
+    assert _generation("agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21") == (
+        "agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21", 1)
+
+
 async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
     """A never-retired identity re-mounting is an ordinary re-attach — no reanimation flag, no
     stamp. The guard must fire ONLY on a winning retired=true, or every re-mount cries wolf."""

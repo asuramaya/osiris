@@ -184,21 +184,46 @@ def _generation(canonical: str) -> tuple[str, int]:
     as a brand-new ROOT starting over at generation 1. Climbing another 39 generations
     from there hit the same fallback again — a second `-g40` — and so on, forever,
     every 39 generations: Thoth's real generation count was ~118 by the time this
-    fired a THIRD time and minted `...-g40-g40-g40`. Parsing the `g<N>` suffix here
-    (N>39, the only range `_to_roman` ever emits it for, and only in the exact digit
-    form it emits — no leading zeros, nothing `_to_roman` itself wouldn't produce)
-    closes the loop: `next_generation` on `...-g40` now correctly yields `...-g41`,
-    not another reset."""
-    root, sep, suffix = canonical.rpartition("-")
-    if sep and root:
+    fired a THIRD time and minted `...-g40-g40-g40`.
+
+    UNWINDS THE WHOLE CHAIN, NOT JUST THE LAST SEGMENT (test_greatfold's own catch,
+    msg 7623, on the first cut of this fix): a legacy id can carry an ORDINARY roman
+    suffix immediately after a g-reset (`...-g40-ii` — the reset landed on generation
+    40, then two MORE generations minted normally before the next reset or before this
+    fix ever landed), so reading only the trailing segment left `...-g40-ii` parsing to
+    root `...-g40` (itself unparsed) at generation 2 — fold_seat's own family grouping
+    still split one soul into two. This peels segments from the RIGHT in a loop, as
+    long as each one parses as either a roman numeral (>=2) or a `g<N>` marker (N>39,
+    the exact digit form `_to_roman` emits, nothing else). NOT a plain sum: the OLD
+    buggy `next_generation`, applied repeatedly, always re-based each reset's LOCAL
+    count at 1 (not 0), so a segment past the first one only ever adds `(value - 1)`
+    true generations on top of what came before — verified by literally simulating the
+    old buggy next_generation from generation 1 and reading off the true step count at
+    each landmark id (`...-g40-g40-xxxviii` lands at true generation 116 this way, NOT
+    the 118 a naive sum would give — Thoth's own "-g40-g40-g40" mint, one hop later, is
+    118). Stops at the first segment that parses as neither (the true root, or a
+    hex/UUID tail the i/v/x-only alphabet was built never to misparse —
+    test_generation_math_is_hex_safe's own guarantee, unchanged: a segment must consist
+    ENTIRELY of i/v/x to parse as roman, and none of those three characters is a valid
+    hex digit, so a real UUID segment can never falsely round-trip)."""
+    root = canonical
+    total: int | None = None
+    while True:
+        new_root, sep, suffix = root.rpartition("-")
+        if not sep or not new_root:
+            break
         g = _from_roman(suffix)
-        if g is not None and g >= 2:
-            return root, g
-        if suffix.startswith("g") and suffix[1:].isdigit():
+        if g is None and suffix.startswith("g") and suffix[1:].isdigit():
             n = int(suffix[1:])
             if n > 39 and str(n) == suffix[1:]:
-                return root, n
-    return canonical, 1
+                g = n
+        if g is None or g < 2:
+            break
+        total = g if total is None else total + (g - 1)
+        root = new_root
+    if total is None:
+        return canonical, 1
+    return root, total
 
 
 def next_generation(canonical: str) -> str:
