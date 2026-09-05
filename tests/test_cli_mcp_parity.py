@@ -76,6 +76,35 @@ NO_MCP_EQUIVALENT = {
         "correct-agent-house's own entry above; retire_agent carries meta="
         "{'deprecated': True} from the #202 wave-3 retire_object fold, still fully "
         "callable, its own CLI door untouched by the fold.",
+    "stop": "NOT actually MCP-less — same hidden-alias shape as correct-agent-house's own "
+        "entry above; stop carries meta={'deprecated': True} from the #202 seat-dispatcher "
+        "build (msg 7039), still fully callable, its own CLI door untouched by the fold.",
+    "charter-for": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "house's own entry above; charter_for carries meta={'deprecated': True} from the "
+        "#202 seat-dispatcher build (msg 7039), still fully callable.",
+    "rebind-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "house's own entry above; rebind_seat carries meta={'deprecated': True} from the "
+        "#202 seat-dispatcher build (msg 7039), still fully callable.",
+    "correct-pin-value": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "agent-house's own entry above; correct_pin_value carries meta="
+        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "fully callable.",
+    "heal-seat-anchor": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "agent-house's own entry above; heal_seat_anchor carries meta="
+        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039) ON TOP OF "
+        "its own pre-existing self/third-party consolidation (task #199 lane 2) — still "
+        "fully callable either way.",
+    "transition-seat-project": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; transition_seat_project carries meta="
+        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "fully callable.",
+    "heal-seat-transcript": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "agent-house's own entry above; heal_seat_transcript carries meta="
+        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "fully callable.",
+    "mint-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "house's own entry above; mint_seat carries meta={'deprecated': True} from the "
+        "#202 seat-dispatcher build (msg 7039), still fully callable.",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
           "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
           "that already exists arriving and naming ITSELF) — different actor, different "
@@ -181,18 +210,18 @@ CLI_ONLY_PARAMS = {
 MCP_ONLY_PARAMS = {
     ("launch", "message"): "the CLI has no way to deliver an opening brief in one act "
         "today — a real gap, named rather than hidden, not yet built",
-    ("heal_seat_anchor", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) "
-        "is the same concept, inverted and renamed to match this house's --apply repair "
-        "convention rather than the MCP tools' own dry_run=True default.",
     ("resume", "message"): "same gap as launch's own message param above — the CLI has "
         "no way to deliver an opening brief in one act today; not yet built",
-    ("transition_seat_project", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
-        "above) is the same concept, inverted and renamed to match this house's --apply "
-        "repair convention rather than the MCP tools' own dry_run=True default.",
-    ("heal_seat_transcript", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
-        "above) is the same concept, inverted and renamed to match this house's --apply "
-        "repair convention rather than the MCP tools' own dry_run=True default — "
-        "identical shape to heal_seat_anchor's own entry above.",
+    # NOT RETARGETED to ("seat", "dry_run") (#202 seat dispatcher, msg 7039): _mcp_tools()
+    # reads a tool's params off inputSchema["properties"] directly — a flat-schema
+    # assumption that seat's hand-built oneOf-per-action schema (SEAT_INPUT_SCHEMA, no
+    # top-level "properties" key) breaks entirely, reading as an EMPTY param set. The
+    # three entries that lived here (heal_seat_anchor/transition_seat_project/
+    # heal_seat_transcript, each -> dry_run) are DELETED rather than pointed at a name
+    # this gate cannot actually check — Thoth's own dispatch (msg 7039) already assigns
+    # the (tool, action)-aware gate extension to Khnum, after per-seat lineage lands;
+    # until then, honest omission beats a table entry this gate would flag as stale on
+    # sight. transition_seat_project's own dry_run entry is deleted for the same reason.
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -204,29 +233,21 @@ RENAMED_PARAMS = {
     ("launch", "handle", "launch", "target"):
         "the same seat reference, two names — found building this detector, not by a "
         "human; not yet reconciled",
-    ("stop", "handle", "stop", "target"):
-        "the same seat reference, two names — MATCHES launch's own handle/target split "
-        "exactly (the entry above), and deliberately so: stop is launch's inverse and the "
-        "pair must read identically at the terminal. Reconciling this means reconciling "
-        "BOTH together, never one of them (Thoth LXXXVII, 2026-08-28)",
-    ("charter-for", "seat", "charter_for", "seat_id"):
-        "the same seat reference, two names — found building this detector; not yet "
-        "reconciled",
+    # ("stop", "handle", ...) and ("charter-for", "seat", ...) DELETED rather than
+    # retargeted at "seat" (#202 seat dispatcher, msg 7039) — same reason as the deleted
+    # MCP_ONLY_PARAMS entries above: _mcp_tools() reads seat's params off inputSchema
+    # ["properties"], which the hand-built oneOf schema leaves empty, so any entry
+    # naming a specific seat param would read as stale on sight. Both CLI doors (stop,
+    # charter-for) are covered by NO_MCP_EQUIVALENT above instead, which only needs
+    # tool-level existence, not a param match. Khnum's (tool, action)-aware gate
+    # extension (Thoth dispatch 7039, after per-seat lineage lands) is the real fix.
     ("resume", "handle", "resume", "target"):
         "the same seat reference, two names — MATCHES launch's own handle/target split "
         "exactly (both entries above), and deliberately so: resume is launch's own sibling "
         "verb now, split from it by the same ruling (60c78788/41a41437); the pair must "
         "read identically at the terminal for the same reason stop/launch already do",
-    ("heal-seat-anchor", "seat", "heal_seat_anchor", "seat_id"):
-        "the same seat reference, two names — same shape as charter-for/seat above. "
-        "heal_seat_anchor was consolidated (task #199 lane 2, thread 6778): it now takes "
-        "an optional `seat_id` covering what heal_seat_anchor_third_party's own `seat_id` "
-        "used to (that name is now a hidden, deprecated alias forwarding here, dropped "
-        "from list_tools() but still callable — see mcp_server.py's BoundedMCP.list_tools "
-        "override). The CLI door (`osiris heal-seat-anchor <seat> --because`) still "
-        "calls identity_heal.heal_seat_anchor_third_party directly, unchanged and "
-        "unaffected by the MCP-layer consolidation; its own `seat` param maps to this "
-        "same `seat_id`, not yet reconciled by name.",
+    # ("heal-seat-anchor", "seat", ...) DELETED, same reason as stop/charter-for above —
+    # covered by NO_MCP_EQUIVALENT instead, pending Khnum's (tool, action)-aware gate.
     ("retire-agent", "seat", "retire_object", "target"):
         "the same agent reference, two names — same shape as charter-for/seat and "
         "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
@@ -236,11 +257,11 @@ RENAMED_PARAMS = {
         "hidden (meta={'deprecated': True}), the CLI door still calls agents.retire_agent "
         "directly, unchanged and unaffected by the MCP-layer fold — same reasoning as "
         "heal-seat-anchor's own entry above, this comparison just needs a LIVE mcp name "
-        "to check itself against.",
-    ("heal-seat-transcript", "seat", "heal_seat_transcript", "handle"):
-        "the same seat reference, two names — the CLI positional is named `seat` to "
-        "match every other third-party-target door in this file; the MCP tool's own "
-        "param is `handle`, unchanged (#204).",
+        "to check itself against. UNCHANGED by the #202 seat dispatcher (msg 7039): "
+        "retire_object stays its own live tool (kind='project'/'agent' still route "
+        "through it; only kind='seat' also gained a seat(action='retire') door).",
+    # ("heal-seat-transcript", "seat", ...) DELETED, same reason as heal-seat-anchor
+    # above — covered by NO_MCP_EQUIVALENT instead.
 }
 
 # LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
@@ -298,6 +319,13 @@ BINDING_VERBS = frozenset({
     # retire_agent folded into one door; flips objects.status the same way each of the
     # three hidden aliases already did.
     "retire_object",
+    # `seat` (#202 seat dispatcher, operator ruling f9182ad7, Thoth dispatch 7039) — the
+    # first object-type dispatcher: 23 of the binding-mover names above (mint_seat
+    # through heal_seat_transcript) fold into this one door's actions, all kept as
+    # hidden deprecated aliases. Writes holds/house/handle/managed_by/pin/works_in
+    # across nearly every action, the same 6823 rule the individual verbs it absorbs
+    # were each added under.
+    "seat",
 })
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
@@ -347,6 +375,13 @@ NO_CLI_EQUIVALENT = {
         "retire_project/retire_agent inherits the same CLI gap two of the three "
         "already carried (retire_agent's own CLI door stays a direct third-party "
         "act, untouched by the fold, not routed through this new door).",
+    "seat": "BY DESIGN, permanent — the operator's own price-minimizer #3 (ruling "
+        "f9182ad7, Thoth dispatch 7039): 'the CLI stays verb-per-command' even as the "
+        "MCP surface moves to object-type dispatchers. Every action seat(action=...) "
+        "covers already has (or will have) its own CLI subcommand (stop, mint-seat, "
+        "rebind-seat, ...) calling the underlying orchestrator function directly, "
+        "unaffected by the MCP-layer fold — a raw `osiris seat --action=...` door was "
+        "deliberately never scoped, not a gap to close.",
     "fork_project": "not yet built — same scoping note as create_project.",
     # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
     # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
@@ -943,6 +978,24 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # get_object_list(object_type=...) — #202 wave 4: get_thread_list/get_decision_list
     # folded into one door (both hidden deprecated aliases). Pure read, not a binding-mover.
     "get_object_list": {"binding_verb": False, "parameterizes": "get_thread_list"},
+    # seat(action=...) — #202 SEAT DISPATCHER, operator ruling f9182ad7, Thoth dispatch
+    # 7039, migration plan decision 620bdb32: the first object-type dispatcher under the
+    # new surface-shape rule. 23 standalone tools fold in as hidden deprecated aliases
+    # (mint_seat, stop, walk_in, pause_seat, vacate_seat, rebind_seat, bind_seat_tree,
+    # seat_edge, charter, charter_for, heal_seat_anchor, heal_seat_transcript,
+    # transition_seat_project, resync_seat_house, sweep_seat_disk, rename_seat,
+    # set_seat_attended, reissue_office, establish_office, invalidate_works_in,
+    # reconcile_seat_identity, correct_house, correct_pin_value, revert_own_pin_write —
+    # 24 names, one more than "23" above counts because seat_edge itself was already a
+    # wave-3 dispatcher whose two actions (attach/detach) both fold in under this one
+    # name). launch/resume/wake/wake_preflight ALSO dispatch here but stay separately
+    # named (not aliases, not decaying) — see the migration plan's own reasoning for
+    # keeping them dual-reachable. retire_object and retire() deliberately stay OUT
+    # (retire_object still serves kind='project'/'agent', no dispatcher for those yet;
+    # retire() is session-lifecycle, a documented open question per the plan's own
+    # correction addendum). Binding-mover: writes holds/house/handle/managed_by/pin/
+    # works_in across nearly every action.
+    "seat": {"binding_verb": True, "parameterizes": "mint_seat"},
 }
 
 

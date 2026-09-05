@@ -120,6 +120,19 @@ def _strip_redundant_titles(schema: Any) -> Any:
     return schema
 
 
+# HAND-BUILT DISCRIMINATED-UNION SCHEMAS (task #202, operator ruling f9182ad7, price-
+# minimizer #1): an object-type dispatcher's real inputSchema — a oneOf branch per
+# `action` — cannot come from FastMCP's own signature-driven auto-generation, which only
+# ever emits one flat object schema no matter how a function branches internally. Each
+# dispatcher registers its own hand-authored schema here (tool name -> schema dict);
+# BoundedMCP.list_tools() below substitutes it in place of the auto-generated one, the
+# SAME override seam the title-strip already uses. Populated after each dispatcher's own
+# schema constant is defined (forward reference resolved at list_tools() CALL time, well
+# after module load — the same late-binding every function body in this file already
+# relies on).
+_HAND_BUILT_SCHEMAS: dict[str, dict[str, Any]] = {}
+
+
 class BoundedMCP(FastMCP):
     """FastMCP with a WAIST — every tool result passes the response budget on its way out.
 
@@ -180,7 +193,8 @@ class BoundedMCP(FastMCP):
         them, unlike a title no client reads)."""
         tools = [t for t in await super().list_tools() if not (t.meta or {}).get("deprecated")]
         return [t.model_copy(update={
-            "inputSchema": _strip_redundant_titles(t.inputSchema),
+            "inputSchema": (_HAND_BUILT_SCHEMAS[t.name] if t.name in _HAND_BUILT_SCHEMAS
+                            else _strip_redundant_titles(t.inputSchema)),
             "outputSchema": (_strip_redundant_titles(t.outputSchema)
                              if t.outputSchema else t.outputSchema),
         }) for t in tools]
@@ -2540,76 +2554,796 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
     return out
 
 
+# ============================================================================================
+# SEAT DISPATCHER (task #202, operator ruling f9182ad7, Thoth dispatch 7039, migration plan
+# decision 620bdb32 + amendment): the first object-type dispatcher under the new surface-shape
+# rule. 22 standalone tools dissolve into this one door's actions; launch/resume/wake/
+# wake_preflight stay named (hot ten / lifecycle siblings) AND also become seat actions,
+# unchanged bodies, no alias-decay for those four since they are not retiring.
+#
+# PARAM UNIFICATION: the 22 originals used FOUR different names for "which seat/agent" —
+# seat_id, seat, handle, worker, target. This dispatcher standardizes on `target` for every
+# EXISTING-object reference; `handle` is kept separate and reserved for the two CREATE actions
+# (mint, walk_in) where a name is being minted, not resolved — conflating "the name I am
+# creating" with "the object I am modifying" would be the wrong kind of DRY.
+#
+# THE EXPLICIT-NULL PROBLEM (resync_house's `new_house`, correct_pin's `value`): both letters'
+# original signatures required the KEY to be present even when the value is None (None being a
+# legal, meaningful "unset" value, not "omitted"). A flat shared-params signature loses that
+# distinction unless marked — `_UNSET` is a sentinel string (never a legal house name or pin
+# value) used ONLY for these two params' default, so pre-dispatch validation can tell "caller
+# forgot this required param" apart from "caller explicitly unset it."
+_UNSET = "__seat_dispatcher_unset__"
+
+
+def _seat_action_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """One oneOf branch: `action` pinned to a const, plus this action's own properties/
+    required — never the union's params, never another action's shape leaking in.
+    `additionalProperties: False` — a real client that mistypes a param for this action
+    gets a rejection here, before the call ever reaches _seat_impl's own pre-dispatch
+    validation (belt and suspenders, not a duplicate: this catches an unknown param
+    name, the runtime check catches a missing required one)."""
+    return {"type": "object", "properties": properties, "required": required,
+            "additionalProperties": False}
+
+
+def _s(desc: str = "") -> dict[str, Any]:
+    return {"type": "string"}
+
+
+def _opt_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
+
+
+def _b(default: bool) -> dict[str, Any]:
+    return {"type": "boolean", "default": default}
+
+
+def _list_s() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def _opt_list_s() -> dict[str, Any]:
+    return {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+            "default": None}
+
+
+def _action_const(name: str) -> dict[str, Any]:
+    return {"type": "string", "const": name}
+
+
+# THE SUBAGENT-ATTRIBUTION TRIO: subagent_id/subagent_type carry attribution for an
+# ephemeral hand, session_anchor pins a specific mounted connection — all three genuinely
+# optional, but part of the real accepted surface for every branch whose original
+# standalone tool took them (stop/walk_in/launch/resume/wake); pause_seat's own original
+# took session_anchor alone. Declared once, spread into the branches that need it, so a
+# real client validating against this schema doesn't reject a legitimate attributed call.
+_SUBAGENT_TRIO = {"subagent_id": _opt_s(), "subagent_type": _opt_s(),
+                  "session_anchor": _opt_s()}
+_SESSION_ANCHOR_ONLY = {"session_anchor": _opt_s()}
+
+
+# THE HAND-BUILT DISCRIMINATED UNION (price-minimizer #1, operator ruling f9182ad7) —
+# FastMCP's own signature-driven auto-generation cannot express "these params depend on
+# `action`"; it only ever emits one flat object schema. This is authored directly, wired into
+# BoundedMCP.list_tools() below (the same seam the title-strip already overrides), and never
+# touches call_tool's own argument validation (that stays the flat pydantic signature on
+# `seat()` itself — this schema is what a MODEL reads before calling, pre-dispatch validation
+# inside _seat_impl is what actually enforces per-action correctness at call time).
+SEAT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _seat_action_schema({
+            "action": _action_const("mint"), "handle": _s(), "project": _opt_s(),
+            "model": _opt_s(), "house": _opt_s(),
+        }, ["action", "handle"]),
+        _seat_action_schema({
+            "action": _action_const("stop"), "target": _opt_s(), "reason": _s(),
+            **_SUBAGENT_TRIO,
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("walk_in"), "handle": _s(),
+            "wants_office": {"type": "boolean"}, "cwd": _opt_s(), "job_dir": _opt_s(),
+            "model": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "handle", "wants_office"]),
+        _seat_action_schema({
+            "action": _action_const("pause"), "paused": _b(True), "target": _opt_s(),
+            "reason": _s(), **_SESSION_ANCHOR_ONLY,
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("vacate"), "target": _s(), "because": _s(),
+        }, ["action", "target", "because"]),
+        _seat_action_schema({
+            "action": _action_const("retire"), "target": _s(), "because": _s(),
+            "override_live": _b(False),
+        }, ["action", "target"]),
+        _seat_action_schema({
+            "action": _action_const("rebind"), "target": _s(), "new_cwd": _s(),
+            "extract": _b(False), "force": _b(False), "because": _s(),
+        }, ["action", "target", "new_cwd"]),
+        _seat_action_schema({
+            "action": _action_const("bind_tree"), "target": _s(), "tree_cwd": _s(),
+            "because": _s(),
+        }, ["action", "target", "tree_cwd", "because"]),
+        _seat_action_schema({
+            "action": _action_const("attach"), "target": _s(), "manager": _s(),
+            "because": _s(),
+        }, ["action", "target", "manager", "because"]),
+        _seat_action_schema({
+            "action": _action_const("detach"), "target": _s(), "because": _s(),
+        }, ["action", "target", "because"]),
+        _seat_action_schema({
+            "action": _action_const("charter"), "repos": _opt_list_s(),
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("charter_for"), "target": _s(), "repos": _list_s(),
+            "because": _s(),
+        }, ["action", "target", "repos", "because"]),
+        _seat_action_schema({
+            "action": _action_const("heal_anchor"), "target": _opt_s(), "because": _opt_s(),
+            "dry_run": _b(True),
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("heal_transcript"), "target": _s(),
+            "source_paths": _list_s(), "dry_run": _b(True), "because": _s(),
+        }, ["action", "target", "source_paths"]),
+        _seat_action_schema({
+            "action": _action_const("transition_project"), "fabricated_project": _opt_s(),
+            "real_project": _opt_s(), "because": _s(), "repos": _opt_list_s(),
+            "dry_run": _b(True),
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("resync_house"), "target": _s(), "new_house": _opt_s(),
+            "reason": _s(),
+        }, ["action", "target", "reason"]),
+        _seat_action_schema({
+            "action": _action_const("sweep_disk"), "target": _s(), "dry_run": _b(True),
+            "because": _s(),
+        }, ["action", "target"]),
+        _seat_action_schema({
+            "action": _action_const("rename"), "target": _s(), "new_handle": _s(),
+            "because": _s(),
+        }, ["action", "target", "new_handle", "because"]),
+        _seat_action_schema({
+            "action": _action_const("set_attended"), "target": _s(), "attended": _s(),
+            "because": _s(),
+        }, ["action", "target", "attended", "because"]),
+        _seat_action_schema({
+            "action": _action_const("reissue_office"), "target": _s(), "because": _s(),
+            "adopt": _b(False),
+        }, ["action", "target", "because"]),
+        _seat_action_schema({
+            "action": _action_const("establish_office"), "target": _s(),
+        }, ["action", "target"]),
+        _seat_action_schema({
+            "action": _action_const("invalidate_works_in"), "stale_project": _s(),
+            "because": _s(),
+        }, ["action", "stale_project", "because"]),
+        _seat_action_schema({
+            "action": _action_const("reconcile_identity"), "target": _opt_s(),
+            "agent_id": _opt_s(), "because": _opt_s(),
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("correct_house"), "new_house": _s(),
+        }, ["action", "new_house"]),
+        _seat_action_schema({
+            "action": _action_const("correct_pin"), "key": _s(), "value": _opt_s(),
+            "reason": _s(),
+        }, ["action", "key", "reason"]),
+        _seat_action_schema({
+            "action": _action_const("revert_pin"),
+        }, ["action"]),
+        _seat_action_schema({
+            "action": _action_const("launch"), "target": _s(), "message": _s(),
+            "model": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "target"]),
+        _seat_action_schema({
+            "action": _action_const("resume"), "target": _s(), "message": _s(),
+            "model": _opt_s(), **_SUBAGENT_TRIO,
+        }, ["action", "target"]),
+        _seat_action_schema({
+            "action": _action_const("wake"), "target": _s(), "message": _s(),
+            **_SUBAGENT_TRIO,
+        }, ["action", "target", "message"]),
+        _seat_action_schema({
+            "action": _action_const("wake_preflight"), "target": _s(),
+        }, ["action", "target"]),
+    ],
+}
+_HAND_BUILT_SCHEMAS["seat"] = SEAT_INPUT_SCHEMA
+
+# action -> the params it actually accepts (beyond `action`/`ctx`/subagent plumbing) and which
+# of those are REQUIRED — the pre-dispatch validation price-minimizer (#2): a caller who
+# mis-shapes a call gets back the action's own expected param list in ONE round trip, never a
+# generic pydantic complaint or (worse) a wrong write from a silently-defaulted param.
+_SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
+    # action: (all_accepted, required)
+    "mint": (["handle", "project", "model", "house"], ["handle"]),
+    "stop": (["target", "reason"], []),
+    "walk_in": (["handle", "wants_office", "cwd", "job_dir", "model"], ["handle", "wants_office"]),
+    "pause": (["paused", "target", "reason"], []),
+    "vacate": (["target", "because"], ["target", "because"]),
+    "retire": (["target", "because", "override_live"], ["target"]),
+    "rebind": (["target", "new_cwd", "extract", "force", "because"], ["target", "new_cwd"]),
+    "bind_tree": (["target", "tree_cwd", "because"], ["target", "tree_cwd", "because"]),
+    "attach": (["target", "manager", "because"], ["target", "manager", "because"]),
+    "detach": (["target", "because"], ["target", "because"]),
+    "charter": (["repos"], []),
+    "charter_for": (["target", "repos", "because"], ["target", "repos", "because"]),
+    "heal_anchor": (["target", "because", "dry_run"], []),
+    "heal_transcript": (
+        ["target", "source_paths", "dry_run", "because"], ["target", "source_paths"]),
+    "transition_project": (
+        ["fabricated_project", "real_project", "because", "repos", "dry_run"], []),
+    "resync_house": (["target", "new_house", "reason"], ["target", "reason"]),
+    "sweep_disk": (["target", "dry_run", "because"], ["target"]),
+    "rename": (["target", "new_handle", "because"], ["target", "new_handle", "because"]),
+    "set_attended": (["target", "attended", "because"], ["target", "attended", "because"]),
+    "reissue_office": (["target", "because", "adopt"], ["target", "because"]),
+    "establish_office": (["target"], ["target"]),
+    "invalidate_works_in": (["stale_project", "because"], ["stale_project", "because"]),
+    "reconcile_identity": (["target", "agent_id", "because"], []),
+    "correct_house": (["new_house"], ["new_house"]),
+    "correct_pin": (["key", "value", "reason"], ["key", "reason"]),
+    "revert_pin": ([], []),
+    "launch": (["target", "message", "model"], ["target"]),
+    "resume": (["target", "message", "model"], ["target"]),
+    "wake": (["target", "message"], ["target", "message"]),
+    "wake_preflight": (["target"], ["target"]),
+}
+
+
+async def _seat_impl(
+    action: str, *,
+    target: str | None = None, handle: str | None = None, manager: str | None = None,
+    new_cwd: str | None = None, extract: bool = False, force: bool = False,
+    because: str = "", reason: str = "", dry_run: bool = True,
+    repos: list[str] | None = None, adopt: bool = False, attended: str | None = None,
+    new_handle: str | None = None, new_house: str | None = _UNSET,
+    key: str | None = None, value: str | None = _UNSET, project: str | None = None,
+    model: str | None = None, house: str | None = None, tree_cwd: str | None = None,
+    source_paths: list[str] | None = None, override_live: bool = False,
+    paused: bool = True, agent_id: str | None = None, wants_office: bool | None = None,
+    cwd: str | None = None, job_dir: str | None = None, message: str = "",
+    stale_project: str | None = None, fabricated_project: str | None = None,
+    real_project: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Shared body behind `seat` and its 22 hidden single-purpose aliases (mint_seat,
+    stop, walk_in, pause_seat, vacate_seat, retire_object(kind='seat'), rebind_seat,
+    bind_seat_tree, seat_edge(action='attach'/'detach'), charter, charter_for,
+    heal_seat_anchor, heal_seat_transcript, transition_seat_project, resync_seat_house,
+    sweep_seat_disk, rename_seat, set_seat_attended, reissue_office, establish_office,
+    invalidate_works_in, reconcile_seat_identity, correct_house, correct_pin_value,
+    revert_own_pin_write) — one code path, many names. launch/resume/wake/wake_preflight
+    ALSO dispatch here but stay separately named (not aliases, not decaying — see the
+    block comment above SEAT_INPUT_SCHEMA). Every branch's body below is copied verbatim
+    from what was that alias's own top-level function, params renamed onto the shared
+    surface only where the original name collided across actions (task #202, migration
+    plan decision 620bdb32).
+
+    PRE-DISPATCH VALIDATION (price-minimizer #2): before any branch runs, checks the
+    action is known and every REQUIRED param for it was actually supplied — a mistake
+    costs one round trip naming exactly what was missing, never a wrong write."""
+    if action not in _SEAT_ACTION_PARAMS:
+        return {"error": f"unknown action {action!r}",
+                "known_actions": sorted(_SEAT_ACTION_PARAMS)}
+    accepted, required = _SEAT_ACTION_PARAMS[action]
+    local = dict(locals())
+    # "" counts as missing too — every required string-shaped param here (target, because,
+    # reason, handle, key, new_handle, attended, stale_project, manager, tree_cwd, new_cwd)
+    # is an identifier or a reason, never legitimately blank; the shared signature defaults
+    # several of them to "" rather than None (matching each original's own default), so a
+    # bare None-check alone would silently accept an omitted required `because` as present.
+    missing = [p for p in required if local.get(p) in (None, _UNSET, "")]
+    if missing:
+        return {"error": f"seat(action={action!r}) missing required param(s) {missing}",
+                "expected_params": {"required": required, "optional":
+                                    [p for p in accepted if p not in required]}}
+
+    if action == "mint":
+        assert handle is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — minting a worker is a seat's own act",
+                             "why": _anchorless(ctx)}
+        from src.orchestrator.seats import held_seat
+        pool = await _pool_get()
+        bound = await held_seat(pool, ident.agent_id)
+        manager_seat_id = bound["seat_id"] if bound else None
+        if manager_seat_id is None:
+            from src.orchestrator.mintseat import _resolve_seat_ref
+            from src.orchestrator.offices import _handle_of
+            handle_claim = await _handle_of(pool, ident.agent_id)
+            if handle_claim:
+                manager_seat_id = await _resolve_seat_ref(pool, handle_claim)
+        if manager_seat_id is None:
+            return {"error": "you hold no seat of your own — claim_name first; a seat "
+                             "mints workers under ITSELF, and an unclaimed lineage has "
+                             "no seat to extend"}
+        from src.orchestrator.mintseat import mint_seat as _mint_seat
+        kwargs: dict[str, Any] = {"intended_model": model} if model else {}
+        return await _mint_seat(Actions(pool), manager=manager_seat_id, handle=handle,
+                                house=house, project=project, actor=ident.agent_id, **kwargs)
+
+    if action == "stop":
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount(cwd, job_dir=<your anchor>) first — a stop must say "
+                             "who it's from", "why": _anchorless(ctx)}
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        from src.orchestrator.trigger import stop_seat
+        return await stop_seat(Actions(await _pool_get()), caller=actor, target=target,
+                               reason=reason)
+
+    if action == "walk_in":
+        assert handle is not None  # pre-dispatch validation already required it
+        pool = await _pool_get()
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            if not cwd:
+                return {"error": "not yet mounted, and no cwd given — pass cwd (your "
+                                 "working directory) so walk_in can mount you first, or "
+                                 "call mount() yourself before walk_in"}
+            mount_result = await mount(
+                cwd=cwd, job_dir=job_dir, model=model, subagent_id=subagent_id,
+                subagent_type=subagent_type, session_anchor=session_anchor, ctx=ctx)
+            if "error" in mount_result:
+                return {"error": mount_result["error"], "step": "mount"}
+            agent_id_ = mount_result.get("agent")
+            if not agent_id_:
+                return {"error": "mount succeeded but returned no agent id — cannot "
+                                 "continue", "step": "mount", "mount_result": mount_result}
+            mount_step: dict[str, Any] = {"ran": True, "result": mount_result}
+        else:
+            agent_id_ = ident.agent_id
+            mount_step = {"ran": False, "note": f"already mounted as {agent_id_}, skipping"}
+        assert wants_office is not None  # pre-dispatch validation already required it
+        from src.orchestrator.walkin import walk_in_named
+        result = await walk_in_named(
+            pool, agent_id=agent_id_, handle=handle, wants_office=wants_office)
+        if "error" in result:
+            result.setdefault("steps_so_far", {})["mount"] = mount_step
+            return result
+        return {**result, "mount": mount_step}
+
+    if action == "pause":
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount first — a pause must say whose hand pulled the lever",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        a = Actions(pool)
+        from src.orchestrator.folds import canonical_agent, living_head
+        from src.orchestrator.seats import held_seat, seat_receipt
+        who = target or ident.agent_id
+        if who.startswith("seat:"):
+            if await seat_receipt(pool, who) is None:
+                return {"error": f"no such living seat: '{who}' — check fleet()"}
+            stamp_on = who
+        elif who.startswith("agent:"):
+            head = await living_head(pool, await canonical_agent(pool, who))
+            bound = await held_seat(pool, head)
+            stamp_on = (bound or {}).get("seat_id") or head
+        else:  # a plain name — resolve like a DM address does
+            from src.orchestrator.agents import resolve_seat
+            from src.orchestrator.seats import seat_holder_ineligible
+            ineligible = await seat_holder_ineligible(pool, who)
+            if ineligible is not None:
+                return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
+                                 "directly (target='seat:<id>') once a new holder claims "
+                                 "it, or pause the seat id itself if you mean to gate the "
+                                 "chair."}
+            resolved = await resolve_seat(a, who)
+            if resolved["agent"] is None:
+                return {"error": f"no seat or agent named '{who}' — check fleet()"}
+            stamp_on = resolved.get("seat_id") or resolved["agent"]
+        obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
+        oid = await a.create_or_find_object(obj_type, stamp_on, ident.agent_id)
+        now = datetime.now(UTC)
+        await a.assert_property(oid, "paused", paused, ident.agent_id, now, 0.9,
+                                evidence_class="self_declared")
+        if reason:
+            await a.assert_property(oid, "paused_reason", reason[:500], ident.agent_id, now,
+                                    0.9, evidence_class="self_declared")
+        queued = 0
+        if stamp_on.startswith("agent:") or stamp_on.startswith("seat:"):
+            queued = await pool.fetchval(
+                "SELECT count(*) FROM fleet_messages m WHERE m.to_agent=$1 AND "
+                "m.read_at IS NULL AND NOT EXISTS (SELECT 1 FROM message_recipients r "
+                "WHERE r.message_id=m.id AND r.read_at IS NOT NULL)", stamp_on) or 0
+        return {"paused" if paused else "released": stamp_on, "by": ident.agent_id,
+                **({"reason": reason} if reason else {}),
+                **({"queued_dms": queued} if queued else {}),
+                "note": ("the DM push lane now queues this seat's mail — release with "
+                         "seat(action='pause', paused=False, target=...)" if paused else
+                         "the queue drains on the next dispatch (a fresh send, or the "
+                         "worker sweep within the minute)")}
+
+    if action == "vacate":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — vacating a seat's holder is a deliberate act "
+                             "on the record", "why": _anchorless(ctx)}
+        from src.orchestrator.trigger import vacate_dead_seat
+        return await vacate_dead_seat(Actions(await _pool_get()), seat_id=target,
+                                      actor=ident.agent_id, because=because)
+
+    if action == "retire":
+        assert target is not None  # pre-dispatch validation already required it
+        return await _retire_object_impl(
+            "seat", target, because=because, override_live=override_live, ctx=ctx)
+
+    if action == "rebind":
+        assert target is not None and new_cwd is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a rebind is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.mounts import rebind_seat as _rebind
+        result = await _rebind(Actions(await _pool_get()), seat_or_agent=target,
+                               new_cwd=new_cwd, actor=ident.agent_id, extract=extract,
+                               force=force, because=because or None)
+        moved = result.get("agent")
+        if moved and not result.get("error"):
+            base = _generation(moved)[0]
+            for cached in _agents.values():
+                if _generation(cached.agent_id)[0] == base:
+                    cached.cwd = new_cwd
+        return result
+
+    if action == "bind_tree":
+        assert target is not None and tree_cwd is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a tree binding is a mind's act, and the "
+                             "graph must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.seats import bind_seat_tree as _bind_seat_tree
+        return await _bind_seat_tree(Actions(await _pool_get()), seat_id=target,
+                                     tree_cwd=tree_cwd, because=because, actor=ident.agent_id)
+
+    if action in ("attach", "detach"):
+        assert target is not None  # pre-dispatch validation already required it
+        return await _seat_edge_impl(action, target, manager=manager, because=because, ctx=ctx)
+
+    if action == "charter":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a charter names WHOSE seat rules which repos",
+                    "why": _anchorless(ctx)}
+        from src.orchestrator.charter import charter_of, set_charter
+        from src.orchestrator.seats import held_seat
+        pool = await _pool_get()
+        bound = await held_seat(pool, ident.agent_id)
+        if bound is None:
+            return {"agent": ident.agent_id,
+                    "error": "not yet seated — a charter belongs to a SEAT, and this "
+                             "identity holds none yet. attach at spawn (or claim_name, "
+                             "if this is a fresh mint) binds you to one first."}
+        seat_id_ = str(bound["seat_id"])
+        if repos is not None:
+            return await set_charter(Actions(pool), seat_id_, repos, actor=ident.agent_id)
+        return {"agent": ident.agent_id, "seat": seat_id_,
+                "charter": await charter_of(pool, seat_id_)}
+
+    if action == "charter_for":
+        assert target is not None and repos is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a charter declared for another seat is a "
+                             "mind's act, and the graph must know whose",
+                    "why": _anchorless(ctx)}
+        from src.orchestrator.charter import charter_for as _charter_for
+        return await _charter_for(Actions(await _pool_get()), target, repos, because=because,
+                                  actor=ident.agent_id)
+
+    if action == "heal_anchor":
+        return await _heal_seat_anchor_impl(target, because, dry_run, ctx)
+
+    if action == "heal_transcript":
+        assert target is not None and source_paths is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a transcript heal is a deliberate act on "
+                             "the record", "why": _anchorless(ctx)}
+        from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
+        return await _heal(await _pool_get(), target, source_paths, dry_run=dry_run,
+                           because=because)
+
+    if action == "transition_project":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a project transition is a seat's own act",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.transition import transition_seat_project as _transition
+        result = await _transition(
+            pool, ident.agent_id, fabricated_project=fabricated_project,
+            real_project=real_project, because=because, repos=repos, dry_run=dry_run)
+        if not dry_run and result.get("steps", {}).get(
+                "invalidate_works_in", {}).get("invalidated"):
+            base = _generation(ident.agent_id)[0]
+            real_name = result["real_project"].removeprefix("repo:")
+            fab_name = result["fabricated_project"].removeprefix("repo:")
+            for cached in _agents.values():
+                if _generation(cached.agent_id)[0] != base:
+                    continue
+                await _resolve_project_seat_first(pool, cached)
+                if cached.project == fab_name:
+                    cached.project = real_name
+        return result
+
+    if action == "resync_house":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a correction is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.seats import resync_seat_house_third_party
+        resolved_house = None if new_house is _UNSET else new_house
+        return await resync_seat_house_third_party(
+            Actions(await _pool_get()), target, resolved_house, source=ident.agent_id,
+            reason=reason)
+
+    if action == "sweep_disk":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a disk sweep is a deliberate act on the "
+                             "record", "why": _anchorless(ctx)}
+        handle_ = (target or "").strip()
+        if not handle_:
+            return {"error": "a handle is required"}
+        pool = await _pool_get()
+        from src.orchestrator.offices import sweep_retired_office, sweep_seat_workspace
+        because_arg = because.strip() or None
+        office_out = await sweep_retired_office(pool, handle=handle_, dry_run=dry_run,
+                                                because=because_arg)
+        workspace_out = await sweep_seat_workspace(pool, handle=handle_, dry_run=dry_run,
+                                                   because=because_arg)
+        return {"handle": handle_, "dry_run": dry_run, "office": office_out,
+                "workspace": workspace_out}
+
+    if action == "rename":
+        assert target is not None and new_handle is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a rename is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.seats import rename_seat as _rename_seat
+        return await _rename_seat(Actions(await _pool_get()), seat_id=target,
+                                  new_handle=new_handle, because=because, actor=ident.agent_id)
+
+    if action == "set_attended":
+        assert target is not None and attended is not None  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a seat's attendance signal is a mind's act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.seats import set_seat_attended as _set_seat_attended
+        return await _set_seat_attended(Actions(await _pool_get()), seat_id=target,
+                                        attended=attended, because=because, actor=ident.agent_id)
+
+    if action == "reissue_office":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a reissue is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.boot_compiler import reissue_office as _reissue_office
+        return await _reissue_office(Actions(await _pool_get()), seat_id=target,
+                                     because=because, actor=ident.agent_id, adopt=adopt)
+
+    if action == "establish_office":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — an office ceremony is a mind's act, and the "
+                             "graph must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.offices import establish_office as _establish
+        return await _establish(Actions(await _pool_get()), seat_or_agent=target,
+                                actor=ident.agent_id)
+
+    if action == "invalidate_works_in":
+        assert stale_project is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — invalidating a works_in edge is a deliberate "
+                             "act on the record", "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
+        result = await _invalidate_works_in(Actions(pool), ident.agent_id, stale_project,
+                                            because=because, actor=ident.agent_id)
+        if not result.get("error"):
+            base = _generation(ident.agent_id)[0]
+            dropped = result["was_working_in"].removeprefix("repo:")
+            remaining = [p.removeprefix("repo:")
+                        for p in (result.get("still_working_in") or [])]
+            for cached in _agents.values():
+                if _generation(cached.agent_id)[0] != base:
+                    continue
+                await _resolve_project_seat_first(pool, cached)
+                if cached.project == dropped and len(remaining) == 1:
+                    cached.project = remaining[0]
+        return result
+
+    if action == "reconcile_identity":
+        return await _reconcile_seat_identity_impl(target, agent_id, because, ctx)
+
+    if action == "correct_house":
+        assert new_house is not None and new_house is not _UNSET  # already validated
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — house-correct is a seat's own act",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.seats import correct_house as _correct_house
+        result = await _correct_house(Actions(pool), ident.agent_id, new_house,
+                                      source=ident.agent_id)
+        if not result.get("error"):
+            base = _generation(ident.agent_id)[0]
+            for cached in _agents.values():
+                if _generation(cached.agent_id)[0] == base:
+                    await _resolve_project_seat_first(pool, cached)
+        return result
+
+    if action == "correct_pin":
+        assert key is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a pin correction is a seat's own act",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.offices import correct_own_pin_value as _correct_own_pin_value
+        resolved_value = None if value is _UNSET else value
+        return await _correct_own_pin_value(pool, ident.agent_id, key, resolved_value,
+                                            reason=reason)
+
+    if action == "revert_pin":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — reverting a pin is a seat's own act",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.offices import revert_own_pin_write as _revert_own_pin_write
+        return await _revert_own_pin_write(pool, ident.agent_id)
+
+    if action == "launch":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must "
+                             "say who it's from", "why": _anchorless(ctx)}
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        from src.orchestrator.trigger import launch_seat
+        return await launch_seat(Actions(await _pool_get()), caller=actor, target=target,
+                                 message=message, model=model)
+
+    if action == "resume":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount(cwd, job_dir=<your anchor>) first — a resume must "
+                             "say who it's from", "why": _anchorless(ctx)}
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        from src.orchestrator.trigger import resume_seat
+        return await resume_seat(Actions(await _pool_get()), caller=actor, target=target,
+                                 message=message, model=model)
+
+    if action == "wake":
+        assert target is not None  # pre-dispatch validation already required it
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say "
+                             "who it's from", "why": _anchorless(ctx)}
+        actor = await _actor_for(ctx, subagent_id, subagent_type)
+        from src.orchestrator.trigger import wake_worker
+        return await wake_worker(Actions(await _pool_get()), caller=actor, target=target,
+                                 message=message)
+
+    if action == "wake_preflight":
+        assert target is not None  # pre-dispatch validation already required it
+        pool = await _pool_get()
+        from src.orchestrator.trigger import (
+            _resolve_wake_address,
+            _seat_for_target,
+            wake_gate_preflight,
+        )
+        wake_seat = await _seat_for_target(Actions(pool), target)
+        wake_resolved = await _resolve_wake_address(pool, wake_seat or target)
+        if isinstance(wake_resolved, dict):
+            return {**wake_resolved, "status": "no-live-body"}
+        resolved_target, seat_id = wake_resolved
+        return await wake_gate_preflight(pool, resolved_target, seat_id=seat_id)
+
+    return {"error": f"unhandled action {action!r} — this is a dispatcher bug, not a "
+                     "caller error, report it"}
+
+
 @mcp.tool()
+async def seat(
+    action: str,
+    target: str | None = None, handle: str | None = None, manager: str | None = None,
+    new_cwd: str | None = None, extract: bool = False, force: bool = False,
+    because: str = "", reason: str = "", dry_run: bool = True,
+    repos: list[str] | None = None, adopt: bool = False, attended: str | None = None,
+    new_handle: str | None = None, new_house: str | None = _UNSET,
+    key: str | None = None, value: str | None = _UNSET, project: str | None = None,
+    model: str | None = None, house: str | None = None, tree_cwd: str | None = None,
+    source_paths: list[str] | None = None, override_live: bool = False,
+    paused: bool = True, agent_id: str | None = None, wants_office: bool | None = None,
+    cwd: str | None = None, job_dir: str | None = None, message: str = "",
+    stale_project: str | None = None, fabricated_project: str | None = None,
+    real_project: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE SEAT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one door,
+    many actions over Seat/Agent lifecycle. Each `action` accepts only its own params
+    (see `describe('seat')` for the full per-action shape, or call with a wrong/missing
+    param — the error names exactly what that action expects); shared params (target,
+    because, reason, dry_run, ...) mean the same thing across every action that takes them.
+
+    ACTION TABLE — action: what it does (required params beyond action):
+      mint: found a managed worker seat under your own (handle)
+      new: NOT YET BUILT here — still CLI-only (`osiris new`), no MCP door
+      stop: kill a live body's OS process (target=None means self)
+      walk_in: mount + claim_name + establish_office in one call (handle, wants_office)
+      pause: gate the DM push lane for a seat (target=None means self)
+      vacate: release a dead holder without retiring the seat (target, because)
+      retire: mark a Seat permanently closed, third-party (target)
+      rebind: move a seat's anchor cwd (target, new_cwd)
+      bind_tree: point a seat's code checkout (target, tree_cwd, because)
+      attach: create a managed_by edge (target, manager, because)
+      detach: remove a managed_by edge (target, because)
+      charter: self-declare your own seat's charter (repos, or omit to read)
+      charter_for: declare a charter on another seat's behalf (target, repos, because)
+      heal_anchor: reassert the anchor_cwd invariant (target=None means self)
+      heal_transcript: splice a fragmented session back into one file (target, source_paths)
+      transition_project: move your own seat off a fabricated project binding
+      resync_house: third-party house correction, unset with new_house=null (target, reason)
+      sweep_disk: delete a retired seat's office+workspace directories (target)
+      rename: change a seat's handle, manager/operator-invoked (target, new_handle, because)
+      set_attended: stamp a seat 'human'/'worker' (target, attended, because)
+      reissue_office: recompile a seat's CLAUDE.md managed section (target, because)
+      establish_office: move a seat into its Osiris-owned home (target)
+      invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
+      reconcile_identity: heal a house/project cross-source contradiction (target=None self)
+      correct_house: a head corrects its OWN house (new_house)
+      correct_pin: correct an existing key in your own seat's pin (key, reason)
+      revert_pin: undo your seat's most recent pin write
+      launch: give a seat a fresh body (target) — ALSO its own named tool, same call
+      resume: continue a seat's dormant session (target) — ALSO its own named tool
+      wake: knock on your managed_by pair's other half (target, message) — ALSO named
+      wake_preflight: check wake()'s gates before calling it (target) — ALSO named
+
+    DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
+    transition_project, sweep_disk) — same convention as their standalone predecessors."""
+    return await _seat_impl(
+        action, target=target, handle=handle, manager=manager, new_cwd=new_cwd,
+        extract=extract, force=force, because=because, reason=reason, dry_run=dry_run,
+        repos=repos, adopt=adopt, attended=attended, new_handle=new_handle,
+        new_house=new_house, key=key, value=value, project=project, model=model,
+        house=house, tree_cwd=tree_cwd, source_paths=source_paths,
+        override_live=override_live, paused=paused, agent_id=agent_id,
+        wants_office=wants_office, cwd=cwd, job_dir=job_dir, message=message,
+        stale_project=stale_project, fabricated_project=fabricated_project,
+        real_project=real_project, subagent_id=subagent_id, subagent_type=subagent_type,
+        session_anchor=session_anchor, ctx=ctx)
+
+
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='pause')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def pause_seat(paused: bool = True, target: str | None = None, reason: str = "",
                      session_anchor: str | None = None,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """The explicit per-seat PAUSE control. While paused, the DM push lane will not
-    resume the seat — mail queues (nothing lost, at-least-once) until
-    pause_seat(paused=False) drains it on the next dispatch. Pull is untouched: a paused
-    seat taking a turn still reads its inbox normally.
-
-    `target=None` pauses yourself. A seat id, agent id, or plain name pauses that seat —
-    allowed for any mounted caller by design, but LOUD: stamped in your name, visible in
-    every queued sender's receipt, reversible by anyone the same way.
-
-    Stamp lands on the SEAT object when it holds one (survives succession), else the
-    agent object."""
-    ident = await _ident_for(ctx, session_anchor)
-    if ident is None:
-        return {"error": "mount first — a pause must say whose hand pulled the lever",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    a = Actions(pool)
-    from src.orchestrator.folds import canonical_agent, living_head
-    from src.orchestrator.seats import held_seat, seat_receipt
-    who = target or ident.agent_id
-    if who.startswith("seat:"):
-        if await seat_receipt(pool, who) is None:
-            return {"error": f"no such living seat: '{who}' — check fleet()"}
-        stamp_on = who
-    elif who.startswith("agent:"):
-        head = await living_head(pool, await canonical_agent(pool, who))
-        bound = await held_seat(pool, head)
-        stamp_on = (bound or {}).get("seat_id") or head
-    else:  # a plain name — resolve like a DM address does
-        from src.orchestrator.agents import resolve_seat
-        from src.orchestrator.seats import seat_holder_ineligible
-        # THE SAME GRAVE-DELIVERY GUARD send() USES (task #142 punch-list item 3): a name
-        # whose unique seat has ONLY ineligible holders must never fall through to
-        # resolve_seat's un-seated-lineage fallback here either — a pause meant for a live
-        # seat landing on some OTHER, older, unmarked generation instead would silently
-        # leave the actual seat unpaused while stamping a ghost, worse than a bare refusal.
-        ineligible = await seat_holder_ineligible(pool, who)
-        if ineligible is not None:
-            return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
-                             "directly (target='seat:<id>') once a new holder claims it, "
-                             "or pause the seat id itself if you mean to gate the chair."}
-        resolved = await resolve_seat(a, who)
-        if resolved["agent"] is None:
-            return {"error": f"no seat or agent named '{who}' — check fleet()"}
-        stamp_on = resolved.get("seat_id") or resolved["agent"]
-    obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
-    oid = await a.create_or_find_object(obj_type, stamp_on, ident.agent_id)
-    now = datetime.now(UTC)
-    await a.assert_property(oid, "paused", paused, ident.agent_id, now, 0.9,
-                            evidence_class="self_declared")
-    if reason:
-        await a.assert_property(oid, "paused_reason", reason[:500], ident.agent_id, now, 0.9,
-                                evidence_class="self_declared")
-    queued = 0
-    if stamp_on.startswith("agent:") or stamp_on.startswith("seat:"):
-        queued = await pool.fetchval(
-            "SELECT count(*) FROM fleet_messages m WHERE m.to_agent=$1 AND m.read_at IS NULL "
-            "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
-            "  AND r.read_at IS NOT NULL)", stamp_on) or 0
-    return {"paused" if paused else "released": stamp_on, "by": ident.agent_id,
-            **({"reason": reason} if reason else {}),
-            **({"queued_dms": queued} if queued else {}),
-            "note": ("the DM push lane now queues this seat's mail — release with "
-                     "pause_seat(paused=False, target=...)" if paused else
-                     "the queue drains on the next dispatch (a fresh send, or the worker "
-                     "sweep within the minute)")}
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='pause')."""
+    return await _seat_impl("pause", paused=paused, target=target, reason=reason,
+                            session_anchor=session_anchor, ctx=ctx)
 
 
 @mcp.tool()
@@ -4247,27 +4981,19 @@ async def resume(target: str, message: str = "", model: str | None = None,
                              message=message, model=model)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='stop')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def stop(target: str | None = None, reason: str = "",
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """launch()'s process-lifecycle inverse — stops a LIVE body's OS process (harness
-    `claude stop <id>` when tracked, else SIGTERM). Not a symmetric "sleep" — an honest
-    termination, auditable, not a pause. No 'unstop' call needed: once the process exits,
-    a fresh launch()/wake() proceeds normally.
-
-    `target=None` stops yourself, always allowed. Otherwise downward-only, mirroring
-    launch(). `status`: stopped | no-live-body | refused-not-your-worker |
-    refused-signal."""
-    ident = await _ident_for(ctx, session_anchor)
-    if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a stop must say who "
-                         "it's from", "why": _anchorless(ctx)}
-    actor = await _actor_for(ctx, subagent_id, subagent_type)
-    from src.orchestrator.trigger import stop_seat
-    return await stop_seat(Actions(await _pool_get()), caller=actor, target=target,
-                           reason=reason)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='stop')."""
+    return await _seat_impl("stop", target=target, reason=reason, subagent_id=subagent_id,
+                            subagent_type=subagent_type, session_anchor=session_anchor,
+                            ctx=ctx)
 
 
 @mcp.tool()
@@ -4390,94 +5116,39 @@ async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
     return await _claim(Actions(await _pool_get()), ident.agent_id, name, source=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='charter')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def charter(repos: list[str] | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """THE CHARTER (Phase 1 §4.1, ruling `dd47c1da`): a house is what a seat RULES, not where
-    it sits. With `repos`, DECLARE your seat's whole charter — the repo labels you govern from
-    this moment (self-declared, your own act); a repo you named before but drop now is healed
-    off (compensating event, never deleted), never mints twice. Without `repos`, just READ your
-    current charter back. Most seats have none — works_in already names their one home; a
-    charter is for a seat that rules several repos regardless of which one it happens to sit
-    in right now."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a charter names WHOSE seat rules which repos",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.charter import charter_of, set_charter
-    from src.orchestrator.seats import held_seat
-    pool = await _pool_get()
-    # RE-KEYED ONTO THE SEAT (ruling 1db1ff41) — see orient()'s own charter line for the full
-    # rationale. A charter belongs to the SEAT, never the session: resolve it the same
-    # lineage-aware way (held_seat) before either reading or declaring. An identity that holds
-    # no seat yet (never attached/claimed) is refused here, not silently keyed on the Agent —
-    # that's the exact bug this ruling closes.
-    bound = await held_seat(pool, ident.agent_id)
-    if bound is None:
-        return {"agent": ident.agent_id,
-                "error": "not yet seated — a charter belongs to a SEAT, and this identity "
-                         "holds none yet. attach at spawn (or claim_name, if this is a "
-                         "fresh mint) binds you to one first."}
-    seat_id = str(bound["seat_id"])
-    if repos is not None:
-        return await set_charter(Actions(pool), seat_id, repos, actor=ident.agent_id)
-    return {"agent": ident.agent_id, "seat": seat_id, "charter": await charter_of(pool, seat_id)}
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='charter')."""
+    return await _seat_impl("charter", repos=repos, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='charter_for')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def charter_for(seat_id: str, repos: list[str], because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Declare a charter ON BEHALF OF `seat_id` — the manager-invoked sibling of
-    `charter()`, never a widening of it: `charter()` stays self-declaration only. For a
-    seat that cannot yet speak for itself: a seat may declare its own charter, its
-    manager may declare for it, and the operator is every seat's ultimate manager, so
-    no seat is ever authority-less.
-
-    ENFORCED, not just documented: the caller must be `seat_id`'s manager (the live
-    `managed_by` edge) or an operator actor — refuses loudly otherwise, naming both who
-    the caller resolved to and who the seat's actual manager is. `because` is required.
-    Blind to any pre-existing Agent-origin `governs` edges the target seat may still
-    carry from before charter's Seat-keyed re-key — see charter.py's own docstring."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a charter declared for another seat is a mind's "
-                         "act, and the graph must know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.charter import charter_for as _charter_for
-    return await _charter_for(Actions(await _pool_get()), seat_id, repos, because=because,
-                              actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='charter_for')."""
+    return await _seat_impl("charter_for", target=seat_id, repos=repos, because=because,
+                            ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='rebind')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       force: bool = False, because: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Move a seat's anchor cwd, preserving identity, lineage, attribution, and mail.
-    `seat` accepts a claimed name, a raw agent id, or an unclaimed seat's own handle.
-    Writes/refreshes `.osiris` at `new_cwd` (project label unchanged), re-points the
-    whole lineage's mount rows, stamps the move, carries harness metadata so resume
-    survives it. Mints nothing new; refuses on a name matching neither agent nor seat.
-
-    `extract=True`: the seat leaves a SHARED cwd taking only its own lineage's
-    transcripts — co-resident history stays, the old path remains live. Live cached
-    identities are patched in place so a same-session orient() sees the new anchor
-    without a fresh mount().
-
-    LIVENESS GUARD: self stays open; rebinding a different lineage's live target
-    refuses by default — `force=True` + `because` overrides."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a rebind is a mind's act, and the graph must know whose",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.mounts import rebind_seat as _rebind
-    result = await _rebind(Actions(await _pool_get()), seat_or_agent=seat, new_cwd=new_cwd,
-                           actor=ident.agent_id, extract=extract,
-                           force=force, because=because or None)
-    moved = result.get("agent")
-    if moved and not result.get("error"):
-        base = _generation(moved)[0]
-        for cached in _agents.values():
-            if _generation(cached.agent_id)[0] == base:
-                cached.cwd = new_cwd
-    return result
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='rebind')."""
+    return await _seat_impl("rebind", target=seat, new_cwd=new_cwd, extract=extract,
+                            force=force, because=because, ctx=ctx)
 
 
 @mcp.tool()
@@ -4850,19 +5521,17 @@ async def _reconcile_seat_identity_impl(
         actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='reconcile_identity')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def reconcile_seat_identity(
     seat_id: str | None = None, agent_id: str | None = None, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Heal a seat's identity: a cross-source CONTRADICTION on exactly two properties, a
-    Seat's `house` and its holder Agent's `project`. Newest-declared-wins, same tiebreak
-    the read path applies. Reversible — every healed row's id is in the receipt.
-
-    `seat_id=None` (default) heals the caller's own held seat, `because` unused.
-    `seat_id=<any seat>` heals a third party's — `agent_id` optional (omitted heals
-    `house` alone), `because` required. Does not check caller authority beyond being
-    mounted on the third-party path."""
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='reconcile_identity')."""
     return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
 
 
@@ -4910,21 +5579,16 @@ async def _heal_seat_anchor_impl(
                        actor=ident.agent_id, dry_run=dry_run)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='heal_anchor')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def heal_seat_anchor(
     seat_id: str | None = None, because: str | None = None, dry_run: bool = True,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """HEAL A SEAT's `anchor_cwd` against THE ANCHOR INVARIANT: a Seat's anchor is
-    IDENTITY, always `<office_root>/<handle>`, never wherever a session happens to be
-    sitting. Asserts the invariant office path as the SOLE current `anchor_cwd`,
-    collapsing every stray value. REFUSES rather than guesses: no handle on record, or
-    the office directory does not exist on disk.
-
-    `seat_id=None` (default) heals the CALLER's own held seat, `because` optional;
-    `seat_id=<any seat>` heals a third party's, `because` REQUIRED.
-
-    `dry_run=True` is the default; the receipt shows `current_before` and `target`."""
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='heal_anchor')."""
     return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
@@ -5029,96 +5693,49 @@ async def ingest_project_third_party(
     return await _ingest_project_impl(project, because, dry_run, ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='correct_house')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
-    """A HEAD corrects its OWN stored house (ruling ff6148b0, decision 87953278) — the one
-    legitimate write left after house became a live derivation off the managed_by chain
-    (derive_house): a head's anchor is a deliberate identity declaration, exactly like
-    claim_name, so this is SELF-scoped and never operator-fenced. Refuses on a non-head
-    (an active managed_by edge out means this seat derives its house through its manager
-    now — nothing here to correct) or a caller holding no seat. Patches every live cached
-    identity in your own lineage — the next orient() reflects it without a reconnect."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — house-correct is a seat's own act",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.seats import correct_house as _correct_house
-    result = await _correct_house(Actions(pool), ident.agent_id, new_house,
-                                  source=ident.agent_id)
-    if not result.get("error"):
-        base = _generation(ident.agent_id)[0]
-        for cached in _agents.values():
-            if _generation(cached.agent_id)[0] == base:
-                await _resolve_project_seat_first(pool, cached)
-    return result
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='correct_house')."""
+    return await _seat_impl("correct_house", new_house=new_house, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='resync_house')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def resync_seat_house(seat_id: str, new_house: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """THE THIRD-PARTY SIBLING OF `correct_house` (task #152's khepri/deckard/metron
-    repair, decision 6602d39d) — the door that was missing: `seats.resync_seat_house_
-    third_party` had no MCP surface at all. UNLIKE `correct_house`, NOT self-scoped and
-    NOT headship-gated (a deliberate, standing refusal to merge the two — decision
-    4e1dde75: the authority mismatch is load-bearing) — any mounted caller may name any
-    seat, `actor` is attribution only, and callers are responsible for the authorization
-    this tool cannot enforce. `reason` is required and non-empty, same law as
-    `correct_pin_value`.
-
-    `new_house=None` UNSETS the seat's house — genuinely absent, never a fabricated
-    placeholder (decision 68fba2e4/thread 19d6bdcb7fa9: the operator's own house/project
-    ruling, the repair target for the six live specimens whose house was stamped
-    `=handle` at mint, decision 24e0b761's own class)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a correction is a mind's act, and the graph "
-                         "must know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import resync_seat_house_third_party
-    return await resync_seat_house_third_party(
-        Actions(await _pool_get()), seat_id, new_house, source=ident.agent_id, reason=reason)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='resync_house')."""
+    return await _seat_impl("resync_house", target=seat_id, new_house=new_house,
+                            reason=reason, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='correct_pin')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def correct_pin_value(key: str, value: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """Correct an EXISTING key in your own seat's `.osiris` pin (msg 4761, obligation
-    114f7ac9) — the door that was missing: `offices.correct_pin_value` (the raw rewrite) had
-    no MCP surface at all, so a caller told to use it could only hand-edit the file. THE
-    NAMED EXCEPTION to additive-only pin writes (write_pin_additions never overwrites an
-    existing key, by design) — this one does, for a specific, already-diagnosed correction.
-    SELF-SCOPED like `correct_house`: always targets YOUR OWN seat's office (resolved off
-    `held_seat`, never a path you supply), never another seat's. `reason` is required and
-    non-empty — a correction with no stated reason is the silent overwrite this verb exists
-    to prevent. Refuses on: no held seat; `key` not already declared (use write_pin_additions
-    for a genuinely missing one); invalid TOML; an empty reason. Also corrects your ANCHOR
-    copy when one exists and differs (ruling b30e2b38), reported under `anchor`.
-    `revert_own_pin_write` is the self-scoped undo.
-
-    `value=None` UNSETS `key` — deletes the line, never a fabricated placeholder."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a pin correction is a seat's own act",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.offices import correct_own_pin_value as _correct_own_pin_value
-    return await _correct_own_pin_value(pool, ident.agent_id, key, value, reason=reason)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='correct_pin')."""
+    return await _seat_impl("correct_pin", key=key, value=value, reason=reason, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='revert_pin')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def revert_own_pin_write(ctx: Context | None = None) -> dict[str, Any]:
-    """Undo your seat's most recent pin correction/addition — the self-scoped door onto
-    `offices.revert_pin_write` (existed, tested, unreached until ruling b30e2b38). Resolved
-    off your own held seat, never a path you supply. Restores the `.osiris.bak` your most
-    recent real write took; refuses if none exists. Also reverts your ANCHOR copy under
-    `anchor` when a backup exists there too — silently skipped otherwise."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — reverting a pin is a seat's own act",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.offices import revert_own_pin_write as _revert_own_pin_write
-    return await _revert_own_pin_write(pool, ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='revert_pin')."""
+    return await _seat_impl("revert_pin", ctx=ctx)
 
 
 async def _retire_object_impl(
@@ -5195,60 +5812,26 @@ async def retire_seat(seat_id: str, reason: str = "",
         "seat", seat_id, because=reason, override_live=False, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='sweep_disk')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
                           ctx: Context | None = None) -> dict[str, Any]:
-    """THE DISK HALF retire_seat never touches. Sweeps both scaffolded directories for
-    `handle` — the office and the workspace — reporting each half's own receipt under
-    `office`/`workspace`; a refusal on one never blocks the other.
-
-    Each half independently refuses on an ambiguous Seat match, a Seat that is neither
-    retired nor absent, an active holder, or a live body at that path (including after a
-    90s heal-wait re-check) — a directory with no matching Seat row (pure filesystem
-    debris) is the one case both halves accept.
-
-    `dry_run=True` (default) reports `would-delete` for whichever half(s) pass their
-    guards, nothing removed. `dry_run=False` requires `because` and deletes only the
-    half(s) that pass every guard."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a disk sweep is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    handle = (handle or "").strip()
-    if not handle:
-        return {"error": "a handle is required"}
-    pool = await _pool_get()
-    from src.orchestrator.offices import sweep_retired_office, sweep_seat_workspace
-    because_arg = because.strip() or None
-    office_out = await sweep_retired_office(pool, handle=handle, dry_run=dry_run,
-                                            because=because_arg)
-    workspace_out = await sweep_seat_workspace(pool, handle=handle, dry_run=dry_run,
-                                               because=because_arg)
-    return {"handle": handle, "dry_run": dry_run, "office": office_out,
-            "workspace": workspace_out}
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='sweep_disk')."""
+    return await _seat_impl("sweep_disk", target=handle, dry_run=dry_run, because=because,
+                            ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='vacate')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Release a seat's holder without retiring the seat — for a holder whose process
-    died without calling retire() itself, leaving a stale `holds` link retire_seat
-    rightly refuses to touch. This is that refusal's complement, never its bypass.
-
-    Gated on real liveness evidence: the harness roster must show no live session at the
-    seat's office, AND the holder's transcript's newest timestamped line must be stale
-    (never mtime alone). Either signal showing life refuses loudly (`refused-live`); an
-    unreadable roster refuses as `refused-ambiguous`. `status`: vacated |
-    refused-vacant | refused-no-office | refused-live | refused-ambiguous | refused (see
-    `detail`).
-
-    Deliberate hand, one named seat, never a sweep."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — vacating a seat's holder is a deliberate act on "
-                         "the record", "why": _anchorless(ctx)}
-    from src.orchestrator.trigger import vacate_dead_seat
-    return await vacate_dead_seat(Actions(await _pool_get()), seat_id=seat_id,
-                                  actor=ident.agent_id, because=because)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='vacate')."""
+    return await _seat_impl("vacate", target=seat_id, because=because, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -5577,28 +6160,17 @@ async def _seat_edge_impl(
     return {"error": f"unknown action {action!r} — one of attach/detach"}
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='attach'/'detach')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def seat_edge(
     action: str, worker: str, manager: str | None = None, because: str = "",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Create or remove a managed_by edge — one door, two `action`s, never a third.
-
-    `action='attach'` — create it. `manager` required. managed_by is created in exactly
-    two other places in the whole codebase (mint_seat's birth-time edge, fold_seat's
-    re-point) — every seat that predates mint_seat, was adopted, or lost its edge to a
-    detach nobody re-pointed has had no path back except raw SQL until this. Refuses
-    LOUDLY on: blank `because` (the evidence); either seat unknown/inactive; `worker ==
-    manager`; or an already-active managed_by edge out of `worker` — this is a CREATE,
-    never a silent repoint (`action='detach'` first, then attach, if that's what's
-    meant).
-
-    `action='detach'` — remove it. A COORDINATOR IS DEFINED BY HAVING NO MANAGER
-    (derive_role: 'worker' if a manager exists else 'coordinator'), so this REMOVES the
-    edge, never repoints it — a fresh manager, if one is ever assigned, is a separate
-    act. Refuses LOUDLY on: blank `because`; an unknown/inactive seat; or no active
-    managed_by edge out of it (nothing to detach). `manager` is ignored for this
-    action."""
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='attach'/'detach')."""
     return await _seat_edge_impl(action, worker, manager=manager, because=because, ctx=ctx)
 
 
@@ -5626,106 +6198,34 @@ async def attach_seat(
     return await _seat_edge_impl("attach", worker, manager=manager, because=evidence, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='invalidate_works_in')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def invalidate_works_in(stale_project: str, because: str,
                               ctx: Context | None = None) -> dict[str, Any]:
-    """Drop ONE OF YOUR OWN duplicate works_in edges — for a live agent carrying two
-    simultaneously-live works_in edges (a stale fork/rename side surviving beside the
-    current one). orient() resolves through whichever edge wins, so a duplicate is not
-    cosmetic — it can hide your own lineage's threads/decisions from you, live.
-    SELF-SCOPED like correct_house, never operator-fenced: no `agent_id` parameter — the
-    caller IS the target, never another agent's edge.
-
-    Refuses LOUDLY on: blank `because`; a caller not mounted as an active Agent;
-    `stale_project` resolving ambiguously (never guesses) or to no SoftwareProject at
-    all; no active works_in edge from you to it; or `stale_project` naming your ONLY
-    live works_in edge — dropping your last project is amputation, not cleanup; this
-    verb is for duplicates only."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — invalidating a works_in edge is a deliberate "
-                         "act on the record", "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
-    result = await _invalidate_works_in(Actions(pool), ident.agent_id, stale_project,
-                                        because=because, actor=ident.agent_id)
-    if not result.get("error"):
-        # THE STALE-BANNER TRAP, generalized (rebind_seat's own docstring names it
-        # first): the DB write is real immediately, but a LIVE connection's cached
-        # AgentIdentity does not follow it — the gap that made John's own fix appear
-        # to take effect three steps late (thread 8640a625, decision 4001f6d1). Patch
-        # every live cached identity in this agent's own lineage in place, so the
-        # very next orient() on any of those connections sees the drop without a
-        # reconnect. Two-step, mirroring mount()'s own precedence: a SEATED identity
-        # re-derives from the seat's own house (the same call _resolve_project_seat_
-        # first runs at mount time — a no-op for an unseated one, same as there);
-        # only when that leaves the cache still pointing at the just-dropped project
-        # AND exactly one candidate remains unambiguous does the remaining works_in
-        # edge become the fallback — never guessed at when 2+ remain.
-        base = _generation(ident.agent_id)[0]
-        # canonicals are "repo:<name>"; AgentIdentity.project is always the bare name
-        # (agents.py itself builds the canonical as f"repo:{identity.project}") — strip
-        # the prefix before comparing against or assigning into a cached identity.
-        dropped = result["was_working_in"].removeprefix("repo:")
-        remaining = [p.removeprefix("repo:") for p in (result.get("still_working_in") or [])]
-        for cached in _agents.values():
-            if _generation(cached.agent_id)[0] != base:
-                continue
-            await _resolve_project_seat_first(pool, cached)
-            if cached.project == dropped and len(remaining) == 1:
-                cached.project = remaining[0]
-    return result
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='invalidate_works_in')."""
+    return await _seat_impl("invalidate_works_in", stale_project=stale_project,
+                            because=because, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='transition_project')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def transition_seat_project(
     fabricated_project: str | None = None, real_project: str | None = None,
     because: str = "", repos: list[str] | None = None, dry_run: bool = True,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Move YOUR OWN seat's project binding from a fabricated handle-project to the
-    real repo project you already work in — one composed act instead of the Jesus/
-    Chad specimen's hand-run sequence. `fabricated_project` defaults to your seat's
-    own handle (the specimen shape: a fabricated project shares the handle's name).
-    `real_project` disambiguates when you carry more than one other live works_in
-    edge; omitted, it auto-picks the sole other one and refuses rather than guesses
-    when there's more than one. `repos` sets the resulting charter explicitly;
-    omitted, it defaults to `[real_project]`.
-
-    PRECONDITION: mount at the real repo's cwd FIRST — this verb transitions an
-    ALREADY-DUAL works_in binding, it does not create the first edge to the real
-    project itself.
-
-    `dry_run=True` (default) returns the PLAN (which of invalidate_works_in/
-    correct_pin_value/set_charter actually differ from the target state) without
-    writing anything. `dry_run=False` requires `because` and executes only the
-    steps the plan named — a step already matching the target is skipped, not
-    re-run as a no-op. Deliberately never calls rebind_seat: THE ANCHOR INVARIANT
-    (ruling 23771416) already pins anchor_cwd to the office path permanently: this
-    is exactly the call that broke Jesus's and Chad's own anchors, not repeated
-    here."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a project transition is a seat's own act",
-                "why": _anchorless(ctx)}
-    pool = await _pool_get()
-    from src.orchestrator.transition import transition_seat_project as _transition
-    result = await _transition(
-        pool, ident.agent_id, fabricated_project=fabricated_project,
-        real_project=real_project, because=because, repos=repos, dry_run=dry_run)
-    if not dry_run and result.get("steps", {}).get("invalidate_works_in", {}).get("invalidated"):
-        # SAME STALE-BANNER PATCH invalidate_works_in's own tool wrapper applies —
-        # a live cached identity does not follow the DB write without this.
-        base = _generation(ident.agent_id)[0]
-        real_name = result["real_project"].removeprefix("repo:")
-        fab_name = result["fabricated_project"].removeprefix("repo:")
-        for cached in _agents.values():
-            if _generation(cached.agent_id)[0] != base:
-                continue
-            await _resolve_project_seat_first(pool, cached)
-            if cached.project == fab_name:
-                cached.project = real_name
-    return result
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='transition_project')."""
+    return await _seat_impl("transition_project", fabricated_project=fabricated_project,
+                            real_project=real_project, because=because, repos=repos,
+                            dry_run=dry_run, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -5997,84 +6497,54 @@ async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, 
                                    actor=ident.agent_id)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='set_attended')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def set_seat_attended(seat_id: str, attended: str, because: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """THE HUMAN-ATTENDED GUARD'S REAL SIGNAL (thread 96f62338) — stamps a seat's own explicit
-    `attended` property ('human' or 'worker'), read directly by dispatch_dm's human-attended
-    guard instead of its old, broken `managed_by` proxy (true only while Thoth was the sole
-    manager; false since workers started minting their own sub-workers and test seats).
-
-    OPERATOR-APPROVED TO CHANGE, ENFORCED: the operator or the target seat's own manager
-    only. `attended='human'` marks a seat the operator actually fronts; `attended='worker'`
-    reverses a prior stamp. Refuses loudly on a value outside {'human','worker'}, a blank
-    `because`, an unauthorized actor, or an unknown/retired seat."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a seat's attendance signal is a mind's act, and the "
-                         "graph must know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import set_seat_attended as _set_seat_attended
-    return await _set_seat_attended(Actions(await _pool_get()), seat_id=seat_id,
-                                    attended=attended, because=because, actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='set_attended')."""
+    return await _seat_impl("set_attended", target=seat_id, attended=attended,
+                            because=because, ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='rename')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def rename_seat(seat_id: str, new_handle: str, because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Rename a Seat — manager/operator-invoked, ENFORCED, no self-service (claim_name is
-    for a mind naming ITSELF). Stamps the seat's own `handle` and, if the seat is occupied,
-    the current holder's `handle` too — both compensating assertions, the old handle stays
-    in history. The harness-session display name is OUT of scope; the receipt says the
-    graph renamed and the harness name follows at the holder's next spawn. Refuses loudly
-    on a blank/over-long `new_handle`, a blank `because`, an unauthorized actor, an unknown
-    seat, or a `new_handle` another active seat already carries (case-insensitive)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a rename is a mind's act, and the graph must know "
-                         "whose", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import rename_seat as _rename_seat
-    return await _rename_seat(Actions(await _pool_get()), seat_id=seat_id,
-                              new_handle=new_handle, because=because, actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='rename')."""
+    return await _seat_impl("rename", target=seat_id, new_handle=new_handle, because=because,
+                            ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='bind_tree')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """Point a seat's CODE checkout at `tree_cwd` — distinct from its office (identity home,
-    untouched here). `launch_seat` reuses whatever is recorded until this is called again;
-    osiris never provisions the directory — `launch_seat` checks it exists on disk before
-    trusting it, this only records the location. OPERATOR-OR-MANAGER ONLY, ENFORCED — this is
-    what a relaunched seat trusts as the code it executes. Refuses on a blank
-    `tree_cwd`/`because`, an unauthorized actor, or an unknown seat."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a tree binding is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.seats import bind_seat_tree as _bind_seat_tree
-    return await _bind_seat_tree(Actions(await _pool_get()), seat_id=seat_id,
-                                 tree_cwd=tree_cwd, because=because, actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='bind_tree')."""
+    return await _seat_impl("bind_tree", target=seat_id, tree_cwd=tree_cwd, because=because,
+                            ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='reissue_office')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Recompile a seat's CLAUDE.md managed section on demand, when law changes or a
-    live fact (a peer bond, a manager reassignment) needs to reach an already-occupied
-    office. Only the bytes between the `<!-- osiris:compiled:begin/end -->` markers are
-    touched — hand-composed narrative and charter.md always survive. `because` required.
-
-    Refuses loudly, naming the seat, when the managed section is missing, duplicated, or
-    mangled — fix by hand, or pass `adopt=True` for a genuinely pre-compiler office
-    (zero marker text); `adopt=True` on an office that already has marker text also
-    refuses."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a reissue is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.boot_compiler import reissue_office as _reissue_office
-    return await _reissue_office(Actions(await _pool_get()), seat_id=seat_id,
-                                 because=because, actor=ident.agent_id, adopt=adopt)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='reissue_office')."""
+    return await _seat_impl("reissue_office", target=seat_id, because=because, adopt=adopt,
+                            ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -6257,24 +6727,15 @@ async def fleet_reconcile(execute: bool = False,
                                    execute=execute)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='establish_office')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
-    """THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned
-    home at ~/.osiris/seats/<handle>/: writes the seat's STANDING ORDERS (a per-seat
-    CLAUDE.md boot sector — identity, house, charter, the office model; never clobbers an
-    existing one), then rebind-extracts the seat there (.osiris pin, mount rows, its own
-    lineage's transcripts re-addressed so resume works in place — co-residents' history
-    stays). `seat` accepts a claimed name or a raw agent id. Refuses loudly on an unknown
-    seat and on an anonymous lineage (an office is named for its seat — claim_name first).
-    Idempotent: re-running converges on the same office. The receipt carries the launch
-    line to hand the operator."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — an office ceremony is a mind's act, and the graph "
-                         "must know whose", "why": _anchorless(ctx)}
-    from src.orchestrator.offices import establish_office as _establish
-    return await _establish(Actions(await _pool_get()), seat_or_agent=seat,
-                            actor=ident.agent_id)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='establish_office')."""
+    return await _seat_impl("establish_office", target=seat, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -6310,93 +6771,35 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
     return await _lift(await _pool_get(), ref, handle, actor=actor)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='walk_in')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def walk_in(
     handle: str, wants_office: bool, cwd: str | None = None, job_dir: str | None = None,
     model: str | None = None, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """One call over mount + claim_name + establish_office, for a mind with nothing but
-    this server. Composes each step untouched, returns its receipt verbatim, stops at
-    the first refusal. Skips an already-done step honestly (`ran: false` + why).
-
-    `handle` and `wants_office` are both required, never defaulted — nobody but the
-    caller can pick a name, and forcing an office onto a one-off visitor would erase that
-    class's whole point. `cwd`/`job_dir` only consulted if not yet mounted; project/house
-    come free off `cwd`. Full rationale: src/orchestrator/walkin.py's own docstring."""
-    pool = await _pool_get()
-    ident = await _ident_for(ctx, session_anchor)
-    if ident is None:
-        if not cwd:
-            return {"error": "not yet mounted, and no cwd given — pass cwd (your working "
-                             "directory) so walk_in can mount you first, or call mount() "
-                             "yourself before walk_in"}
-        mount_result = await mount(
-            cwd=cwd, job_dir=job_dir, model=model, subagent_id=subagent_id,
-            subagent_type=subagent_type, session_anchor=session_anchor, ctx=ctx)
-        if "error" in mount_result:
-            return {"error": mount_result["error"], "step": "mount"}
-        agent_id = mount_result.get("agent")
-        if not agent_id:
-            return {"error": "mount succeeded but returned no agent id — cannot continue",
-                    "step": "mount", "mount_result": mount_result}
-        mount_step: dict[str, Any] = {"ran": True, "result": mount_result}
-    else:
-        agent_id = ident.agent_id
-        mount_step = {"ran": False, "note": f"already mounted as {agent_id}, skipping"}
-
-    from src.orchestrator.walkin import walk_in_named
-    result = await walk_in_named(
-        pool, agent_id=agent_id, handle=handle, wants_office=wants_office)
-    if "error" in result:
-        result.setdefault("steps_so_far", {})["mount"] = mount_step
-        return result
-    return {**result, "mount": mount_step}
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='walk_in')."""
+    return await _seat_impl("walk_in", handle=handle, wants_office=wants_office, cwd=cwd,
+                            job_dir=job_dir, model=model, subagent_id=subagent_id,
+                            subagent_type=subagent_type, session_anchor=session_anchor,
+                            ctx=ctx)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='mint')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def mint_seat(
     handle: str, project: str | None = None, model: str | None = None,
     house: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Mint a specialist WORKER seat under YOUR OWN seat, one act: ensure_seat + an
-    office scaffold (dir, .osiris pin, CLAUDE.md + charter.md) + an intended_model stamp
-    + managed_by (you become manager of record). The calling seat is always the manager
-    — no override param, a seat mints its own workers, never another's. Idempotent: a
-    handle already naming a living Seat is adopted (missing edge/stamp asserted, nothing
-    rewritten) rather than twinned. `house` omitted inherits your own; crossing houses
-    refuses unless the caller is the operator. Refuses loudly if you hold no seat of your
-    own (claim_name first)."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — minting a worker is a seat's own act",
-                         "why": _anchorless(ctx)}
-    from src.orchestrator.seats import held_seat
-    pool = await _pool_get()
-    bound = await held_seat(pool, ident.agent_id)
-    manager_seat_id = bound["seat_id"] if bound else None
-    if manager_seat_id is None:
-        # THE SUCCESSION GAP (live acceptance, msg 926 — Thoth LI's own first call): held_seat
-        # needs a `holds` link on the caller's EXACT label, but a succeeded lineage's holds
-        # link can sit on an ancestor label (mint_heir doesn't always re-link it at every
-        # mint — a separate, deeper gap, banked as its own thread rather than fixed here:
-        # whether succession should carry `holds` forward the way it already carries
-        # `handle`). The HANDLE ASSERTION, unlike the link, IS copied to every new
-        # generation (agents.mint_heir's seat-inheritance step) — fall back to it, the same
-        # way mount's own seat display (handshake._seat_of) already resolves.
-        from src.orchestrator.mintseat import _resolve_seat_ref
-        from src.orchestrator.offices import _handle_of
-        handle_claim = await _handle_of(pool, ident.agent_id)
-        if handle_claim:
-            manager_seat_id = await _resolve_seat_ref(pool, handle_claim)
-    if manager_seat_id is None:
-        return {"error": "you hold no seat of your own — claim_name first; a seat mints "
-                         "workers under ITSELF, and an unclaimed lineage has no seat to "
-                         "extend"}
-    from src.orchestrator.mintseat import mint_seat as _mint_seat
-    kwargs: dict[str, Any] = {"intended_model": model} if model else {}
-    return await _mint_seat(Actions(pool), manager=manager_seat_id, handle=handle,
-                            house=house, project=project, actor=ident.agent_id, **kwargs)
+    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='mint')."""
+    return await _seat_impl("mint", handle=handle, project=project, model=model,
+                            house=house, ctx=ctx)
 
 
 @mcp.tool()
@@ -7603,32 +8006,19 @@ async def rematerialize(
     return await SoulStore(pool).rematerialize_to_disk(anchor_sid, dest=dest, force=force)
 
 
-@mcp.tool()
+@mcp.tool(meta={
+    "deprecated": True,
+    "use_instead": "seat(action='heal_transcript')",
+    "since": "task #202 seat dispatcher (msg 7039)",
+})
 async def heal_seat_transcript(
     handle: str, source_paths: list[str], dry_run: bool = True, because: str = "",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Splice a seat's session, fragmented across multiple project slugs by a mid-session
-    cwd move, back into ONE file at its own office slug. `handle` names the seat whose
-    office the result lands at. `source_paths` are the original fragments, IN CHAIN
-    ORDER (oldest first) — the session uuid and 8-char anchor_sid derive from
-    `source_paths[0]`'s own filename.
-
-    `verify_jsonl_chain_boundary` runs on every consecutive pair before anything is
-    touched, refusing a false "same session" or a genuinely separate session sharing
-    only a directory.
-
-    `dry_run=True` (default) reports clean/refused per pair and where the result would
-    land — nothing written. `dry_run=False` requires `because` and performs the real
-    splice + rematerialize. Never touches a Seat row, anchor_cwd, or any source
-    transcript — the anchor-repoint half is heal_seat_anchor, a different door."""
-    ident = await _ident_for(ctx)
-    if ident is None:
-        return {"error": "mount first — a transcript heal is a deliberate act on the record",
-                "why": _anchorless(ctx)}
-    from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
-    return await _heal(await _pool_get(), handle, source_paths, dry_run=dry_run,
-                       because=because)
+    """DEPRECATED — hidden alias, still callable. Forwards to
+    seat(action='heal_transcript')."""
+    return await _seat_impl("heal_transcript", target=handle, source_paths=source_paths,
+                            dry_run=dry_run, because=because, ctx=ctx)
 
 
 @mcp.tool(meta={

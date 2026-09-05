@@ -780,14 +780,21 @@ async def test_deprecated_tools_are_hidden_from_list_but_still_in_call_registry(
     appear in what a model's own tool list shows (the surface shrink), while remaining
     fully present in the manager's own registry call_tool resolves against (the
     backward-compat guarantee) — verified against the REAL server, not a stand-in, for
-    every retirement task #199 lane 2/6788's wave has landed so far."""
+    every retirement task #199 lane 2/6788's wave has landed so far.
+
+    heal_seat_anchor and reconcile_seat_identity moved from `survivors` to `retired`
+    here (#202 SEAT DISPATCHER, operator ruling f9182ad7, Thoth dispatch 7039): both
+    were the task #199 lane 2 consolidation's own surviving self/third-party doors, now
+    THEMSELVES folded into seat(action='heal_anchor'/'reconcile_identity') and hidden a
+    second time — the mechanism this test proves is unchanged, only which names
+    currently sit on which side of it."""
     from src import mcp_server as srv
 
     listed = {t.name for t in await srv.mcp.list_tools()}
     retired = {"heal_seat_anchor_third_party", "unfork_project",
-              "reconcile_seat_identity_third_party", "ingest_project_third_party"}
-    survivors = {"heal_seat_anchor", "fork_project", "reconcile_seat_identity",
-                "ingest_project"}
+              "reconcile_seat_identity_third_party", "ingest_project_third_party",
+              "heal_seat_anchor", "reconcile_seat_identity"}
+    survivors = {"fork_project", "ingest_project"}
     assert not (retired & listed), retired & listed
     assert survivors <= listed
     for name in retired:
