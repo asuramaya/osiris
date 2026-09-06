@@ -1183,13 +1183,21 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     # "visitor" at all and would happily match the shorter, ILIKE-friendliest sidechain label.
     from src.actions.core import Actions
     from src.orchestrator.agents import resolve_seat
+    from src.orchestrator.seats import seat_holder_ineligible
 
-    seat = await resolve_seat(Actions(pool), ref)
-    if seat.get("agent"):
-        oid = await pool.fetchval(
-            "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", seat["agent"])
-        if oid is not None:
-            return uuid.UUID(str(oid))
+    # THE SAME GUARD send()/doors() USE (60bc15db specimen 3, rulings 1a64ae9a/aee67e6d):
+    # a name whose unique seat has only ineligible holders would otherwise fall to
+    # resolve_seat's un-seated-lineage fallback and confidently resolve a dossier/focus_
+    # object lookup to some OTHER, older, unmarked generation. Falls through to the
+    # generic name-matching legs below rather than refusing outright — this resolver has
+    # other real legs left to try, unlike a pure address-resolution door.
+    if await seat_holder_ineligible(pool, ref) is None:
+        seat = await resolve_seat(Actions(pool), ref)
+        if seat.get("agent"):
+            oid = await pool.fetchval(
+                "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", seat["agent"])
+            if oid is not None:
+                return uuid.UUID(str(oid))
     for predicate, order in (
         ("lower(a.value #>> '{}') = lower($1)",
          "(SELECT count(*) FROM current_assertions x WHERE x.object_id=a.object_id) DESC"),
@@ -5157,6 +5165,22 @@ FLEET_STRIP: dict[str, Any] = {
 }
 
 
+# THE CENSUS DOOR'S TWO FIXED-ARGS SAVED COMPOSITIONS (Thoth dispatch 7543 item 2's own
+# fold correction: a new NAMED TOOL was the wrong shape — the operator's direction is
+# fewer tools, and `census` was already a composition Function). Two separate saved
+# compositions, ONE PER `kind`, rather than one composition taking a variable arg — the
+# exact same wall mail_threads hit above (a Function that reads `args.X` at call time
+# cannot be baked into a single saved spec with one fixed value and still answer every
+# caller's question). `graph_census` stays registered as a hidden deprecated alias for
+# any caller who already knows its name.
+CENSUS_SEAT_PROPERTY_CONTRADICTIONS: dict[str, Any] = {
+    "op": "function", "name": "census", "args": {"kind": "seat_property_contradictions"},
+}
+CENSUS_COHORT: dict[str, Any] = {
+    "op": "function", "name": "census", "args": {"kind": "cohort"},
+}
+
+
 # THE MAIL OVERVIEW (task #71 consolidation wave 2, ruling d42c543b, msg 1929) — the
 # overview-only half of /mail's port. `mail_threads` (registered as a Function, above) is
 # NOT saved as its own composition here — it takes `args.box`, and a saved composition with
@@ -5185,6 +5209,12 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — not "fleet"
     # (taken: every agent the graph knows, unranked). No subject needed.
     "fleet-strip": FLEET_STRIP,
+    # THE SMALLEST DOOR, folded (Thoth dispatch 7543 item 2, fold correction): population
+    # counts three obligations were stuck without — no subject needed, one kind fixed
+    # each (see CENSUS_SEAT_PROPERTY_CONTRADICTIONS/CENSUS_COHORT's own comment for why
+    # two compositions, not one taking a variable arg).
+    "census-seat-property-contradictions": CENSUS_SEAT_PROPERTY_CONTRADICTIONS,
+    "census-cohort": CENSUS_COHORT,
     # /fleet's full-fidelity port (rung 2, ruling d42c543b, msg 1926/1936) — ADDITIVE, the
     # route stays live beside this for a side-by-side look before anything retires. Neither
     # "fleet" (every agent ever seen, no liveness) nor "fleet-strip" (one project, live+
@@ -5327,6 +5357,10 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "type-census": ("engine", "every type's health — counts, orphans, thin, median links"),
     "closure-health": ("engine", "the four numbers: how much of thread closure is held by "
                                  "structure vs memory, fleet-wide"),
+    "census-seat-property-contradictions": ("engine", "every (seat, property) pair "
+        "currently holding more than one live distinct value, fleet-wide"),
+    "census-cohort": ("engine", "the #189 adoption instrument's own cohort-aged "
+        "connectivity figures"),
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),
     "lap": ("engine", "one object's provenance timeline — how belief formed"),

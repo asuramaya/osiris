@@ -325,6 +325,44 @@ async def test_dossier_resolves_a_fleet_handle_to_the_real_agent_not_a_sidechain
     assert out["id"] == str(real), "resolved to the sidechain artifact, not the real agent"
 
 
+async def test_dossier_never_resolves_a_handle_to_an_ineligible_holders_agent(
+    actions: Actions,
+) -> None:
+    """60bc15db specimen 3 (rulings 1a64ae9a/aee67e6d), resolve_ref's own call site:
+    a handle whose unique seat has only an ineligible (false_mint) active holder must
+    never resolve through resolve_seat's un-seated-lineage fallback into that dead
+    generation's own Agent object — the same grave-delivery class send()/doors() already
+    guard against, now closed at dossier's own resolver too."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    now = datetime.now(UTC)
+    seat = await ensure_seat(actions, house="osiris", handle="DossierGhost", source="test")
+    ancestor = await actions.create_or_find_object(
+        "Agent", "agent:dossierghost-old", "agent:dossierghost-old")
+    await actions.assert_property(ancestor, "handle", "DossierGhost",
+                                  "agent:dossierghost-old", now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:dossierghost-old")
+    heir = await actions.create_or_find_object(
+        "Agent", "agent:dossierghost-new", "agent:dossierghost-new")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:dossierghost-new")
+    await actions.assert_property(heir, "false_mint", "true", "agent:dossierghost-new",
+                                  now, 0.9, evidence_class="self_declared")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.dossier("DossierGhost")
+    finally:
+        srv._pool = saved_pool
+
+    assert out.get("id") != str(heir), "resolved into the ineligible generation's own agent"
+    assert out.get("id") != str(ancestor)
+
+
 async def test_the_mcp_dossier_tool_resolves_a_short_id(actions: Actions) -> None:
     """task #64 (ruling ad19a779): every id a composition ROW hands out (a table/Function
     row's own 8-char "id" column) must feed straight back into dossier(), not just

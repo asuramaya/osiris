@@ -2477,3 +2477,28 @@ async def test_census_refuses_an_unknown_kind_rather_than_guessing(actions: Acti
     assert "error" in out
     assert "seat_property_contradictions" in out["error"]
     assert "cohort" in out["error"]
+
+
+async def test_census_seat_property_contradictions_composition_is_registered_and_runs(
+    actions: Actions,
+) -> None:
+    """Thoth's own fold correction (dispatch 7543 item 2): census is reached through the
+    generic composition door, not a bespoke named tool — one fixed-args saved composition
+    per kind, same shape mail_overview/fleet_live already prove out end to end."""
+    seat = await actions.create_or_find_object("Seat", "seat:censuscomptest", "test")
+    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "bytebye", "agent:bob", NOW, 0.9)
+
+    await save_composition(actions.pool, "census-seat-property-contradictions",
+                           DEFAULT_COMPOSITIONS["census-seat-property-contradictions"])
+    res = await run_composition(actions.pool, "census-seat-property-contradictions")
+    assert res["kind"] == "data"
+    row = next(r for r in res["items"]["rows"] if r["seat"] == "seat:censuscomptest")
+    assert row["property"] == "house"
+
+
+async def test_census_cohort_composition_is_registered_and_runs(actions: Actions) -> None:
+    await save_composition(actions.pool, "census-cohort", DEFAULT_COMPOSITIONS["census-cohort"])
+    res = await run_composition(actions.pool, "census-cohort")
+    assert res["kind"] == "data"
+    assert "cohorts" in res["items"]
