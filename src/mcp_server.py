@@ -6229,7 +6229,7 @@ async def project(
     action: str, project: str | None = None, name: str | None = None, because: str = "",
     dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
     seat_id: str | None = None, operator_citation: str | None = None,
-    value: str | None = None, ctx: Context | None = None,
+    value: str | None = None, merge_into: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
     door, many actions over SoftwareProject lifecycle. See `describe('project')` for
@@ -6257,7 +6257,7 @@ async def project(
     return await _project_impl(
         action, project=project, name=name, because=because, dry_run=dry_run,
         new_name=new_name, fork_into=fork_into, seat_id=seat_id,
-        operator_citation=operator_citation, value=value, ctx=ctx)
+        operator_citation=operator_citation, value=value, merge_into=merge_into, ctx=ctx)
 
 
 async def _ingest_project_impl(

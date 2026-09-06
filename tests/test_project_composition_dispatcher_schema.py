@@ -181,3 +181,21 @@ async def test_a_real_client_rejects_one_composition_actions_params_on_anothers_
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(
             instance={"action": "list", "spec": {"subject": "x"}}, schema=schema)
+
+
+async def test_project_forwards_merge_into_to_the_implementation(monkeypatch: Any) -> None:
+    """THE DROPPED FLAG (Thoth, 2026-09-06, the handlingtheloop fold): project()'s own
+    signature accepted `merge_into` and its schema advertised it, but the forwarding call
+    to _project_impl never passed it — so rename refused the collision it had been told
+    to accept, twice, on the operator's word. A schema promise the wrapper does not keep."""
+    seen: dict[str, Any] = {}
+
+    async def _fake(action: str, **kw: Any) -> dict[str, Any]:
+        seen.update(kw, action=action)
+        return {"ok": True}
+
+    monkeypatch.setattr(srv, "_project_impl", _fake)
+    await srv.project(action="rename", project="repo:x", new_name="y", because="b",
+                      dry_run=True, merge_into=True)
+    assert seen["action"] == "rename"
+    assert seen["merge_into"] is True
