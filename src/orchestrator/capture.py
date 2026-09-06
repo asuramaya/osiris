@@ -2345,13 +2345,16 @@ def _arc_out_of_scope_note(label: str) -> str:
             "carry an arc (capture.ARCS names osiris's own roadmap taxonomy only)")
 
 
+DEFAULT_STALE_AFTER_DAYS = 14
+
+
 async def open_thread(
     actions: Actions, summary: str, *, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
     severity: str | None = None, resolves: str | list[str] | None = None,
     branch: str | None = None, files_touched: list[str] | None = None,
     source: str = _SOURCE, repo_evidence_class: str | None = None,
-    unlinked_because: str | None = None,
+    unlinked_because: str | None = None, stale_after_days: int | None = None,
 ) -> uuid.UUID:
     """Open a thread at source — an unresolved question / next-step for the next session
     to inherit. Same shape as a mined Thread (props summary + status=open) so it appears in
@@ -2431,7 +2434,18 @@ async def open_thread(
     conditional-acceptance leg already proved sufficient (content-capacity was never the
     problem), carrying the git branch and the repo-relative files this build touches so a
     later reader — or `open_thread`'s own collision check, below — can find it by file
-    overlap instead of only by already suspecting it exists."""
+    overlap instead of only by already suspecting it exists.
+
+    `stale_after_days` (no-regrow hygiene item 2, practice 393be453, operator ruling
+    2026-09-06) — `kind='obligation'` ONLY, same scoping as the owner-default above: a
+    general thread has no aging law (this house's own standing choice, unowned/ageless
+    both being legitimate for a plain question), but a DUTY carries a window past which it
+    surfaces on its OWNER's own next Stop as a named ask — never a DM, never a cron; that
+    is `obligation_hygiene.py`'s separate idle-since-touched axis, unrelated to this
+    age-since-OPENED one. Defaults to `DEFAULT_STALE_AFTER_DAYS` (14), overridable per
+    call for a duty that is known to run longer or shorter; stamped once, at birth, as an
+    absolute `stale_after` timestamp (`observed + the window`) rather than a duration, so
+    every later reader compares against `now()` with no re-derivation."""
     if arc is not None:
         if await arc_in_scope(actions.pool, repo):
             if arc not in ARCS:
@@ -2493,6 +2507,12 @@ async def open_thread(
         if effective_owner:
             await a.assert_property(t, "owner", effective_owner.strip(), source, observed,
                                     _CONF, evidence_class=_EC)
+        if kind == "obligation":
+            window_days = (stale_after_days if stale_after_days is not None
+                           else DEFAULT_STALE_AFTER_DAYS)
+            stale_after = observed + timedelta(days=window_days)
+            await a.assert_property(t, "stale_after", stale_after.isoformat(), source,
+                                    observed, _CONF, evidence_class=_EC)
         if branch:
             await a.assert_property(t, "branch", branch, source, observed, _CONF,
                                     evidence_class=_EC)

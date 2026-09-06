@@ -230,6 +230,53 @@ def test_ungraded_mail_still_blocks_never_guessed_as_fyi(monkeypatch: Any) -> No
     assert json.loads(out[0])["decision"] == "block"
 
 
+def test_stale_obligations_block_the_stop_named_not_counted(monkeypatch: Any) -> None:
+    """No-regrow hygiene item 2 (practice 393be453): a stale-after obligation blocks Stop
+    the same severity an ask message does, and NAMES it — never a bare count."""
+    out: list[str] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": None, "bands": {},
+                               "stale_obligations": [
+                                   {"id": "abc12345", "summary": "a duty gone quiet",
+                                    "stale_days": 3}]}}
+        raise AssertionError("must not reach stage_a when an obligation is stale")
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = _cmd_stop({"session_id": "staleblock1", "cwd": "/x"})
+    assert rc == 0
+    decision = json.loads(out[0])
+    assert decision["decision"] == "block"
+    assert "abc12345" in decision["reason"]
+    assert "a duty gone quiet" in decision["reason"]
+
+
+def test_stale_obligations_never_fire_when_mail_already_blocks(monkeypatch: Any) -> None:
+    """The mail gate is checked first — a caller already blocked on mail never sees a
+    second, competing block for the same turn."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        calls.append(data)
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 1, "senders": ["agent:x"], "window": None, "bands": {},
+                               "stale_obligations": [
+                                   {"id": "def67890", "summary": "irrelevant here",
+                                    "stale_days": 1}]}}
+        raise AssertionError("must not reach stage_a on a blocked stop")
+
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    rc = _cmd_stop({"session_id": "mailfirst1", "cwd": "/x"})
+    assert rc == 0
+    decision = json.loads(out[0])
+    assert "def67890" not in decision["reason"]  # the mail block fired instead
+    assert [c["phase"] for c in calls] == ["deliverable"]
+
+
 def test_stage_a_fires_on_a_clean_allowed_stop(monkeypatch: Any) -> None:
     calls: list[dict[str, Any]] = []
 

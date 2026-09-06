@@ -15,6 +15,7 @@ established."""
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path as _Path
 from typing import Any
 
@@ -26,20 +27,100 @@ import asyncpg
 STOP_GRACE_SECS = 3600
 
 
+# no-regrow hygiene item 2 (practice 393be453) — every subquery COALESCEs to the SAME
+# "current winning value" pattern the-wall/obligation_hygiene.py already use; kept local
+# (not a shared constant) since this is the only caller in this module.
+_OBLIGATION_SUMMARY_SQL = (
+    "COALESCE("
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+)
+_OBLIGATION_KIND_SQL = (
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+)
+_OBLIGATION_STATUS_SQL = (
+    "COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')"
+)
+_OBLIGATION_OWNER_SQL = (
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+)
+_OBLIGATION_STALE_AFTER_SQL = (
+    "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)"
+)
+
+
+async def compute_stale_obligations(
+    conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, cwd: str,
+) -> list[dict[str, Any]]:
+    """No-regrow hygiene item 2's own READ half (practice 393be453, operator ruling
+    2026-09-06): every OPEN kind='obligation' Thread THIS session's own identity owns,
+    past its `stale_after` window (open_thread's own `stale_after_days`, default 14) —
+    named, never a bare count, so the owner sees exactly what to touch (annotate/resolve/
+    reclassify). Matched the same way `_leased_assignment` above already identifies "the
+    freshest open obligation whose owner is this seat or this agent's lineage", widened to
+    ALSO match the seat's own HANDLE string — `open_thread`'s own default owner for an
+    unowned obligation IS the handle (a bare display name), never the raw seat/agent id,
+    so a handle-only match would silently miss the common case."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.seats import held_seat
+
+    identity = await _resolve_worker_identity(conn, session_id, cwd)
+    if identity is None:
+        return []
+    agent_id = identity["agent_id"]
+    seat_id = identity.get("seat_id")
+    owners = {agent_id.lower(), _generation(agent_id)[0].lower()}
+    if seat_id:
+        owners.add(str(seat_id).lower())
+        seat = await held_seat(conn, agent_id)
+        if seat and seat.get("handle"):
+            owners.add(str(seat["handle"]).lower())
+    rows = await conn.fetch(
+        "SELECT o.id, "
+        f" {_OBLIGATION_SUMMARY_SQL} AS summary, "
+        f" {_OBLIGATION_STALE_AFTER_SQL} AS stale_after "
+        "FROM objects o WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        f"  AND {_OBLIGATION_STATUS_SQL}='open' AND {_OBLIGATION_KIND_SQL}='obligation' "
+        f"  AND lower(COALESCE({_OBLIGATION_OWNER_SQL},'')) = ANY($1::text[]) "
+        f"  AND {_OBLIGATION_STALE_AFTER_SQL} IS NOT NULL "
+        f"  AND ({_OBLIGATION_STALE_AFTER_SQL})::timestamptz <= now() "
+        f"ORDER BY ({_OBLIGATION_STALE_AFTER_SQL})::timestamptz ASC",
+        list(owners))
+    now = datetime.now(UTC)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        stale_at = datetime.fromisoformat(r["stale_after"])
+        out.append({"id": str(r["id"])[:8], "summary": r["summary"],
+                   "stale_days": (now - stale_at).days})
+    return out
+
+
 async def compute_stop_deliverable(
     conn: asyncpg.Pool | asyncpg.Connection, *, cwd: str, session_id: str,
 ) -> dict[str, Any]:
     """Verbatim extraction of osiris_stophook.py's own `_deliverable` body — see that
     function's docstring for the full rationale (the project resolution, the self-echo
     guard, the lineage rollup). Returns a JSON-shaped dict instead of a tuple so the /stop
-    route can hand it back unchanged; the hook's own `_deliverable` wrapper unpacks it."""
+    route can hand it back unchanged; the hook's own `_deliverable` wrapper unpacks it.
+
+    `stale_obligations` (no-regrow hygiene item 2) rides along in the SAME phase/round-
+    trip — a session at Stop already pays for this query's own identity resolution via
+    `_resolve_worker_identity`, so adding it here costs one more SELECT, not a second
+    phase the hook has to remember to call."""
     from src.orchestrator.agents import soul_base
     from src.orchestrator.mounts import find_session_row
     from src.orchestrator.seats import resolve_project
 
     row = await find_session_row(conn, session_id or "")
     if row is None or not row["agent_id"]:
-        return {"n": 0, "senders": [], "window": None, "bands": {}, "project": None}
+        return {"n": 0, "senders": [], "window": None, "bands": {}, "project": None,
+               "stale_obligations": []}
     project = await resolve_project(conn, str(row["agent_id"]), cwd)
     me = str(row["agent_id"])
     base = soul_base(me)
@@ -62,9 +143,10 @@ async def compute_stop_deliverable(
     senders = [s for s in (n_row["senders"] or []) if s] if n_row else []
     bands = ({"ask": int(n_row["asks"] or 0), "fyi": int(n_row["fyis"] or 0)}
              if n_row else {})
+    stale_obligations = await compute_stale_obligations(conn, session_id=session_id, cwd=cwd)
     return {
         "n": n, "senders": senders, "window": row["context_window_size"],
-        "bands": bands, "project": project,
+        "bands": bands, "project": project, "stale_obligations": stale_obligations,
     }
 
 
@@ -246,7 +328,7 @@ async def _sent_a_real_ask(conn: Any, agent_id: str, within_secs: int = 300) -> 
     """True when this agent already sent a grade='ask' message inside the last
     `within_secs` — the signal that a trailing '?' is a REAL mail-routed ask, not a
     question narrated into an empty room."""
-    from datetime import UTC, datetime, timedelta
+    from datetime import timedelta
 
     from src.orchestrator.agents import _generation
 
@@ -358,8 +440,6 @@ def _practice_violation(
 async def _already_flagged_today(conn: Any, agent_id: str, practice_id: str) -> bool:
     """One Stage C flag per (agent, practice) per calendar day — an alert nobody believes
     is worse than no alert."""
-    from datetime import UTC, datetime
-
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
@@ -417,8 +497,6 @@ async def compute_stop_stage_a(
     if pct is not None:
         actions = Actions(pool)
         obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
-        from datetime import UTC, datetime
-
         await actions.assert_property(
             obj, "context_pct", str(pct), agent_id, datetime.now(UTC), 1.0,
             evidence_class="direct_observation")
@@ -436,8 +514,6 @@ async def compute_stop_stage_a(
             manager_seat=manager_seat)
     leased = await _leased_assignment(pool, seat_id, agent_id)
     if leased is None:
-        from datetime import UTC, datetime
-
         actions = Actions(pool)
         obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
         await actions.assert_property(

@@ -4600,6 +4600,47 @@ async def test_open_thread_default_stays_unowned_when_no_seat_resolves(
     assert "owner" not in props
 
 
+# ═══ stale_after (no-regrow hygiene item 2, practice 393be453) ═══
+
+
+async def test_open_thread_obligation_stamps_the_default_14_day_stale_after(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import DEFAULT_STALE_AFTER_DAYS
+
+    before = datetime.now(UTC)
+    t = await open_thread(actions, "a duty with no explicit window",
+                          kind="obligation", source="agent:staleowner1")
+    after = datetime.now(UTC)
+    props = await _props(actions.pool, t)
+    stale_after = datetime.fromisoformat(props["stale_after"])
+    assert (before + timedelta(days=DEFAULT_STALE_AFTER_DAYS) <= stale_after
+           <= after + timedelta(days=DEFAULT_STALE_AFTER_DAYS))
+
+
+async def test_open_thread_obligation_honours_an_explicit_stale_after_days(
+    actions: Actions,
+) -> None:
+    before = datetime.now(UTC)
+    t = await open_thread(actions, "a duty known to run longer than usual",
+                          kind="obligation", source="agent:staleowner2", stale_after_days=30)
+    props = await _props(actions.pool, t)
+    stale_after = datetime.fromisoformat(props["stale_after"])
+    assert stale_after >= before + timedelta(days=29)  # ~30 days out, not 14
+
+
+async def test_open_thread_general_thread_never_gets_a_stale_after(
+    actions: Actions,
+) -> None:
+    """The window is SCOPED to kind='obligation' only — a general thread has no aging
+    law (this house's own standing choice: an ageless open question is legitimate),
+    matching the owner-default's own identical scoping just above."""
+    t = await open_thread(actions, "a general thread, no kind at all",
+                          source="agent:staleowner3")
+    props = await _props(actions.pool, t)
+    assert "stale_after" not in props
+
+
 async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
     actions: Actions,
 ) -> None:

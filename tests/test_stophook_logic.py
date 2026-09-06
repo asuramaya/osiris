@@ -26,6 +26,7 @@ from src.orchestrator.stophook_logic import (
     _leased_assignment,
     _resolve_worker_identity,
     _stage_a_confession,
+    compute_stale_obligations,
     compute_stop_deliverable,
     compute_stop_offload,
     compute_stop_stage_a,
@@ -43,7 +44,8 @@ async def test_compute_stop_deliverable_works_against_a_pool_not_just_a_connecti
     actions: Actions,
 ) -> None:
     out = await compute_stop_deliverable(actions.pool, cwd="/nowhere", session_id="")
-    assert out == {"n": 0, "senders": [], "window": None, "bands": {}, "project": None}
+    assert out == {"n": 0, "senders": [], "window": None, "bands": {}, "project": None,
+                  "stale_obligations": []}
 
 
 async def test_compute_stop_offload_unresolvable_session_returns_none(
@@ -100,6 +102,86 @@ async def test_compute_stop_deliverable_finds_mail_sent_to_a_g_n_lineage_base(
     out = await compute_stop_deliverable(actions.pool, cwd="/lp/office-gen", session_id=sid)
     assert out["n"] == 1
     assert out["bands"] == {"ask": 1, "fyi": 0}
+
+
+# ═══ no-regrow hygiene item 2 (practice 393be453) — stale_after surfaces on the owner's
+# own Stop, named, not counted ═══
+
+
+async def _mounted_seat(
+    actions: Actions, *, agent: str, seat: str, handle: str, sid: str, job_short: str,
+) -> None:
+    seat_obj = await actions.create_or_find_object("Seat", seat, agent)
+    now = datetime.now(UTC)
+    await actions.assert_property(seat_obj, "handle", handle, agent, now, 0.9,
+                                  evidence_class="self_declared")
+    await bind_holder(actions, seat_id=seat, agent_id=agent)
+    await save_mount(actions.pool, job_dir=f"/j/jobs/{job_short}", agent_id=agent,
+                     project="staleproj", cwd="/sp/office", model=None, session_key=None)
+
+
+async def test_compute_stale_obligations_surfaces_a_past_window_duty_owned_by_my_handle(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await _mounted_seat(actions, agent="agent:staleobl1", seat="seat:staleobl1",
+                        handle="Staleworker1", sid="staleob1-0000-4000-8000-000000000000",
+                        job_short="staleob1")
+    # a window already in the past — the same shape a real 15-day-old obligation carries
+    await open_thread(actions, "a duty already past its window", kind="obligation",
+                      owner="Staleworker1", source="agent:staleobl1", stale_after_days=-1)
+    out = await compute_stale_obligations(
+        actions.pool, session_id="staleob1-0000-4000-8000-000000000000", cwd="/sp/office")
+    assert len(out) == 1
+    assert "a duty already past its window" in out[0]["summary"]
+    assert out[0]["stale_days"] >= 0
+
+
+async def test_compute_stale_obligations_never_surfaces_a_duty_still_inside_its_window(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await _mounted_seat(actions, agent="agent:staleobl2", seat="seat:staleobl2",
+                        handle="Staleworker2", sid="staleob2-0000-4000-8000-000000000000",
+                        job_short="staleob2")
+    await open_thread(actions, "a fresh duty, well inside its window", kind="obligation",
+                      owner="Staleworker2", source="agent:staleobl2")  # default 14 days out
+    out = await compute_stale_obligations(
+        actions.pool, session_id="staleob2-0000-4000-8000-000000000000", cwd="/sp/office")
+    assert out == []
+
+
+async def test_compute_stale_obligations_never_surfaces_someone_elses_duty(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await _mounted_seat(actions, agent="agent:staleobl3", seat="seat:staleobl3",
+                        handle="Staleworker3", sid="staleob3-0000-4000-8000-000000000000",
+                        job_short="staleob3")
+    await open_thread(actions, "someone else's stale duty", kind="obligation",
+                      owner="SomeoneElseEntirely", source="agent:nobody", stale_after_days=-1)
+    out = await compute_stale_obligations(
+        actions.pool, session_id="staleob3-0000-4000-8000-000000000000", cwd="/sp/office")
+    assert out == []
+
+
+async def test_compute_stop_deliverable_carries_stale_obligations_alongside_mail(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await _mounted_seat(actions, agent="agent:staleobl4", seat="seat:staleobl4",
+                        handle="Staleworker4", sid="staleob4-0000-4000-8000-000000000000",
+                        job_short="staleob4")
+    await open_thread(actions, "a duty riding along in the deliverable phase", kind="obligation",
+                      owner="Staleworker4", source="agent:staleobl4", stale_after_days=-1)
+    out = await compute_stop_deliverable(
+        actions.pool, cwd="/sp/office", session_id="staleob4-0000-4000-8000-000000000000")
+    assert len(out["stale_obligations"]) == 1
+    assert "riding along" in out["stale_obligations"][0]["summary"]
 
 
 # ═══════════ STAGE A/B/C, PORTED — dispatch 5441 LEG 1 parity fix ═══════════

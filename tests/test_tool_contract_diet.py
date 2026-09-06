@@ -1271,7 +1271,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
 # live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
 # new fields, no new tool, no new param. Measured exact (104,642), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 105273  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 105,273 -> 105,817 (2026-09-06, Sekhmet, no-regrow hygiene item 2, practice 393be453,
+# thread 1588bc73): open_thread gains one new param, `stale_after_days` (kind='obligation'
+# only, default 14) — a docstring sentence plus the new inputSchema entry. No new tool.
+# fleet_digest's own docstring also gained one clause naming item 4's obligation_pressure
+# field. Measured exact (105,817), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 105817  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
