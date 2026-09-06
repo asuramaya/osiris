@@ -6051,7 +6051,7 @@ PROJECT_INPUT_SCHEMA: dict[str, Any] = {
         }, ["action"]),
         _dispatcher_action_schema({
             "action": _action_const("rename"), "project": _s(), "new_name": _s(),
-            "because": _s(),
+            "because": _s(), "dry_run": _b(True), "merge_into": _b(False),
         }, ["action", "project", "new_name", "because"]),
         _dispatcher_action_schema({
             "action": _action_const("fork"), "project": _s(), "fork_into": _s(),
@@ -6079,7 +6079,8 @@ _HAND_BUILT_SCHEMAS["project"] = PROJECT_INPUT_SCHEMA
 _PROJECT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "create": (["name", "because"], ["name", "because"]),
     "ingest": (["project", "because", "dry_run"], []),
-    "rename": (["project", "new_name", "because"], ["project", "new_name", "because"]),
+    "rename": (["project", "new_name", "because", "dry_run", "merge_into"],
+              ["project", "new_name", "because"]),
     "fork": (["project", "fork_into", "because"], ["project", "fork_into", "because"]),
     "unfork": (["project", "fork_into", "because"], ["project", "fork_into", "because"]),
     "retire": (["project", "because"], ["project", "because"]),
@@ -6093,7 +6094,7 @@ async def _project_impl(
     project: str | None = None, name: str | None = None, because: str | None = None,
     dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
     seat_id: str | None = None, operator_citation: str | None = None,
-    value: str | None = None, ctx: Context | None = None,
+    value: str | None = None, merge_into: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `project` and its 7 hidden single-purpose aliases
     (create_project, ingest_project, rename_project, fork_project, unfork_project,
@@ -6154,7 +6155,20 @@ async def _project_impl(
                 evidence_by_seat[r["canonical"]] = await _project_identity_evidence(
                     pool, seat_id=r["canonical"])
         out = await _rename_project(Actions(pool), project=project, new_name=new_name,
-                                    because=because, actor=ident.agent_id)
+                                    because=because, actor=ident.agent_id,
+                                    dry_run=dry_run, merge_into=merge_into)
+        if not dry_run and not out.get("error"):
+            # STALE MOUNT CACHE (Deckard's report, msg 7719/0afe7d35): get_status()'s
+            # `project` field reads ident.project off THIS process's in-memory _agents
+            # cache, not a fresh graph read — same shape transition_project/correct_house
+            # already guard above. A rename with no in-process cache fix left every
+            # already-mounted agent (any generation, not just the caller's own lineage —
+            # a project rename is never lineage-scoped) reporting the pre-rename name
+            # until its next full re-mount.
+            old_bare = out["project"].removeprefix("repo:")
+            for cached in _agents.values():
+                if cached.project == old_bare:
+                    cached.project = new_name
         if evidence_by_seat:
             rename_evidence = {
                 seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
@@ -6227,7 +6241,9 @@ async def project(
       ingest: land a project's own git history and close the threads it witnesses
         (project=None + because=None is SELF-SERVICE, resolves your own pin; project
         given + because given is the THIRD-PARTY shape instead)
-      rename: declare a project's new NAME, non-canonical (project, new_name, because)
+      rename: declare a project's new NAME, non-canonical (project, new_name, because).
+        dry_run=True by default (pass dry_run=False to actually write) — refuses a
+        new_name already naming a DIFFERENT project of any status unless merge_into=True
       fork: declare two already-active projects a FORK pair (project, fork_into, because)
       unfork: reverse a fork pair's live edge (project, fork_into, because)
       retire: retire a dead project stub, third-party (project, because)
@@ -6481,12 +6497,14 @@ async def project_identity_evidence(seat_id: str, operator_citation: str | None 
     "use_instead": "project(action='rename')",
     "since": "task #202 project dispatcher (msg 7095)",
 })
-async def rename_project(project: str, new_name: str, because: str,
+async def rename_project(project: str, new_name: str, because: str, dry_run: bool = True,
+                         merge_into: bool = False,
                          ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
     project(action='rename')."""
     return await _project_impl("rename", project=project, new_name=new_name,
-                               because=because, ctx=ctx)
+                               because=because, dry_run=dry_run, merge_into=merge_into,
+                               ctx=ctx)
 
 
 async def _fork_project_impl(
