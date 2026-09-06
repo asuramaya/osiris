@@ -980,6 +980,61 @@ async def test_record_decision_tool_confesses_when_rationale_loses_the_tie_break
     assert str(d)[:8] in second["content_landed_note"]
 
 
+# --- unfiled warning (thread 595c3a89): a decision with no repo= and no auto-detected
+# decided_in commit citation produces ZERO outgoing links and is structurally invisible to
+# _fn_project no matter how many JOIN paths it grows — advisory only, never a refusal. ---
+
+
+async def test_record_decision_tool_warns_when_nothing_links_it_to_a_project(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision("a standalone ruling with no repo and no commit")
+    finally:
+        srv._pool = saved_pool
+    assert out["unfiled"] is True
+    assert "repo=" in out["unfiled_note"]
+
+
+async def test_record_decision_tool_stays_silent_when_repo_is_given(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "a ruling filed under a real project", repo="unfiledwarnproj")
+    finally:
+        srv._pool = saved_pool
+    assert "unfiled" not in out
+
+
+async def test_record_decision_tool_stays_silent_when_a_commit_sha_auto_resolves(
+    actions: Actions,
+) -> None:
+    """No repo=, but the summary names a real ingested commit — decided_in mints instead
+    of in_repo, and that alone must be enough to clear the warning (the read-back checks
+    both link types, not just in_repo)."""
+    from src import mcp_server as srv
+
+    await actions.create_or_find_object(
+        "Commit", "commit:cafef00dfeed", "commit:cafef00dfeed")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "fixed by commit cafef00dfeed, no repo named here")
+    finally:
+        srv._pool = saved_pool
+    assert "unfiled" not in out
+
+
 async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions) -> None:
     """Direct unit test of `exclude` (Thoth's catch, msg 1903, thread af77073a), independent
     of any similarity-score luck: an exact restatement dedups to `d` with no exclusion, and
