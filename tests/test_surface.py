@@ -24,7 +24,7 @@ async def test_empty_desk_is_all_zero_and_quiet(actions: Actions) -> None:
     assert seg.briefs_total.show and seg.briefs_total.data == {"briefs": 0}
     assert seg.briefs_mine.show is False  # dark at zero
     assert seg.wakes.show and seg.wakes.data == {"wakes": 0}
-    assert seg.mail.show and seg.mail.data == {"mail": 0, "flight": 0, "dm": 0}
+    assert seg.mail.show and seg.mail.data == {"mail": 0, "flight": 0, "dm": 0, "needs": 0}
     assert seg.mail.severity == "ok"
     assert seg.sensing.show is False
     assert seg.spend.show is False and seg.spend.data == {"metered": False}

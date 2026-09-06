@@ -191,7 +191,9 @@ async def fetch(
         "alarm" if split["dm"] else "amber" if flight_n else "ok")
     mail_seg = Segment(
         "mail", show=True, severity=mail_severity, value=f"mail {split['mail']}",
-        data={"mail": split["mail"], "flight": flight_n, "dm": split["dm"]}, link="conversations")
+        data={"mail": split["mail"], "flight": flight_n, "dm": split["dm"],
+              "needs": int(split.get("needs", split["mail"] + split["dm"]))},
+        link="conversations")
 
     sensing_seg = Segment(
         "sensing", show=bool(sick), severity="alarm" if sick else "ok",

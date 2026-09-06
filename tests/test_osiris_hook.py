@@ -1277,3 +1277,14 @@ def test_cmd_stop_self_compacts_even_after_the_soft_nudge_already_fired(
     assert not out
     assert phases.count("self_compact") == 1
     assert (jobs / ".osiris_self_compacted").exists()
+
+
+def test_statusline_envelope_counts_needs_not_every_unread_broadcast(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Operator 2026-09-06: every worker showed "9" — nine fyi deploy broadcasts nobody had
+    acked. The envelope renders the heartbeat's `needs` (direct mail + non-fyi room mail),
+    never the raw unread count."""
+    out = _statusline(monkeypatch, tmp_path,
+                      answer={"result": {**_COUNTS, "mail": 9, "dm": 0, "needs": 1}})
+    assert "\u2709\ufe0e 1" in out and "\u2709\ufe0e 9" not in out

@@ -1454,8 +1454,28 @@ async def test_unread_split_sums_to_unread_count(actions: Actions) -> None:
     from src.orchestrator.mailbox import unread_split
     split = await unread_split(p, "myroom", reader_agent=me)
     total = await unread_count(p, "myroom", reader_agent=me)
-    assert split == {"mail": 1, "dm": 1}
+    assert split == {"mail": 1, "dm": 1, "needs": 2}
     assert split["mail"] + split["dm"] == total
+
+
+async def test_unread_split_needs_excludes_fyi_broadcasts(actions: Actions) -> None:
+    """Operator 2026-09-06: nine fyi deploy broadcasts lit every worker's envelope as "9".
+    `needs` is the chrome's number — direct mail of any grade plus room broadcasts that are
+    not graded fyi; `mail` stays the raw unread room count for inbox parity."""
+    p = actions.pool
+    me = "agent:ab12aa78"
+    await _seed(p, "fyiroom")
+    for i in range(3):   # distinct bodies: send_message dedupes an identical repeat
+        await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
+                           to_project="fyiroom", body=f"deployed {i}, fyi", grade="fyi")
+    await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
+                       to_project="fyiroom", body="who owns this?", grade="ask")
+    await send_message(p, from_agent="agent:aaa", from_project="elsewhere",
+                       to_agent=me, body="a dm for me", grade="fyi")
+    from src.orchestrator.mailbox import unread_split
+    split = await unread_split(p, "fyiroom", reader_agent=me)
+    assert split["mail"] == 4 and split["dm"] == 1
+    assert split["needs"] == 2          # the ask broadcast + the direct fyi; not the 3 fyi
 
 
 async def test_send_tool_echoes_the_per_hop_dispatch_receipt(actions: Actions) -> None:

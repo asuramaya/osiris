@@ -289,7 +289,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         # trying to keep it compact"). The count is what is unread and addressed to YOU —
         # direct mail plus room broadcasts you have not read; in-flight traffic on other
         # agents' desks is fleet telemetry and lives in fleet(), never in your bar.
-        yours = int(mail or 0) + int(dm or 0)
+        yours = int(r.get("needs", int(mail or 0) + int(dm or 0)))
         mail_s = (f"{_RED}\u2709\ufe0e {yours}{_RESET}" if yours
                   else f"{_DIM}\u2709\ufe0e 0{_RESET}")
         sick_s = (f"{_RED}\u26a0 not sensing: {','.join(sick[:2])}{_RESET}" if sick else "")

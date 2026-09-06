@@ -43,6 +43,9 @@ class HeartbeatResult(NamedTuple):
     # live bodies holding seats managed_by THIS seat. 0 for a seat that manages nobody, and
     # the chrome then shows no fleet cell at all — the bar is scoped to the agent's premises.
     team: int = 0
+    # THE ENVELOPE'S NUMBER: unread mail that asks something of this reader (direct mail of
+    # any grade, room broadcasts not graded fyi) — see mailbox.unread_split.
+    needs: int = 0
 
 
 async def _team_live(conn: Any, seat_id: str, *, live_secs: int) -> int:
@@ -185,4 +188,5 @@ async def compute_heartbeat(
         seg.owed.data["owed"], seg.owed_here.data["owed_here"], seg.sensing.data["sick"],
         (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
          seg.spend.data.get("blind", 0)),
-        resolved_project, resolved_intent, resolved_seat_handle, team)
+        resolved_project, resolved_intent, resolved_seat_handle, team,
+        int(seg.mail.data.get("needs", seg.mail.data["mail"] + seg.mail.data["dm"])))

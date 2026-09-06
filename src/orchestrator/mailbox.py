@@ -773,8 +773,14 @@ async def unread_split(
             "AND NOT EXISTS (SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
             "  AND r2.read_at IS NOT NULL)", _norm(reader_project))
         return {"mail": int(n or 0), "dm": 0}
+    # `needs` is the CHROME's number (operator 2026-09-06, "just ✉ 3 is enough"): what is
+    # unread AND asks something of this reader — direct mail of any grade, plus room
+    # broadcasts that are not graded fyi. An fyi broadcast never wakes anyone and an ack
+    # settles it, so nine deploy notices must not light every worker's bar as "9 for you".
     q = ("SELECT count(*) FILTER (WHERE m.to_agent IS NULL) AS mail, "
-         "       count(*) FILTER (WHERE m.to_agent IS NOT NULL) AS dm "
+         "       count(*) FILTER (WHERE m.to_agent IS NOT NULL) AS dm, "
+         "       count(*) FILTER (WHERE m.to_agent IS NOT NULL "
+         "                        OR coalesce(m.grade, '') <> 'fyi') AS needs "
          "FROM fleet_messages m "
          "LEFT JOIN message_recipients r ON r.message_id=m.id AND r.agent_id=$agent "
          "WHERE " + _DELIVERABLE_TO_READER)
@@ -783,7 +789,8 @@ async def unread_split(
     row = await pool.fetchrow(
         q, reader_agent, _norm(reader_project or ""), lease_secs, _HOLD_GRACE_SECS,
         _generation(reader_agent)[0])
-    return {"mail": int(row["mail"] or 0), "dm": int(row["dm"] or 0)}
+    return {"mail": int(row["mail"] or 0), "dm": int(row["dm"] or 0),
+            "needs": int(row["needs"] or 0)}
 
 
 # A BRIEF THE DESK STILL SHOWS — the one predicate behind every briefs number (operator
