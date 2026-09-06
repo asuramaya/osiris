@@ -287,7 +287,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         owe_s = (f"{_RED}owe {owed_here}{_RESET}" if owed_here else f"{_GREEN}owe 0{_RESET}")
         desk_s = f"{_DIM}briefs {desk}{_RESET}" if desk else ""
         flight_s = f"{_AMBER}+{flight}{_RESET}" if flight else ""
-        dm_s = f" {_RED}\u2709{dm}{_RESET}" if dm else ""
+        dm_s = f" {_RED}\u2709\ufe0e {dm}{_RESET}" if dm else ""
         mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight or dm)
                   else f"{_DIM}mail 0{_RESET}")
         sick_s = (f"{_RED}\u26a0 not sensing: {','.join(sick[:2])}{_RESET}" if sick else "")

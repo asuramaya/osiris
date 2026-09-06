@@ -487,7 +487,7 @@ def test_statusline_shows_a_dm_doorbell_even_with_zero_plain_mail(monkeypatch: A
     out = []
     monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
     osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
-    assert "✉7" in out[0]
+    assert "✉\ufe0e 7" in out[0]  # text presentation + a space: no glyph overlap
     assert f"{osiris_hook._DIM}mail 0{osiris_hook._RESET}" not in out[0]
 
 
