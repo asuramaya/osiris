@@ -8103,6 +8103,26 @@ async def record_decision(
         out["unresolved_grounds"] = missing
         out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
                        "then re-run record_decision (idempotent) to attach the edges")
+    # UNFILED WARNING (thread 595c3a89): a decision with no repo= and no auto-detected
+    # decided_in commit citation produces ZERO outgoing links and is structurally
+    # invisible to _fn_project no matter how many JOIN paths it grows — found live, all
+    # 5 decisions Thoth cited in DM 2704 had exactly this shape. The MCP wrapper already
+    # passes repo= through correctly when supplied; the gap is entirely at call sites
+    # that omit it. A READ-BACK (same discipline as content_landed above), not an
+    # inference from the params this call happened to receive — repo_defaulted/
+    # lineage_repo_derivation both mint a real in_repo link of their own, so checking
+    # the actual link table catches every path that landed one, not just the plain
+    # repo= case. Advisory only, never a refusal: some decisions are legitimately
+    # standalone (a fleet-wide ruling with no one project).
+    if not await pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type IN ('in_repo', 'decided_in') "
+        "LIMIT 1", d):
+        out["unfiled"] = True
+        out["unfiled_note"] = (
+            "no repo= given and no commit sha auto-resolved from summary/rationale/"
+            "protocol — this decision has no outgoing link and will not surface in "
+            "any project-scoped view (decision-log, orient(project=...), etc). Pass "
+            "repo= if this belongs to one, or ignore if it's genuinely fleet-wide.")
     return out
 
 
