@@ -842,9 +842,12 @@ async def _establish_pure_seat_office(
     if not handle:
         return {"error": f"{seat_id} has no handle on record — an office is named for its "
                          "seat's handle, and this one has none"}
-    house = facts["house"]
-    if not house:
-        return {"error": f"{seat_id} has no derivable house — nothing to pin at an office"}
+    # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
+    # this used to refuse the whole ceremony on a houseless seat, the exact shape the
+    # ruling exists to end ("nothing in osiris may require a house"). `house` renders as
+    # "" through compile_managed_body/house_law.md, which drops the clause entirely
+    # rather than showing an empty one.
+    house = facts["house"] or ""
     root = office_root or _default_office_root()
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)

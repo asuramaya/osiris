@@ -248,6 +248,33 @@ async def test_establish_office_builds_for_a_never_claimed_seat(
     assert again["standing_orders"].startswith("left in place")
 
 
+async def test_establish_office_builds_for_a_houseless_seat(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A HOUSE IS OPTIONAL (ruling 860b0306): this ceremony used to refuse outright on a
+    seat with no derivable house at all — "nothing to pin at an office" — the exact shape
+    the ruling exists to end (a seat governing a single repo carries none; nothing in
+    osiris may require one). A never-claimed, never-managed seat with no house declared
+    must build a full office anyway, and the compiled orders must never show a bare,
+    empty house clause."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house=None, handle="Houseless", source="test")
+
+    out = await establish_office(
+        actions, seat_or_agent="Houseless", actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert "error" not in out
+    assert out["seat"] == seat["seat_id"]
+    assert out["house"] == ""
+    office = tmp_path / "seats" / "houseless"
+    orders = (office / "CLAUDE.md").read_text()
+    assert "Seat: **Houseless**" in orders
+    assert "house **" not in orders  # the clause disappears, never renders empty
+
+
 async def test_establish_office_renders_peer_addendum_when_peered(
     actions: Actions, tmp_path: Path,
 ) -> None:

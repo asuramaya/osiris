@@ -212,8 +212,12 @@ async def compile_managed_body(
             manager_handle=manager_handle)
     elif resolved_role == "coordinator":
         role_body = _read_template("role_coordinator.md").format(handle=handle, office=office)
+    # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
+    # the clause disappears entirely rather than rendering an empty "house **`**", which
+    # would misread as a graph defect rather than the deliberate unset state it now is.
+    house_clause = f", house **{house}**" if house else ""
     house_body = _read_template("house_law.md").format(
-        handle=handle, office=office, house=house, seat_line=seat_line,
+        handle=handle, office=office, house_clause=house_clause, seat_line=seat_line,
         charter_block=charter_block, peer_block=peer_block)
     practice_body = await _practice_block(actions.pool, resolved_role or "")
     return house_body + ("\n" + role_body if role_body else "") + practice_body

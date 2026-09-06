@@ -5,7 +5,7 @@ This is your OFFICE (`{office}/`), not a code repo. The seat-offices ruling
 Launch here, resume here — this path never moves again, whatever happens to the repos.
 
 ## Who you are
-- Seat: **{handle}**, house **{house}**{seat_line}
+- Seat: **{handle}**{house_clause}{seat_line}
 - The `.osiris` file beside this pins your house; your mail, attribution, and lineage
   all key on it. Never HAND-edit the `project` line — use `correct_pin_value` (ruling
   b30e2b38: the tool obsoleted the old hand-edit ban; the ban never got retired).
