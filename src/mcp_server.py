@@ -671,21 +671,30 @@ async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
     at zero. `blind_spots` names what this can't see."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
+    # ::bigint ON EVERY sum(response_bytes) (found live, first real 24h read after deploy):
+    # response_bytes is declared `bigint` (migration 0057), and Postgres's own SUM(bigint)
+    # rule ALWAYS promotes to `numeric` regardless of the actual row values — asyncpg then
+    # decodes that as a Decimal, which json.dumps renders as a STRING, not a number. Every
+    # other summed column here (call_count/total_ms) stays a plain int/float because
+    # SUM(integer)->bigint and SUM(double precision)->double precision both decode natively.
+    # The cast forces the wire type back to bigint at the query, not a Python-side int() —
+    # the safer fix, since a Python cast after the fact still round-trips through a Decimal
+    # first and a caller reading `type(total_bytes)` mid-query would see the wrong thing.
     tool_rows = await pool.fetch(
         "SELECT tool_name, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
-        "sum(response_bytes) AS total_bytes "
+        "sum(response_bytes)::bigint AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY tool_name ORDER BY total_ms DESC", since,
     )
     caller_rows = await pool.fetch(
         "SELECT caller, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
-        "sum(response_bytes) AS total_bytes "
+        "sum(response_bytes)::bigint AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY caller ORDER BY total_ms DESC", since,
     )
     action_rows = await pool.fetch(
         "SELECT tool_name, action, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
-        "sum(response_bytes) AS total_bytes "
+        "sum(response_bytes)::bigint AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 AND action <> '' "
         "GROUP BY tool_name, action ORDER BY total_ms DESC", since,
     )
