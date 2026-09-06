@@ -1033,7 +1033,8 @@ def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() 
 # ---------------------------------------------------------------------------
 
 _COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4, "team": 7,
-           "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0], "resolved_project": "osiris"}
+           "team_of": 8, "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0],
+           "resolved_project": "osiris"}
 
 
 def _statusline(
@@ -1066,7 +1067,7 @@ def test_statusline_live_answer_renders_counts_and_no_stale_marker(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
     out = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})
-    assert "team 7" in out and "owe 2" in out
+    assert "team 7/8" in out and "owe 2" in out
     assert "ago" not in out                # a live answer is never marked stale
     assert "graph" not in out              # and never carries a failure word
 
@@ -1078,7 +1079,7 @@ def test_statusline_falls_back_to_cache_and_marks_it_rather_than_crying_unreacha
     marker — never `graph unreachable`, which blamed Postgres while it was up 27 hours."""
     _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})   # warm the cache
     out = _statusline(monkeypatch, tmp_path, answer=None)            # now the probe misses
-    assert "team 7" in out and "owe 2" in out    # last-known-good survives the miss
+    assert "team 7/8" in out and "owe 2" in out    # last-known-good survives the miss
     assert "ago" in out                           # ...and is HONESTLY marked as cached
     assert "unreachable" not in out
 

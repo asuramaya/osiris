@@ -43,23 +43,33 @@ class HeartbeatResult(NamedTuple):
     # live bodies holding seats managed_by THIS seat. 0 for a seat that manages nobody, and
     # the chrome then shows no fleet cell at all — the bar is scoped to the agent's premises.
     team: int = 0
+    # ...over the seats it manages: "team 3/4" (operator 2026-09-06: n/x, just information).
+    team_of: int = 0
     # THE ENVELOPE'S NUMBER: unread mail that asks something of this reader (direct mail of
     # any grade, room broadcasts not graded fyi) — see mailbox.unread_split.
     needs: int = 0
 
 
-async def _team_live(conn: Any, seat_id: str, *, live_secs: int) -> int:
-    row = await conn.fetchval(
-        "SELECT count(DISTINCT m.agent_id) FROM agent_mounts m "
-        "JOIN objects a ON a.canonical = m.agent_id "
-        "JOIN links h ON h.from_id = a.id AND h.type = 'holds' "
-        "  AND (h.valid_until IS NULL OR h.valid_until > now()) "
-        "JOIN links mb ON mb.from_id = h.to_id AND mb.type = 'managed_by' "
-        "  AND (mb.valid_until IS NULL OR mb.valid_until > now()) "
-        "JOIN objects mgr ON mgr.id = mb.to_id "
-        "WHERE mgr.canonical = $1 AND m.last_seen > now() - make_interval(secs => $2)",
+async def _team_live(conn: Any, seat_id: str, *, live_secs: int) -> tuple[int, int]:
+    """(live, managed): seats managed_by `seat_id` that currently have a live body, over
+    all active seats managed_by it. (0, 0) for a seat that manages nobody."""
+    row = await conn.fetchrow(
+        "WITH managed AS ("
+        "  SELECT s.id, s.canonical FROM links mb JOIN objects s ON s.id = mb.from_id "
+        "  JOIN objects mgr ON mgr.id = mb.to_id "
+        "  WHERE mgr.canonical = $1 AND mb.type = 'managed_by' AND s.status = 'active' "
+        "    AND (mb.valid_until IS NULL OR mb.valid_until > now())) "
+        "SELECT (SELECT count(*) FROM managed) AS managed, "
+        "       (SELECT count(DISTINCT managed.id) FROM managed "
+        "        JOIN links h ON h.to_id = managed.id AND h.type = 'holds' "
+        "          AND (h.valid_until IS NULL OR h.valid_until > now()) "
+        "        JOIN objects a ON a.id = h.from_id "
+        "        JOIN agent_mounts m ON m.agent_id = a.canonical "
+        "          AND m.last_seen > now() - make_interval(secs => $2)) AS live",
         seat_id, float(live_secs))
-    return int(row or 0)
+    if row is None:
+        return 0, 0
+    return int(row["live"] or 0), int(row["managed"] or 0)
 
 
 def _seat_owns_cwd(cwd: str, *, handle: str, anchor_cwd: str | None) -> bool:
@@ -153,7 +163,7 @@ async def compute_heartbeat(
     resolved_project = project_hint or None
     resolved_intent = intent_hint
     resolved_seat_handle: str | None = None
-    team = 0
+    team, team_of = 0, 0
     if agent:
         from src.orchestrator.seats import held_seat, seat_facts
 
@@ -162,7 +172,8 @@ async def compute_heartbeat(
             resolved_seat_handle = seat.get("handle")
             anchor = None
             if seat.get("seat_id"):
-                team = await _team_live(conn, seat["seat_id"], live_secs=lease_secs)
+                team, team_of = await _team_live(conn, seat["seat_id"],
+                                                 live_secs=lease_secs)
                 facts = await seat_facts(conn, seat["seat_id"])
                 anchor = facts.get("anchor_cwd")
                 if resolved_intent is None and anchor:
@@ -188,5 +199,5 @@ async def compute_heartbeat(
         seg.owed.data["owed"], seg.owed_here.data["owed_here"], seg.sensing.data["sick"],
         (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
          seg.spend.data.get("blind", 0)),
-        resolved_project, resolved_intent, resolved_seat_handle, team,
+        resolved_project, resolved_intent, resolved_seat_handle, team, team_of,
         int(seg.mail.data.get("needs", seg.mail.data["mail"] + seg.mail.data["dm"])))

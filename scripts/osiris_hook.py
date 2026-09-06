@@ -275,7 +275,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         parts = [f"\u25c8 {project}", f"{_DIM}graph: no answer{_RESET}"]
     else:
         desk, mail, dm = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0)
-        team = r.get("team", 0)
+        team, team_of = r.get("team", 0), r.get("team_of", 0)
         owed_here, sick = r.get("owed_here", 0), r.get("sick") or []
         spend = r.get("spend") or [0.0, 0.0, 0]
         spent, cap, blind = (spend + [0.0, 0.0, 0])[:3]
@@ -313,7 +313,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             _link(mail_s, "conversations"),
             # A MANAGER SEES ITS OWN TEAM; everyone else sees no fleet cell, and wakes/h
             # left the bar entirely (operator 2026-09-06: global for no reason here).
-            *([_link(f"team {team}\u25cf", "fleet")] if team else []),
+            *([_link(f"team {team}/{team_of}", "fleet")] if team_of else []),
             # THE STALE MARKER, restoring the old script's answered-just-late distinction
             # (this comment used to say that state "doesn't exist here" — it does again).
             # Dim, last, and never silent: an operator reading counts is entitled to know
