@@ -2595,6 +2595,36 @@ async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) ->
     assert out == {"root": "agent:lwi5", "projects": [], "candidate_ids": [], "resolved": None}
 
 
+async def test_lineage_works_in_never_lets_a_retired_generation_vote(
+    actions: Actions,
+) -> None:
+    """msg 7641/7646 item 1: a mis-minted heir later retired still carries its own
+    works_in edge forever (append-only history) — without this fix, that retired
+    generation votes in the SAME abstain-on-disagreement law that
+    test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement demonstrates,
+    so a lineage that carries one retired mis-mint alongside its real, single-project
+    generations wrongly abstains instead of resolving. Excluded exactly like
+    seat_holders (agents.py) already excludes retired/false_mint from counting HOLDERS."""
+    from src.orchestrator.agents import lineage_works_in
+
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:lwi6", "test")
+    mismint = await actions.create_or_find_object("Agent", "agent:lwi6-ii", "test")
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:lwiproj6", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:lwiprojbogus", "test")
+    await actions.create_link(gen1, proj_a, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(mismint, proj_b, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.assert_property(mismint, "retired", True, "test", now, 0.9,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+
+    out = await lineage_works_in(actions.pool, "agent:lwi6-ii")
+    assert out["projects"] == ["lwiproj6"]
+    assert out["resolved"] == "lwiproj6"
+    assert out["candidate_ids"] == [proj_a]
+
+
 # ═══ threads f6f11d78/20af2c95 (decision 5b217d13, 2026-08-04): mint_heir's house-relink
 # and register_agent's own identity.project assertion used to fire unconditionally in the
 # SAME call, sharing one `now` — a seat's stale derived `house` disagreeing with the

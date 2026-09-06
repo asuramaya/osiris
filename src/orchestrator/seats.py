@@ -2140,20 +2140,48 @@ async def follow_binding(
     link on a FOLDED SIBLING rather than the direct ancestor — the mint from the living
     head then found nothing to move, and Atlas's DM to the seat rotted on a grave. Any
     active holds link anywhere in the heir's lineage (or on the explicit ancestor, which
-    a cross-base succession may place outside it) re-links to the heir."""
+    a cross-base succession may place outside it) re-links to the heir —
+    EXCEPT a sibling generation's hold that is itself genuinely LIVE right now (msg
+    7641/7646 item 1, c7524a2b's own two losses: both timestamp-matched a fresh mint
+    stealing an unrelated, still-working sibling's seat out from under it). Liveness here
+    is checked EXACT-GENERATION, never through `mounts.agent_liveness`'s own lineage-wide
+    widening — every row already shares the heir's base by construction, so that widened
+    check would read every sibling "live" the instant the heir's own fresh mount row
+    lands, defeating the very guard this adds. The ancestor's OWN hold always moves,
+    live or not — an ancestor never contests its own heir."""
     from src.orchestrator.agents import _generation
 
     base = _generation(heir)[0]
     seats = await actions.pool.fetch(
-        "SELECT l.from_id, l.to_id FROM links l JOIN objects hf ON hf.id=l.from_id "
+        "SELECT l.from_id, l.to_id, hf.canonical AS holder FROM links l "
+        "JOIN objects hf ON hf.id=l.from_id "
         "WHERE l.type='holds' AND l.from_id <> $3 "
         "AND (l.from_id=$1 OR hf.canonical=$2 OR hf.canonical LIKE $2 || '-%') "
         "AND (l.valid_until IS NULL OR l.valid_until > now())",
         ancestor_oid, base, heir_oid)
     for r in seats:
+        if r["from_id"] != ancestor_oid and await _exact_holder_live(actions.pool, r["holder"]):
+            continue
         await actions.invalidate_link(r["from_id"], r["to_id"], "holds", heir, now)
         await actions.create_link(heir_oid, r["to_id"], "holds", heir, now, _CONF,
                                   evidence_class=_EC)
+
+
+async def _exact_holder_live(pool: asyncpg.Pool, canonical: str) -> bool:
+    """EXACT-generation liveness for one specific holder id — `follow_binding`'s own guard,
+    deliberately NOT `mounts.agent_liveness` (which widens across the whole lineage base):
+    called from inside a sweep where every candidate already shares that same base, the
+    widened check would report every sibling live the moment the heir itself has a fresh
+    mount row, which is exactly the false positive this exists to avoid."""
+    from src.orchestrator.mounts import freshest_liveness_ts, is_live
+
+    mount_seen = await pool.fetchval(
+        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", canonical)
+    last_active_iso = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
+    return is_live(freshest_liveness_ts(mount_seen, last_active_iso))
 
 
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) —

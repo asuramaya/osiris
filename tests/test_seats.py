@@ -29,6 +29,7 @@ from src.orchestrator.seats import (
     bind_holder,
     ensure_seat,
     find_seat,
+    follow_binding,
     held_seat,
     mint_attach_token,
     seat_of_mount,
@@ -268,6 +269,71 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
     # an EXACT match on the presented id is trusted even mid-fork.
     exact_match = await held_seat(actions.pool, later)
     assert exact_match is not None and exact_match["seat_id"] == other_seat["seat_id"]
+
+
+async def test_follow_binding_never_steals_a_live_siblings_hold(actions: Actions) -> None:
+    """c7524a2b's own live specimen (msg 7641/7646 item 1): the lineage-wide sweep that
+    heals Ra's stranded-seat gap is a double-edged sword — matching every generation
+    sharing the heir's base also matches a SIBLING generation that is genuinely, currently
+    live and holding a seat of its own. mint_heir minting a fresh heir must never steal
+    that sibling's seat out from under it; it must still, unconditionally, move the
+    ANCESTOR's own hold (the ordinary succession case)."""
+    ancestor_seat = await ensure_seat(actions, house="osiris", handle="WernerAncestor",
+                                      source="test")
+    sibling_seat = await ensure_seat(actions, house="osiris", handle="WernerSibling",
+                                     source="test")
+
+    ancestor_oid = await actions.create_or_find_object(
+        "Agent", "agent:werner0001", "test")
+    await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:werner0001")
+
+    # a genuinely live sibling generation of the SAME base, holding an UNRELATED seat —
+    # `save_mount` (via `_seated_agent`) is exactly what makes it read live.
+    sibling = "agent:werner0001-v"
+    await _seated_agent(actions, sibling, "/jobs/werner-v")
+    await bind_holder(actions, seat_id=sibling_seat["seat_id"], agent_id=sibling)
+
+    heir = "agent:werner0001-ii"
+    heir_oid = await actions.create_or_find_object("Agent", heir, "test")
+    await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=heir_oid,
+                         now=datetime.now(UTC))
+
+    # the ancestor's OWN hold moved — the ordinary succession case, unconditional.
+    assert await _active_holds(actions, heir, ancestor_seat["seat_id"])
+    assert not await _active_holds(actions, "agent:werner0001", ancestor_seat["seat_id"])
+    # the LIVE sibling's hold on its own, different seat was never touched.
+    assert await _active_holds(actions, sibling, sibling_seat["seat_id"])
+    assert not await _active_holds(actions, heir, sibling_seat["seat_id"])
+
+
+async def test_follow_binding_still_heals_a_stranded_but_dead_siblings_hold(
+    actions: Actions,
+) -> None:
+    """Ra's stranded seat itself (2026-07-17), unchanged by the live-sibling guard above: a
+    FOLDED, no-longer-live sibling's un-healed hold is exactly the case the lineage-wide
+    sweep exists to heal — the guard only refuses a LIVE holder, never a cold one."""
+    ancestor_seat = await ensure_seat(actions, house="osiris", handle="RaAncestor",
+                                      source="test")
+    stranded_seat = await ensure_seat(actions, house="osiris", handle="RaStranded",
+                                      source="test")
+
+    ancestor_oid = await actions.create_or_find_object("Agent", "agent:ra0001", "test")
+    await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:ra0001")
+
+    # a folded sibling with NO mount row at all — cold, exactly like a graft left behind
+    # after a fold with nobody left to keep it warm.
+    folded = "agent:ra0001-iii"
+    await actions.create_or_find_object("Agent", folded, "test")
+    await bind_holder(actions, seat_id=stranded_seat["seat_id"], agent_id=folded)
+
+    heir = "agent:ra0001-ii"
+    heir_oid = await actions.create_or_find_object("Agent", heir, "test")
+    await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=heir_oid,
+                         now=datetime.now(UTC))
+
+    assert await _active_holds(actions, heir, ancestor_seat["seat_id"])
+    assert await _active_holds(actions, heir, stranded_seat["seat_id"])
+    assert not await _active_holds(actions, folded, stranded_seat["seat_id"])
 
 
 async def test_bind_holder_invalidates_the_agents_own_other_active_holds(

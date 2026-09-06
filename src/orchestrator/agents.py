@@ -275,6 +275,14 @@ async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
         "SELECT DISTINCT p.id, p.canonical FROM links l "
         "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
         "  AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
+        # RETIRED/FALSE-MINT GENERATIONS NEVER VOTE (msg 7641/7646 item 1): a mis-minted
+        # heir that was later retired still carries its own works_in edge forever
+        # (append-only history) — counting it as a live lineage voice is exactly how a
+        # lineage that carries a retired mis-mint alongside its real generations ends up
+        # with two DISTINCT projects and abstains, per the same law seat_holders (above)
+        # already applies to counting HOLDERS.
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=a.id "
+        "    AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true') "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
         "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now())",
         root)
