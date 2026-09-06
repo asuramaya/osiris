@@ -65,6 +65,24 @@ async def test_agent_liveness_answers_for_the_soul_not_the_numeral(
     mounts._GREETS.clear()
 
 
+async def test_agent_liveness_exact_never_crosses_generations(actions: Actions) -> None:
+    """`agent_liveness_exact`'s WHOLE reason to exist, the exact inverse of
+    `agent_liveness`'s own lineage-aware promise above: msg 7677/7680's live specimen —
+    a historical ancestor several generations behind the current head must read dead on
+    its own exact id even though its lineage's CURRENT generation is live right now,
+    which is exactly the false positive `agent_liveness`'s widening would produce."""
+    await mounts.save_mount(actions.pool, job_dir="/j/soulprobe2",
+                            agent_id="agent:ab99cd99-xii", project="p", cwd="/w",
+                            model=None, session_key=None)
+    widened = await mounts.agent_liveness(actions.pool, "agent:ab99cd99-ii")
+    assert widened["live"] is True  # the lineage-wide check DOES cross generations
+    exact = await mounts.agent_liveness_exact(actions.pool, "agent:ab99cd99-ii")
+    assert exact["live"] is False and exact["last_seen"] is None
+    # the exact id itself, of course, still reads live on its own mount row
+    same = await mounts.agent_liveness_exact(actions.pool, "agent:ab99cd99-xii")
+    assert same["live"] is True and same["last_seen"] is not None
+
+
 async def test_agent_liveness_ever_mounted_survives_a_stale_row(actions: Actions) -> None:
     """`ever_mounted` (thread ee412c7e, Alfred's post-reboot finding 2): a real
     agent_mounts row existing at all — however stale — is a distinct, positive fact from

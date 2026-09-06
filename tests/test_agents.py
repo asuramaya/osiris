@@ -3846,6 +3846,36 @@ async def test_correct_succession_override_live_bypasses_the_guard(actions: Acti
     assert out["was_live"] is True
 
 
+async def test_correct_succession_never_blocks_on_an_unrelated_live_generation_of_the_same_lineage(
+    actions: Actions,
+) -> None:
+    """THE LIVE SPECIMEN (msg 7677/7680, caught mid-batch): every correction target here
+    is, by the very nature of a half-heal repair, a historical ancestor several
+    generations behind whatever the lineage's CURRENT head is — and that current head is
+    very likely live right now, which is exactly why `mounts.agent_liveness`'s own
+    lineage-wide widening is the wrong check to run on the ANCESTOR's exact id. This is a
+    NEGATIVE CONTROL: it must fail against the unfixed verb (agent_liveness instead of
+    agent_liveness_exact), which would read agent:cs7lineage-ii "live" purely because its
+    much later sibling agent:cs7lineage-xii has a fresh mount row."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import correct_succession
+
+    anc = await actions.create_or_find_object("Agent", "agent:cs7lineage-ii", "test")
+    await actions.assert_property(anc, "succeeded_by", "agent:cs7phantom", "seam-debounce",
+                                  datetime.now(UTC), 0.6,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    # the CURRENT head of the same lineage is live right now — a different generation,
+    # never the one being corrected.
+    await mounts.save_mount(actions.pool, job_dir="/j/cs7lineage-xii",
+                            agent_id="agent:cs7lineage-xii", project="osiris", cwd="/x",
+                            model=None, session_key="k")
+
+    out = await correct_succession(actions, agent_id="agent:cs7lineage-ii", value="",
+                                   because="half-heal batch repair", actor="agent:witness")
+    assert "error" not in out
+    assert out["was_live"] is False
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

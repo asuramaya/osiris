@@ -2080,13 +2080,20 @@ async def correct_succession(
     in history, exactly the append-only law every other correction door in this house
     already holds to.
 
-    THE LIVENESS GUARD mirrors `retire_agent`'s, not `rehold_seat`'s (this corrects a
-    PROPERTY on the named agent itself, not a seat's holder): `agent_id` reading LIVE
+    THE LIVENESS GUARD mirrors `retire_agent`'s SHAPE, not its exact CHECK (this corrects
+    a PROPERTY on the named agent itself, not a seat's holder): `agent_id` reading LIVE
     right now refuses by default — a mind still active is not settled history yet, and
     correcting its own succession record out from under it is exactly the "two signals
     disagree" shape this house's own population practice warns against — `override_live
     =True` names that as a deliberate act, the same escape hatch `retire_agent` already
-    carries for the identical reason.
+    carries for the identical reason. BUT the check itself is `mounts.
+    agent_liveness_exact`, never `retire_agent`'s own lineage-wide `agent_liveness` — a
+    live specimen mid-batch (msg 7677/7680) caught the exact false positive
+    `follow_binding`'s own guard was built to avoid earlier the same night: every
+    correction target here is, BY THE VERY NATURE of a half-heal repair, a historical
+    ancestor whose lineage is very likely CURRENTLY active — the widened check would read
+    it "live" off its own descendant's fresh mount row and refuse nearly the whole batch,
+    the opposite of what a "is THIS SPECIFIC ancestor still active" question should ask.
 
     THE RECEIPT NAMES BOTH SIDES OF THE CHANGE AND ITS OWN CONSEQUENCE, not just the
     write: `was`/`now` for the property itself, and `lineage_head` BEFORE and AFTER the
@@ -2106,7 +2113,7 @@ async def correct_succession(
 
     from src.orchestrator import mounts
 
-    liveness = await mounts.agent_liveness(actions.pool, agent_id)
+    liveness = await mounts.agent_liveness_exact(actions.pool, agent_id)
     if liveness["live"] and not override_live:
         return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}) "
                          "— correct_succession refuses to rewrite a live mind's own "

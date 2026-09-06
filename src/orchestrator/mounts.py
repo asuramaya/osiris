@@ -650,6 +650,26 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
             "ever_mounted": ever_mounted}
 
 
+async def agent_liveness_exact(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
+    """`agent_liveness`'s EXACT-canonical twin — no lineage-base widening at all. Built
+    for `seats.follow_binding`'s own live-sibling guard (msg 7641/7646) and reused by
+    `agents.correct_succession`'s liveness guard (msg 7677/7680's own live specimen,
+    caught mid-batch: `agent_liveness`'s widened check read a purely HISTORICAL ancestor
+    generation as "live" the instant its lineage's CURRENT, unrelated-in-this-context
+    generation had a fresh mount row — exactly the false positive `agent_liveness`'s own
+    docstring warns any caller reading a SPECIFIC generation's identity, not the
+    lineage's, must avoid). Any caller asking "is THIS EXACT id itself active" — not
+    "is this id's lineage active" — wants this, never the widened check."""
+    mount_seen = await pool.fetchval(
+        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
+    last_active_iso = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
+    ts = freshest_liveness_ts(mount_seen, last_active_iso)
+    return {"live": is_live(ts), "last_seen": ts.isoformat() if ts is not None else None}
+
+
 async def project_last_seen(pool: asyncpg.Pool, project: str) -> str | None:
     """The freshest mount activity for a project (ISO), for the send() listener probe."""
     v = await pool.fetchval(

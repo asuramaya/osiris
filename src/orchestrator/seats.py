@@ -2218,16 +2218,13 @@ async def _exact_holder_live(pool: asyncpg.Pool, canonical: str) -> bool:
     deliberately NOT `mounts.agent_liveness` (which widens across the whole lineage base):
     called from inside a sweep where every candidate already shares that same base, the
     widened check would report every sibling live the moment the heir itself has a fresh
-    mount row, which is exactly the false positive this exists to avoid."""
-    from src.orchestrator.mounts import freshest_liveness_ts, is_live
+    mount row, which is exactly the false positive this exists to avoid. Delegates to the
+    shared primitive (`mounts.agent_liveness_exact`, promoted from this function's own
+    original inline body when `correct_succession` needed the identical exact-match check,
+    msg 7677/7680) rather than keeping a second copy to drift from."""
+    from src.orchestrator.mounts import agent_liveness_exact
 
-    mount_seen = await pool.fetchval(
-        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", canonical)
-    last_active_iso = await pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canonical)
-    return is_live(freshest_liveness_ts(mount_seen, last_active_iso))
+    return bool((await agent_liveness_exact(pool, canonical))["live"])
 
 
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) —
