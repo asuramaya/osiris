@@ -413,6 +413,30 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
     assert out["possibly_stale_seats"]["checked"] is True  # additive, detection-only
 
 
+async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion(
+    actions: Actions,
+) -> None:
+    """THE TIE-BREAK GAP (thread 04907b12, live specimen: repo:xxit's winning name row
+    stayed "xxit" long after the rename, because an ordinary mount re-asserting the OLD
+    name from a stale pin wrote at the SAME self_declared/0.9 confidence rename_project
+    itself used — current_assertions' tie-break falls through to pure recency, so a
+    later, uninformed write silently overturned a deliberate one). rename_project must
+    write its own name at a confidence strictly above the self_declared ceiling, so a
+    later ordinary self_declared write can never out-tie-break it regardless of recency."""
+    proj = await _mk_project(actions, "renametieold")
+    await rename_project(actions, project="renametieold", new_name="renametienew",
+                         because="test: the tie-break shape", actor="agent:test",
+                         dry_run=False)
+    # a later, ordinary mount re-asserts the OLD name at ordinary self_declared/0.9 —
+    # exactly what an uninformed ordinary mount from a stale pin would write
+    await actions.assert_property(proj, "name", "renametieold", "agent:stale-mount",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    current_name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
+    assert current_name == "renametienew"
+
+
 async def test_rename_project_names_a_seat_left_stale_by_the_rename(
     actions: Actions,
 ) -> None:

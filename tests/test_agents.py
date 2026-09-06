@@ -310,6 +310,52 @@ async def test_resolve_or_mint_project_lets_a_genuinely_different_project_mint_s
         "AND canonical IN ('repo:conker', 'repo:conker-detect')") == 2
 
 
+async def test_resolve_or_mint_project_finds_a_renamed_projects_new_name_no_stub(
+    actions: Actions,
+) -> None:
+    """THE RENAME STUB (thread 04907b12, live specimen: repo:xxit renamed to
+    handlingtheloop — the canonical stays repo:xxit forever, only the `name` property
+    changes). A mount whose pin already reads the NEW name used to find zero canonical
+    matches and mint a fresh, wrong SoftwareProject — this is the mint-time choke point
+    that must resolve through the winning `name` property, not just the canonical,
+    exactly like `_resolve_software_project` already does for every other project verb."""
+    from src.orchestrator.project_identity import rename_project
+
+    old = await _resolve_or_mint_project(actions, "renamestubold", "test")
+    out = await rename_project(actions, project="repo:renamestubold",
+                               new_name="renamestubnew", because="test: the xxit shape",
+                               actor="operator", dry_run=False)
+    assert out.get("error") is None
+
+    found = await _resolve_or_mint_project(actions, "renamestubnew", "test")
+    assert found == old  # resolves to the SAME object, never a fresh stub
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND (lower(canonical) = lower('repo:renamestubold') "
+        "  OR lower(canonical) = lower('repo:renamestubnew'))") == 1
+
+
+async def test_resolve_or_mint_project_still_mints_when_the_new_name_is_ambiguous(
+    actions: Actions,
+) -> None:
+    """Two or more existing objects sharing the target name is not this function's call
+    to arbitrate, same law as a case-differing canonical twin above — falls through to
+    the literal mint-or-find rather than guessing which one a caller meant."""
+    from datetime import UTC, datetime
+
+    a = await actions.create_or_find_object("SoftwareProject", "repo:ambigone", "test")
+    b = await actions.create_or_find_object("SoftwareProject", "repo:ambigtwo", "test")
+    now = datetime.now(UTC)
+    for oid in (a, b):
+        await actions.assert_property(oid, "name", "ambigshared", "test", now, 0.9,
+                                      evidence_class="self_declared")
+
+    found = await _resolve_or_mint_project(actions, "ambigshared", "test")
+    assert found not in (a, b)
+    assert await actions.pool.fetchval(
+        "SELECT canonical FROM objects WHERE id=$1", found) == "repo:ambigshared"
+
+
 async def test_resolve_or_mint_project_never_arbitrates_a_pre_existing_twin(
     actions: Actions,
 ) -> None:

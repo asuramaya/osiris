@@ -75,6 +75,18 @@ from src.parsers.evidence import confidence_for
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
+# A DECLARED RENAME MUST OUTRANK AN ORDINARY MOUNT'S OWN GUESS (thread 04907b12, live
+# specimen: repo:xxit renamed to handlingtheloop, then an ordinary metron/deckard mount
+# re-asserted "xxit" at the SAME self_declared/0.9 confidence rename_project itself used
+# — current_assertions' tie-break (confidence DESC, observed_at DESC) then falls through
+# to pure recency, so a later, uninformed mount silently overturned a deliberate,
+# testimony-backed rename). Written at the SAME evidence_class (still a self-declaration,
+# never a different KIND of claim) but a confidence strictly above the 0.9 ceiling every
+# ordinary self_declared write is capped at (BASE_CONFIDENCE[SELF_DECLARED]) — the exact
+# "operator-ruling"-source pattern already used elsewhere in this graph (seat_generation
+# backfills at 0.95-0.99) for a declared act that must never lose a tie to routine traffic.
+_RENAME_CONF = 0.95
+
 
 def _remote_basename(url: str | None) -> str | None:
     """The repo name a remote URL implies, for comparison against a bare project label —
@@ -536,7 +548,7 @@ async def rename_project(
                               if collide is not None else None),
                 "note": "preview only — pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
-    await actions.assert_property(row["id"], "name", new_name, actor, now, _CONF,
+    await actions.assert_property(row["id"], "name", new_name, actor, now, _RENAME_CONF,
                                   evidence_class=_EC)
     bare_old = row["canonical"].removeprefix("repo:")
     mount_tag = await actions.pool.execute(

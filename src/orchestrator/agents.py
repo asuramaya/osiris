@@ -2671,14 +2671,40 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     deserves — the caller simply has nothing to link works_in to this turn, same as an
     honestly-None project already does. Existing degenerate objects (repo:? itself) are
     never reused either — a caller landing here with the same garbage label a second time
-    must not keep growing its edge count."""
+    must not keep growing its edge count.
+
+    THE RENAME STUB (thread 04907b12, live specimen: xxit renamed to handlingtheloop —
+    the canonical STAYS repo:xxit forever, only the `name` property changes, per
+    rename_project's own law): a canonical-only lookup goes blind to that new name
+    the instant it's declared, so the very next mount whose pin already reads the new
+    label finds NO canonical match and MINTS A FRESH OBJECT under it — nine live
+    works_in edges landed on the stub before this was caught. `_resolve_software_project`
+    (projects.py) already treats canonical-string and winning-`name`-property matches as
+    ONE inseparable label lookup ("must be checked for a collision TOGETHER") for every
+    OTHER project verb; this mint-time choke point never got the same law. Checked only
+    when the canonical search comes up EMPTY (a canonical hit, even an ambiguous
+    case-differing one, is unchanged — this only closes the zero-match gap a rename
+    opens), and only trusted on an UNAMBIGUOUS single name match — two or more, exactly
+    like two or more canonical matches above, is not this function's call to arbitrate
+    and falls through to the literal mint-or-find."""
     from src.orchestrator.capture import _REPO_NAME_RE
     if not _REPO_NAME_RE.fullmatch(project):
         return None
     matches = await actions.pool.fetch(
         "SELECT canonical FROM objects WHERE type='SoftwareProject' AND status='active' "
         "AND lower(canonical) = lower($1)", f"repo:{project}")
-    canonical = matches[0]["canonical"] if len(matches) == 1 else f"repo:{project}"
+    canonical: str | None = matches[0]["canonical"] if len(matches) == 1 else None
+    if canonical is None and not matches:
+        name_matches = await actions.pool.fetch(
+            "SELECT o.canonical FROM objects o WHERE o.type='SoftwareProject' "
+            "AND o.status='active' AND lower((SELECT a.value #>> '{}' "
+            "FROM current_assertions a WHERE a.object_id=o.id AND a.name='name' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) = lower($1)",
+            project)
+        if len(name_matches) == 1:
+            canonical = name_matches[0]["canonical"]
+    if canonical is None:
+        canonical = f"repo:{project}"
     return await actions.create_or_find_object("SoftwareProject", canonical, actor)
 
 
