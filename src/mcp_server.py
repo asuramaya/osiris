@@ -6217,7 +6217,13 @@ async def _project_impl(
             for cached in _agents.values():
                 if cached.project == old_bare:
                     cached.project = new_name
-        if evidence_by_seat:
+        # 7f90f394: this evidence attachment describes what governing seats think of
+        # new_name — meaningless noise when the rename itself never happened (a refusal)
+        # or hasn't happened YET (a dry-run preview), so it only runs on an actual,
+        # landed write. The old unconditional version claimed "{new_name!r} was written"
+        # verbatim on a REFUSAL path too, whenever any seat's evidence happened to
+        # disagree with the value that was never written at all.
+        if evidence_by_seat and not out.get("error") and not dry_run:
             rename_evidence = {
                 seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
                 for seat, ev in evidence_by_seat.items()

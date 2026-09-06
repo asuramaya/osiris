@@ -202,11 +202,20 @@ async def _normalize_project_label_through_merge(
     Never guesses: the label names its own SoftwareProject by EXACT canonical only
     (case-insensitive, matching `_resolve_or_mint_project`'s own lookup) — no string
     similarity, no directory-name fallback (13af22fc's phantom-repo defect). A label that
-    names no object, or one that's already live (not merged), returns itself unchanged,
-    second element None. A chain too deep to resolve (a cycle) is NEVER silently picked
-    through — the original label comes back untouched alongside a confession string for
-    the caller to surface, never a guessed winner (this house names disagreement, it
-    never crowns a side).
+    names no object returns itself unchanged, second element None. A chain too deep to
+    resolve (a cycle) is NEVER silently picked through — the original label comes back
+    untouched alongside a confession string for the caller to surface, never a guessed
+    winner (this house names disagreement, it never crowns a side).
+
+    A label naming an object that was never MERGED (winner == the object itself) still
+    goes through `_live_label` before returning (7f90f394): `rename_project` changes
+    only the `name` property, never `canonical` — the OLD label the caller passed in
+    still resolves here (canonical is forever), but comparing that stale label against
+    the object's live remote/pin/charter forever reads as a false disagreement after a
+    plain rename with no fold involved at all, the exact xxit/handlingtheloop specimen
+    `_live_label`'s own docstring already names for the merged case. Only a genuinely
+    stale label is translated; a label that already matches the object's own live name
+    passes through unchanged either way.
 
     EXACT MATCH FIRST, CASE-INSENSITIVE ONLY AS A REFUSAL-GATED FALLBACK (a real bug
     caught tonight by a deployed suite going intermittently red — Thoth's own catch): a
@@ -249,7 +258,7 @@ async def _normalize_project_label_through_merge(
                        "merged_into edge) — compared unnormalized rather than guessing a "
                        "winner")
     if winner == row["id"]:
-        return label, None
+        return await _live_label(conn_or_pool, winner, row["canonical"]), None
     canon = await conn_or_pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
     return await _live_label(conn_or_pool, winner, canon), None
 
