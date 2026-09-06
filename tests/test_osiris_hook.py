@@ -437,9 +437,8 @@ def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any)
     assert rc == 0
     assert len(out) >= 1
     assert "Seshat" in out[0] and "osiris" in out[0]
-    assert "fleet 3●" in out[0]
-    assert "wakes 2/h" in out[0]
-    assert "mail 0" in out[0]
+    assert "fleet" not in out[0] and "wakes" not in out[0]   # premises-scoped bar
+    assert "\u2709\ufe0e 0" in out[0]
     assert "owe 0" in out[0]
 
 
@@ -487,7 +486,7 @@ def test_statusline_shows_a_dm_doorbell_even_with_zero_plain_mail(monkeypatch: A
     out = []
     monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
     osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
-    assert "✉\ufe0e 7" in out[0]  # text presentation + a space: no glyph overlap
+    assert "✉\ufe0e 7" in out[0]  # one cell: what is addressed to you, nothing global
     assert f"{osiris_hook._DIM}mail 0{osiris_hook._RESET}" not in out[0]
 
 
@@ -1033,7 +1032,7 @@ def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() 
 # the three states stay APART: LIVE, STALE (cached, marked), SILENT (nothing known).
 # ---------------------------------------------------------------------------
 
-_COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4,
+_COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4, "team": 7,
            "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0], "resolved_project": "osiris"}
 
 
@@ -1067,7 +1066,7 @@ def test_statusline_live_answer_renders_counts_and_no_stale_marker(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
     out = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})
-    assert "fleet 7" in out and "owe 2" in out
+    assert "team 7" in out and "owe 2" in out
     assert "ago" not in out                # a live answer is never marked stale
     assert "graph" not in out              # and never carries a failure word
 
@@ -1079,7 +1078,7 @@ def test_statusline_falls_back_to_cache_and_marks_it_rather_than_crying_unreacha
     marker — never `graph unreachable`, which blamed Postgres while it was up 27 hours."""
     _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})   # warm the cache
     out = _statusline(monkeypatch, tmp_path, answer=None)            # now the probe misses
-    assert "fleet 7" in out and "owe 2" in out    # last-known-good survives the miss
+    assert "team 7" in out and "owe 2" in out    # last-known-good survives the miss
     assert "ago" in out                           # ...and is HONESTLY marked as cached
     assert "unreachable" not in out
 
@@ -1137,7 +1136,7 @@ def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
     on ignorance has no shared identity to hold. Fix: never write, and never read, that bucket."""
     # Session A: unresolved project, live answer — must NOT write any cache file at all.
     out_a = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS}, project_hint=None)
-    assert "fleet 7" in out_a
+    assert "team 7" in out_a
     assert list(tmp_path.glob("*.json")) == []
 
     # Session B: also unresolved, but its own probe MISSES — it must render SILENT, never
@@ -1145,7 +1144,7 @@ def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
     # law holds even if some other unresolved caller had — the bucket is never read either).
     out_b = _statusline(monkeypatch, tmp_path, answer=None, project_hint=None)
     assert "no answer" in out_b
-    assert "fleet 7" not in out_b
+    assert "team 7" not in out_b
     assert "ago" not in out_b
 
 
@@ -1166,13 +1165,13 @@ def test_statusline_unpinned_cwd_with_a_session_heals_from_its_own_cache(
     # The same session's probe misses across a restart: its own last answer, marked.
     out_a2 = _statusline(monkeypatch, tmp_path, answer=None,
                          project_hint=None, session_id="sess-A")
-    assert "thoth\u00b7osiris" in out_a2 and "fleet 7" in out_a2 and "ago" in out_a2
+    assert "thoth\u00b7osiris" in out_a2 and "team 7" in out_a2 and "ago" in out_a2
     assert "?" not in out_a2 and "no answer" not in out_a2
 
     # A DIFFERENT unpinned session never borrows it: its own miss stays silent.
     out_b = _statusline(monkeypatch, tmp_path, answer=None,
                         project_hint=None, session_id="sess-B")
-    assert "no answer" in out_b and "fleet 7" not in out_b and "thoth" not in out_b
+    assert "no answer" in out_b and "team 7" not in out_b and "thoth" not in out_b
 
 
 def test_statusline_resolved_project_still_caches_normally(
@@ -1198,7 +1197,7 @@ def test_statusline_retries_once_before_giving_up(monkeypatch: Any, tmp_path: Pa
 
     out = _statusline(monkeypatch, tmp_path, answer=_flaky)
     assert len(calls) == 2               # first missed, second landed
-    assert "fleet 7" in out and "ago" not in out   # and it counts as LIVE, not stale
+    assert "team 7" in out and "ago" not in out   # and it counts as LIVE, not stale
 
 
 def test_cmd_stop_self_compacts_once_when_every_box_is_complete(

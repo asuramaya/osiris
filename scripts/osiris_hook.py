@@ -274,9 +274,8 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         project = project_hint or "?"
         parts = [f"\u25c8 {project}", f"{_DIM}graph: no answer{_RESET}"]
     else:
-        desk, mail, dm, flight = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0), \
-            r.get("flight", 0)
-        live, wakes = r.get("souls", 0), r.get("wakes", 0)
+        desk, mail, dm = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0)
+        team = r.get("team", 0)
         owed_here, sick = r.get("owed_here", 0), r.get("sick") or []
         spend = r.get("spend") or [0.0, 0.0, 0]
         spent, cap, blind = (spend + [0.0, 0.0, 0])[:3]
@@ -286,10 +285,13 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         seat_tag = f"{resolved_seat_handle}\u00b7" if resolved_seat_handle else ""
         owe_s = (f"{_RED}owe {owed_here}{_RESET}" if owed_here else f"{_GREEN}owe 0{_RESET}")
         desk_s = f"{_DIM}briefs {desk}{_RESET}" if desk else ""
-        flight_s = f"{_AMBER}+{flight}{_RESET}" if flight else ""
-        dm_s = f" {_RED}\u2709\ufe0e {dm}{_RESET}" if dm else ""
-        mail_s = (f"mail {mail}{flight_s}{dm_s}" if (mail or flight or dm)
-                  else f"{_DIM}mail 0{_RESET}")
+        # ONE CELL, YOUR PREMISES ONLY (operator 2026-09-06: "just ✉ 3 is enough ... we're
+        # trying to keep it compact"). The count is what is unread and addressed to YOU —
+        # direct mail plus room broadcasts you have not read; in-flight traffic on other
+        # agents' desks is fleet telemetry and lives in fleet(), never in your bar.
+        yours = int(mail or 0) + int(dm or 0)
+        mail_s = (f"{_RED}\u2709\ufe0e {yours}{_RESET}" if yours
+                  else f"{_DIM}\u2709\ufe0e 0{_RESET}")
         sick_s = (f"{_RED}\u26a0 not sensing: {','.join(sick[:2])}{_RESET}" if sick else "")
         spend_s = ""
         try:
@@ -309,8 +311,9 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             _link(owe_s, "desk"),
             *([_link(desk_s, "desk")] if desk_s else []),
             _link(mail_s, "conversations"),
-            _link(f"fleet {live}\u25cf", "fleet"),
-            _link(f"wakes {wakes}/h", "wakes"),
+            # A MANAGER SEES ITS OWN TEAM; everyone else sees no fleet cell, and wakes/h
+            # left the bar entirely (operator 2026-09-06: global for no reason here).
+            *([_link(f"team {team}\u25cf", "fleet")] if team else []),
             # THE STALE MARKER, restoring the old script's answered-just-late distinction
             # (this comment used to say that state "doesn't exist here" — it does again).
             # Dim, last, and never silent: an operator reading counts is entitled to know
