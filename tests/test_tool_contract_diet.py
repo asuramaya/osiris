@@ -1277,7 +1277,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # not just active, so a deliberate reuse needs an explicit override) — two new schema
 # fields plus the ACTION TABLE docstring line naming them. Measured exact (105,548), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 105548  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 105,548 -> 106,023 (2026-09-06, Seshat, thread 4dcc1849, decision f9e47d3c): mount()
+# gains a docstring paragraph naming its new lineage-memory-custody behavior
+# (prior_lineage_memory_archived/memory_migration_needed) — no new tool, no new schema
+# param, just prose naming what mount() now does on the caller's behalf. Measured exact
+# (106,023), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 106023  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

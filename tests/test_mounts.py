@@ -8,6 +8,7 @@ FRESH transcript read (never a stale copy of the stored model).
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -2232,3 +2233,126 @@ async def test_the_registry_census_mcp_tool_wraps_the_orchestrator(
     finally:
         srv._pool = saved_pool
     assert out["blind"] is False and "rowless_count" in out
+
+
+# ═══ LINEAGE MEMORY CUSTODY (thread 4dcc1849, decision f9e47d3c) — mount()'s own wiring
+# of src/orchestrator/lineage_memory.py's pure filesystem functions. The functions
+# themselves are tested directly in tests/test_lineage_memory.py; these tests prove
+# mount() calls them correctly, only for a REGISTERED agent, and records an archive
+# durably on the graph. ═══
+
+async def test_mount_archives_a_different_lineages_memory_and_records_it(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+
+    cwd = str(tmp_path / "o")
+    job_dir = str(tmp_path / "jobs" / "custody01")
+    # a job_dir basename that does NOT match the bound agent's own lineage prefix makes
+    # `lived=True` unconditionally (mcp_server.py's own `lived` computation) — the same
+    # shape test_mount_tool_honors_a_bound_seat above already relies on.
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:custodytest-vii",
+                            project="osiris", cwd=cwd, model=None, session_key="k:custody")
+
+    fake_result = lineage_memory.MemoryCustodyResult(
+        action="archived", path=str(tmp_path / "memory.archived-agent_oldlineage-x"),
+        prior_lineage="agent:oldlineage")
+    monkeypatch.setattr(
+        lineage_memory, "ensure_lineage_memory_custody",
+        lambda cwd, root: fake_result)
+    stamped: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        lineage_memory, "stamp_lineage_sentinel",
+        lambda cwd, root: stamped.append((cwd, root)))
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=cwd, job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert out["prior_lineage_memory_archived"]["prior_lineage"] == "agent:oldlineage"
+    assert out["prior_lineage_memory_archived"]["path"] == fake_result.path
+    assert stamped == [(cwd, "agent:custodytest")]  # sentinel refreshed AFTER the archive
+
+    obj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", "agent:custodytest-vii")
+    row = await actions.pool.fetchrow(
+        "SELECT value #>> '{}' AS value FROM current_assertions "
+        "WHERE object_id=$1 AND name='archived_memory'", obj_id)
+    assert row is not None
+    recorded = json.loads(row["value"])
+    assert recorded["prior_lineage"] == "agent:oldlineage"
+    assert recorded["path"] == fake_result.path
+
+
+async def test_mount_surfaces_migration_needed_without_touching_anything(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+
+    cwd = str(tmp_path / "o")
+    job_dir = str(tmp_path / "jobs" / "custody02")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:custodytest2-vii",
+                            project="osiris", cwd=cwd, model=None, session_key="k:custody2")
+
+    fake_result = lineage_memory.MemoryCustodyResult(
+        action="migration_needed", path=str(tmp_path / "memory"))
+    monkeypatch.setattr(
+        lineage_memory, "ensure_lineage_memory_custody",
+        lambda cwd, root: fake_result)
+    stamp_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        lineage_memory, "stamp_lineage_sentinel",
+        lambda cwd, root: stamp_calls.append((cwd, root)))
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=cwd, job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert fake_result.path is not None and fake_result.path in out["memory_migration_needed"]
+    assert "prior_lineage_memory_archived" not in out
+    assert stamp_calls == []  # never stamped over unreviewed pre-existing content
+
+    obj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", "agent:custodytest2-vii")
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='archived_memory'",
+        obj_id)
+    assert row is None  # nothing was archived, so nothing was recorded
+
+
+async def test_mount_never_runs_lineage_memory_custody_for_a_genuine_visitor(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A visitor mints no Agent object at all (test_mount_never_mints_a_genuine_visitor,
+    above) — there is nothing to attribute custody to, so the filesystem check must
+    never even run."""
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+
+    called = False
+
+    def _spy(cwd: str, root: str) -> lineage_memory.MemoryCustodyResult:
+        nonlocal called
+        called = True
+        return lineage_memory.MemoryCustodyResult(action="noop")
+
+    monkeypatch.setattr(lineage_memory, "ensure_lineage_memory_custody", _spy)
+
+    job_dir = str(tmp_path / "jobs" / "custody03")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "stranger-repo"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert "visitor" in out
+    assert called is False

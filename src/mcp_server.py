@@ -2269,7 +2269,14 @@ async def mount(
     `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they
     rebind a revisited tab or background-job fork to its existing soul instead of
     minting a stranger. `want_co_agents`/`want_held_work` return the full lists;
-    default is counts only."""
+    default is counts only.
+
+    LINEAGE MEMORY CUSTODY (thread 4dcc1849): this cwd's own Claude Code memory files
+    (~/.claude/projects/<slug>/memory/) are checked against a per-lineage sentinel — a
+    different lineage's memory found here is archived sideways (renamed, never deleted)
+    and reported as `prior_lineage_memory_archived` (a pointer to read, never auto-
+    copied); pre-existing content with no sentinel at all reports
+    `memory_migration_needed` instead of being silently moved."""
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2740,6 +2747,45 @@ async def mount(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     if away:  # who wore your face + how your conversations moved, since your last sign of life
         out["while_you_were_away"] = away
+    if registered:
+        # LINEAGE MEMORY CUSTODY (thread 4dcc1849, decision f9e47d3c): a REGISTERED agent
+        # only — a visitor/spawn never gets a real Agent object, nothing to attribute
+        # custody to. Filesystem-only, best-effort: must never be able to fail a mount.
+        from src.orchestrator.lineage_memory import (
+            ensure_lineage_memory_custody,
+            stamp_lineage_sentinel,
+        )
+        try:
+            lineage_root = _generation(ident.agent_id)[0]
+            custody = ensure_lineage_memory_custody(cwd, lineage_root)
+            if custody.action == "archived":
+                out["prior_lineage_memory_archived"] = {
+                    "path": custody.path, "prior_lineage": custody.prior_lineage,
+                    "note": ("a different lineage's memory files were found in this cwd's "
+                             "harness-native memory dir and moved sideways, never deleted — "
+                             "read the archived path if its context is useful; nothing was "
+                             "copied into your own, empty, memory store")}
+                try:
+                    actions = Actions(pool)
+                    obj_id = await actions.create_or_find_object(
+                        "Agent", ident.agent_id, settings.osiris_actor)
+                    await actions.assert_property(
+                        obj_id, "archived_memory",
+                        {"prior_lineage": custody.prior_lineage, "path": custody.path,
+                         "archived_at": datetime.now(UTC).isoformat()},
+                        settings.osiris_actor, datetime.now(UTC), 0.9)
+                except Exception:  # noqa: BLE001 — the durable record is a bonus, not a gate
+                    pass
+                stamp_lineage_sentinel(cwd, lineage_root)
+            elif custody.action == "migration_needed":
+                out["memory_migration_needed"] = (
+                    f"{custody.path} has pre-existing memory content with no osiris "
+                    "lineage sentinel — predates this system, not auto-archived; a human "
+                    "should review and seed it by hand")
+            else:  # noop — already owned, or nothing there yet
+                stamp_lineage_sentinel(cwd, lineage_root)
+        except Exception:  # noqa: BLE001 — memory custody must never break a mount
+            pass
     # TERSE BY DEFAULT (task #55): the stale-cwd explanation (declared/kept already have
     # what changed) and the routine 'call orient() next' reminder. Everything safety-
     # critical (minted/succession/swap/reanimation — an identity confession an agent could
