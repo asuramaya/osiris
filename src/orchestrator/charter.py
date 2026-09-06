@@ -103,17 +103,21 @@ async def set_charter(
     Refuses per-name, never wholesale: a name `_resolve_repo` can't find as an already-real
     SoftwareProject (git-ingested, or already named on some other record) lands in `rejected`
     with why, and the REST of the call still applies — the same "one bad item never sinks the
-    whole batch" discipline `settle()` already runs. Never mints a SoftwareProject itself."""
+    whole batch" discipline `settle()` already runs. Never mints a SoftwareProject itself.
+
+    `seat_id` resolves by canonical, by `handle`, or by raw object id (`_resolve_active_seat`,
+    thread 8673ddb7's own precedent) — a SEVENTH specimen of that exact-canonical-only gap
+    (thread c851c81b, Tantra: `charter_for('Tantra', ...)` read "no such active seat" although
+    her Seat was active and held that literal handle)."""
     from src.orchestrator.capture import _resolve_repo
+    from src.orchestrator.seats import _resolve_active_seat
 
     now = datetime.now(UTC)
-    seat_oid = await actions.pool.fetchval(
-        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
-        seat_id,
-    )
-    if seat_oid is None:
+    seat_row = await _resolve_active_seat(actions.pool, seat_id)
+    if seat_row is None:
         return {"error": f"no such active seat: {seat_id!r} — a charter is declared BY a "
                          "seat, and this one doesn't exist (or isn't active)"}
+    seat_oid, seat_id = seat_row["id"], seat_row["canonical"]
     candidates = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
     resolved: dict[str, Any] = {}
     rejected: list[dict[str, str]] = []

@@ -174,6 +174,22 @@ async def test_set_charter_refuses_for_an_unknown_seat(actions: Actions) -> None
         "SELECT 1 FROM objects WHERE canonical='repo:osiris'") is None
 
 
+async def test_set_charter_resolves_by_handle_not_just_canonical(actions: Actions) -> None:
+    """Thread c851c81b (Tantra): a caller supplying the seat's HANDLE, not its canonical,
+    used to read back 'no such active seat' even though the seat was active and held that
+    exact handle — a seventh specimen of the exact-canonical-only gap _resolve_active_seat
+    (seats.py, thread 8673ddb7) was built to close. The output's own 'seat' field reports
+    the resolved canonical, never the handle it was called with, so charter_of/create_link
+    downstream never silently miss on a still-unresolved handle string."""
+    seat_id = await _seated(actions, "agent:handlecaller", "Handleford")
+    await _repo(actions, "osiris")
+    out = await set_charter(actions, "Handleford", ["osiris"], actor="agent:handlecaller")
+    assert "error" not in out
+    assert out["seat"] == seat_id
+    assert out["charter"] == ["osiris"]
+    assert await charter_of(actions.pool, seat_id) == ["osiris"]
+
+
 # ═══ succession dissolves invalidate_link's exact-from_id limitation (Thoth's explicit gate,
 # msg 2402): one seat, one link, no generations — a successor re-declaring now heals the SAME
 # row an ancestor generation minted, not a duplicate the ancestor's row survives alongside. ═══
