@@ -922,7 +922,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # --bg-substrate body gets silently respawned by the harness's own daemon; `stop_seat`
 # now prefers the harness's own `claude stop <id>` and falls back to SIGTERM only when
 # no harness-tracked id exists). The growth is a corrected fact, not added prose.
-TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on measurement.
+# was 202871: RATCHETED DOWN 202,888 -> 202,871 on measurement.  (history, not executable)
 # Seshat trimmed the duplicate-works-in lint text under the category rule while fixing its
 # overclaim, so the merged tree came in 17 chars UNDER the standing ceiling. Left alone that
 # is 17 chars of headroom nobody measured and the next raise would silently spend it — which
@@ -943,7 +943,7 @@ TOOL_CONTRACT_CEILING_CHARS = 202871  # RATCHETED DOWN 202,888 -> 202,871 on mea
 # new capability, not padding. Trimmed once under the category rule before raising
 # (removed the "unreached vs rebuild" narrative aside, a caller has no use for it at call
 # time; 1,850 -> 1,548 chars).
-TOOL_CONTRACT_CEILING_CHARS = 204880
+# was 204880  (history, not executable)
 # 204,880 -> 205,497 (measured exact). Tool count unchanged at 147 (2026-09-02, Imhotep,
 # decision 7fe20cc5, obligation 53424b07, operator-authorized): `merge`/`rebind_seat`
 # each gained `force`/`because` params and a short docstring note for the new
@@ -951,13 +951,13 @@ TOOL_CONTRACT_CEILING_CHARS = 204880
 # contracts grew because the guard's behavior is something a caller now genuinely needs
 # to know exists. Trimmed once under the category rule before raising (both new
 # docstring notes cut to one sentence each).
-TOOL_CONTRACT_CEILING_CHARS = 205497
+# was 205497  (history, not executable)
 # 205,497 -> 206,209 (measured exact). Tool count 147 -> 148 (2026-09-02, Imhotep, ruling
 # b30e2b38): new tool revert_own_pin_write (see the count changelog above) plus a short
 # correct_pin_value docstring addendum for its own anchor-copy extension — a genuinely
 # new capability, not padding. Trimmed both new docstrings once under the category rule
 # before raising.
-TOOL_CONTRACT_CEILING_CHARS = 206209
+# was 206209  (history, not executable)
 # 206,209 -> 208,607 (measured exact). Tool count 148 -> 149 (2026-09-02, Khnum, thread
 # 6483/6559/6567/6576): new tool heal_seat_transcript (see the count changelog above) —
 # a genuinely new capability, not padding.
@@ -967,7 +967,7 @@ TOOL_CONTRACT_CEILING_CHARS = 206209
 # <office_root>/<handle>, corrupted live on Chad/Jesus/henry/Marquee by rebind_seat's own
 # now-closed write-path gap). A genuinely new capability, not padding. Trimmed both new
 # docstrings once under the category rule before raising.
-TOOL_CONTRACT_CEILING_CHARS = 202871
+# was 202871  (history, not executable)
 # 202,871 -> 210,451 (measured exact). Tool count unchanged at 151 (2026-09-03, Khnum,
 # the khnum-splice-seek/main reconciliation, ruling d161a156's own coordination cost):
 # the merge driver correctly declined to add the two branches' own ceiling deltas
@@ -978,7 +978,7 @@ TOOL_CONTRACT_CEILING_CHARS = 202871
 # already in main) are genuinely present in the tool count (151, already correctly
 # 3-way-reconciled) but their combined char cost was never actually measured together
 # until now. Measured fresh, not summed.
-TOOL_CONTRACT_CEILING_CHARS = 210451
+# was 210451  (history, not executable)
 # 210,451 -> 212,749 (measured exact). Tool count 151 -> 152 (2026-09-03, Khnum, task #199
 # lane 3C, ruling 41a41437): ONE new tool, `resume` — launch's former automatic resume-or-
 # fresh branch split into its own agent-facing verb, mirroring the CLI's own already-ruled
@@ -1089,7 +1089,7 @@ TOOL_CONTRACT_CEILING_CHARS = 210451
 # mint-time to correction-time. A real capability, not bloat: the anyOf-null schema
 # shape (deliberately NOT stripped by the title-strip above, per its own note) is the
 # honest cost of representing a legal "no value" the tool previously could not express.
-TOOL_CONTRACT_CEILING_CHARS = 115367
+# was 115367  (history, not executable)
 # 115,367 -> 115,446 (merge of sekhmet-orient-diet, 2026-09-04): correct_pin_value's `value`
 # widened to str | None so a pin key can be UNSET (operator ruling 004cc8d8: homeless is legal);
 # +79 post-title-strip schema chars for the anyOf, no prose.
@@ -1271,7 +1271,21 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
 # live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
 # new fields, no new tool, no new param. Measured exact (104,642), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 105273  # 2026-09-06 Thoth: +retract flag on correct_succession.
+TOOL_CONTRACT_CEILING_CHARS = 105273  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+
+def test_ceiling_has_exactly_one_executable_assignment() -> None:
+    """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
+    `TOOL_CONTRACT_CEILING_CHARS = N` as an EXECUTABLE line, so a three-way merge that kept an
+    ancestor's line as the last assignment silently reverted the ceiling (seven times to
+    202871 between 2026-09-04 and 09-06). History is comments now; a second executable
+    assignment fails here before it can win a merge."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).read_text().split("\n")
+    hits = [i + 1 for i, line in enumerate(src)
+            if re.match(r"^TOOL_CONTRACT_CEILING_CHARS\s*=", line)]
+    assert hits == [hits[0]] and len(hits) == 1, f"executable ceiling assignments at {hits}"
+
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
