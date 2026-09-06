@@ -1241,7 +1241,14 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # count, itself a house-law violation (raw SQL against the kernel is a defect report,
 # never a shortcut). One new tool, one string param (`kind`), two supported kinds
 # documented in the docstring. Measured exact (104,690), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 104690
+# 104,690 -> 105,134 (2026-09-06, Seshat, Thoth DM 7649, context diet round 2): dossier
+# and roster each gain one opt-in bool param (`want_relationships`, `want_caveats`) —
+# the two confirmed context-bloat offenders (decision a065171f: dossier's relationships
+# measured 76% of its own bytes/call; roster's 10-paragraph caveats printed on every
+# call) now default to a collapsed summary instead of the full list, same want_*
+# convention orient()'s blind_spots already uses. No new tool; two new docstring
+# sentences naming the opt-in. Measured exact (105,134), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 105134
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

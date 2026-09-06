@@ -25,9 +25,19 @@ from src.ontology.labels import fetch_label_props, resolve_label
 _HIDDEN_LINK_TYPES = ("same_as", "not_same_as")
 
 
-async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any]:
+async def entity_dossier(
+    pool: asyncpg.Pool, object_id: uuid.UUID, want_relationships: bool = False,
+) -> dict[str, Any]:
     """Identity properties + named relationship network for one entity. Returns {}
     if the object does not exist (the endpoint maps that to 404).
+
+    RECEIPT DIET (context-bloat round 2, Thoth DM 7649): relationships measured at 76%
+    of this verb's own bytes/call (decision a065171f, a live cupid specimen returning
+    ~100 rows) — unlike orient()'s blind_spots (an aside), this IS the requested
+    content, so a bare want_* suppress would leave the default caller with nothing.
+    Default collapses to a per-type count plus the first 10 rows (still useful without
+    a second call); `want_relationships=True` returns every row, unchanged from before
+    this diet.
 
     Task #97 workstream 3 (ruling 52daab71): both this entity's own `name` and every
     neighbor's name used to check ONLY the `name` property — an entity/neighbor whose
@@ -183,7 +193,7 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
         for r in raw_rels
     ]
 
-    return {
+    out: dict[str, Any] = {
         "id": str(object_id),
         "type": obj["type"],
         "canonical": obj["canonical"],
@@ -191,5 +201,18 @@ async def entity_dossier(pool: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, 
         "status": winners.get("status"),
         "name": name,
         "properties": list(properties.values()),
-        "relationships": rels,
     }
+    if want_relationships:
+        out["relationships"] = rels
+    else:
+        by_type: dict[str, int] = {}
+        for r in rels:
+            by_type[r["type"]] = by_type.get(r["type"], 0) + 1
+        out["relationships"] = rels[:10]
+        out["relationships_by_type"] = by_type
+        out["relationships_total"] = len(rels)
+        if len(rels) > 10:
+            out["relationships_note"] = (
+                f"{len(rels)} relationship(s) across {len(by_type)} type(s); showing the "
+                "first 10 — pass want_relationships=True for the full list")
+    return out

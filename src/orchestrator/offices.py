@@ -165,7 +165,7 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     from src.orchestrator.agents import read_house_label, read_seat_handle, read_tree_kind
     from src.orchestrator.seats import roster
 
-    data = await roster(pool)
+    data = await roster(pool, want_caveats=True)  # merges roster's own caveats into ours below
     claims: dict[str, list[tuple[str, str]]] = {}       # path -> [(seat_id, handle), ...]
     kind_of: dict[str, str | None] = {}                  # path -> proposed kind
     house_of_path: dict[str, list[str | None]] = {}      # path -> every claimant's house answer

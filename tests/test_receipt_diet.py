@@ -324,3 +324,81 @@ async def test_record_decision_prior_art_is_slimmed_not_the_full_search_shape(
 
     assert out["prior_art"] == [{"id": "feedf00d", "type": "Decision",
                                  "summary": "a related ruling"}]
+
+
+# --- CONTEXT DIET ROUND 2 (Thoth DM 7649, extends decision d958e618/a065171f): dossier's
+# relationships (measured 76% of its own bytes/call on a live 100-row cupid specimen) and
+# roster's 10-paragraph caveats (measured on every call regardless of need) are the two
+# confirmed offenders — both dieted the same want_*-opt-in shape as orient()'s blind_spots
+# above, since unlike blind_spots these ARE the requested content: default collapses to a
+# summary (per-type counts + first 10 rows for dossier, a count + pointer for roster's
+# caveats) rather than suppressing the field outright.
+
+async def test_dossier_relationships_collapse_to_counts_and_first_ten_by_default(
+    actions: Actions,
+) -> None:
+    """A hub object with 15 relationships (more than a cupid-shaped specimen's own 100,
+    but past the 10-row sample) must show a per-type count, a total, and only the first
+    10 full rows by default; want_relationships=True restores every row, unchanged."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    hub = await actions.create_or_find_object("Thread", "thread:dossierhub", "test")
+    now = datetime.now(UTC)
+    for i in range(15):
+        nbr = await actions.create_or_find_object("Thread", f"thread:dossierhub-nbr{i}", "test")
+        await actions.create_link(hub, nbr, "linked_to", "test", now, 0.9)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        before = await srv.dossier(str(hub), want_relationships=True)
+        after = await srv.dossier(str(hub))
+    finally:
+        srv._pool = saved_pool
+
+    assert len(before["relationships"]) == 15
+    assert "relationships_by_type" not in before
+    assert len(after["relationships"]) == 10
+    assert after["relationships_by_type"] == {"linked_to": 15}
+    assert after["relationships_total"] == 15
+    assert "want_relationships=True" in after["relationships_note"]
+    before_bytes = _receipt_bytes(before)
+    after_bytes = _receipt_bytes(after)
+    assert after_bytes < before_bytes, (before_bytes, after_bytes)
+    # RATCHET: measured exact AFTER value for this 15-relationship fixture (2385 bytes;
+    # BEFORE was 3167 — a 24.7% cut from dropping 5 of 15 full rows down to a count).
+    # Raise only with a reason, never a reflex.
+    assert after_bytes <= 2450, (
+        f"dossier() receipt (15-relationship hub, no want_relationships requested) grew "
+        f"to {after_bytes} bytes, over the ratchet of 2450 (before-diet equivalent was "
+        f"{before_bytes})")
+
+
+async def test_roster_caveats_collapse_to_a_count_by_default(actions: Actions) -> None:
+    """roster()'s own 10-paragraph `_ROSTER_CAVEATS` list rode every call regardless of
+    need — now opt-in, same shape as orient()'s blind_spots and dossier's relationships
+    above."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        before = await srv.roster(want_caveats=True)
+        after = await srv.roster()
+    finally:
+        srv._pool = saved_pool
+
+    assert len(before["caveats"]) >= 8
+    assert "caveats" not in after
+    assert after["caveats_count"] == len(before["caveats"])
+    assert "want_caveats=True" in after["caveats_note"]
+    before_bytes = _receipt_bytes(before)
+    after_bytes = _receipt_bytes(after)
+    assert after_bytes < before_bytes, (before_bytes, after_bytes)
+    # RATCHET: measured exact AFTER value (an empty-fleet fixture; the seats list itself
+    # is 0 rows here, so this isolates the caveats cut). Raise only with a reason.
+    assert after_bytes <= 400, (
+        f"roster() receipt (no want_caveats requested) grew to {after_bytes} bytes, over "
+        f"the ratchet of 400 (before-diet equivalent was {before_bytes})")
