@@ -1262,6 +1262,12 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # convention orient()'s blind_spots already uses. No new tool; two new docstring
 # sentences naming the opt-in. Measured exact (105,134), not estimated.
 TOOL_CONTRACT_CEILING_CHARS = 104301  # 2026-09-06 Thoth: 6th stale-ancestor regression, re-pinned.
+# 104,301 -> 104,642 (2026-09-06, Seshat, Thoth DM 7667): tool_traffic() gains
+# total_bytes/avg_bytes reporting alongside its existing total_ms/avg_ms (the
+# mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
+# live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
+# new fields, no new tool, no new param. Measured exact (104,642), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 104642
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

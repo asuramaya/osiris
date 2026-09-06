@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -196,6 +197,7 @@ class BoundedMCP(FastMCP):
         await _nudge_tool_list_refresh(ctx)
         _ensure_tool_stats_flush_task()
         t0 = time.monotonic()
+        result_bytes = 0
         try:
             result = await self._tool_manager.call_tool(
                 name, arguments, context=ctx, convert_result=False)
@@ -205,11 +207,13 @@ class BoundedMCP(FastMCP):
                     result["context"] = note
             tool = self._tool_manager.get_tool(name)
             assert tool is not None  # call_tool already raised if the name were unknown
-            return tool.fn_metadata.convert_result(fit(result, tool=name))
+            bounded = fit(result, tool=name)
+            result_bytes = _response_byte_size(bounded)
+            return tool.fn_metadata.convert_result(bounded)
         finally:
             action = arguments.get("action")
             _record_tool_call(name, _caller_for(ctx), (time.monotonic() - t0) * 1000,
-                              action if isinstance(action, str) else "")
+                              action if isinstance(action, str) else "", result_bytes)
 
     async def list_tools(self) -> list[MCPTool]:
         """HIDDEN ALIASES (task #199 lane 2, thread 6778 — the consolidation-without-an-
@@ -362,10 +366,29 @@ def _caller_for(ctx: Context | None) -> str:
     return _generation(ident.agent_id)[0] if ident is not None else "unattributed"
 
 
-def _record_tool_call(name: str, caller: str, ms: float, action: str = "") -> None:
-    row = _tool_call_stats.setdefault((name, caller, action), {"count": 0.0, "total_ms": 0.0})
+def _response_byte_size(payload: Any) -> int:
+    """The size actually being reported (thread e4a5755a's own sibling gap, closed by
+    Thoth DM 7667): BoundedMCP.call_tool already holds the bounded response in hand and
+    times the call, but never sized it — every context-diet byte table before this
+    (d958e618/a065171f/32b0c88f) had to substitute a handful of live probe calls for
+    real fleet traffic because this number didn't exist anywhere. Best-effort: a payload
+    `fit()` returns is JSON-shaped by construction (it's what convert_result serializes
+    next), but this must never be the reason a response fails to ship — an
+    unserializable value reads as 0 bytes, not a crash."""
+    try:
+        return len(json.dumps(payload, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_tool_call(
+    name: str, caller: str, ms: float, action: str = "", response_bytes: int = 0,
+) -> None:
+    row = _tool_call_stats.setdefault(
+        (name, caller, action), {"count": 0.0, "total_ms": 0.0, "total_bytes": 0.0})
     row["count"] += 1
     row["total_ms"] += ms
+    row["total_bytes"] += response_bytes
 
 
 def _ensure_tool_stats_flush_task() -> None:
@@ -397,8 +420,10 @@ async def _flush_tool_stats_once() -> None:
         pool = await _pool_get()
         await pool.executemany(
             "INSERT INTO mcp_tool_stats (tool_name, caller, action, window_start, "
-            "window_end, call_count, total_ms) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            [(tool, caller, action, window_start, window_end, int(v["count"]), v["total_ms"])
+            "window_end, call_count, total_ms, response_bytes) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            [(tool, caller, action, window_start, window_end, int(v["count"]), v["total_ms"],
+              int(v["total_bytes"]))
              for (tool, caller, action), v in batch.items()],
         )
     except Exception:  # noqa: BLE001 — telemetry must never break serving
@@ -632,67 +657,84 @@ _pool: asyncpg.Pool | None = None
 
 @mcp.tool()
 async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
-    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE — call count + total/avg wall-clock time,
-    newest-cost-first, cut three ways: by TOOL (`persisted`/`current_unflushed_window`),
+    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE — call count + total/avg wall-clock time
+    AND total/avg response bytes (`total_bytes`/`avg_bytes`, thread e4a5755a's own sibling
+    gap, closed by Thoth DM 7667 — BoundedMCP.call_tool now sizes the bounded response it
+    already holds, best-effort, 0 on an unserializable payload), ranked by ms cost,
+    cut three ways: by TOOL (`persisted`/`current_unflushed_window`),
     by CALLER (`..._by_caller`), by (TOOL, ACTION) under a dispatcher (`..._by_action`,
     empty action = ordinary call). `persisted` reads flushed 60s windows back `window_minutes`;
-    `current_unflushed_*` is live since the last flush. Failures count too.
+    `current_unflushed_*` is live since the last flush. Failures count too. A row flushed
+    before this column existed reads `total_bytes=0` — unmeasured, not zero-cost.
     `retired_alias_traffic`: the alias-decay instrument — a hidden alias's own traffic
     next to the dispatcher action that absorbed it; `eligible_for_removal` needs BOTH
     at zero. `blind_spots` names what this can't see."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
     tool_rows = await pool.fetch(
-        "SELECT tool_name, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "SELECT tool_name, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
+        "sum(response_bytes) AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY tool_name ORDER BY total_ms DESC", since,
     )
     caller_rows = await pool.fetch(
-        "SELECT caller, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "SELECT caller, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
+        "sum(response_bytes) AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 "
         "GROUP BY caller ORDER BY total_ms DESC", since,
     )
     action_rows = await pool.fetch(
-        "SELECT tool_name, action, sum(call_count) AS calls, sum(total_ms) AS total_ms "
+        "SELECT tool_name, action, sum(call_count) AS calls, sum(total_ms) AS total_ms, "
+        "sum(response_bytes) AS total_bytes "
         "FROM mcp_tool_stats WHERE window_start >= $1 AND action <> '' "
         "GROUP BY tool_name, action ORDER BY total_ms DESC", since,
     )
 
-    def _fmt(calls: int, total_ms: float) -> dict[str, Any]:
+    def _fmt(calls: int, total_ms: float, total_bytes: int = 0) -> dict[str, Any]:
         return {"calls": calls, "total_ms": round(total_ms, 1),
-                "avg_ms": round(total_ms / calls, 2) if calls else None}
+                "avg_ms": round(total_ms / calls, 2) if calls else None,
+                "total_bytes": total_bytes,
+                "avg_bytes": round(total_bytes / calls, 1) if calls else None}
 
-    persisted = [{"tool": r["tool_name"], **_fmt(r["calls"], r["total_ms"])} for r in tool_rows]
+    persisted = [{"tool": r["tool_name"], **_fmt(r["calls"], r["total_ms"], r["total_bytes"])}
+                for r in tool_rows]
     persisted_by_caller = [
-        {"caller": r["caller"], **_fmt(r["calls"], r["total_ms"])} for r in caller_rows]
+        {"caller": r["caller"], **_fmt(r["calls"], r["total_ms"], r["total_bytes"])}
+        for r in caller_rows]
     persisted_by_action = [
-        {"tool": r["tool_name"], "action": r["action"], **_fmt(r["calls"], r["total_ms"])}
+        {"tool": r["tool_name"], "action": r["action"],
+         **_fmt(r["calls"], r["total_ms"], r["total_bytes"])}
         for r in action_rows]
 
     by_tool: dict[str, dict[str, float]] = {}
     by_caller: dict[str, dict[str, float]] = {}
     by_action: dict[tuple[str, str], dict[str, float]] = {}
     for (tool, caller, action), v in _tool_call_stats.items():
-        t = by_tool.setdefault(tool, {"count": 0.0, "total_ms": 0.0})
+        t = by_tool.setdefault(tool, {"count": 0.0, "total_ms": 0.0, "total_bytes": 0.0})
         t["count"] += v["count"]
         t["total_ms"] += v["total_ms"]
-        c = by_caller.setdefault(caller, {"count": 0.0, "total_ms": 0.0})
+        t["total_bytes"] += v.get("total_bytes", 0.0)
+        c = by_caller.setdefault(caller, {"count": 0.0, "total_ms": 0.0, "total_bytes": 0.0})
         c["count"] += v["count"]
         c["total_ms"] += v["total_ms"]
+        c["total_bytes"] += v.get("total_bytes", 0.0)
         if action:
-            a = by_action.setdefault((tool, action), {"count": 0.0, "total_ms": 0.0})
+            a = by_action.setdefault((tool, action),
+                                     {"count": 0.0, "total_ms": 0.0, "total_bytes": 0.0})
             a["count"] += v["count"]
             a["total_ms"] += v["total_ms"]
+            a["total_bytes"] += v.get("total_bytes", 0.0)
     live = [
-        {"tool": name, **_fmt(int(v["count"]), v["total_ms"])}
+        {"tool": name, **_fmt(int(v["count"]), v["total_ms"], int(v["total_bytes"]))}
         for name, v in sorted(by_tool.items(), key=lambda kv: -kv[1]["total_ms"])
     ]
     live_by_caller = [
-        {"caller": name, **_fmt(int(v["count"]), v["total_ms"])}
+        {"caller": name, **_fmt(int(v["count"]), v["total_ms"], int(v["total_bytes"]))}
         for name, v in sorted(by_caller.items(), key=lambda kv: -kv[1]["total_ms"])
     ]
     live_by_action = [
-        {"tool": tool, "action": action, **_fmt(int(v["count"]), v["total_ms"])}
+        {"tool": tool, "action": action, **_fmt(int(v["count"]), v["total_ms"],
+                                                int(v["total_bytes"]))}
         for (tool, action), v in sorted(by_action.items(), key=lambda kv: -kv[1]["total_ms"])
     ]
 

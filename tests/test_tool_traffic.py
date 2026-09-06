@@ -35,17 +35,37 @@ def _use_test_pool(actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(srv, "_pool_get", _fake_pool_get)
 
 
+def test_response_byte_size_measures_the_actual_json_wire_size() -> None:
+    """Thread e4a5755a's own sibling gap (Thoth DM 7667): a byte table needs a real number
+    to read, not another live probe call. This must match len(json.dumps(...).encode())
+    exactly — it's the same shape fn_metadata.convert_result serializes next."""
+    import json
+
+    payload = {"a": 1, "b": "x" * 50}
+    assert srv._response_byte_size(payload) == len(json.dumps(payload).encode("utf-8"))
+
+
+def test_response_byte_size_degrades_to_zero_on_an_unserializable_payload() -> None:
+    """Best-effort, never a crash: telemetry must not be able to break a real response.
+    `default=str` already rescues an ordinary custom object (which is the point — most
+    real payloads still measure something useful); a circular reference is the genuine
+    failure json can never serialize regardless of `default`, proving the fallback fires."""
+    circular: dict[str, object] = {}
+    circular["self"] = circular
+    assert srv._response_byte_size(circular) == 0
+
+
 def test_record_tool_call_accumulates_count_and_ms_per_tool_and_caller() -> None:
     srv._record_tool_call("orient", "agent:thoth", 12.5)
     srv._record_tool_call("orient", "agent:thoth", 7.5)
     srv._record_tool_call("orient", "agent:seshat", 9.0)
     srv._record_tool_call("mount", "agent:thoth", 3.0)
     assert srv._tool_call_stats[("orient", "agent:thoth", "")] == {
-        "count": 2, "total_ms": 20.0}
+        "count": 2, "total_ms": 20.0, "total_bytes": 0.0}
     assert srv._tool_call_stats[("orient", "agent:seshat", "")] == {
-        "count": 1, "total_ms": 9.0}
+        "count": 1, "total_ms": 9.0, "total_bytes": 0.0}
     assert srv._tool_call_stats[("mount", "agent:thoth", "")] == {
-        "count": 1, "total_ms": 3.0}
+        "count": 1, "total_ms": 3.0, "total_bytes": 0.0}
 
 
 def test_record_tool_call_counts_a_failed_call_too() -> None:
@@ -66,9 +86,9 @@ def test_record_tool_call_keeps_action_a_separate_dimension() -> None:
     srv._record_tool_call("seat", "agent:thoth", 3.0, "stop")
     srv._record_tool_call("seat", "agent:thoth", 2.0, "mint")
     assert srv._tool_call_stats[("seat", "agent:thoth", "mint")] == {
-        "count": 2, "total_ms": 7.0}
+        "count": 2, "total_ms": 7.0, "total_bytes": 0.0}
     assert srv._tool_call_stats[("seat", "agent:thoth", "stop")] == {
-        "count": 1, "total_ms": 3.0}
+        "count": 1, "total_ms": 3.0, "total_bytes": 0.0}
 
 
 def test_caller_for_is_cache_only_never_reattaches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,21 +121,24 @@ async def test_flush_writes_the_batch_by_tool_and_caller_and_clears_the_live_dic
     actions: Actions, _use_test_pool: None,
 ) -> None:
     srv._tool_stats_window_start = datetime.now(UTC) - timedelta(seconds=60)
-    srv._record_tool_call("orient", "agent:thoth", 10.0)
-    srv._record_tool_call("orient", "agent:thoth", 20.0)
-    srv._record_tool_call("orient", "agent:seshat", 5.0)
-    srv._record_tool_call("roster", "unattributed", 5.0)
+    srv._record_tool_call("orient", "agent:thoth", 10.0, response_bytes=100)
+    srv._record_tool_call("orient", "agent:thoth", 20.0, response_bytes=200)
+    srv._record_tool_call("orient", "agent:seshat", 5.0, response_bytes=50)
+    srv._record_tool_call("roster", "unattributed", 5.0, response_bytes=30)
 
     await srv._flush_tool_stats_once()
 
     assert srv._tool_call_stats == {}  # the live dict is empty again, ready for the next window
     rows = await actions.pool.fetch(
-        "SELECT tool_name, caller, call_count, total_ms FROM mcp_tool_stats "
+        "SELECT tool_name, caller, call_count, total_ms, response_bytes FROM mcp_tool_stats "
         "ORDER BY tool_name, caller")
     assert [dict(r) for r in rows] == [
-        {"tool_name": "orient", "caller": "agent:seshat", "call_count": 1, "total_ms": 5.0},
-        {"tool_name": "orient", "caller": "agent:thoth", "call_count": 2, "total_ms": 30.0},
-        {"tool_name": "roster", "caller": "unattributed", "call_count": 1, "total_ms": 5.0},
+        {"tool_name": "orient", "caller": "agent:seshat", "call_count": 1, "total_ms": 5.0,
+         "response_bytes": 50},
+        {"tool_name": "orient", "caller": "agent:thoth", "call_count": 2, "total_ms": 30.0,
+         "response_bytes": 300},
+        {"tool_name": "roster", "caller": "unattributed", "call_count": 1, "total_ms": 5.0,
+         "response_bytes": 30},
     ]
 
 
@@ -133,23 +156,28 @@ async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spot
 ) -> None:
     await actions.pool.execute(
         "INSERT INTO mcp_tool_stats (tool_name, caller, window_start, window_end, "
-        "call_count, total_ms) VALUES "
-        "('orient', 'agent:thoth', now() - interval '30 seconds', now(), 2, 60.0), "
-        "('orient', 'agent:seshat', now() - interval '30 seconds', now(), 1, 30.0)")
-    srv._record_tool_call("mount", "agent:thoth", 4.0)  # still in the live, unflushed window
+        "call_count, total_ms, response_bytes) VALUES "
+        "('orient', 'agent:thoth', now() - interval '30 seconds', now(), 2, 60.0, 2000), "
+        "('orient', 'agent:seshat', now() - interval '30 seconds', now(), 1, 30.0, 1000)")
+    srv._record_tool_call("mount", "agent:thoth", 4.0, response_bytes=40)  # still unflushed
 
     out = await srv.tool_traffic(window_minutes=5)
 
     assert out["persisted"] == [
-        {"tool": "orient", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0}]
+        {"tool": "orient", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0,
+         "total_bytes": 3000, "avg_bytes": 1000.0}]
     assert sorted(out["persisted_by_caller"], key=lambda r: r["caller"]) == [
-        {"caller": "agent:seshat", "calls": 1, "total_ms": 30.0, "avg_ms": 30.0},
-        {"caller": "agent:thoth", "calls": 2, "total_ms": 60.0, "avg_ms": 30.0},
+        {"caller": "agent:seshat", "calls": 1, "total_ms": 30.0, "avg_ms": 30.0,
+         "total_bytes": 1000, "avg_bytes": 1000.0},
+        {"caller": "agent:thoth", "calls": 2, "total_ms": 60.0, "avg_ms": 30.0,
+         "total_bytes": 2000, "avg_bytes": 1000.0},
     ]
     assert out["current_unflushed_window"] == [
-        {"tool": "mount", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0}]
+        {"tool": "mount", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0,
+         "total_bytes": 40, "avg_bytes": 40.0}]
     assert out["current_unflushed_by_caller"] == [
-        {"caller": "agent:thoth", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0}]
+        {"caller": "agent:thoth", "calls": 1, "total_ms": 4.0, "avg_ms": 4.0,
+         "total_bytes": 40, "avg_bytes": 40.0}]
     # rule 2 from msg 4034: the blind population lives IN the output, not only in a decision
     assert any("osiris-console" in s for s in out["blind_spots"])
     assert any("osiris-worker" in s for s in out["blind_spots"])
@@ -178,20 +206,23 @@ async def test_tool_traffic_breaks_a_dispatcher_down_by_action(
     already does for WHO instead of WHAT."""
     await actions.pool.execute(
         "INSERT INTO mcp_tool_stats (tool_name, caller, action, window_start, "
-        "window_end, call_count, total_ms) VALUES "
-        "('seat', 'agent:thoth', 'mint', now() - interval '30 seconds', now(), 3, 90.0), "
-        "('seat', 'agent:thoth', 'stop', now() - interval '30 seconds', now(), 1, 5.0), "
-        "('orient', 'agent:thoth', '', now() - interval '30 seconds', now(), 2, 20.0)")
-    srv._record_tool_call("seat", "agent:seshat", 6.0, "mint")
+        "window_end, call_count, total_ms, response_bytes) VALUES "
+        "('seat', 'agent:thoth', 'mint', now() - interval '30 seconds', now(), 3, 90.0, 300), "
+        "('seat', 'agent:thoth', 'stop', now() - interval '30 seconds', now(), 1, 5.0, 50), "
+        "('orient', 'agent:thoth', '', now() - interval '30 seconds', now(), 2, 20.0, 200)")
+    srv._record_tool_call("seat", "agent:seshat", 6.0, "mint", response_bytes=60)
 
     out = await srv.tool_traffic(window_minutes=5)
 
     assert out["persisted_by_action"] == [
-        {"tool": "seat", "action": "mint", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0},
-        {"tool": "seat", "action": "stop", "calls": 1, "total_ms": 5.0, "avg_ms": 5.0},
+        {"tool": "seat", "action": "mint", "calls": 3, "total_ms": 90.0, "avg_ms": 30.0,
+         "total_bytes": 300, "avg_bytes": 100.0},
+        {"tool": "seat", "action": "stop", "calls": 1, "total_ms": 5.0, "avg_ms": 5.0,
+         "total_bytes": 50, "avg_bytes": 50.0},
     ]  # 'orient' with action='' is excluded — not a dispatcher call
     assert out["current_unflushed_by_action"] == [
-        {"tool": "seat", "action": "mint", "calls": 1, "total_ms": 6.0, "avg_ms": 6.0}]
+        {"tool": "seat", "action": "mint", "calls": 1, "total_ms": 6.0, "avg_ms": 6.0,
+         "total_bytes": 60, "avg_bytes": 60.0}]
 
 
 @pytest.mark.asyncio
