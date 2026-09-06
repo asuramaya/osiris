@@ -677,6 +677,16 @@ async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> 
 # {mode, detail} the sender sees in send()'s echo — a hop is visible or it did not happen.
 
 _ASK_SLACK_SECS = 900  # a turn may run this long past its own desk brief before going quiet
+# THE 47-DAY BRAKE (Alfred's post-reboot finding 3, msg 7462, thread ee412c7e): an
+# undismissed desk brief from 2026-07-20 braked a September peer DM as "queued-needs-
+# input" — the "kept working since" check below is itself reboot-fragile (agent_mounts
+# can read `last=None` for a lineage that hasn't remounted yet this boot, even though it
+# plainly worked for weeks after the old ask), so a brief old enough is dropped as a gate
+# outright rather than trusted to that check alone. 7 days, per Thoth's own proposed
+# default (msg 7542 item 4) — long enough that no genuinely-live ask-then-silence should
+# ever still be sitting here, short enough that a truly abandoned brief cannot hold
+# unrelated mail hostage for a month and a half.
+_ASK_BRAKE_MAX_AGE_SECS = 7 * 86400
 
 
 async def _last_wake_mode_msg(pool: asyncpg.Pool, message_id: int) -> str | None:
@@ -723,6 +733,8 @@ async def _awaiting_operator(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any
     row = await pool.fetchrow(q, OPERATOR_ADDR, base)
     if row is None:
         return None
+    if (datetime.now(UTC) - row["created_at"]).total_seconds() > _ASK_BRAKE_MAX_AGE_SECS:
+        return None  # too old to still be a live gate, whatever "kept working" can prove
     last = await pool.fetchval(
         "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1 "
         "OR agent_id LIKE $1 || '-%'", base)
@@ -1212,7 +1224,16 @@ async def _unresolved_wake_receipt(pool: asyncpg.Pool, target: str) -> dict[str,
     live:true) showed the addressee live seconds ago. Consulted here, BEFORE the
     classifier speaks: live → the honest word is 'could not resolve a session for a live
     mind', an outcome (mail queues, reads at its own next turn), never a failure; dead →
-    'never mounted' remains true and is said plainly, unchanged from before this fix."""
+    'never mounted' remains true and is said plainly, unchanged from before this fix.
+
+    THE REBOOT-STALE 'never-mounted' LIE (Alfred's post-reboot finding 2, msg 7462,
+    thread ee412c7e): `liveness['live']` alone answers "live RIGHT NOW", which reads
+    False for every mind in the minutes after a reboot — including one that mounted and
+    sent DMs that same morning. A bare not-live used to fall straight to 'never
+    mounted', conflating that reboot-window silence with a positive claim this identity
+    has no mount history at all. `agent_liveness`'s own `ever_mounted` (mount_seen is
+    not None — a real row exists, however stale) tells the two apart: mounted-before-
+    but-cold gets its own honest 'cold-mounted-before' label instead."""
     from src.orchestrator import mounts
 
     liveness = await mounts.agent_liveness(pool, target)
@@ -1222,6 +1243,13 @@ async def _unresolved_wake_receipt(pool: asyncpg.Pool, target: str) -> dict[str,
                           "but no resumable OS session could be resolved for it — "
                           "could not resolve recipient session; the mail queues in the "
                           "box and reads at its own next natural turn"}
+    if liveness["ever_mounted"]:
+        return {"mode": "cold-mounted-before",
+                "detail": f"{target} has mounted before (registry last seen "
+                          f"{liveness['last_seen']}) but is not live right now and no "
+                          "resumable OS session could be resolved — 'never mounted' "
+                          "would be false; the mail queues and reads at its own next "
+                          "natural turn once the mind is live again"}
     return {"mode": "never-mounted",
             "detail": f"{target} has never mounted — no session to resume"}
 
@@ -2472,6 +2500,10 @@ _WAKE_STATUS = {
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",
     "never-mounted": "no-live-body",
+    # a real mount row exists (however stale) — genuinely no-live-body right now, same
+    # practical handling as never-mounted, but the wording no longer lies about there
+    # being zero history for this identity (thread ee412c7e).
+    "cold-mounted-before": "no-live-body",
     # live by the SAME registry fleet() trusts, but no OS session could be resolved for
     # it — an outcome (mail queues, reads at its own next turn), never a failure; must
     # never collapse into "no-live-body", which is the false-absence class this fixes.
