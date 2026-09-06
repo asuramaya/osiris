@@ -473,6 +473,54 @@ async def _miner(actions: Actions, since: datetime) -> dict[str, Any]:
     return out
 
 
+# no-regrow hygiene item 4 (practice 393be453, operator ruling 2026-09-06): osiris ITSELF
+# is not a client project and carries a wider target — every other project is a client.
+_OBLIGATION_TARGET_OSIRIS = 40
+_OBLIGATION_TARGET_CLIENT = 15
+
+
+async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
+    """No-regrow hygiene item 4's own weekly gauge: every project carrying at least one
+    OPEN kind='obligation' Thread, against its fixed target (osiris itself under
+    `_OBLIGATION_TARGET_OSIRIS`, every client project under `_OBLIGATION_TARGET_CLIENT`),
+    naming the THREE OLDEST owners (the ones who have been carrying it longest) rather
+    than a bare count alone — a digest that only says "47 open" tells nobody whom to ask;
+    naming the oldest three points at exactly that. `(unfiled)` (no in_repo link at all)
+    is its own bucket, same convention `obligation_hygiene.hygiene_status` already uses,
+    and is never scored against a target (an unfiled obligation is a filing gap, not a
+    project's own pressure)."""
+    rows = await actions.pool.fetch(
+        "SELECT COALESCE(p.canonical, '(unfiled)') AS project, o.created_at, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner "
+        "FROM objects o "
+        "LEFT JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "LEFT JOIN objects p ON p.id=l.to_id "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "    WHERE a.object_id=o.id AND a.name='status' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    ='obligation' "
+        "ORDER BY project, o.created_at ASC")
+    by_project: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_project.setdefault(r["project"], []).append(
+            {"created_at": r["created_at"], "owner": r["owner"]})
+    out: list[dict[str, Any]] = []
+    for project, items in sorted(by_project.items()):
+        target = (None if project == "(unfiled)" else
+                  _OBLIGATION_TARGET_OSIRIS if project.removeprefix("repo:") == "osiris"
+                  else _OBLIGATION_TARGET_CLIENT)
+        oldest = [it["owner"] or "(unowned)" for it in items[:3]]
+        out.append({"project": project.removeprefix("repo:"), "open": len(items),
+                   "target": target, "oldest_owners": oldest})
+    return out
+
+
 async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
@@ -493,6 +541,7 @@ async def fleet_digest(
     bodies = await _bodies(actions, effective_since)
     retrieval = await _retrieval(actions, effective_since)
     miner = await _miner(actions, effective_since)
+    obligation_pressure = await _obligation_pressure(actions)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     # the danger map: a STAMPED swap (durable, from the transcript at mount) OR a LIVE swap
     # (the heartbeat caught the harness swapping the model since the last stamp — not yet in
@@ -553,5 +602,6 @@ async def fleet_digest(
         "bodies": bodies,
         "retrieval": retrieval,
         "miner": miner,
+        "obligation_pressure": obligation_pressure,
         "operator_inbox": operator_inbox,
     }

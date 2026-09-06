@@ -4700,7 +4700,9 @@ async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dic
     health (which identities resolved cleanly), ACTIVITY (what agents decided/opened
     in your name, not the miner's backfill), the DANGER map (model swaps — the
     harness's silent demotions), LAUNDERING (credence flags where a relay carried a
-    fact above its origin grade), and SPEND (metered honestly).
+    fact above its origin grade), SPEND (metered honestly), and OBLIGATION_PRESSURE
+    (no-regrow hygiene item 4: per-project open count against a fixed target — osiris
+    itself under 40, every client under 15 — naming the three oldest owners).
 
     `hours` given → an ad-hoc rolling window. `hours=None` (default) → WATERMARK MODE:
     'what's new since I last looked', from the stored operator watermark (24h fallback
@@ -8527,6 +8529,7 @@ async def open_thread(
     resolves: str | list[str] | None = None,
     branch: str | None = None, files_touched: list[str] | None = None,
     unlinked_because: str | None = None,
+    stale_after_days: int | None = None,
     session_anchor: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
@@ -8545,8 +8548,11 @@ async def open_thread(
     (osiris-scoped only). `resolves` closes a predecessor thread this one supersedes —
     same UUID/canonical/short-id-only strictness as record_decision's `resolves`.
     `branch`/`files_touched` mark held work; `colliding_work` names any open collision.
-    `unlinked_because` mirrors record_decision's own hatch. consult_canon('open_thread')
-    for more."""
+    `unlinked_because` mirrors record_decision's own hatch. `stale_after_days`
+    (no-regrow hygiene, practice 393be453) applies to `kind='obligation'` only — the
+    window (default 14) past which it surfaces on its owner's own next Stop as a named
+    ask; unrelated to obligation_hygiene.py's separate idle-since-touched cron.
+    consult_canon('open_thread') for more."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
@@ -8634,7 +8640,7 @@ async def open_thread(
             source=actor,
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
-            unlinked_because=unlinked_because,
+            unlinked_because=unlinked_because, stale_after_days=stale_after_days,
         )
     except ValueError as e:
         return {"error": str(e)}

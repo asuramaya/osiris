@@ -1282,7 +1282,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # (prior_lineage_memory_archived/memory_migration_needed) — no new tool, no new schema
 # param, just prose naming what mount() now does on the caller's behalf. Measured exact
 # (106,023), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 106023  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 105,273 -> 105,817 (2026-09-06, Sekhmet, no-regrow hygiene item 2, practice 393be453,
+# thread 1588bc73): open_thread gains one new param, `stale_after_days` (kind='obligation'
+# only, default 14) — a docstring sentence plus the new inputSchema entry. No new tool.
+# fleet_digest's own docstring also gained one clause naming item 4's obligation_pressure
+# field. Measured exact (105,817), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 106567
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

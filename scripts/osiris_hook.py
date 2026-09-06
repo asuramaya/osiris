@@ -504,6 +504,27 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         }))
         return 0
 
+    # NO-REGROW HYGIENE ITEM 2 (practice 393be453, operator ruling 2026-09-06): every open
+    # kind='obligation' Thread THIS session's own identity owns, past its stale_after window
+    # (default 14 days from open), blocks Stop as a NAMED ask — the same severity an unread
+    # ask message carries, never a bare count (that's exactly what this replaces: a pile
+    # that regrows silently because nobody's own stop ever names it to them). Checked only
+    # once the mail gate above is clear — an owner already blocked on mail sees that first,
+    # never two competing blocks in the same turn.
+    stale = result.get("stale_obligations") or []
+    if stale:
+        named = "; ".join(f"{o['id']} ({o['stale_days']}d overdue): {o['summary']!r}"
+                          for o in stale[:5])
+        more = f" (+{len(stale) - 5} more)" if len(stale) > 5 else ""
+        print(json.dumps({
+            "decision": "block",
+            "reason": (f"Osiris: {len(stale)} of your own obligation(s) are past their "
+                       f"stale-after window — {named}{more}. Touch each one (annotate, "
+                       "resolve with a because naming what superseded it, or reclassify) "
+                       "before finishing — a stale duty is carried, not forgotten."),
+        }))
+        return 0
+
     # Context occupancy — via THE authority (context_lens.last_usage/occupancy/window_for),
     # never a second, independently-drifting tail-parse. Found in the retirement's own
     # parity proof (dispatch 5599): a hand-rolled reimplementation here had no concept of

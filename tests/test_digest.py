@@ -394,3 +394,52 @@ async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
     assert dg["summary"]["unseen"] == 1              # the ghost is named, not vanished
     assert dg["summary"]["swapped_unseen"] == 1      # its swap is on the books
     assert "3" in dg["roster_scope"]                 # and the lens says what it did
+
+
+# ═══ no-regrow hygiene item 4 (practice 393be453) — the digest's own obligation-pressure
+# gauge: per-project open count against a fixed target, naming the three OLDEST owners ═══
+
+
+async def test_obligation_pressure_names_the_three_oldest_owners_against_target(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await _seed_project(actions.pool, "pressureproj")
+    for i, owner in enumerate(["Owner1", "Owner2", "Owner3", "Owner4"]):
+        await open_thread(actions, f"duty {i} in pressureproj", kind="obligation",
+                          owner=owner, repo="pressureproj", source="agent:seed-pressureproj")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    rows = {r["project"]: r for r in dg["obligation_pressure"]}
+    row = rows["pressureproj"]
+    assert row["open"] == 4
+    assert row["target"] == 15  # a client project, not osiris itself
+    assert row["oldest_owners"] == ["Owner1", "Owner2", "Owner3"]  # oldest three, in order
+
+
+async def test_obligation_pressure_osiris_gets_the_wider_target(actions: Actions) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "an osiris-owned duty", kind="obligation", owner="Someone",
+                      repo="osiris", source="session")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    rows = {r["project"]: r for r in dg["obligation_pressure"]}
+    assert rows["osiris"]["target"] == 40
+
+
+async def test_obligation_pressure_unfiled_bucket_carries_no_target(actions: Actions) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "an obligation nobody filed under a project",
+                      kind="obligation", owner="Nowhere", source="session")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    rows = {r["project"]: r for r in dg["obligation_pressure"]}
+    assert rows["(unfiled)"]["target"] is None
+
+
+async def test_obligation_pressure_never_lists_a_project_with_no_open_obligations(
+    actions: Actions,
+) -> None:
+    await _seed_project(actions.pool, "quietproj")
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    assert "quietproj" not in {r["project"] for r in dg["obligation_pressure"]}
