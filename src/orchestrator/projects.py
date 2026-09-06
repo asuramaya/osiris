@@ -1139,7 +1139,16 @@ async def normalize_project_casing(
 
     rename_result = await rename_project(
         actions, project=populated_row["canonical"], new_name=correct_case,
-        because=evidence, actor=actor)
+        because=evidence, actor=actor, dry_run=False,
+        # merge_into=True: the fold just above is WHY new_name collides — phantom_row
+        # (the object correct_case's OWN canonical was minted under) was just folded
+        # into populated_row a few lines up, so a collision here is the deliberate
+        # point of this function, never a mistake to refuse (#93af8ced: the old
+        # active-only collision check never caught this because fold_project had
+        # already flipped the phantom's status to 'merged' by the time rename ran;
+        # widening the check to any status, correctly, made this call newly refuse
+        # without this flag).
+        merge_into=True)
     if rename_result.get("error"):
         return {"error": rename_result["error"], "folded": fold_result["folded"],
                "into": fold_result["into"],

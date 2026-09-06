@@ -144,7 +144,8 @@ async def test_register_agent_mount_never_clobbers_a_declared_rename(actions: Ac
 
     # a deliberate, declared rename lands (rename_project, the graph-only verb)
     out = await rename_project(actions, project="xxit", new_name="handlingtheloop",
-                               because="operator-approved #110 rename", actor="Thoth")
+                               because="operator-approved #110 rename", actor="Thoth",
+                               dry_run=False)
     assert out["new_name"] == "handlingtheloop"
 
     # a LATER, ordinary mount from a seat whose pin was never updated — the metron/deckard
@@ -253,7 +254,7 @@ async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
     proj = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical='repo:renamedx'")
     await rename_project(actions, project="renamedx", new_name="totally-different-name",
-                         because="operator-approved rename", actor="Thoth")
+                         because="operator-approved rename", actor="Thoth", dry_run=False)
 
     ident2 = resolve_identity(cwd="/w/renamedx", session="sess-unrelated2",
                               model="claude-fable-5")

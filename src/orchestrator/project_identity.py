@@ -436,6 +436,7 @@ def rename_evidence_verdict(evidence: dict[str, Any], new_name: str) -> str:
 
 async def rename_project(
     actions: Actions, *, project: str, new_name: str, because: str, actor: str,
+    dry_run: bool = True, merge_into: bool = False,
 ) -> dict[str, Any]:
     """RENAME: ONE object keeps its stable `canonical` id FOREVER — even though
     SoftwareProject's canonical happens to be name-shaped (`repo:<name>`), it is treated
@@ -475,9 +476,17 @@ async def rename_project(
 
     Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
     `project` ref (AmbiguousProjectRef, named exactly like every other project verb);
-    a non-active project; `new_name` already resolving to a DIFFERENT active
-    SoftwareProject (a real collision, never silently merged — fold_project is the
-    deliberate, evidence-gated verb for that, on purpose, with its own guard)."""
+    a non-active project; `new_name` already resolving to a DIFFERENT SoftwareProject
+    OF ANY STATUS — active, retired, or already-merged (a real collision, never
+    silently merged — fold_project is the deliberate, evidence-gated verb for that) —
+    unless `merge_into=True` is passed explicitly, acknowledging the caller has already
+    seen the collision and means to reuse the name anyway (this still never merges the
+    two objects itself; it only lifts the refusal).
+
+    `dry_run=True` (the default, same convention as every other write verb in this
+    file) returns the exact plan — resolved project, old/new name, any collision found —
+    without writing anything: no `assert_property`, no `agent_mounts` repoint, no
+    prior-art search. Pass `dry_run=False` explicitly to actually rename."""
     from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
 
     project = (project or "").strip()
@@ -507,15 +516,25 @@ async def rename_project(
     except AmbiguousProjectRef:
         collide = None  # an ambiguity already living under new_name is a pre-existing
                         # problem this rename did not create and is not asked to solve
-    if collide is not None and collide["id"] != row["id"] and collide["status"] == "active":
-        return {"error": f"{new_name!r} already names a DIFFERENT active project "
-                         f"({collide['canonical']}) — rename_project never collides two "
-                         "identities; fold_project is the deliberate, evidence-gated "
-                         "merge verb if these are actually the same project"}
+    if collide is not None and collide["id"] != row["id"] and not merge_into:
+        return {"error": f"{new_name!r} already names a DIFFERENT project "
+                         f"({collide['canonical']}, status={collide['status']}) — "
+                         "rename_project never collides two identities silently; pass "
+                         "merge_into=True if this is deliberate (it only lifts this "
+                         "refusal, it does not itself merge the two objects — "
+                         "fold_project is the evidence-gated verb for that), or name a "
+                         "genuinely free new_name instead"}
     old_name = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         row["id"])
+    if dry_run:
+        return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
+                "because": because, "dry_run": True,
+                "collision": (f"{collide['canonical']} (status={collide['status']}) — "
+                              "would proceed only because merge_into=True"
+                              if collide is not None else None),
+                "note": "preview only — pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "name", new_name, actor, now, _CONF,
                                   evidence_class=_EC)

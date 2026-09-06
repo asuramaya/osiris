@@ -1271,7 +1271,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
 # live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
 # new fields, no new tool, no new param. Measured exact (104,642), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 105273  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 105,273 -> 105,548 (2026-09-06, Imhotep, Deckard msg 7719/93af8ced): project(action=
+# 'rename') gains dry_run (was silently impure — dry_run=True performed the write
+# regardless) and merge_into (the collision refusal now fires on ANY colliding status,
+# not just active, so a deliberate reuse needs an explicit override) — two new schema
+# fields plus the ACTION TABLE docstring line naming them. Measured exact (105,548), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 105548  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

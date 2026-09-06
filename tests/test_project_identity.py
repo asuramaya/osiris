@@ -224,7 +224,7 @@ async def test_candidates_key_by_live_name_not_stale_canonical_after_a_rename(
     await actions.create_link(t, proj, "in_repo", "agent:1e11ab01", datetime.now(UTC), 0.9)
 
     out = await rename_project(actions, project="staleslug", new_name="freshname",
-                               because="x", actor="agent:test")
+                               because="x", actor="agent:test", dry_run=False)
     assert out["new_name"] == "freshname"
 
     ev = await project_identity_evidence(actions.pool, seat_id=seat["seat_id"])
@@ -391,7 +391,7 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
 
     out = await rename_project(actions, project="xxit", new_name="handlingtheloop",
                                because="operator ruling: xxit renamed on its remote",
-                               actor="agent:test")
+                               actor="agent:test", dry_run=False)
 
     assert out["project"] == "repo:xxit"          # canonical id NEVER changes
     assert out["old_name"] == "xxit" and out["new_name"] == "handlingtheloop"
@@ -424,7 +424,7 @@ async def test_rename_project_names_a_seat_left_stale_by_the_rename(
 
     out = await rename_project(actions, project="renseat1", new_name="renseat1new",
                                because="operator ruling: repo renamed on its remote",
-                               actor="agent:test")
+                               actor="agent:test", dry_run=False)
     stale = out["possibly_stale_seats"]
     assert stale["checked"] is True
     assert any(h["field"] == "house" and h["value"] == "renseat1" for h in stale["hits"])
@@ -445,7 +445,7 @@ async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
     monkeypatch.setattr(
         "src.orchestrator.capture.property_prior_art", _fake_prior_art)
     out = await rename_project(actions, project="bytebye", new_name="ByeByte",
-                               because="tidying casing", actor="agent:test")
+                               because="tidying casing", actor="agent:test", dry_run=False)
     assert out["new_name"] == "ByeByte"  # the write still happened
     assert out["prior_art_flag"] == (
         "a standing ruling (1db87191) may already cover repo:bytebye's 'name'")
@@ -487,10 +487,77 @@ async def test_rename_project_refuses_colliding_with_a_different_active_project(
     await _mk_project(actions, "targetproj")
 
     out = await rename_project(actions, project="sourceproj", new_name="targetproj",
-                               because="x", actor="agent:test")
+                               because="x", actor="agent:test", dry_run=False)
 
-    assert "already names a DIFFERENT active project" in out["error"]
+    assert "already names a DIFFERENT project" in out["error"]
     assert "fold_project" in out["error"]
+
+
+async def test_rename_project_refuses_colliding_with_a_retired_project_too(
+    actions: Actions,
+) -> None:
+    """#93af8ced: the old check only fired on an ACTIVE collision, so a name still held
+    by a RETIRED project silently reused it — this closes that gap."""
+    await _mk_project(actions, "willretire")
+    await _mk_project(actions, "renameme")
+    retired = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:willretire'")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    out = await rename_project(actions, project="renameme", new_name="willretire",
+                               because="x", actor="agent:test", dry_run=False)
+
+    assert "already names a DIFFERENT project" in out["error"]
+    assert "status=retired" in out["error"]
+
+
+async def test_rename_project_merge_into_lifts_the_collision_refusal(
+    actions: Actions,
+) -> None:
+    """merge_into=True is an explicit override, never a merge itself (fold_project stays
+    the only verb that actually merges two objects) — it only lets the caller proceed
+    having acknowledged the collision."""
+    await _mk_project(actions, "willretire2")
+    await _mk_project(actions, "renameme2")
+    retired = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:willretire2'")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    out = await rename_project(actions, project="renameme2", new_name="willretire2",
+                               because="x", actor="agent:test", dry_run=False,
+                               merge_into=True)
+
+    assert out["new_name"] == "willretire2"
+    assert "error" not in out
+
+
+async def test_rename_project_dry_run_writes_nothing(actions: Actions) -> None:
+    """#93af8ced (Deckard's report, msg 7719): dry_run=True must be a pure preview —
+    zero object_events, zero assertions, zero agent_mounts changes. This is the one
+    concrete case this thread was opened to fix; the old code performed the write
+    regardless of dry_run."""
+    proj = await _mk_project(actions, "drypreview")
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/j/drypreview", agent_id="agent:dryrun1",
+                     project="drypreview", cwd="/w/drypreview", model=None,
+                     session_key=None)
+    assertions_before = await actions.pool.fetchval("SELECT count(*) FROM assertions")
+
+    out = await rename_project(actions, project="drypreview", new_name="drypreviewnew",
+                               because="x", actor="agent:test")  # dry_run defaults True
+
+    assert out["dry_run"] is True
+    assert out["new_name"] == "drypreviewnew"
+    assertions_after = await actions.pool.fetchval("SELECT count(*) FROM assertions")
+    assert assertions_after == assertions_before
+    current_name = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
+    assert current_name == "drypreview"  # unchanged
+    mount_row = await actions.pool.fetchval(
+        "SELECT project FROM agent_mounts WHERE job_dir='/j/drypreview'")
+    assert mount_row == "drypreview"  # unchanged
 
 
 # --- fork_project / unfork_project (#110, decision 1db1ff41) ------------------------------
@@ -806,7 +873,7 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
     srv._pool = actions.pool
     try:
         out = await rename_tool(project="oldname", new_name="newname",
-                                because="test rename", ctx=ctx)
+                                because="test rename", dry_run=False, ctx=ctx)
         assert out["new_name"] == "newname"
         assert seat["seat_id"] in out["rename_evidence"]
         entry = out["rename_evidence"][seat["seat_id"]]
@@ -830,6 +897,57 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
+
+
+async def test_mcp_rename_project_heals_every_stale_mount_cache_entry(
+    actions: Actions,
+) -> None:
+    """#93af8ced (Deckard's report, msg 7719): get_status()'s `project` field reads a
+    connection's cached AgentIdentity.project, never a fresh graph read — the same
+    process-local cache transition_project/correct_house/invalidate_works_in already
+    heal after their own writes. rename_project had no such heal, so get_status() (and
+    anything else reading the mount cache) kept reporting the pre-rename name for every
+    already-mounted connection, indefinitely, until its next full re-mount. Two
+    connections here, on purpose: one under the old name (must heal), one already on an
+    unrelated project (must NOT be touched)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import rename_project as rename_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    await _mk_project(actions, "cacheoldname")
+    await _mk_project(actions, "untouchedproj")
+
+    class _CtxA:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    class _CtxB:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx_stale = _CtxA()
+    ctx_other = _CtxB()
+    _agents[_conn_key(ctx_stale)] = AgentIdentity(
+        agent_id="agent:stalecache1", session="stalecache1", project="cacheoldname",
+        model=None, cwd=None)
+    _agents[_conn_key(ctx_other)] = AgentIdentity(
+        agent_id="agent:othercache1", session="othercache1", project="untouchedproj",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rename_tool(project="cacheoldname", new_name="cachenewname",
+                                because="test cache heal", dry_run=False, ctx=ctx_stale)
+        assert out["new_name"] == "cachenewname"
+        assert _agents[_conn_key(ctx_stale)].project == "cachenewname"
+        assert _agents[_conn_key(ctx_other)].project == "untouchedproj"  # never touched
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx_stale), None)
+        _agents.pop(_conn_key(ctx_other), None)
 
 
 async def test_mcp_project_identity_evidence_and_fork_doors(
@@ -949,7 +1067,8 @@ async def test_rename_project_migrates_edges_never_orphans_them(
         "SELECT canonical FROM objects WHERE id=$1", proj)
 
     out = await rename_project(actions, project="beforename", new_name="aftername",
-                               because="adversarial edge-migration test", actor="agent:test")
+                               because="adversarial edge-migration test", actor="agent:test",
+                               dry_run=False)
     assert out["new_name"] == "aftername"
     assert out["project"] == old_canonical  # canonical is UNCHANGED — the receipt's own
                                             # "project" key IS the canonical, by contract
