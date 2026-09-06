@@ -10434,25 +10434,66 @@ def _proc_mem_kb() -> dict[str, int | None]:
     return out
 
 
+_MEMORY_DIAG_MAX_FRAMES = 5
+_MEMORY_DIAG_WINDOW_S = 300.0  # 5 min hard cap, whichever fires first vs the RSS tripwire
+_MEMORY_DIAG_RSS_REFUSE_KB = 1_500_000  # 1.5 GB — refuse to start (or keep running) above this
+_MEMORY_DIAG_CHECK_INTERVAL_S = 15.0
+
+_diag_window: dict[str, Any] = {"task": None, "started_at": None}
+
+
+async def _diag_window_guard(deadline: float) -> None:
+    """THE INCIDENT THIS EXISTS TO PREVENT (thread 4746e7f4, 2026-09-06 ~23:20Z): the
+    ORIGINAL /diag/memory had no bound at all — tracemalloc(25) traced every allocation
+    in the live server indefinitely, its own bookkeeping alone peaked over 1 GB within
+    minutes, the event loop starved (18 CPU-min in 20 wall-min), /heartbeat timed out
+    fleet-wide, MCP calls hung past 300s, and SIGTERM did not stop it — only SIGKILL did.
+    A poller that stops arriving (exactly what happened: the outage killed the poll
+    script too) is not a safety net; THIS process must end the window on its own.
+
+    Runs for the LIFE of one window: sleeps in short ticks, checking RSS each time, and
+    stops tracing the moment EITHER the hard duration cap or the RSS tripwire fires —
+    whichever comes first. Fail-open on its own errors: the `finally` stops tracing and
+    clears window state regardless of how the loop above exits."""
+    import tracemalloc
+
+    try:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_MEMORY_DIAG_CHECK_INTERVAL_S)
+            mem = _proc_mem_kb()
+            if mem["rss_kb"] is not None and mem["rss_kb"] > _MEMORY_DIAG_RSS_REFUSE_KB:
+                break
+    finally:
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+        _diag_window["task"] = None
+        _diag_window["started_at"] = None
+
+
 @mcp.custom_route("/diag/memory", methods=["GET"])
 async def diag_memory_route(request: Any) -> Any:
     """MEMORY DIAGNOSTICS (thread 4746e7f4, operator "why osiris uses so much ram"
     2026-09-06): osiris-mcp oscillates 0.9-2.1 GB under its 2G cgroup cap and swaps every
     incarnation, cause unmeasured since the August cap-raise. Read-only, no graph writes.
 
-    Gated OFF by default (`osiris_memory_diag_enabled`) — `tracemalloc` tracing itself
-    costs real CPU/memory while active, so this must never run silently in production;
-    flip the setting on for a measurement window, then off again.
+    REDESIGNED after a live outage this instrument itself caused (see `_diag_window_guard`'s
+    own docstring for the full incident) — this is now a BOUNDED WINDOW, never an
+    indefinite trace: `_MEMORY_DIAG_MAX_FRAMES` (5, not 25 — traceback capture depth is
+    the dominant cost) per allocation, `_MEMORY_DIAG_WINDOW_S` (300s) hard cap, auto-
+    stopped sooner if RSS crosses `_MEMORY_DIAG_RSS_REFUSE_KB` (1.5 GB) DURING the window
+    (`_diag_window_guard`, a background task, so this ends even if nobody polls again).
 
-    First call after the flag goes on (or after `?reset=1`) STARTS tracing (25 frames of
-    traceback per allocation) and returns the baseline RSS/swap only — nothing to report
-    yet, tracing just began. Every call after that takes a fresh snapshot and returns the
-    top 25 allocation SITES by current size (`tracemalloc.take_snapshot().statistics
-    ('lineno')`), beside the same RSS/swap read — bracket a spike by polling this across
-    it (e.g. every few minutes over the reported 30-minute window) and diff two
-    snapshots' own top sites to see what GREW, not just what's currently biggest.
-    `?reset=1` clears tracing and restarts it fresh (a new baseline), for bracketing
-    before/after a fix without restarting the whole process."""
+    Gated OFF by default (`osiris_memory_diag_enabled`) — tracemalloc tracing still costs
+    real CPU/memory while active even bounded, so this must never run silently.
+
+    A call while NO window is running: refuses (409) if RSS is already over the safety
+    line — starting a trace under memory pressure is exactly the wrong moment. Otherwise
+    starts one and returns the baseline RSS/swap plus the window length.
+
+    A call while a window IS already running: NEVER restarts it (refuses a second
+    concurrent window by construction — there is no `?reset=1` anymore) — returns the
+    current top-5 allocation sites, RSS/swap, and how much window time remains.
+    `?stop=1` ends the window early regardless of state, canceling the guard task."""
     from starlette.responses import JSONResponse
 
     if not get_settings().osiris_memory_diag_enabled:
@@ -10462,24 +10503,49 @@ async def diag_memory_route(request: Any) -> Any:
     import tracemalloc
 
     mem = _proc_mem_kb()
-    reset = request.query_params.get("reset") == "1"
-    if reset and tracemalloc.is_tracing():
-        tracemalloc.stop()
-    if not tracemalloc.is_tracing():
-        tracemalloc.start(25)
-        return JSONResponse({"started": True, **mem,
-                             "note": "tracemalloc just started (or was reset) — call "
-                                     "again after a spike to see allocation sites"})
-    snapshot = tracemalloc.take_snapshot()
-    top = snapshot.statistics("lineno")[:25]
-    current, peak = tracemalloc.get_traced_memory()
+    if request.query_params.get("stop") == "1":
+        task = _diag_window.get("task")
+        if task is not None:
+            task.cancel()
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+        _diag_window["task"] = None
+        _diag_window["started_at"] = None
+        return JSONResponse({"stopped": True, **mem})
+
+    if tracemalloc.is_tracing():
+        snapshot = tracemalloc.take_snapshot()
+        top = snapshot.statistics("lineno")[:_MEMORY_DIAG_MAX_FRAMES]
+        current, peak = tracemalloc.get_traced_memory()
+        started_at = _diag_window.get("started_at")
+        remaining_s = (max(0.0, _MEMORY_DIAG_WINDOW_S - (time.monotonic() - started_at))
+                      if started_at is not None else None)
+        return JSONResponse({
+            **mem, "tracemalloc_current_kb": current // 1024,
+            "tracemalloc_peak_kb": peak // 1024, "window_remaining_s": remaining_s,
+            "top_allocations": [
+                {"site": str(stat.traceback[0]), "size_kb": round(stat.size / 1024, 1),
+                 "count": stat.count}
+                for stat in top
+            ],
+        })
+
+    if mem["rss_kb"] is not None and mem["rss_kb"] > _MEMORY_DIAG_RSS_REFUSE_KB:
+        return JSONResponse({
+            "error": f"refused — RSS already {mem['rss_kb'] // 1024} MB, over the "
+                     f"{_MEMORY_DIAG_RSS_REFUSE_KB // 1024} MB safety line; tracing costs "
+                     "the most exactly when memory is already tight", **mem}, status_code=409)
+
+    tracemalloc.start(_MEMORY_DIAG_MAX_FRAMES)
+    _diag_window["started_at"] = time.monotonic()
+    _diag_window["task"] = asyncio.create_task(
+        _diag_window_guard(time.monotonic() + _MEMORY_DIAG_WINDOW_S))
     return JSONResponse({
-        **mem, "tracemalloc_current_kb": current // 1024, "tracemalloc_peak_kb": peak // 1024,
-        "top_allocations": [
-            {"site": str(stat.traceback[0]), "size_kb": round(stat.size / 1024, 1),
-             "count": stat.count}
-            for stat in top
-        ],
+        "started": True, **mem, "window_s": _MEMORY_DIAG_WINDOW_S,
+        "note": f"tracemalloc started ({_MEMORY_DIAG_MAX_FRAMES} frames) — auto-stops "
+                f"after {_MEMORY_DIAG_WINDOW_S:.0f}s or sooner if RSS crosses "
+                f"{_MEMORY_DIAG_RSS_REFUSE_KB // 1024} MB; poll again for allocation "
+                "sites, or ?stop=1 to end it early",
     })
 
 
