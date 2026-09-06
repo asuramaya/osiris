@@ -1608,6 +1608,20 @@ def test_generation_overflow_suffix_round_trips_instead_of_re_basing() -> None:
     assert _generation("agent:x-green") == ("agent:x-green", 1)        # not digits after 'g'
 
 
+def test_soul_base_is_the_shared_resolver_generation_zero_and_g_n_alike() -> None:
+    """soul_base (thread 25b57dca) is the one name every single-hop-only caller should
+    reach for instead of re-deriving its own roman-only suffix strip — it must agree with
+    _generation()'s own root exactly, roman or g<N>, chained or not."""
+    from src.orchestrator.agents import soul_base
+
+    assert soul_base("agent:x") == "agent:x"
+    assert soul_base("agent:x-ii") == "agent:x"
+    assert soul_base("agent:x-g40") == "agent:x"
+    assert soul_base("agent:x-g40-ii") == "agent:x"                    # a hop past a reset
+    assert soul_base("agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21") == (
+        "agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21")                  # uuid tail untouched
+
+
 def test_generation_unwinds_a_whole_chain_of_overflow_resets() -> None:
     """test_greatfold's own catch (msg 7623) on the first cut of the overflow fix: a
     single-segment check missed the composite shape a REAL mint sequence produces — a

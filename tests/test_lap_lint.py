@@ -126,6 +126,7 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     await actions.assert_property(z, "succeeded_by", "agent:dddd0404", t, NOW, 0.9,
                                   evidence_class=_SD)  # points into the void
     await actions.create_or_find_object("Agent", "agent:eeee0005-ii", t)  # no succeeded_from
+    await actions.create_or_find_object("Agent", "agent:eeee0007-g40", t)  # same, g<N> suffix
     r = await actions.create_or_find_object("Agent", "agent:ffff0006", t)
     await actions.assert_property(r, "retired", True, t, NOW, 0.9, evidence_class=_SD)
     await mounts.save_mount(actions.pool, job_dir="/x/jobs/ffff0006",
@@ -138,7 +139,8 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert len(cycle) == 1 and "agent:aaaa0001" in cycle[0]["detail"]
     dangle = _by_check(out, "lineage-dangling")
     assert len(dangle) == 1 and dangle[0]["subject"] == "agent:cccc0003"
-    assert [f["subject"] for f in _by_check(out, "orphan-heir")] == ["agent:eeee0005-ii"]
+    assert [f["subject"] for f in _by_check(out, "orphan-heir")] == [
+        "agent:eeee0005-ii", "agent:eeee0007-g40"]
     retired = _by_check(out, "retired-live")
     assert len(retired) == 1 and retired[0]["subject"] == "agent:ffff0006"
     assert retired[0]["severity"] == "error"

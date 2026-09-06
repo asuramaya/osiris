@@ -1392,7 +1392,6 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 
 _LINT_CAP = 50  # findings LISTED per check; totals are always reported — no silent caps
-_ROMAN_HEIR = re.compile(r"-[ivxlcdm]+$")
 _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 
 # THE RATCHET (Thoth DM 2581/2603, decision fc5b6c5f/5713e1fc, cb38d922): resolved-with-no-
@@ -1741,7 +1740,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
                                  "with no recorded ancestor"}
         for c in sorted(canons)
-        if _ROMAN_HEIR.search(c) and not props.get(c, {}).get("succeeded_from")])
+        if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
     live = {r["agent_id"] for r in await pool.fetch(
         "SELECT DISTINCT agent_id FROM agent_mounts "
         "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}

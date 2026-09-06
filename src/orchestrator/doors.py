@@ -117,10 +117,12 @@ async def doors(
         if occ["holder"]:
             matches = [await _record(pool, occ["holder"], resolved_via="seat-link", **kw)]
     elif ref.startswith("/") or ref.startswith("~"):
+        from src.orchestrator.agents import SOUL_SQL_TEMPLATE
+
         cwd = _normed(ref)
         souls = await pool.fetch(
             "SELECT DISTINCT ON (soul) soul FROM ("
-            "  SELECT agent_id, regexp_replace(agent_id, '-[ivxlcdm]+$', '') AS soul, last_seen "
+            f"  SELECT agent_id, {SOUL_SQL_TEMPLATE.format(col='agent_id')} AS soul, last_seen "
             "  FROM agent_mounts WHERE cwd=$1"
             ") s ORDER BY soul, last_seen DESC NULLS LAST", cwd)
         for s in souls:

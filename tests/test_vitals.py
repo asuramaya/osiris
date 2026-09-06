@@ -27,6 +27,21 @@ async def test_live_counts_souls_not_rows_and_confesses_visitors(
     assert out == {"souls": 1, "visitors": 1}
 
 
+async def test_live_counts_a_g_n_generation_as_the_same_soul_not_a_new_one(
+    actions: Actions,
+) -> None:
+    """The live specimen (thread 25b57dca): a lineage past generation 39 carries a
+    `-g<N>` suffix, not a roman numeral — the SQL soul-fold used to only strip
+    `[ivxlcdm]+`, so a g<N> door counted as a brand-new soul beside its own ancestor."""
+    p = actions.pool
+    await save_mount(p, job_dir="/j/soulg1", agent_id="agent:ab99cd99-g40",
+                     project="osiris", cwd="/w", model=None, session_key="sid:realconng1")
+    await save_mount(p, job_dir="/j/soulg2", agent_id="agent:ab99cd99-g41",
+                     project="osiris", cwd="/w", model=None, session_key="sid:realconng2")
+    out = await vitals.live_souls(p)
+    assert out == {"souls": 1, "visitors": 0}
+
+
 async def test_operator_debts_empty_desk_is_zero(actions: Actions) -> None:
     out = await vitals.operator_debts(actions.pool, hood="osiris")
     assert out == {"owed": 0, "owed_here": 0}
