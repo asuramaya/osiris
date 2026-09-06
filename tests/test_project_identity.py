@@ -358,6 +358,65 @@ async def test_normalize_project_label_refuses_a_genuine_case_ambiguity(
     assert confession is not None and "differ only by case" in confession
 
 
+async def test_normalize_project_label_follows_a_plain_rename_never_merged(
+    actions: Actions,
+) -> None:
+    """7f90f394, the live xxit/handlingtheloop specimen: a PLAIN rename_project call —
+    no fold, no merge, `winner == the object itself` at every step — still left the
+    OLD label unchanged before this fix, because the "already live (not merged)" early
+    return skipped `_live_label` entirely. canonical never changes on a rename
+    (rename_project's own guarantee), so the stale label still resolves to the right
+    object here; only its own `name` property has moved on."""
+    from src.orchestrator.project_identity import (
+        _normalize_project_label_through_merge,
+        rename_project,
+    )
+
+    await _mk_project(actions, "xxit")
+    await rename_project(actions, project="xxit", new_name="handlingtheloop",
+                         because="renamed on its remote", actor="agent:test", dry_run=False)
+
+    label, confession = await _normalize_project_label_through_merge(actions.pool, "xxit")
+    assert label == "handlingtheloop"
+    assert confession is None
+
+
+async def test_identity_evidence_agrees_after_a_plain_rename_no_false_disagree(
+    actions: Actions, tmp_path,
+) -> None:
+    """The same specimen at the project_identity_evidence level: a governing seat's
+    charter still names the project by its PRE-rename label (nothing forces every
+    tier to update in lockstep with a rename), and the live git remote already reads
+    the NEW name. Before this fix this read as a permanent 'disagree' — comparing the
+    remote's live basename against the stale charter label — even though nothing is
+    actually contested; after a rename, "does the remote agree" must ask about the
+    object's CURRENT name, not whichever tier's copy of the label is oldest."""
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Renameagree",
+                             anchor_cwd=str(office), source="test")
+    proj = await _mk_project(actions, "xxit",
+                             on_disk_path=_git_repo(
+                                 tmp_path, "xxit-repo",
+                                 "https://github.com/asuramaya/handlingtheloop.git"))
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    await rename_project(actions, project="xxit", new_name="handlingtheloop",
+                         because="renamed on its remote", actor="agent:test", dry_run=False)
+
+    ev = await project_identity_evidence(actions.pool, seat_id=seat["seat_id"])
+
+    assert list(ev["candidates"]) == ["handlingtheloop"], (
+        "the charter's pre-rename label surfaced as its own, permanently-disagreeing "
+        "candidate instead of folding into the object's live name")
+    c = ev["candidates"]["handlingtheloop"]
+    assert c["declared_charter"] is True
+    assert c["remote_agrees"] is True
+    assert ev["agreement"] == "single-candidate"
+
+
 async def test_self_authored_reports_existence_only_never_content(
     actions: Actions, tmp_path,
 ) -> None:
@@ -918,6 +977,54 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
         # only in a docstring a caller may never read
         assert "self-consistency" in out["rename_evidence_note"].lower()
         assert "not" in out["rename_evidence_note"].lower()
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
+async def test_mcp_rename_project_refusal_never_claims_it_was_written(
+    actions: Actions, tmp_path,
+) -> None:
+    """7f90f394: the evidence/warning attachment used to run unconditionally, even when
+    `_rename_project` itself refused (a name collision here) — so a governing seat whose
+    OWN evidence happened to disagree with the never-written new_name produced a receipt
+    reading "'newname' was written, but ..." on a call that wrote nothing at all. The
+    warning (and the whole rename_evidence block) must only ever appear on an actual,
+    landed write."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import rename_project as rename_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "othername"\n')
+    seat = await ensure_seat(actions, house="osiris", handle="Refuseseat",
+                             anchor_cwd=str(office), source="test")
+    proj = await _mk_project(actions, "sourceproj2")
+    await _mk_project(actions, "targetproj2")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:refuser1", session="refuser1", project="unrelated",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rename_tool(project="sourceproj2", new_name="targetproj2",
+                                because="test refusal", dry_run=False, ctx=ctx)
+        assert "error" in out
+        assert "was written" not in str(out)
+        assert "rename_evidence" not in out
+        assert "warning" not in out
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
