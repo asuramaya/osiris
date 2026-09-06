@@ -234,7 +234,13 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     # after a container that never moved (the #169 shape \u2014 a remedy that cannot tell two
     # states apart and confidently prescribes one).
     stale_age, from_cache = 0, False
-    cache_key = project_hint or None
+    # NO PIN, BUT A SESSION: key the cache on THIS session (never the shared "_" bucket).
+    # A session-scoped file has exactly one writer and one reader, so nothing can leak
+    # across sessions — and it is what lets a seat-office-root tab (its container pin is
+    # deliberately `kind = "container"`, never a project) survive a deploy restart with
+    # `thoth·osiris ⋯7s ago` instead of `? graph: no answer` (operator, 2026-09-06).
+    session_scoped = project_hint is None and bool(session_id)
+    cache_key = project_hint or (f"session-{session_id}" if session_scoped else None)
     r: dict[str, Any] | None = None
     if resp is not None and not resp.get("error"):
         r = resp.get("result") or resp
@@ -246,16 +252,20 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         # read. Never write, and below, never read, that bucket at all: an unresolved
         # session stays live-only, same as a genuinely offline `/heartbeat`.
         if isinstance(r, dict) and cache_key is not None:
-            # CACHE ONLY THE PROJECT-SCOPED COUNTS. resolved_seat_handle / resolved_intent
+            # A session-scoped file is the caller's OWN: its resolved identity is safe to
+            # keep (and is exactly what the fallback bar needs instead of a bare `?`).
+            # CACHE ONLY THE PROJECT-SCOPED COUNTS in the shared, project-keyed file.
+            # resolved_seat_handle / resolved_intent
             # are the CALLER's, not the project's, and this file is shared by every agent
             # working the project — caching them let one seat's bar wear another's name
             # (caught live in test: a probe from the osiris tree rendered `imhotep·osiris`
             # off Imhotep's cached row). Dropping them is not a loss: the seat tag is a
             # nicety, and wearing someone else's identity is the exact class of error the
             # rest of tonight was spent undoing.
-            _statusline_cache_write(cache_key, {k: v for k, v in r.items()
-                                                if k not in ("resolved_seat_handle",
-                                                             "resolved_intent")})
+            _statusline_cache_write(cache_key, r if session_scoped else
+                                    {k: v for k, v in r.items()
+                                     if k not in ("resolved_seat_handle",
+                                                  "resolved_intent")})
     elif cache_key is not None:
         r, stale_age = _statusline_cache_read(cache_key)
         from_cache = r is not None

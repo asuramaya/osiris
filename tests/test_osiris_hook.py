@@ -992,6 +992,7 @@ _COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4,
 
 def _statusline(
     monkeypatch: Any, tmp_path: Path, *, answer: Any, project_hint: str | None = "testproj",
+    session_id: str | None = None,
 ) -> str:
     """Render one statusline with `_post` stubbed and the cache redirected into tmp.
 
@@ -1010,7 +1011,8 @@ def _statusline(
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         osiris_hook._cmd_statusline({"workspace": {"current_dir": "/tmp/x"},
-                                     "model": {"id": "claude-opus-5"}})
+                                     "model": {"id": "claude-opus-5"},
+                                     **({"session_id": session_id} if session_id else {})})
     return buf.getvalue()
 
 
@@ -1098,6 +1100,32 @@ def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
     assert "no answer" in out_b
     assert "fleet 7" not in out_b
     assert "ago" not in out_b
+
+
+def test_statusline_unpinned_cwd_with_a_session_heals_from_its_own_cache(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE SEAT-OFFICE-ROOT TAB (Thoth, 2026-09-06): cwd is the seats container, whose pin
+    is deliberately `kind = "container"` and never a project, so `project_hint` is None.
+    With no cache key at all, every deploy restart rendered `? graph: no answer` for the
+    whole restart window. A session-scoped key is safe (one writer, one reader) and carries
+    the caller's OWN resolved identity, so the fallback bar wears its own name, not `?`."""
+    live = {**_COUNTS, "resolved_seat_handle": "thoth", "resolved_intent": "claude-opus-5"}
+    out_a = _statusline(monkeypatch, tmp_path, answer={"result": live},
+                        project_hint=None, session_id="sess-A")
+    assert "thoth\u00b7osiris" in out_a
+    assert [p.name for p in tmp_path.glob("*.json")] == ["session-sess-A.json"]
+
+    # The same session's probe misses across a restart: its own last answer, marked.
+    out_a2 = _statusline(monkeypatch, tmp_path, answer=None,
+                         project_hint=None, session_id="sess-A")
+    assert "thoth\u00b7osiris" in out_a2 and "fleet 7" in out_a2 and "ago" in out_a2
+    assert "?" not in out_a2 and "no answer" not in out_a2
+
+    # A DIFFERENT unpinned session never borrows it: its own miss stays silent.
+    out_b = _statusline(monkeypatch, tmp_path, answer=None,
+                        project_hint=None, session_id="sess-B")
+    assert "no answer" in out_b and "fleet 7" not in out_b and "thoth" not in out_b
 
 
 def test_statusline_resolved_project_still_caches_normally(
