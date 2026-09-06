@@ -176,6 +176,56 @@ async def test_backfill_is_incremental_and_forgets_the_dead(
     assert n == baseline["embedded"] + 1
 
 
+async def test_matrix_cache_never_rebuilds_on_a_wall_clock_only_on_the_fingerprint(
+    actions: Actions, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE MEMORY BUG (thread 4746e7f4, operator "why osiris uses so much ram"
+    2026-09-06): _matrix used to force a full ~39,097-row rebuild every 120s of wall
+    clock regardless of whether the fingerprint had moved — this module's own docstring
+    promises a refresh "when the table's fingerprint moves", never on a timer. Simulates
+    121 real seconds passing between two calls (via `time.monotonic`, jumped forward —
+    harmless against the fixed code, which no longer reads the clock at all here) and
+    counts the expensive full-row query: only the first call may fetch, even though the
+    OLD 120s window would have elapsed by the second."""
+    await _decision(actions, "decision:matrixcache1", "the warm swap demotion ruling stands")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+
+    real_fetch = actions.pool.fetch
+    calls = {"full_fetch": 0}
+
+    async def _counting_fetch(query: str, *args: object) -> object:
+        if "SELECT object_id, field, vec FROM search_vectors" in query:
+            calls["full_fetch"] += 1
+        return await real_fetch(query, *args)
+
+    monkeypatch.setattr(actions.pool, "fetch", _counting_fetch)
+    first = await semantics._matrix(actions.pool, fake_embedder.model)
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(semantics.time, "monotonic", lambda: real_monotonic() + 121.0)
+    second = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert first is not None and second is not None
+    assert calls["full_fetch"] == 1  # only the first call actually fetched the rows
+
+
+async def test_matrix_cache_rebuilds_the_moment_the_fingerprint_moves(
+    actions: Actions, fake_embedder: FakeEmbedder,
+) -> None:
+    """The OTHER half of the same guarantee: a real change (a new embedding) must still
+    invalidate the cache immediately — the fingerprint alone carries this, with nothing
+    else needed."""
+    await _decision(actions, "decision:matrixcache2", "the warm swap demotion ruling stands")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+    first = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert first is not None
+    n_before = len(first[0])
+
+    await _decision(actions, "decision:matrixcache3", "settle every inbox mail before dark")
+    await semantics.embed_backfill(actions.pool, fake_embedder)
+    second = await semantics._matrix(actions.pool, fake_embedder.model)
+    assert second is not None
+    assert len(second[0]) == n_before + 1
+
+
 async def test_semantic_candidates_rank_by_meaning_and_respect_the_floor(
     actions: Actions, fake_embedder: FakeEmbedder
 ) -> None:
