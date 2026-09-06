@@ -476,6 +476,12 @@ class Settings(BaseSettings):
     # itself costs real CPU/memory overhead while tracing — OFF by default, the same law
     # every other diagnostic/write mechanism in this file follows, so it never runs
     # silently in production; the operator flips it on for a measurement window only.
+    # THE FIRST VERSION CAUSED A LIVE OUTAGE (same thread, ~23:20Z the same night): an
+    # unbounded tracemalloc(25) trace pinned the event loop, SIGTERM didn't stop it, only
+    # SIGKILL did. `/diag/memory` is now a BOUNDED window on its own (5 frames, a 300s
+    # hard cap, an in-window RSS tripwire, refuses a second concurrent window, refuses to
+    # start over 1.5 GB RSS) — this flag still gates it entirely dark by default, but the
+    # route itself can no longer run away even while the flag is on.
     osiris_memory_diag_enabled: bool = False
 
 
