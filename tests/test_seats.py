@@ -3702,6 +3702,50 @@ async def test_bind_seat_tree_allows_the_target_seats_own_manager(actions: Actio
     assert out["tree_cwd"] == "/repo/legit"
 
 
+async def test_bind_seat_tree_self_authorizes_an_unmanaged_seats_own_holder(
+    actions: Actions,
+) -> None:
+    """THE DECKARD SPECIMEN (thread ae93d2e1, Deckard msg 7719 item 3): an UNMANAGED seat
+    had no legal actor at all for its own tree, not even its own holder — seat:51da7e71
+    stranded on a dead on_disk_path with nobody able to correct it. A holder acting on its
+    OWN seat, with no manager to defer to, is now let through — and the receipt confesses
+    it rather than reading identically to a manager-approved write."""
+    from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="Unmanaged",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:unmanaged-holder", source="test")
+
+    out = await bind_seat_tree(actions, seat_id=seat, tree_cwd="/repo/fixed",
+                               actor="agent:unmanaged-holder",
+                               because="the holder repairs its own dead tree path")
+    assert out.get("error") is None
+    assert out["tree_cwd"] == "/repo/fixed"
+    assert out["authorization"] == "self-authorized, no manager on record"
+
+
+async def test_bind_seat_tree_still_refuses_a_managed_seats_holder_bypassing_its_manager(
+    actions: Actions,
+) -> None:
+    """Self-authorization is scoped to the UNMANAGED case only — a managed seat's own
+    holder must still go through its manager (or the operator), same as before. Widening
+    self-authorization to every seat would let a compromised or careless holder bypass a
+    real manager gate that exists precisely to catch a hostile tree_cwd rebind."""
+    from src.orchestrator.seats import attach_seat, bind_holder, bind_seat_tree, ensure_seat
+
+    manager = (await ensure_seat(actions, house="demo", handle="TreeMgr2",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="TreeWkr2",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=worker, agent_id="agent:managed-holder", source="test")
+
+    out = await bind_seat_tree(actions, seat_id=worker, tree_cwd="/repo/hostile",
+                               actor="agent:managed-holder",
+                               because="the holder tries to skip its own manager")
+    assert "not authorized to bind" in out["error"]
+
+
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
 
 
