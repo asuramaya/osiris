@@ -6793,6 +6793,7 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("correct_succession"), "agent_id": _s(),
             "value": _opt_s(), "because": _s(), "override_live": _b(False),
+            "retract": _b(False),
         }, ["action", "agent_id", "because"]),
         _dispatcher_action_schema({
             "action": _action_const("retire"), "agent_id": _s(), "because": _s(),
@@ -6818,7 +6819,7 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     # `value` is deliberately NOT in required here, same _UNSET reason as correct_pin's own
     # `value` above — "" is a legal, meaningful retraction, not an omission, and the shared
     # missing-check below treats "" as absent; the branch itself refuses a genuine _UNSET.
-    "correct_succession": (["agent_id", "value", "because", "override_live"],
+    "correct_succession": (["agent_id", "value", "because", "override_live", "retract"],
                            ["agent_id", "because"]),
     "retire": (["agent_id", "because", "override_live"], ["agent_id", "because"]),
     "fleet_reconcile": (["execute"], []),
@@ -6833,7 +6834,7 @@ async def _agent_impl(
     seat_generation: int | None = None, value: str | None = _UNSET,
     because: str | None = None,
     override_live: bool = False, execute: bool = False, subagent_id: str | None = None,
-    dry_run: bool = True, ctx: Context | None = None,
+    dry_run: bool = True, retract: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `agent` and its 5 hidden single-purpose aliases (claim_name,
     correct_agent_house, retire_agent, file_subagent, file_subagents — 6 names, one
@@ -6875,6 +6876,13 @@ async def _agent_impl(
             seat_generation=seat_generation, actor=ident.agent_id)
     if action == "correct_succession":
         assert agent_id is not None and because is not None
+        # THE HARNESS CANNOT SEND "" (2026-09-06, Khnum msg 7701 + Thoth's own repro): an
+        # explicit empty-string argument is serialized as `"value": ,` — invalid JSON —
+        # by the calling harness, so the "" retraction contract was unreachable from any
+        # agent. `retract=True` is the boolean spelling of the same act; "" still works
+        # for callers that can send it.
+        if retract:
+            value = ""
         if value is _UNSET or value is None:
             return {"error": "value is required — pass \"\" explicitly to retract the "
                              "succession pointer to unset, never omit it to mean that"}
@@ -6923,7 +6931,7 @@ async def agent(
     project: str | None = None, seat_generation: int | None = None,
     value: str | None = _UNSET, because: str | None = None, override_live: bool = False,
     execute: bool = False, subagent_id: str | None = None, dry_run: bool = True,
-    ctx: Context | None = None,
+    retract: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE AGENT OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
     many actions over Agent identity/lineage. See `describe('agent')` for the full
@@ -6935,7 +6943,7 @@ async def agent(
       correct_house: heal an already-polluted agent's project/seat_generation stamps,
         third-party (agent_id; at least one of project/seat_generation)
       correct_succession: correct an agent's own succeeded_by pointer (agent_id,
-        because, value="" to retract). Refuses blank because or a LIVE target
+        because, value="" or retract=True to retract). Refuses blank because or a LIVE target
         unless override_live=True.
       retire: third-party Agent retirement, always releases the held seat (agent_id,
         because)
@@ -6952,7 +6960,7 @@ async def agent(
         action, name=name, agent_id=agent_id, project=project,
         seat_generation=seat_generation, value=value, because=because,
         override_live=override_live, execute=execute, subagent_id=subagent_id,
-        dry_run=dry_run, ctx=ctx)
+        dry_run=dry_run, retract=retract, ctx=ctx)
 
 
 @mcp.tool(meta={

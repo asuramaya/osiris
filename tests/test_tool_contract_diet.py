@@ -1271,7 +1271,7 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
 # live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
 # new fields, no new tool, no new param. Measured exact (104,642), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 105207  # 2026-09-06 Thoth: 7th merge reversion, re-pinned.
+TOOL_CONTRACT_CEILING_CHARS = 105273  # 2026-09-06 Thoth: +retract flag on correct_succession.
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

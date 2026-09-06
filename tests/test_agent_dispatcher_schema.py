@@ -107,3 +107,14 @@ async def test_a_real_client_rejects_one_agent_actions_params_on_anothers_const(
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(
             instance={"action": "retire", "name": "should-not-be-here"}, schema=schema)
+
+
+async def test_correct_succession_accepts_the_boolean_retract_spelling() -> None:
+    """The harness cannot serialize an explicit "" argument (2026-09-06, Khnum msg 7701 +
+    Thoth's own repro: `"value": ,` is what reaches the server), so the retraction has a
+    boolean spelling too. Schema-level: retract:true validates without value."""
+    schema = await _schema("agent")
+    jsonschema.validate(
+        instance={"action": "correct_succession", "agent_id": "agent:abc123",
+                  "because": "half-heal pair 25/25", "retract": True},
+        schema=schema)
