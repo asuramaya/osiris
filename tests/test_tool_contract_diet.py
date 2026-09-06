@@ -1287,7 +1287,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # only, default 14) — a docstring sentence plus the new inputSchema entry. No new tool.
 # fleet_digest's own docstring also gained one clause naming item 4's obligation_pressure
 # field. Measured exact (105,817), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 106567
+TOOL_CONTRACT_CEILING_CHARS = 106567  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
