@@ -70,6 +70,45 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
     assert src == "agent:f01dbeef"
 
 
+async def test_fold_agent_copies_read_markers_so_a_fold_cant_resurrect_settled_mail(
+    actions: Actions,
+) -> None:
+    """THE DUAL READ-MARKER GAP (thread 25b57dca item 6, live specimen: messages 7578-7585
+    — dupe's recipient rows read by an old generation, fleet_messages.read_at NULL).
+    `_move_agent_estate` re-addresses fleet_messages.to_agent from dupe to head, but used
+    to leave message_recipients rows keyed to dupe — so mail dupe had ALREADY READ came
+    back deliverable to head the moment the fold landed. mint_heir closed this exact gap
+    for ordinary succession years ago; fold_agent's own estate-move never got the mirror."""
+    p = actions.pool
+    await _mk_agent(actions, "agent:rmk1dupe0")
+    await _mk_agent(actions, "agent:rmk1into0")
+    msg = await send_message(p, from_agent="agent:sender", from_project="osiris",
+                             to_agent="agent:rmk1dupe0", body="already handled this")
+    from src.orchestrator.mailbox import ack_messages
+
+    # dupe settles it: a message_recipients row lands on 'agent:rmk1dupe0' with read_at
+    # set; fleet_messages.read_at itself stays NULL (the per-recipient model, not the
+    # legacy single-reader column)
+    ack = await ack_messages(p, "osiris", [msg["id"]], reader_agent="agent:rmk1dupe0")
+    assert ack["settled"] == [msg["id"]]
+
+    out = await fold_agent(actions, dupe="agent:rmk1dupe0", into="agent:rmk1into0",
+                           evidence="census: same mind, two labels", actor="operator")
+    assert out["living_head"] == "agent:rmk1into0"
+    assert out["read_markers_copied"] == 1
+    # the head must NOT see dupe's already-read mail as fresh
+    assert await unread_count(p, "osiris", reader_agent="agent:rmk1into0") == 0
+    row = await p.fetchrow(
+        "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg["id"], "agent:rmk1into0")
+    assert row is not None and row["read_at"] is not None
+    # dupe's own row survives untouched — a copy, never a destructive move
+    dupe_row = await p.fetchrow(
+        "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg["id"], "agent:rmk1dupe0")
+    assert dupe_row is not None and dupe_row["read_at"] is not None
+
+
 async def test_fold_agent_moves_the_dupes_works_in_and_governs_edges_too(
     actions: Actions,
 ) -> None:

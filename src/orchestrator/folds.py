@@ -171,7 +171,21 @@ async def _move_agent_estate(
     succession, never a second implementation. Every move here is individually idempotent
     (an item already moved no longer matches its own WHERE clause), so running this
     twice, or running it after `fold_agent`'s own inline call already did the same work,
-    changes nothing on the second pass."""
+    changes nothing on the second pass.
+
+    THE DUAL READ-MARKER GAP (thread 25b57dca item 6, operator ruling 2f42d429, live
+    specimen: messages 7578-7585 — dupe's recipient rows read by an old generation,
+    fleet_messages.read_at NULL): the mail UPDATE above re-addresses `fleet_messages.
+    to_agent` from `dupe` to `head`, but `message_recipients` rows stay keyed to `dupe`'s
+    id — every reader's own "have I already read this" check (`NOT EXISTS ... WHERE
+    r3.agent_id=<head's lineage>`) then finds nothing, and mail `dupe` genuinely already
+    read reappears as deliverable to `head`. `mint_heir` (agents.py) closed this exact
+    gap for ORDINARY succession years ago (its own INSERT ... ON CONFLICT DO NOTHING
+    copy) — `fold_agent`'s estate-move never got the same fix, because it is a second,
+    independent implementation of "one mind inherits another's mail." Mirrored here,
+    verbatim in shape: a non-destructive COPY (dupe keeps its own rows — unfold_agent's
+    own `estate_unreturnable` framing for the raw to_agent/agent_id UPDATEs is untouched
+    by this, since nothing here is destroyed, only duplicated forward)."""
     from datetime import UTC, datetime
 
     from src.orchestrator.agents import move_agent_project_links
@@ -181,6 +195,12 @@ async def _move_agent_estate(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         head, dupe)
     mail_moved = int(tag.rsplit(" ", 1)[-1])
+    tag = await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at, "
+        "deliveries)"
+        " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
+        " WHERE agent_id=$2 ON CONFLICT (message_id, agent_id) DO NOTHING", head, dupe)
+    read_markers_copied = int(tag.rsplit(" ", 1)[-1])
     tag = await actions.pool.execute(
         "UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2", head, dupe)
     rows_moved = int(tag.rsplit(" ", 1)[-1])
@@ -201,6 +221,7 @@ async def _move_agent_estate(
         project_links_moved = await move_agent_project_links(
             actions, dupe_oid, head_oid, actor, now)
     return {"living_head": head, "mail_readdressed": mail_moved,
+            "read_markers_copied": read_markers_copied,
             "mount_rows_repointed": rows_moved, "threads_reowned": len(threads),
             "project_links_moved": project_links_moved}
 
@@ -298,6 +319,7 @@ async def fold_agent(
     return {
         "folded": dupe, "into": into, "living_head": estate["living_head"],
         "mail_readdressed": estate["mail_readdressed"],
+        "read_markers_copied": estate["read_markers_copied"],
         "mount_rows_repointed": estate["mount_rows_repointed"],
         "threads_reowned": estate["threads_reowned"],
         "project_links_moved": estate["project_links_moved"], "evidence": evidence,
