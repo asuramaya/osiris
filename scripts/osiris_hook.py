@@ -546,6 +546,15 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     soft_exists = soft is not None and soft.exists()
     hard_exists = hard is not None and hard.exists()
 
+    # SELF-COMPACTION COMES BEFORE THE NUDGE SHORT-CIRCUITS (ruling a3fb7c11; caught live on
+    # the first acceptance run, 2026-09-06: the body settled after the soft nudge, ended its
+    # turn, and the hook returned at "soft already fired" without re-checking the boxes, so
+    # the seam never came). Once every box is complete the ritual is DONE — the markers
+    # below only govern how often to nag a body that has NOT settled.
+    if _self_compact_ready(session_id, cwd, marker_dir, pct):
+        _fire_stage_a(hook, session_id, cwd, pct=good_pct)
+        return 0
+
     if soft_exists and not hard_exists and pct < HARD_ALARM_PCT:
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0  # soft already fired, below hard line
@@ -590,6 +599,30 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
                    f"since settle can't see it there otherwise). {tier_note}."),
     }))
     return 0
+
+
+def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct: int) -> bool:
+    """At or past SELF_COMPACT_PCT with no marker yet: ask the offload phase once more and,
+    if every box is complete, hand the seam to `_self_compact_once`. True when the boxes are
+    complete (the caller stops nagging), False otherwise (the caller keeps its ritual)."""
+    try:
+        from src.orchestrator.context_lens import SELF_COMPACT_PCT
+    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+        return False
+    if pct < SELF_COMPACT_PCT:
+        return False
+    marker = (marker_dir / ".osiris_self_compacted") if marker_dir else None
+    if marker is not None and marker.exists():
+        return False
+    resp = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd, "session_id": session_id},
+                 timeout=_TIMEOUTS["stop"])
+    if resp is None or resp.get("error"):
+        return False
+    boxes = (resp.get("result") or resp)
+    if not isinstance(boxes, dict) or _missing_boxes(boxes):
+        return False
+    _self_compact_once(session_id, marker_dir, pct)
+    return True
 
 
 def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int) -> None:

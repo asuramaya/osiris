@@ -1239,3 +1239,42 @@ def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
             / ".osiris_self_compacted").exists()
     assert osiris_hook._cmd_stop(hook) == 0               # a second stop: marker holds
     assert phases.count("self_compact") == 1
+
+
+def test_cmd_stop_self_compacts_even_after_the_soft_nudge_already_fired(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE FIRST LIVE ACCEPTANCE RUN (compacttest, 2026-09-06 22:38Z): the soft nudge fired,
+    the body settled to complete:true, ended its turn — and the hook returned at "soft
+    already fired, below hard line" without re-checking the boxes, so the seam never came.
+    A settled body past the line self-compacts regardless of which nudges already fired."""
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 184000}},
+    }) + "\n")
+    phases: list[str] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        phases.append(data["phase"])
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
+        if data["phase"] == "offload":
+            return {"result": {}}  # settled: nothing missing
+        if data["phase"] == "self_compact":
+            return {"result": {"compacted": True}}
+        return None
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    jobs = tmp_path / "home" / ".claude" / "jobs" / "softfire"
+    jobs.mkdir(parents=True)
+    (jobs / ".osiris_offload_blocked").touch()          # the soft nudge already fired
+    hook = {"session_id": "softfire-0000-4000-8000-000000000000", "cwd": "/x",
+            "transcript_path": str(t)}
+    assert osiris_hook._cmd_stop(hook) == 0
+    assert not out
+    assert phases.count("self_compact") == 1
+    assert (jobs / ".osiris_self_compacted").exists()
