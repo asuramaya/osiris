@@ -4555,3 +4555,19 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
         await cmd_launch("clilineagetwin", model=None, pool=actions.pool,
                          spawn=_spawn, agents_json=_empty)
     assert spawned == [str(office)]
+
+
+def test_window_tag_never_falls_back_to_osiris() -> None:
+    """Ruling 860b0306 (operator, 2026-09-06): a house is OPTIONAL, and an empty one must
+    never render as osiris's own tag — "[OS] Lilguy" sat in the agents list beside the real
+    osiris seats. House code when present, else the governed project's code, else no
+    brackets at all."""
+    from src.orchestrator.trigger import _house_tag, _window_name
+    assert _house_tag("osiris") == "OS"
+    assert _house_tag("hector-vector") == "HE"
+    assert _house_tag("") == ""
+    assert _house_tag(None) == ""
+    assert _house_tag("", "lilguy") == "LI"
+    assert _window_name("osiris", "Thoth") == "[OS] Thoth"
+    assert _window_name(None, "Lilguy", "lilguy") == "[LI] Lilguy"
+    assert _window_name("", "Lilguy", None) == "Lilguy"

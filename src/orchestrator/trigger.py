@@ -2205,7 +2205,9 @@ async def dispatch_dm(
                 office=office, anchor=anchor, handle=handle, agent=bound["agent"],
                 generation=bound["generation"])
             try:
-                await fresh_spawn(launch_cwd, name=f"[{_house_tag(house)}] {handle}",
+                window = _window_name(
+                    house, handle, await _governed_project_name(pool, seat_id))
+                await fresh_spawn(launch_cwd, name=window,
                                   model=st.osiris_wake_model or None, prompt=boot_prompt)
             except OSError as exc:
                 return {"mode": "refused-spawn",
@@ -2643,12 +2645,45 @@ async def _manager_control(req: dict[str, Any]) -> dict[str, Any]:
     return await manager_call(req)
 
 
-def _house_tag(house: str | None) -> str:
+def _house_tag(house: str | None, project: str | None = None) -> str:
     """The window's [TAG] prefix — the operator's front-door naming ('[OS] Thoth', c8da5a52). A
-    simple house-derived short code for now (osiris→OS); a real house→tag map is a later
-    refinement, flagged in the launch() build."""
-    h = (house or "").strip()
-    return h[:2].upper() if h else "OS"
+    simple short code (osiris→OS); a real house→tag map is a later refinement.
+
+    NEVER "OS" AS A FALLBACK (operator 2026-09-06, ruling 860b0306: a house is OPTIONAL — a
+    single-repo seat carries none). An empty house used to render as osiris's own tag, so
+    "[OS] Lilguy" sat in the agents list beside the real osiris seats. Now: the house's
+    code when present, else the governed PROJECT's code, else "" — and `_window_name`
+    drops the brackets entirely when there is no code, so a bare `Lilguy` is honest."""
+    for label in (house, project):
+        h = (label or "").strip()
+        if h:
+            return h[:2].upper()
+    return ""
+
+
+def _window_name(house: str | None, handle: str | None, project: str | None = None) -> str:
+    """`[TAG] handle`, or the bare handle when neither house nor project gives a tag."""
+    tag = _house_tag(house, project)
+    return f"[{tag}] {handle}" if tag else str(handle or "")
+
+
+async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None) -> str | None:
+    """The single project this seat governs (its `governs` edge target's winning name), or
+    None when it governs none or more than one — the window tag's fallback when the seat
+    has no house. One read; never a mint."""
+    if not seat_id:
+        return None
+    rows = await pool.fetch(
+        "SELECT p.canonical, (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=p.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name "
+        "FROM links l JOIN objects s ON s.id=l.from_id JOIN objects p ON p.id=l.to_id "
+        "WHERE s.canonical=$1 AND l.type='governs' AND p.type='SoftwareProject' "
+        "AND p.status='active' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        seat_id)
+    if len(rows) != 1:
+        return None
+    return str(rows[0]["name"] or rows[0]["canonical"].removeprefix("repo:"))
 
 
 def _tree_exists(tree_cwd: str) -> bool:
@@ -3208,8 +3243,10 @@ async def _launch_target_setup(
         launch_cwd = tree_cwd
 
     anchor = _launch_anchor(target_seat)
+    name = _window_name(house, handle,
+                        await _governed_project_name(actions.pool, target_seat))
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
-             "command": f'python -m src.manager.attach "[{_house_tag(house)}] {handle}"'}
+             "command": f'python -m src.manager.attach "{name}"'}
 
     from src.orchestrator.agents import is_occupied_by_a_live_body
     current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
@@ -3285,7 +3322,8 @@ async def launch_seat(
     # whatever osiris_wake_model happened to be that day, silently.
     argv_model, model_source = await _resolve_launch_model(
         actions.pool, target_seat, model=model, facts=facts, settings=st)
-    name = f"[{_house_tag(house)}] {handle}"
+    name = _window_name(house, handle,
+                        await _governed_project_name(actions.pool, target_seat))
 
     out: dict[str, Any]
     if lane == "pty":
