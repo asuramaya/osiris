@@ -1248,7 +1248,20 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # deprecated alias (meta={"deprecated": True}), which this ratchet does not count at all
 # — same mechanism run_composition/save_composition already use. Net: zero growth.
 # Measured exact (103,857), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 103857
+# 103,857 -> 104,690 (2026-09-05, Sekhmet, Thoth dispatch 7543 item 2): `graph_census`, a
+# genuinely new tool — three obligations (a78b6987, 7917b404, b2208b94) were stuck on a
+# direct-DB-script workaround purely because no MCP verb could answer a plain population
+# count, itself a house-law violation (raw SQL against the kernel is a defect report,
+# never a shortcut). One new tool, one string param (`kind`), two supported kinds
+# documented in the docstring. Measured exact (104,690), not estimated.
+# 104,690 -> 105,134 (2026-09-06, Seshat, Thoth DM 7649, context diet round 2): dossier
+# and roster each gain one opt-in bool param (`want_relationships`, `want_caveats`) —
+# the two confirmed context-bloat offenders (decision a065171f: dossier's relationships
+# measured 76% of its own bytes/call; roster's 10-paragraph caveats printed on every
+# call) now default to a collapsed summary instead of the full list, same want_*
+# convention orient()'s blind_spots already uses. No new tool; two new docstring
+# sentences naming the opt-in. Measured exact (105,134), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""

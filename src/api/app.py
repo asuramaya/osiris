@@ -707,7 +707,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         company): its identity properties plus its ownership/family/director network,
         each endpoint named. Complements the `who-is-this` composition (the footprint/
         tier lens)."""
-        dossier = await entity_dossier(p, object_id)
+        # The graph view renders this as a node's full neighborhood (module docstring,
+        # dossier.py) — unlike the MCP tool, this console-facing endpoint keeps the
+        # pre-diet default of every relationship row, not the collapsed count+sample.
+        dossier = await entity_dossier(p, object_id, want_relationships=True)
         if not dossier:
             raise HTTPException(404, "object not found")
         return dossier

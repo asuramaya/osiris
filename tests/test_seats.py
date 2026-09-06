@@ -2090,7 +2090,7 @@ async def test_roster_repo_lookup_near_misses_empty_when_agreement_is_not_no_mat
 async def test_roster_repo_lookup_no_match_is_not_no_owner(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
-    out = await roster(actions.pool, repo="never-declared-anywhere")
+    out = await roster(actions.pool, repo="never-declared-anywhere", want_caveats=True)
     assert out["agreement"] == "no-match"
     assert out["matches"] == []
     assert any("not that the repo has no owner" in c for c in out["caveats"])
@@ -2261,10 +2261,21 @@ async def test_roster_names_resolution_reports_ambiguity_never_picks(
 async def test_roster_always_returns_caveats(actions: Actions) -> None:
     from src.orchestrator.seats import roster
 
-    out = await roster(actions.pool)
+    out = await roster(actions.pool, want_caveats=True)
     assert out["caveats"], (
         "a roster with no stated blind spots is the exact failure mode it exists to avoid")
     assert any("canonical" in c for c in out["caveats"])
+
+
+async def test_roster_caveats_default_to_a_count_and_pointer(actions: Actions) -> None:
+    """RECEIPT DIET (context-bloat round 2, Thoth DM 7649): the 10-paragraph caveat list
+    rode every call by default — now opt-in, same as orient()'s blind_spots."""
+    from src.orchestrator.seats import roster
+
+    out = await roster(actions.pool)
+    assert "caveats" not in out
+    assert out["caveats_count"] > 0
+    assert "want_caveats=True" in out["caveats_note"]
 
 
 # ═══ TREE LEDGER (task #158, dispatch msg 3900) — the pin-vs-graph disagreement report. ═══

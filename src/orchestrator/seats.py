@@ -680,8 +680,25 @@ async def _pin_name_resolution_note(pool: asyncpg.Pool, pin_value: str,
     }
 
 
+def _roster_caveats_out(caveats: list[str], want_caveats: bool) -> dict[str, Any]:
+    """RECEIPT DIET (context-bloat round 2, Thoth DM 7649): `_ROSTER_CAVEATS` alone is
+    10 standing paragraphs, printed on every call regardless of whether the caller has
+    ever needed the text — measured as this verb's own named offender. Default is a
+    one-line pointer; `want_caveats=True` restores the full list, unchanged from
+    before this diet."""
+    if want_caveats:
+        return {"caveats": caveats}
+    return {
+        "caveats_count": len(caveats),
+        "caveats_note": (
+            f"{len(caveats)} standing caveat(s) about this function's own blind spots — "
+            "pass want_caveats=True for the full text"),
+    }
+
+
 async def roster(
     pool: asyncpg.Pool, *, repo: str | None = None, live_secs: int = _LIVE_SECS,
+    want_caveats: bool = False,
 ) -> dict[str, Any]:
     """THE ROSTER (task #140, Alfred's 2813da48): answers "which seat owns this repo" and
     "is a seat's project pin still pointing at something" FROM THE GRAPH — no `ls
@@ -877,7 +894,7 @@ async def roster(
         })
 
     if repo is None:
-        return {"seats": rows, "caveats": list(_ROSTER_CAVEATS)}
+        return {"seats": rows, **_roster_caveats_out(list(_ROSTER_CAVEATS), want_caveats)}
 
     name = repo.removeprefix("repo:").strip()
     matches = [
@@ -948,7 +965,8 @@ async def roster(
             near_misses.append({"repo": candidate, "seat": seat, "via": sorted(vias),
                                  "differs_by": differs})
 
-    return {"repo": name, "matches": matches, "agreement": agreement, "caveats": caveats,
+    return {"repo": name, "matches": matches, "agreement": agreement,
+            **_roster_caveats_out(caveats, want_caveats),
             "near_misses": near_misses, "manager": manager}
 
 

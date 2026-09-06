@@ -1263,12 +1263,12 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
 
 # --- roster ------------------------------------------------------------------------------------
 
-async def cmd_roster(*, repo: str | None, as_json: bool = False) -> int:
+async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: bool = False) -> int:
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "roster", {"repo": repo})
+    result = await call_mcp_tool(url, "roster", {"repo": repo, "want_caveats": want_caveats})
     if isinstance(result, str):
         print(f"osiris roster: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
@@ -3983,6 +3983,9 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris roster\nexample: osiris roster --repo coldspot")
     p_roster.add_argument("--repo", default=None,
                           help="reverse-lookup: which seat owns this repo")
+    p_roster.add_argument("--caveats", action="store_true", dest="want_caveats",
+                          help="the full text of this function's own blind spots (default: "
+                               "a one-line count+pointer, same diet as the MCP tool)")
     p_roster.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
 
@@ -4491,7 +4494,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":
-        return asyncio.run(cmd_roster(repo=args.repo, as_json=args.as_json))
+        return asyncio.run(cmd_roster(repo=args.repo, want_caveats=args.want_caveats,
+                                      as_json=args.as_json))
     if args.command == "desk":
         return asyncio.run(cmd_desk(as_json=args.as_json))
     if args.command == "show":

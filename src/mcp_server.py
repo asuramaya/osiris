@@ -1572,17 +1572,23 @@ async def consolidate(ctx: Context | None = None) -> dict[str, Any]:
 # --- analyze (read-model lenses) --------------------------------------------
 
 @mcp.tool()
-async def dossier(object_ref: str) -> dict[str, Any]:
+async def dossier(object_ref: str, want_relationships: bool = False) -> dict[str, Any]:
     """Who is this? Identity properties + the named relationship network. `object_ref`
     accepts a UUID, an 8-char short id (the same one a composition row's own "id" column
     hands out), a canonical, or a name. For an AGENT specifically, this is where succession
     lives: `succeeded_from`/`minted_because` show up both as properties and as a
     `succeeded_from` relationship edge naming the predecessor — one hop back per call. To
     walk the FULL multi-generation chain in one bounded call, use `succession_chain` instead
-    (task #64, ruling ad19a779)."""
+    (task #64, ruling ad19a779).
+
+    `want_relationships=True` returns every relationship row; default is a per-type
+    count plus the first 10 (a busy hub's relationships were measured at 76% of this
+    verb's own bytes/call, decision a065171f)."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
-    return await entity_dossier(pool, oid) if oid else {"error": f"no object {object_ref!r}"}
+    if not oid:
+        return {"error": f"no object {object_ref!r}"}
+    return await entity_dossier(pool, oid, want_relationships=want_relationships)
 
 
 @mcp.tool()
@@ -4966,7 +4972,7 @@ async def registry_census() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def roster(repo: str | None = None) -> dict[str, Any]:
+async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[str, Any]:
     """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
 
     `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — held but
@@ -4981,11 +4987,13 @@ async def roster(repo: str | None = None) -> dict[str, Any]:
     (normal) else `conflict`, never silently picked. Zero matches is `no-match` (not a
     claim of no owner), paired with `near_misses`.
 
-    Neither `chartered_repos` nor `pin` is certified canonical. `caveats` in every
-    response names this function's own blind spots. consult_canon('roster') for more."""
+    Neither `chartered_repos` nor `pin` is certified canonical — this function's own
+    blind spots (10 standing paragraphs, measured as this verb's own bytes/call
+    offender) sit behind `want_caveats=True`; default is a one-line pointer.
+    consult_canon('roster') for more."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
-    return await _roster(pool, repo=repo)
+    return await _roster(pool, repo=repo, want_caveats=want_caveats)
 
 
 @mcp.tool()
