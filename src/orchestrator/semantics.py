@@ -205,12 +205,26 @@ async def embed_backfill(
 # --- query side: the cached matrix + brute-force cosine ---------------------------------
 
 _matrix_cache: dict[str, Any] = {}  # fingerprint → (ids, fields, numpy matrix)
-_CACHE_TTL = 120.0
 
 
 async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str], Any] | None:
     """The whole vector index in memory (~7MB at current scale), keyed by a cheap DB
-    fingerprint so a stale cache survives at most one backfill OR the TTL."""
+    fingerprint (row count + freshest embedded_at) — refreshed when THAT moves, exactly
+    as this module's own docstring says, never on a wall clock.
+
+    THE 120s-TTL MEMORY BUG (thread 4746e7f4, operator "why osiris uses so much ram"
+    2026-09-06): a caller-side `time.monotonic() - hit[1] < 120.0` check used to force a
+    full rebuild whenever 120s had elapsed since the last one — even when the fingerprint
+    (queried fresh on every call, above) hadn't moved at all. `embed_backfill`'s own
+    explicit `_matrix_cache.clear()` on write already invalidates same-process staleness
+    the instant new vectors land, and the fingerprint query (cheap: one count+max) already
+    catches EVERY case, same-process or cross-process (the arq worker's own embed pass),
+    the moment it runs — so the TTL was pure waste, not a safety net: a hot record_decision/
+    open_thread path (both run prior-art's semantic search) fetched all ~39,097 rows as
+    Python-list-valued asyncpg Records, transiently allocating hundreds of MB before
+    np.asarray ever discarded them, on a clock unrelated to whether anything changed. The
+    fix is not a smaller TTL, it is removing the wall-clock condition entirely — the
+    fingerprint alone is already authoritative."""
     import numpy as np
 
     fp_row = await pool.fetchrow(
@@ -220,8 +234,8 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
         return None
     fp = f"{model}:{fp_row['n']}:{fp_row['latest']}"
     hit = _matrix_cache.get("v")
-    if hit and hit[0] == fp and time.monotonic() - hit[1] < _CACHE_TTL:
-        cached: tuple[list[Any], list[str], Any] = hit[2]
+    if hit and hit[0] == fp:
+        cached: tuple[list[Any], list[str], Any] = hit[1]
         return cached
     rows = await pool.fetch(
         "SELECT object_id, field, vec FROM search_vectors WHERE model=$1", model)
@@ -231,7 +245,7 @@ async def _matrix(pool: asyncpg.Pool, model: str) -> tuple[list[Any], list[str],
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     packed = (ids, fields, mat / norms)
-    _matrix_cache["v"] = (fp, time.monotonic(), packed)
+    _matrix_cache["v"] = (fp, packed)
     return packed
 
 

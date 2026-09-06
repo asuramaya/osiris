@@ -10411,6 +10411,72 @@ async def sweep_route(request: Any) -> Any:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+def _proc_mem_kb() -> dict[str, int | None]:
+    """This process's own current RSS/swap, straight off /proc/self/status — stdlib-only,
+    Linux-specific (the deploy target; no portability need beyond it). Fails open to
+    None per field on any read trouble (an unreadable /proc, a non-Linux host) rather
+    than raising — a diagnostic must never itself become the outage."""
+    out: dict[str, int | None] = {"rss_kb": None, "swap_kb": None}
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                out["rss_kb"] = int(line.split()[1])
+            elif line.startswith("VmSwap:"):
+                out["swap_kb"] = int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+@mcp.custom_route("/diag/memory", methods=["GET"])
+async def diag_memory_route(request: Any) -> Any:
+    """MEMORY DIAGNOSTICS (thread 4746e7f4, operator "why osiris uses so much ram"
+    2026-09-06): osiris-mcp oscillates 0.9-2.1 GB under its 2G cgroup cap and swaps every
+    incarnation, cause unmeasured since the August cap-raise. Read-only, no graph writes.
+
+    Gated OFF by default (`osiris_memory_diag_enabled`) — `tracemalloc` tracing itself
+    costs real CPU/memory while active, so this must never run silently in production;
+    flip the setting on for a measurement window, then off again.
+
+    First call after the flag goes on (or after `?reset=1`) STARTS tracing (25 frames of
+    traceback per allocation) and returns the baseline RSS/swap only — nothing to report
+    yet, tracing just began. Every call after that takes a fresh snapshot and returns the
+    top 25 allocation SITES by current size (`tracemalloc.take_snapshot().statistics
+    ('lineno')`), beside the same RSS/swap read — bracket a spike by polling this across
+    it (e.g. every few minutes over the reported 30-minute window) and diff two
+    snapshots' own top sites to see what GREW, not just what's currently biggest.
+    `?reset=1` clears tracing and restarts it fresh (a new baseline), for bracketing
+    before/after a fix without restarting the whole process."""
+    from starlette.responses import JSONResponse
+
+    if not get_settings().osiris_memory_diag_enabled:
+        return JSONResponse(
+            {"error": "disabled (osiris_memory_diag_enabled=0) — flip it on for a "
+                     "measurement window, this never runs silently"}, status_code=404)
+    import tracemalloc
+
+    mem = _proc_mem_kb()
+    reset = request.query_params.get("reset") == "1"
+    if reset and tracemalloc.is_tracing():
+        tracemalloc.stop()
+    if not tracemalloc.is_tracing():
+        tracemalloc.start(25)
+        return JSONResponse({"started": True, **mem,
+                             "note": "tracemalloc just started (or was reset) — call "
+                                     "again after a spike to see allocation sites"})
+    snapshot = tracemalloc.take_snapshot()
+    top = snapshot.statistics("lineno")[:25]
+    current, peak = tracemalloc.get_traced_memory()
+    return JSONResponse({
+        **mem, "tracemalloc_current_kb": current // 1024, "tracemalloc_peak_kb": peak // 1024,
+        "top_allocations": [
+            {"site": str(stat.traceback[0]), "size_kb": round(stat.size / 1024, 1),
+             "count": stat.count}
+            for stat in top
+        ],
+    })
+
+
 async def _boot_check() -> None:
     """THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
     deploy_guard's own module docstring for why. Scoped to the PERSISTENT streamable-http

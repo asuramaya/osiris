@@ -470,6 +470,13 @@ class Settings(BaseSettings):
     # ALARM_PCT (one authority). 0 disables the whisper entirely. Default 63 — exactly 2/3,
     # the operator's word (2026-07-21): the whisper starts when a third of the life remains.
     osiris_seam_whisper_pct: int = 63
+    # MEMORY DIAGNOSTICS (thread 4746e7f4, operator "why osiris uses so much ram"
+    # 2026-09-06): osiris-mcp oscillates 0.9-2.1 GB under a 2G cgroup cap and swaps every
+    # incarnation, cause unmeasured since the August cap-raise drop-in. `tracemalloc`
+    # itself costs real CPU/memory overhead while tracing — OFF by default, the same law
+    # every other diagnostic/write mechanism in this file follows, so it never runs
+    # silently in production; the operator flips it on for a measurement window only.
+    osiris_memory_diag_enabled: bool = False
 
 
 def get_settings() -> Settings:
