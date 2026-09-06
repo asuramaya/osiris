@@ -3731,6 +3731,121 @@ async def test_retire_agent_omits_stale_records_cleared_when_there_was_nothing_t
     assert "stale_records_cleared" not in out
 
 
+# --- correct_succession (msg 7677/7680, decision 76d43073's half-heal-detect backlog):
+# the sanctioned door for `succeeded_by` — no verb touched this property before. Shaped
+# like retire_agent's own liveness guard (agent_liveness, override_live escape hatch),
+# never a permanent block; the receipt names was/now for the property and lineage_head
+# before/after the write so a caller can see whether the correction moved resolution.
+
+async def test_correct_succession_retracts_a_stale_pointer_and_receipts_both_sides(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import correct_succession
+
+    anc = await actions.create_or_find_object("Agent", "agent:cs1anc", "test")
+    await actions.assert_property(anc, "succeeded_by", "agent:cs1phantom", "seam-debounce",
+                                  datetime.now(UTC), 0.6,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+
+    out = await correct_succession(actions, agent_id="agent:cs1anc", value="",
+                                   because="half-heal batch repair, thread 22f93704",
+                                   actor="agent:witness")
+    assert out["was"] == "agent:cs1phantom"
+    assert out["now"] == ""
+    assert out["because"] == "half-heal batch repair, thread 22f93704"
+    assert out["head_before"] == out["head_after"] == "agent:cs1anc"
+    assert out["head_moved"] is False
+
+    now_value = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        anc)
+    assert now_value == ""
+    # the stale value stays in HISTORY — compensating, never deleted
+    still_there = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='succeeded_by' "
+        "AND value #>> '{}' = 'agent:cs1phantom'", anc)
+    assert still_there == 1
+
+
+async def test_correct_succession_repoints_past_a_phantom_without_moving_the_head(
+    actions: Actions,
+) -> None:
+    """The batch's own corrected write: repointing straight at the phantom's own real
+    successor must leave lineage_head(ancestor) exactly where it already resolved —
+    the walk already skips false_mint hops, so this changes only the STALE bookkeeping,
+    never the resolved answer."""
+    from src.orchestrator.agents import correct_succession
+
+    anc = await actions.create_or_find_object("Agent", "agent:cs2anc", "test")
+    phantom = await actions.create_or_find_object("Agent", "agent:cs2phantom", "test")
+    await actions.create_or_find_object("Agent", "agent:cs2real", "test")
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION.value
+    await actions.assert_property(anc, "succeeded_by", "agent:cs2phantom", "seam-debounce",
+                                  now, 0.6, evidence_class=do)
+    await actions.assert_property(phantom, "false_mint", "true", "seam-debounce", now, 0.6,
+                                  evidence_class=do)
+    await actions.assert_property(phantom, "succeeded_by", "agent:cs2real", "test", now, 0.9,
+                                  evidence_class=do)
+
+    out = await correct_succession(actions, agent_id="agent:cs2anc", value="agent:cs2real",
+                                   because="half-heal batch repair", actor="agent:witness")
+    assert out["was"] == "agent:cs2phantom"
+    assert out["now"] == "agent:cs2real"
+    assert out["head_before"] == out["head_after"] == "agent:cs2real"
+    assert out["head_moved"] is False
+
+
+async def test_correct_succession_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_succession
+
+    await actions.create_or_find_object("Agent", "agent:cs3blnk", "test")
+    out = await correct_succession(actions, agent_id="agent:cs3blnk", value="",
+                                   because="   ", actor="agent:witness")
+    assert "because is required" in out["error"]
+
+
+async def test_correct_succession_refuses_an_unknown_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import correct_succession
+
+    out = await correct_succession(actions, agent_id="agent:cs4ghost", value="",
+                                   because="test", actor="agent:witness")
+    assert "no such agent" in out["error"]
+
+
+async def test_correct_succession_refuses_a_live_target_by_default(actions: Actions) -> None:
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import correct_succession
+
+    await actions.create_or_find_object("Agent", "agent:cs5live", "test")
+    await mounts.save_mount(actions.pool, job_dir="/j/cs5live", agent_id="agent:cs5live",
+                            project="osiris", cwd="/x", model=None, session_key="k")
+
+    out = await correct_succession(actions, agent_id="agent:cs5live", value="",
+                                   because="test", actor="agent:witness")
+    assert "LIVE right now" in out["error"]
+    assert out["liveness"]["live"] is True
+
+
+async def test_correct_succession_override_live_bypasses_the_guard(actions: Actions) -> None:
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import correct_succession
+
+    anc = await actions.create_or_find_object("Agent", "agent:cs6live", "test")
+    await actions.assert_property(anc, "succeeded_by", "agent:cs6phantom", "seam-debounce",
+                                  datetime.now(UTC), 0.6,
+                                  evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/cs6live", agent_id="agent:cs6live",
+                            project="osiris", cwd="/x", model=None, session_key="k")
+
+    out = await correct_succession(actions, agent_id="agent:cs6live", value="",
+                                   because="deliberate override", actor="agent:witness",
+                                   override_live=True)
+    assert out["now"] == ""
+    assert out["was_live"] is True
+
+
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
     which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the

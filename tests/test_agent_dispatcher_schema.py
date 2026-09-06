@@ -42,6 +42,8 @@ async def test_agent_is_live_and_its_aliases_are_not() -> None:
 AGENT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "claim_name": {"name": "distinctive-handle"},
     "correct_house": {"agent_id": "agent:abc123", "project": "widget"},
+    "correct_succession": {"agent_id": "agent:abc123", "value": "agent:def456",
+                           "because": "half-heal batch repair"},
     "retire": {"agent_id": "agent:abc123", "because": "third-party retirement"},
     "fleet_reconcile": {},
     "file_subagent": {"subagent_id": "agent:abc123.1"},
@@ -54,7 +56,7 @@ async def test_agent_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 6, "one branch per agent action — update this count and " \
+    assert len(branches) == 7, "one branch per agent action — update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(AGENT_VALID_PAYLOADS), (

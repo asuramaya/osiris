@@ -2060,6 +2060,78 @@ async def _report_half_healed_phantom(
         kind="obligation", owner="operator", source=_HALF_HEAL_SRC)
 
 
+_HALF_HEAL_BATCH_SRC = "half-heal-batch-repair"
+
+
+async def correct_succession(
+    actions: Actions, *, agent_id: str, value: str, because: str, actor: str,
+    override_live: bool = False,
+) -> dict[str, Any]:
+    """THE SANCTIONED DOOR FOR `succeeded_by` (msg 7677/7680, decision 76d43073's own
+    finding — >=25 half-heal-detect threads, "genuinely live, NOT bulk-closeable, but
+    bulk-REVIEWABLE", and no verb anywhere touched this property; a raw assert_property
+    from outside the MCP surface is exactly what a2cf8405 rules against, and the auto-mode
+    classifier caught it before it ran). Third-party, `rehold_seat`-shaped: gathers its
+    own refusal evidence, writes once, receipts both sides of the change.
+
+    `value=""` retracts the pointer to unset (the same NOT-NULL-safe empty-string
+    sentinel `_debounce_roundtrip`/`_fold_zero_turn_ancestors` already use for a
+    compensating retraction) — never a delete; the stale assertion this supersedes stays
+    in history, exactly the append-only law every other correction door in this house
+    already holds to.
+
+    THE LIVENESS GUARD mirrors `retire_agent`'s, not `rehold_seat`'s (this corrects a
+    PROPERTY on the named agent itself, not a seat's holder): `agent_id` reading LIVE
+    right now refuses by default — a mind still active is not settled history yet, and
+    correcting its own succession record out from under it is exactly the "two signals
+    disagree" shape this house's own population practice warns against — `override_live
+    =True` names that as a deliberate act, the same escape hatch `retire_agent` already
+    carries for the identical reason.
+
+    THE RECEIPT NAMES BOTH SIDES OF THE CHANGE AND ITS OWN CONSEQUENCE, not just the
+    write: `was`/`now` for the property itself, and `lineage_head` BEFORE and AFTER the
+    write for `agent_id` — the exact invariant the batch's own dry-run was built to
+    verify per pair (a retraction that quietly moves the resolved head is the live-sibling
+    -rebind class of bug this whole lane has been chasing all night; `head_moved` says so
+    in the receipt itself rather than leaving a caller to re-derive it)."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — correcting a succession pointer is a "
+                         "deliberate act on the record"}
+    agent_id = (agent_id or "").strip()
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
+    if row is None:
+        return {"error": f"no such agent: {agent_id!r}"}
+
+    from src.orchestrator import mounts
+
+    liveness = await mounts.agent_liveness(actions.pool, agent_id)
+    if liveness["live"] and not override_live:
+        return {"error": f"{agent_id} is LIVE right now (last_seen {liveness['last_seen']}) "
+                         "— correct_succession refuses to rewrite a live mind's own "
+                         "succession record by default; pass override_live=True to "
+                         "correct it anyway, a deliberate act on the record (mirroring "
+                         "retire_agent's own override_live escape hatch)",
+                "liveness": liveness}
+
+    was = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        row["id"])
+    head_before = await lineage_head(actions.pool, agent_id)
+
+    do = EvidenceClass.DIRECT_OBSERVATION
+    now = datetime.now(UTC)
+    await actions.assert_property(row["id"], "succeeded_by", value, _HALF_HEAL_BATCH_SRC,
+                                  now, confidence_for(do), evidence_class=do.value, actor=actor)
+
+    head_after = await lineage_head(actions.pool, agent_id)
+    return {"agent_id": agent_id, "was": was, "now": value, "because": because,
+            "was_live": liveness["live"], "head_before": head_before,
+            "head_after": head_after, "head_moved": head_before != head_after}
+
+
 async def is_occupied_by_a_live_body(
     pool: asyncpg.Pool, agent_id: str, *, agents_json: Any = None,
     read_exe: Any = None, read_cwd: Any = None,

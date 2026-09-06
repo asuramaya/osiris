@@ -6749,6 +6749,10 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "project": _opt_s(), "seat_generation": _opt_int_s(),
         }, ["action", "agent_id"]),
         _dispatcher_action_schema({
+            "action": _action_const("correct_succession"), "agent_id": _s(),
+            "value": _opt_s(), "because": _s(), "override_live": _b(False),
+        }, ["action", "agent_id", "because"]),
+        _dispatcher_action_schema({
             "action": _action_const("retire"), "agent_id": _s(), "because": _s(),
             "override_live": _b(False),
         }, ["action", "agent_id", "because"]),
@@ -6769,6 +6773,11 @@ _HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
 _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "claim_name": (["name"], ["name"]),
     "correct_house": (["agent_id", "project", "seat_generation"], ["agent_id"]),
+    # `value` is deliberately NOT in required here, same _UNSET reason as correct_pin's own
+    # `value` above — "" is a legal, meaningful retraction, not an omission, and the shared
+    # missing-check below treats "" as absent; the branch itself refuses a genuine _UNSET.
+    "correct_succession": (["agent_id", "value", "because", "override_live"],
+                           ["agent_id", "because"]),
     "retire": (["agent_id", "because", "override_live"], ["agent_id", "because"]),
     "fleet_reconcile": (["execute"], []),
     "file_subagent": (["subagent_id"], ["subagent_id"]),
@@ -6779,7 +6788,8 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
 async def _agent_impl(
     action: str, *,
     name: str | None = None, agent_id: str | None = None, project: str | None = None,
-    seat_generation: int | None = None, because: str | None = None,
+    seat_generation: int | None = None, value: str | None = _UNSET,
+    because: str | None = None,
     override_live: bool = False, execute: bool = False, subagent_id: str | None = None,
     dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -6821,6 +6831,19 @@ async def _agent_impl(
         return await _correct_agent_house(
             Actions(await _pool_get()), agent_id=agent_id, project=project,
             seat_generation=seat_generation, actor=ident.agent_id)
+    if action == "correct_succession":
+        assert agent_id is not None and because is not None
+        if value is _UNSET or value is None:
+            return {"error": "value is required — pass \"\" explicitly to retract the "
+                             "succession pointer to unset, never omit it to mean that"}
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — a correction is a mind's act, and the graph "
+                             "must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.agents import correct_succession as _correct_succession
+        return await _correct_succession(
+            Actions(await _pool_get()), agent_id=agent_id, value=value, because=because,
+            actor=ident.agent_id, override_live=override_live)
     if action == "retire":
         assert agent_id is not None and because is not None
         return await _retire_object_impl(
@@ -6856,8 +6879,9 @@ async def _agent_impl(
 async def agent(
     action: str, name: str | None = None, agent_id: str | None = None,
     project: str | None = None, seat_generation: int | None = None,
-    because: str | None = None, override_live: bool = False, execute: bool = False,
-    subagent_id: str | None = None, dry_run: bool = True, ctx: Context | None = None,
+    value: str | None = _UNSET, because: str | None = None, override_live: bool = False,
+    execute: bool = False, subagent_id: str | None = None, dry_run: bool = True,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE AGENT OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
     many actions over Agent identity/lineage. See `describe('agent')` for the full
@@ -6868,6 +6892,9 @@ async def agent(
       claim_name: self-name your own mounted identity (name)
       correct_house: heal an already-polluted agent's project/seat_generation stamps,
         third-party (agent_id; at least one of project/seat_generation)
+      correct_succession: correct an agent's own succeeded_by pointer (agent_id,
+        because, value="" to retract). Refuses blank because or a LIVE target
+        unless override_live=True.
       retire: third-party Agent retirement, always releases the held seat (agent_id,
         because)
       fleet_reconcile: the bulk reaper over stale/anonymous fleet mounts (dry run by
@@ -6881,8 +6908,9 @@ async def agent(
     unmerge (polymorphic across Agent/Seat/Project, stay named)."""
     return await _agent_impl(
         action, name=name, agent_id=agent_id, project=project,
-        seat_generation=seat_generation, because=because, override_live=override_live,
-        execute=execute, subagent_id=subagent_id, dry_run=dry_run, ctx=ctx)
+        seat_generation=seat_generation, value=value, because=because,
+        override_live=override_live, execute=execute, subagent_id=subagent_id,
+        dry_run=dry_run, ctx=ctx)
 
 
 @mcp.tool(meta={
