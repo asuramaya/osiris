@@ -1719,7 +1719,14 @@ async def bind_seat_tree(
     actor-vs-manager_of_seat check, the same pattern rename_seat/set_seat_attended now carry
     (commit c2020a1)): `actor` must be one of `_OPERATOR_ACTORS`'s sentinels, or the seat
     `actor`'s own lineage holds must BE the target seat's manager (`manager_of_seat`'s live
-    `managed_by` edge).
+    `managed_by` edge) — OR, an UNMANAGED seat's own holder acting on its OWN seat only
+    (thread ae93d2e1: the original check had no legal actor at all for a seat with no
+    manager on record, not even that seat's own holder — deckard's real specimen, stranded
+    on a dead tree_cwd after an operator-ordered folder move with nobody able to fix it).
+    That carve-out never widens what a manager can already do (a manager may rebind any
+    seat it manages; self-authorization only ever lets a holder rebind its OWN, and only
+    when no manager exists to defer to instead) — the receipt confesses it under
+    `authorization` rather than reading identically to a manager-approved write.
 
     Refuses LOUDLY on: a blank `tree_cwd`; a blank `because` (a location change is
     testimony — the same discipline `rename_seat`/`set_seat_attended` hold); an unauthorized
@@ -1730,11 +1737,24 @@ async def bind_seat_tree(
     if not because.strip():
         return {"error": "because is required — a tree binding is testimony; the reason "
                          "it changed must be on the record"}
+    self_authorized = False
     if actor not in _OPERATOR_ACTORS:
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         manager_seat_id = await manager_of_seat(actions.pool, seat_id)
-        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+        authorized = caller_seat_id is not None and caller_seat_id == manager_seat_id
+        # SELF-AUTHORIZATION, UNMANAGED ONLY (thread ae93d2e1, Deckard msg 7719 item 3):
+        # a seat with NO manager on record used to have no legal actor at all for its OWN
+        # tree — not even its own holder — the exact deadlock that stranded seat:51da7e71
+        # (deckard) on a dead on_disk_path after an operator-ordered folder move nobody
+        # could correct. A holder acting on its OWN seat, with no manager to defer to, is
+        # never a wider trust grant than the manager check already allows (a manager may
+        # rebind ANY seat it manages; this only ever lets a holder rebind its OWN) — but it
+        # is still a bypass of the normal chain, so the receipt CONFESSES it explicitly
+        # rather than reading identically to a manager-approved write.
+        if not authorized and manager_seat_id is None and caller_seat_id == seat_id:
+            authorized, self_authorized = True, True
+        if not authorized:
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
@@ -1752,10 +1772,13 @@ async def bind_seat_tree(
         row["id"])
     await actions.assert_property(row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC),
                                   _CONF, evidence_class=_EC)
-    return {"seat": seat_id, "old_tree_cwd": old_tree, "tree_cwd": tree_cwd,
+    out = {"seat": seat_id, "old_tree_cwd": old_tree, "tree_cwd": tree_cwd,
            "because": because,
            "note": "recorded — osiris never provisions the directory itself; launch_seat "
                    "checks it exists before trusting it"}
+    if self_authorized:
+        out["authorization"] = "self-authorized, no manager on record"
+    return out
 
 
 async def bind_holder(
