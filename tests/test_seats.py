@@ -336,6 +336,45 @@ async def test_follow_binding_still_heals_a_stranded_but_dead_siblings_hold(
     assert not await _active_holds(actions, folded, stranded_seat["seat_id"])
 
 
+async def test_bind_holder_returns_an_old_new_holder_receipt(actions: Actions) -> None:
+    """msg 7646 item 2: bind_holder used to return None — a caller wanting to know who it
+    just displaced had to read the graph a second time. Now the write itself says so."""
+    seat = await ensure_seat(actions, house="osiris", handle="Bes", source="test")
+    await actions.create_or_find_object("Agent", "agent:bes-first", "test")
+    first = await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bes-first")
+    assert first == {"seat_id": seat["seat_id"], "old_holder": None,
+                     "new_holder": "agent:bes-first"}
+
+    await actions.create_or_find_object("Agent", "agent:bes-second", "test")
+    second = await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bes-second")
+    assert second == {"seat_id": seat["seat_id"], "old_holder": "agent:bes-first",
+                      "new_holder": "agent:bes-second"}
+
+
+async def test_follow_binding_returns_a_receipt_per_seat_actually_moved(
+    actions: Actions,
+) -> None:
+    """msg 7646 item 2: the receipt lists only what actually moved — a live sibling's seat
+    (skipped by the guard above) never appears, so a caller can tell the two cases apart
+    without a second read."""
+    ancestor_seat = await ensure_seat(actions, house="osiris", handle="ImhotepAncestor",
+                                      source="test")
+    sibling_seat = await ensure_seat(actions, house="osiris", handle="ImhotepSibling",
+                                     source="test")
+    ancestor_oid = await actions.create_or_find_object("Agent", "agent:imhotep0001", "test")
+    await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:imhotep0001")
+    live_sibling = "agent:imhotep0001-v"
+    await _seated_agent(actions, live_sibling, "/jobs/imhotep-v")
+    await bind_holder(actions, seat_id=sibling_seat["seat_id"], agent_id=live_sibling)
+
+    heir = "agent:imhotep0001-ii"
+    heir_oid = await actions.create_or_find_object("Agent", heir, "test")
+    receipt = await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir,
+                                   heir_oid=heir_oid, now=datetime.now(UTC))
+    assert receipt == [{"seat_id": ancestor_seat["seat_id"],
+                        "old_holder": "agent:imhotep0001", "new_holder": heir}]
+
+
 async def test_bind_holder_invalidates_the_agents_own_other_active_holds(
     actions: Actions,
 ) -> None:
@@ -451,7 +490,7 @@ async def test_rehold_seat_override_live_bypasses_the_guard(actions: Actions) ->
 
     out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:rehold4-new",
                             because="test repair, deliberate override", actor="test",
-                            override=True)
+                            override_live=True)
     assert out["new_holder"] == "agent:rehold4-new"
     assert await _active_holds(actions, "agent:rehold4-new", seat["seat_id"])
 

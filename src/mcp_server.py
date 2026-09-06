@@ -3434,7 +3434,7 @@ async def _seat_impl(
         from src.orchestrator.seats import rehold_seat as _rehold_seat
         return await _rehold_seat(
             Actions(await _pool_get()), seat_id=target, agent_id=agent_id, because=because,
-            actor=ident.agent_id, override=override_live)
+            actor=ident.agent_id, override_live=override_live)
 
     if action == "correct_house":
         assert new_house is not None and new_house is not _UNSET  # already validated

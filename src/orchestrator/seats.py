@@ -1742,7 +1742,7 @@ async def bind_seat_tree(
 
 async def bind_holder(
     actions: Actions, *, seat_id: str, agent_id: str, source: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Make `agent_id` the seat's ACTIVE holder — prior holders' `holds` links heal by
     valid_until (never deleted, history walkable), one active link remains. The shared tail
     of the two deliberate binding acts: the attach ceremony (token-gated, spawner-driven)
@@ -1768,17 +1768,29 @@ async def bind_holder(
     mechanism already used two lines below for the seat side, rather than adding a new
     additive-flag mechanism. Measured population before this fix: zero agents currently
     held more than one active seat (fleet-wide, not sampled) — this closes the gap before
-    an incident, the cheap time to close it."""
+    an incident, the cheap time to close it.
+
+    RETURNS A RECEIPT (msg 7646 item 2): `{"seat_id", "old_holder", "new_holder"}` —
+    `old_holder` is whoever this call just invalidated on the seat's OWN side (None if
+    the seat was vacant), never the agent-side `other_seats` this also heals. DELIBERATELY
+    NO LIVENESS GUARD HERE — every caller (attach_session's own live-sitter refusal,
+    claim_name's own live-sitter refusal, rehold_seat's own live-different-lineage
+    refusal) already gathers its OWN, situation-specific evidence and refuses BEFORE
+    ever reaching this write, exactly per this docstring's opening line. A second,
+    generic guard here would not add safety; it would silently disagree with whichever
+    caller-specific rule already decided this was safe (the exact two-signals-disagree
+    shape the population practice warns against), so this stays the bare, trusted write
+    it always was."""
     now = datetime.now(UTC)
     src = source or agent_id
     seat_oid = await actions.create_or_find_object("Seat", seat_id, src)
     agent_oid = await actions.create_or_find_object("Agent", agent_id, src)
-    prior = [r["from_id"] for r in await actions.pool.fetch(
-        "SELECT DISTINCT l.from_id FROM links l JOIN objects f ON f.id=l.from_id "
+    prior = [(r["from_id"], r["canonical"]) for r in await actions.pool.fetch(
+        "SELECT DISTINCT l.from_id, f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "WHERE l.to_id=$1 AND l.type='holds' AND f.canonical <> $2 "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_oid, agent_id)]
-    for old in prior:
-        await actions.invalidate_link(old, seat_oid, "holds", src, now)
+    for old_oid, _old_canon in prior:
+        await actions.invalidate_link(old_oid, seat_oid, "holds", src, now)
     other_seats = [r["to_id"] for r in await actions.pool.fetch(
         "SELECT DISTINCT l.to_id FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='holds' AND t.canonical <> $2 "
@@ -1791,11 +1803,13 @@ async def bind_holder(
     if not exists:
         await actions.create_link(agent_oid, seat_oid, "holds", src, now, _CONF,
                                   evidence_class=_EC)
+    return {"seat_id": seat_id, "old_holder": prior[0][1] if prior else None,
+            "new_holder": agent_id}
 
 
 async def rehold_seat(
     actions: Actions, *, seat_id: str, agent_id: str, because: str, actor: str,
-    override: bool = False,
+    override_live: bool = False,
 ) -> dict[str, Any]:
     """THE THIRD-PARTY RE-HOLD DOOR (decision fb85dd4f's own live specimen: Thoth's
     compaction successor lost its own seat's binding to a wrongly-grafted sibling
@@ -1805,8 +1819,11 @@ async def rehold_seat(
     that door: refuses when the seat's CURRENT holder is LIVE (`seat_occupancy`, the same
     authority every other occupancy read in this house shares) and from a DIFFERENT
     lineage than `agent_id` — the exact shape a careless rehold could silently steal a
-    seat out from under a genuinely different, still-working mind — unless `override=True`
-    names that as a deliberate act. `because` is required, same law as every other
+    seat out from under a genuinely different, still-working mind — unless
+    `override_live=True` names that as a deliberate act (renamed from the bare
+    `override` this shipped with — msg 7646 item 2 asks the same word across every
+    hold-move door's receipt/guard family; the MCP surface already spoke it this way,
+    only the internal parameter lagged). `because` is required, same law as every other
     third-party correction in this house (a correction with no stated reason is the silent
     overwrite 719ed5b1 rules against, not a fix).
 
@@ -1833,11 +1850,11 @@ async def rehold_seat(
 
     occ = await seat_occupancy(actions.pool, seat_id)
     old_holder = occ["holder"]
-    if (old_holder and occ["live"] and not override
+    if (old_holder and occ["live"] and not override_live
             and _generation(old_holder)[0] != _generation(agent_id)[0]):
         return {
             "error": f"{seat_id} has a LIVE holder ({old_holder}) from a different "
-                     f"lineage than {agent_id!r} — refusing without override=True",
+                     f"lineage than {agent_id!r} — refusing without override_live=True",
             "old_holder": old_holder, "live": True,
         }
     now = datetime.now(UTC)
@@ -2130,11 +2147,19 @@ async def attach_session(
 async def follow_binding(
     actions: Actions, *, ancestor_oid: uuid.UUID, heir: str, heir_oid: uuid.UUID,
     now: datetime,
-) -> None:
+) -> list[dict[str, Any]]:
     """The binding follows the lineage head (mint_heir's hook): every Seat the LINEAGE
     actively holds re-links to the heir — the old link heals by valid_until, the seat's
     holder history stays walkable, and seat-addressed anything keeps reaching whoever the
     mind is NOW. No seat, no-op.
+
+    RETURNS A RECEIPT (msg 7646 item 2): one `{"seat_id", "old_holder", "new_holder"}`
+    per seat ACTUALLY moved — a live sibling's seat, skipped by the guard below, simply
+    never appears in the list, so a caller can tell "nothing to move" from "moved
+    nothing because a live sibling held it" by checking this against the lineage's own
+    known holds. No separate `override_live` here: this fires automatically inside
+    mint_heir's own succession hook, with no operator present to supply one — the guard
+    stays unconditional by design, unlike rehold_seat's deliberate third-party door.
 
     LINEAGE-WIDE (Ra's stranded seat, 2026-07-17): the churn can leave the active holds
     link on a FOLDED SIBLING rather than the direct ancestor — the mint from the living
@@ -2153,18 +2178,21 @@ async def follow_binding(
 
     base = _generation(heir)[0]
     seats = await actions.pool.fetch(
-        "SELECT l.from_id, l.to_id, hf.canonical AS holder FROM links l "
-        "JOIN objects hf ON hf.id=l.from_id "
+        "SELECT l.from_id, l.to_id, hf.canonical AS holder, t.canonical AS seat_id "
+        "FROM links l JOIN objects hf ON hf.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE l.type='holds' AND l.from_id <> $3 "
         "AND (l.from_id=$1 OR hf.canonical=$2 OR hf.canonical LIKE $2 || '-%') "
         "AND (l.valid_until IS NULL OR l.valid_until > now())",
         ancestor_oid, base, heir_oid)
+    moved: list[dict[str, Any]] = []
     for r in seats:
         if r["from_id"] != ancestor_oid and await _exact_holder_live(actions.pool, r["holder"]):
             continue
         await actions.invalidate_link(r["from_id"], r["to_id"], "holds", heir, now)
         await actions.create_link(heir_oid, r["to_id"], "holds", heir, now, _CONF,
                                   evidence_class=_EC)
+        moved.append({"seat_id": r["seat_id"], "old_holder": r["holder"], "new_holder": heir})
+    return moved
 
 
 async def _exact_holder_live(pool: asyncpg.Pool, canonical: str) -> bool:
