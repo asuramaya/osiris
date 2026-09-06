@@ -29,6 +29,11 @@ ALARM_PCT = 80
 # ALARM_PCT above — a soft nudge at ALARM_PCT re-arms once more here, never a second
 # independently-tuned constant living beside it.
 HARD_ALARM_PCT = 95
+# SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): once the offload boxes are ALL
+# complete at or past this line, the stop hook asks the body's own daemon job to /compact —
+# settle first, then the seam, never the reverse. Deliberately its own constant even though it
+# coincides with ALARM_PCT today: the operator may re-rule one without moving the other.
+SELF_COMPACT_PCT = 80
 
 
 def window_for(raw_model: str | None, used: int | None = None) -> tuple[int, bool]:

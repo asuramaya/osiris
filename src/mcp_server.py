@@ -10181,6 +10181,7 @@ async def stop_route(request: Any) -> Any:
     from starlette.responses import JSONResponse
 
     from src.orchestrator.stophook_logic import (
+        compute_self_compaction,
         compute_stop_deliverable,
         compute_stop_offload,
         compute_stop_stage_a,
@@ -10198,6 +10199,13 @@ async def stop_route(request: Any) -> Any:
             out = await compute_stop_deliverable(pool, cwd=cwd, session_id=session_id)
         elif phase == "offload":
             out = await compute_stop_offload(pool, session_id=session_id, cwd=cwd)
+        elif phase == "self_compact":
+            # SELF-COMPACTION (ruling a3fb7c11): the hook asks only after the offload boxes
+            # came back complete; the route resolves THIS session's own daemon job.
+            pct = body.get("pct")
+            out = await compute_self_compaction(
+                pool, session_id=session_id,
+                pct=(int(pct) if isinstance(pct, (int, float)) else None))
         elif phase == "stage_a":
             # THE PIT WATCH + PRACTICE AUDIT (dispatch 5441 LEG 1 parity fix): fire-and-
             # forget from the hook's own POV — it does not block the stop either way, so

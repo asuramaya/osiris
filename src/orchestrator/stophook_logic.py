@@ -91,6 +91,44 @@ async def compute_stop_offload(
                               seat_id=seat["seat_id"] if seat else None)
 
 
+async def compute_self_compaction(
+    conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, pct: int | None,
+    job_for: Any = None, reply: Any = None,
+) -> dict[str, Any]:
+    """SELF-COMPACTION AT SELF_COMPACT_PCT (operator ruling a3fb7c11, thread e9c8cf50). The
+    stop hook calls this ONLY after the offload boxes came back complete (settle's own
+    `missing_boxes` rule, the same gate /settle confirms with) — so the order the ruling
+    fixes is enforced by construction: settle first, then the seam. Never another body:
+    the job is resolved from THIS session's own id (decision 3d01ee94 still forbids
+    compacting a worker from outside). The injected turn rides the daemon's sanctioned
+    op='reply' lane (ruling 85fba696) and carries its own provenance in the text, since the
+    harness stamps every injected turn origin.kind='human' (claude_daemon.reply's docstring).
+    `job_for`/`reply` are injectable exactly like trigger.dispatch_dm's nudge seam."""
+    from src.orchestrator.context_lens import SELF_COMPACT_PCT
+    from src.orchestrator.mounts import find_session_row
+
+    if job_for is None or reply is None:
+        from src.ingest.harness import claude_daemon
+        job_for = job_for or claude_daemon.job_for
+        reply = reply or claude_daemon.reply
+    out: dict[str, Any] = {"threshold": SELF_COMPACT_PCT, "pct": pct, "compacted": False}
+    if pct is None or pct < SELF_COMPACT_PCT:
+        return {**out, "why": "below the line"}
+    row = await find_session_row(conn, session_id or "")
+    if row is None or not row["agent_id"]:
+        return {**out, "why": "no mounted session row for this session"}
+    job = await job_for({session_id, session_id[:8]})
+    if job is None:
+        return {**out, "why": "no daemon job wears this session (foreground tab, or bg-cold)"}
+    text = (f"/compact osiris self-compaction at {pct}% (>= {SELF_COMPACT_PCT}%, ruling "
+            f"a3fb7c11): settle() reported every box complete for {row['agent_id']}; the "
+            "successor should orient() and read the is_handoff marker first")
+    ok = bool(await reply(job, text))
+    return {**out, "compacted": ok, "agent_id": str(row["agent_id"]),
+            "job_short": str(job.get("short") or ""),
+            "why": None if ok else "daemon refused the reply"}
+
+
 # ═══════════ STAGE A/B/C — THE PIT WATCH + THE PRACTICE AUDIT (dispatch 5441 LEG 1,
 # ported verbatim from osiris_stophook.py's own `_stage_a_async` and its helpers during the
 # hook-migration parity fix; see that file's THE PIT WATCH / STAGE C section headers for the

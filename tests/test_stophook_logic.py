@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -332,3 +333,41 @@ async def test_compute_stop_stage_a_practice_check_disabled_by_default_sends_not
         actions.pool, payload={}, session_id=sid, cwd=str(tmp_path / "office4"))
     after = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
     assert after == before  # no leased obligation either, so state='pending' is the only write
+
+
+async def test_compute_self_compaction_settle_first_then_the_seam(actions: Actions) -> None:
+    """Ruling a3fb7c11 (operator, 2026-09-06; thread e9c8cf50): the trigger injects /compact
+    into THIS session's own daemon job, carries its own provenance in the text (the harness
+    stamps injected turns 'human'), and never fires below SELF_COMPACT_PCT. The daemon lane
+    is injected here exactly like dispatch_dm's nudge seam."""
+    from src.orchestrator.context_lens import SELF_COMPACT_PCT
+    from src.orchestrator.stophook_logic import compute_self_compaction
+
+    a = "agent:selfcompact1"
+    obj = await actions.create_or_find_object("Agent", a, a)
+    await actions.assert_property(obj, "project", "scproj", a, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    sid = "selfcomp-0000-4000-8000-000000000000"
+    await save_mount(actions.pool, job_dir="/j/jobs/selfcomp", agent_id=a, project="scproj",
+                     cwd="/sc/office", model="claude-fable-5", session_key=None)
+    sent: list[tuple[dict[str, Any], str]] = []
+
+    async def _job_for(ids: set[str]) -> dict[str, Any] | None:
+        return {"short": "selfcomp", "sessionId": sid} if sid in ids else None
+
+    async def _reply(job: dict[str, Any], text: str) -> bool:
+        sent.append((job, text))
+        return True
+
+    below = await compute_self_compaction(actions.pool, session_id=sid,
+                                          pct=SELF_COMPACT_PCT - 1,
+                                          job_for=_job_for, reply=_reply)
+    assert below["compacted"] is False and not sent      # never below the line
+    hit = await compute_self_compaction(actions.pool, session_id=sid, pct=SELF_COMPACT_PCT,
+                                        job_for=_job_for, reply=_reply)
+    assert hit["compacted"] is True and hit["agent_id"] == a and hit["job_short"] == "selfcomp"
+    assert len(sent) == 1 and sent[0][1].startswith("/compact ")
+    assert "a3fb7c11" in sent[0][1] and a in sent[0][1]  # provenance rides in the text
+    stranger = await compute_self_compaction(actions.pool, session_id="nobody-0000",
+                                             pct=99, job_for=_job_for, reply=_reply)
+    assert stranger["compacted"] is False and len(sent) == 1  # never another body

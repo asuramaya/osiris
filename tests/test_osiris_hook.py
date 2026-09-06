@@ -1152,3 +1152,43 @@ def test_statusline_retries_once_before_giving_up(monkeypatch: Any, tmp_path: Pa
     out = _statusline(monkeypatch, tmp_path, answer=_flaky)
     assert len(calls) == 2               # first missed, second landed
     assert "fleet 7" in out and "ago" not in out   # and it counts as LIVE, not stale
+
+
+def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Ruling a3fb7c11: settle first, then the seam. With every offload box complete at or
+    past SELF_COMPACT_PCT the hook asks the self_compact phase exactly once (marker file),
+    never blocks the stop, and never asks while a box is missing (that path blocks with the
+    offload ritual instead — the existing test above)."""
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({
+        "type": "assistant",
+        "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 180000}},
+    }) + "\n")
+    phases: list[str] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        phases.append(data["phase"])
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
+        if data["phase"] == "offload":
+            return {"result": {}}  # nothing missing — settle already complete
+        if data["phase"] == "self_compact":
+            assert data["pct"] >= 80
+            return {"result": {"compacted": True, "job_short": "selfcomp"}}
+        return None
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    hook = {"session_id": "selfcomp-0000-4000-8000-000000000000", "cwd": "/x",
+            "transcript_path": str(t)}
+    assert osiris_hook._cmd_stop(hook) == 0
+    assert not out                                       # the stop is never blocked
+    assert phases.count("self_compact") == 1
+    assert (tmp_path / "home" / ".claude" / "jobs" / "selfcomp"
+            / ".osiris_self_compacted").exists()
+    assert osiris_hook._cmd_stop(hook) == 0               # a second stop: marker holds
+    assert phases.count("self_compact") == 1

@@ -541,6 +541,7 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     boxes = (resp2.get("result") or resp2)
     missing = _missing_boxes(boxes) if isinstance(boxes, dict) else []
     if not missing:
+        _self_compact_once(session_id, marker_dir, pct)
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
 
@@ -568,6 +569,32 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
                    f"since settle can't see it there otherwise). {tier_note}."),
     }))
     return 0
+
+
+def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int) -> None:
+    """SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): reached ONLY from the branch
+    where every offload box is complete — settle first, then the seam. Asks the server's
+    self_compact phase, which injects /compact into THIS session's own daemon job, at most
+    once per session (marker file), and only at or past SELF_COMPACT_PCT. Never blocks the
+    stop: the compaction is the daemon's next turn, not this hook's decision."""
+    try:
+        from src.orchestrator.context_lens import SELF_COMPACT_PCT
+    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+        return
+    if pct < SELF_COMPACT_PCT:
+        return
+    marker = (marker_dir / ".osiris_self_compacted") if marker_dir else None
+    if marker is not None and marker.exists():
+        return
+    resp = _post(_URLS["stop"], {"phase": "self_compact", "session_id": session_id,
+                                  "pct": pct}, timeout=_TIMEOUTS["stop"])
+    result = (resp.get("result") or {}) if isinstance(resp, dict) else {}
+    if isinstance(result, dict) and result.get("compacted") and marker is not None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        except OSError:
+            pass
 
 
 def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
