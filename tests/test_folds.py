@@ -505,8 +505,12 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
     supervising governs — the coldspot shape: Aegis lives there, Alfred governs it),
     the anon is presumed the GOVERNOR's (ruling 1db1ff41: declared beats derived — this
     REVERSES the prior resident-wins tie-break), at the multi-seat score: nuanced,
-    verify by hand, both names in the signal."""
+    verify by hand, both names in the signal. The governor's edge is SEAT-origin
+    (Thoth ruling, thread e0712df8): a re-keyed charter is what "declared" means now —
+    see the specimen below for what an un-re-keyed Agent-origin governs edge does
+    instead (nothing)."""
     from src.orchestrator.folds import find_agent_fold_candidates
+    from src.orchestrator.seats import bind_holder
 
     p = actions.pool
     root = tmp_path / "projects"
@@ -523,11 +527,16 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
     await actions.create_link(resident, room, "works_in", "agent:4e51den7",
                               datetime.now(UTC), 0.9)
-    boss = await actions.create_or_find_object("Agent", "agent:b055a1f4",
-                                               "agent:b055a1f4")
-    await actions.assert_property(boss, "handle", "Boss", "agent:b055a1f4",
+    boss_seat = await actions.create_or_find_object("Seat", "seat:b055a1f4",
+                                                     "seat:b055a1f4")
+    await actions.assert_property(boss_seat, "handle", "Boss", "seat:b055a1f4",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    await actions.create_link(boss, room, "governs", "agent:b055a1f4",
+    boss_holder = await actions.create_or_find_object("Agent", "agent:b055a1f4",
+                                                       "agent:b055a1f4")
+    await actions.assert_property(boss_holder, "handle", "Boss", "agent:b055a1f4",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await bind_holder(actions, seat_id="seat:b055a1f4", agent_id="agent:b055a1f4")
+    await actions.create_link(boss_seat, room, "governs", "seat:b055a1f4",
                               datetime.now(UTC), 0.9)
     await save_mount(p, job_dir=str(jobs / "e5a12111"), agent_id="agent:e5a12111",
                      project="sharedroom", cwd="/w/shared-repo", model=None,
@@ -539,6 +548,54 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
     assert mine and mine[0]["into_label"] == "agent:b055a1f4"  # the declared governor wins
     assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls — hand-verify
     assert "agent:4e51den7" in str(mine[0]["signals"])  # the resident is named
+
+
+async def test_archaeologist_ignores_a_legacy_agent_origin_governs_edge(
+    actions: Actions, tmp_path,
+) -> None:
+    """THE ATLAS SPECIMEN (thread e0712df8, Thoth ruling msg 7666): Atlas's Seat charter
+    is clean, but his old Agent generations still carry 29 garbled Agent-origin governs
+    edges (bulk-seeded 2026-07-18, never migrated) that charter_for/set_charter can't
+    see or heal — this tie-break was the one place still reading them, letting known
+    garbage outrank a room's real resident in ~7-8 rooms. An Agent-origin governs edge
+    is now pre-rekey HISTORY, not a live declaration: it must not appear in the
+    candidate set at all — the resident wins outright, not merely at a lower score."""
+    from src.orchestrator.folds import find_agent_fold_candidates
+
+    p = actions.pool
+    root = tmp_path / "projects"
+    jobs = tmp_path / "jobs"
+    slug = root / "-w-legacy-repo"
+    slug.mkdir(parents=True)
+    (slug / "1e6ac1a9-full.jsonl").write_text("{}\n")
+    await _mk_agent(actions, "agent:1e6ac1a9", project="legacyroom")
+    room = await actions.create_or_find_object("SoftwareProject", "repo:legacyroom",
+                                               "repo:legacyroom")
+    resident = await actions.create_or_find_object("Agent", "agent:4e51den9",
+                                                   "agent:4e51den9")
+    await actions.assert_property(resident, "handle", "Resi3", "agent:4e51den9",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(resident, room, "works_in", "agent:4e51den9",
+                              datetime.now(UTC), 0.9)
+    # a garbled legacy governor — an old Agent generation, never re-keyed onto a Seat
+    stale_governor = await actions.create_or_find_object("Agent", "agent:57a1e9c0",
+                                                          "agent:57a1e9c0")
+    await actions.assert_property(stale_governor, "handle", "StaleGov", "agent:57a1e9c0",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(stale_governor, room, "governs", "agent:57a1e9c0",
+                              datetime.now(UTC), 0.9)
+    await save_mount(p, job_dir=str(jobs / "1e6ac1a9"), agent_id="agent:1e6ac1a9",
+                     project="legacyroom", cwd="/w/legacy-repo", model=None,
+                     session_key="whisper:1e6ac1a9")
+
+    out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
+
+    mine = [c for c in out["pending"] if c["dupe"] == "agent:1e6ac1a9"]
+    # the legacy governor never enters the count at all — a single soul (the resident),
+    # not "several souls, governor wins" (that would still cite the stale generation)
+    assert mine and mine[0]["into_label"] == "agent:4e51den9"
+    assert float(mine[0]["score"]) == 0.75  # the room's only (real) soul
+    assert "agent:57a1e9c0" not in str(mine[0]["signals"])
 
 
 async def test_archaeologist_charter_match_reads_a_seat_keyed_governs_edge(
