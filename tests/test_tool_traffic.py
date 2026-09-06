@@ -197,6 +197,31 @@ async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spot
 
 
 @pytest.mark.asyncio
+async def test_tool_traffic_persisted_total_bytes_is_a_real_int_not_a_decimal(
+    actions: Actions, _use_test_pool: None,
+) -> None:
+    """FOUND LIVE (first real 24h read against production after the response_bytes
+    deploy): `response_bytes` is a `bigint` column, and Postgres's own SUM(bigint) rule
+    ALWAYS promotes to `numeric` regardless of the actual values — asyncpg decodes that
+    as a `Decimal`, which json.dumps renders as a STRING in the real MCP wire response.
+    A bare `== 3000` equality assertion does NOT catch this (Decimal('3000') == 3000 is
+    True in Python) — this is exactly why the prior tests all stayed green through the
+    bug. Assert the actual type, not just the value."""
+    await actions.pool.execute(
+        "INSERT INTO mcp_tool_stats (tool_name, caller, window_start, window_end, "
+        "call_count, total_ms, response_bytes) VALUES "
+        "('orient', 'agent:thoth', now() - interval '30 seconds', now(), 2, 60.0, 2000)")
+
+    out = await srv.tool_traffic(window_minutes=5)
+
+    row = out["persisted"][0]
+    assert type(row["total_bytes"]) is int, (
+        f"total_bytes came back as {type(row['total_bytes'])}, not int — it will render "
+        "as a JSON string over the wire, not a number")
+    assert type(row["avg_bytes"]) is float
+
+
+@pytest.mark.asyncio
 async def test_tool_traffic_breaks_a_dispatcher_down_by_action(
     actions: Actions, _use_test_pool: None,
 ) -> None:
