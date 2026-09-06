@@ -1771,6 +1771,28 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         for c in sorted(canons)
         if props.get(c, {}).get("false_mint") == "true" and c in live])
 
+    # MERGED-WITH-LIVE-SUCCESSOR (thread 16ef8d24, the xxxix mis-merge, decision 4510e4c6):
+    # a merge says "this label and its target are the same mind"; a real succeeded_by says
+    # "this mind's story continues at THAT label instead" — a MERGED object still carrying a
+    # winning succeeded_by that names a currently ACTIVE object claims both at once, and the
+    # two claims can point at different places (agent:d6a08aaa-xxxix's own succeeded_by named
+    # agent:d6a08aaa-g40, a real, distinct, still-onward-succeeding identity, while the merge
+    # had folded xxxix into agent:d6a08aaa-g40-vii — seven real generations later in that SAME
+    # chain). A CANDIDATE, not a verdict, same discipline as orphan-heir/retired-live above: a
+    # healthy merge whose target ALSO happens to carry an unrelated succeeded_by fires here
+    # too (an intermediate chain link pointing at a just-repaired ancestor, harmless) — every
+    # hit is unmerge()-worth a human's glance, never an auto-repair.
+    status_of = {r["canonical"]: r["status"] for r in ag_rows}
+    land("merged-with-live-successor", "warn", [
+        {"subject": c,
+         "detail": f"status=merged yet its own succeeded_by names "
+                   f"{props[c]['succeeded_by']!r}, which is currently ACTIVE — the mis-merge "
+                   "shape (decision 4510e4c6): review before trusting the fold, unmerge() is "
+                   "the repair door if the successor's chain is real and independent"}
+        for c in sorted(status_of)
+        if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
+        and status_of.get(props[c]["succeeded_by"]) == "active"])
+
     # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
     # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance
     # survives; the loser's same_as → winner IS the merge marker). So edges on non-active

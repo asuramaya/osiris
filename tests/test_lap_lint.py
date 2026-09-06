@@ -149,6 +149,34 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert _by_check(out, "false-mint-live") == []
 
 
+async def test_lint_flags_a_merged_agent_whose_succeeded_by_is_still_active(
+    actions: Actions,
+) -> None:
+    """THE XXXIX MIS-MERGE SHAPE (thread 16ef8d24, decision 4510e4c6): a merge folds
+    `dupe` into `into` (same_as/status='merged'), but `dupe` still carries its own,
+    independent, self-declared succeeded_by naming a THIRD object that is genuinely
+    active — the merge and the succession pointer disagree about where `dupe`'s
+    identity actually continues. A candidate for unmerge(), never an automatic verdict:
+    a clean churn link whose target happens to be active (an intermediate generation
+    pointing at a just-repaired ancestor) is exactly as harmless and NOT what this
+    fixture tests — this fixture's `real_successor` is a THIRD object, outside the
+    merge entirely, the live specimen's own shape."""
+    t = "agent:teller"
+    dupe = await actions.create_or_find_object("Agent", "agent:mm5f0001", t)
+    into = await actions.create_or_find_object("Agent", "agent:mm5f0002", t)
+    await actions.create_or_find_object("Agent", "agent:mm5f0003", t)  # active, outside the merge
+    await actions.assert_property(dupe, "succeeded_by", "agent:mm5f0003", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.merge_objects(into, dupe, justification="test: mis-merge specimen",
+                                actor="operator")
+    out = await _fn(actions, "lint", {})
+    hits = _by_check(out, "merged-with-live-successor")
+    assert len(hits) == 1
+    assert hits[0]["subject"] == "agent:mm5f0001"
+    assert "agent:mm5f0003" in hits[0]["detail"]
+    assert hits[0]["severity"] == "warn"
+
+
 async def test_lint_flags_a_false_minted_generation_with_a_live_mount(
     actions: Actions,
 ) -> None:
