@@ -55,6 +55,45 @@ _OBLIGATION_STALE_AFTER_SQL = (
 )
 
 
+async def owner_refs(conn: asyncpg.Pool | asyncpg.Connection, agent_id: str) -> list[str]:
+    """Every spelling under which an obligation can be owned by THIS agent: its own id,
+    its lineage base, its seat id, and its seat handle (open_thread's own default owner
+    is the bare handle). Lower-cased; the callers compare lower-cased."""
+    from src.orchestrator.agents import _generation
+    from src.orchestrator.seats import held_seat
+
+    owners = {agent_id.lower(), _generation(agent_id)[0].lower()}
+    seat = await held_seat(conn, agent_id)
+    if seat:
+        if seat.get("seat_id"):
+            owners.add(str(seat["seat_id"]).lower())
+        if seat.get("handle"):
+            owners.add(str(seat["handle"]).lower())
+    return sorted(owners)
+
+
+async def owned_obligations(
+    conn: asyncpg.Pool | asyncpg.Connection, agent_id: str,
+) -> dict[str, int]:
+    """{owned, stale}: OPEN kind='obligation' Threads this agent (seat, lineage, handle)
+    owns, and how many of them are past their stale_after window. THE BAR'S `owe`
+    (operator 2026-09-06: the old owed_here counted the OPERATOR's debts in the project,
+    a number that never belonged to the seat reading it) — scoped to the reader's own
+    premises, red only when something is stale, hidden at zero."""
+    owners = await owner_refs(conn, agent_id)
+    row = await conn.fetchrow(
+        "SELECT count(*) AS owned, "
+        f"  count(*) FILTER (WHERE {_OBLIGATION_STALE_AFTER_SQL} IS NOT NULL "
+        f"    AND ({_OBLIGATION_STALE_AFTER_SQL})::timestamptz <= now()) AS stale "
+        "FROM objects o WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+        f"  AND {_OBLIGATION_STATUS_SQL}='open' AND {_OBLIGATION_KIND_SQL}='obligation' "
+        f"  AND lower(COALESCE({_OBLIGATION_OWNER_SQL},'')) = ANY($1::text[])",
+        owners)
+    if row is None:
+        return {"owned": 0, "stale": 0}
+    return {"owned": int(row["owned"] or 0), "stale": int(row["stale"] or 0)}
+
+
 async def compute_stale_obligations(
     conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, cwd: str,
 ) -> list[dict[str, Any]]:

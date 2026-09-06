@@ -439,7 +439,7 @@ def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any)
     assert "Seshat" in out[0] and "osiris" in out[0]
     assert "fleet" not in out[0] and "wakes" not in out[0]   # premises-scoped bar
     assert "\u2709\ufe0e 0" in out[0]
-    assert "owe 0" in out[0]
+    assert "owe" not in out[0]          # absent at zero (operator 2026-09-06)
 
 
 def test_statusline_route_failure_reports_the_probe_not_a_diagnosis(
@@ -469,7 +469,7 @@ def test_statusline_route_failure_reports_the_probe_not_a_diagnosis(
 def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         osiris_hook, "_post",
-        lambda url, data, timeout=3: {"result": _heartbeat_result(owed_here=3)})
+        lambda url, data, timeout=3: {"result": _heartbeat_result(owed_mine=3, stale_mine=1)})
     out = []
     monkeypatch.setattr("builtins.print", lambda s="": out.append(s))
     osiris_hook._cmd_statusline({"workspace": {"current_dir": "/repo"}})
@@ -1033,7 +1033,8 @@ def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() 
 # ---------------------------------------------------------------------------
 
 _COUNTS = {"briefs": 3, "mail": 1, "dm": 0, "flight": 0, "souls": 7, "wakes": 4, "team": 7,
-           "team_of": 8, "owed_here": 2, "sick": [], "spend": [0.0, 0.0, 0],
+           "team_of": 8, "owed_here": 2, "owed_mine": 2, "stale_mine": 0, "sick": [],
+           "spend": [0.0, 0.0, 0],
            "resolved_project": "osiris"}
 
 
@@ -1289,3 +1290,16 @@ def test_statusline_envelope_counts_needs_not_every_unread_broadcast(
     out = _statusline(monkeypatch, tmp_path,
                       answer={"result": {**_COUNTS, "mail": 9, "dm": 0, "needs": 1}})
     assert "\u2709\ufe0e 1" in out and "\u2709\ufe0e 9" not in out
+
+
+def test_statusline_owe_is_yours_and_briefs_is_gone(monkeypatch: Any, tmp_path: Path) -> None:
+    """Operator 2026-09-06: owe counted the operator's debts in the project, briefs stacked
+    29 unread on a bar nobody reads. Now owe = obligations you own, dim, red only when one
+    is stale, absent at zero; briefs never renders."""
+    out = _statusline(monkeypatch, tmp_path,
+                      answer={"result": {**_COUNTS, "briefs": 29, "owed_here": 9,
+                                         "owed_mine": 3, "stale_mine": 1}})
+    assert "owe 3" in out and "owe 9" not in out and "briefs" not in out
+    out0 = _statusline(monkeypatch, tmp_path,
+                       answer={"result": {**_COUNTS, "owed_mine": 0, "stale_mine": 0}})
+    assert "owe" not in out0

@@ -274,17 +274,21 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         project = project_hint or "?"
         parts = [f"\u25c8 {project}", f"{_DIM}graph: no answer{_RESET}"]
     else:
-        desk, mail, dm = r.get("briefs", 0), r.get("mail", 0), r.get("dm", 0)
+        mail, dm = r.get("mail", 0), r.get("dm", 0)
         team, team_of = r.get("team", 0), r.get("team_of", 0)
-        owed_here, sick = r.get("owed_here", 0), r.get("sick") or []
+        sick = r.get("sick") or []
         spend = r.get("spend") or [0.0, 0.0, 0]
         spent, cap, blind = (spend + [0.0, 0.0, 0])[:3]
         resolved_project = r.get("resolved_project") or project_hint or "?"
         resolved_intent = r.get("resolved_intent")
         resolved_seat_handle = r.get("resolved_seat_handle")
         seat_tag = f"{resolved_seat_handle}\u00b7" if resolved_seat_handle else ""
-        owe_s = (f"{_RED}owe {owed_here}{_RESET}" if owed_here else f"{_GREEN}owe 0{_RESET}")
-        desk_s = f"{_DIM}briefs {desk}{_RESET}" if desk else ""
+        # owe = YOUR open obligations (operator 2026-09-06): red only when one is past its
+        # stale window, dim otherwise, absent at zero. briefs left the bar entirely — the
+        # operator stacked 29 and never read one; a count nobody reads is noise.
+        owed_mine, stale_mine = int(r.get("owed_mine", 0)), int(r.get("stale_mine", 0))
+        owe_s = (f"{_RED}owe {owed_mine}{_RESET}" if stale_mine
+                 else (f"{_DIM}owe {owed_mine}{_RESET}" if owed_mine else ""))
         # ONE CELL, YOUR PREMISES ONLY (operator 2026-09-06: "just ✉ 3 is enough ... we're
         # trying to keep it compact"). The count is what is unread and addressed to YOU —
         # direct mail plus room broadcasts you have not read; in-flight traffic on other
@@ -308,8 +312,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             _link(f"\u25c8 {seat_tag}{resolved_project}", "desk"),
             *([_link(sick_s, "fleet")] if sick_s else []),
             *([_link(spend_s, "desk")] if spend_s else []),
-            _link(owe_s, "desk"),
-            *([_link(desk_s, "desk")] if desk_s else []),
+            *([_link(owe_s, "desk")] if owe_s else []),
             _link(mail_s, "conversations"),
             # A MANAGER SEES ITS OWN TEAM; everyone else sees no fleet cell, and wakes/h
             # left the bar entirely (operator 2026-09-06: global for no reason here).

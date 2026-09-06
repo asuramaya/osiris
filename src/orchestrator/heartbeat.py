@@ -48,6 +48,10 @@ class HeartbeatResult(NamedTuple):
     # THE ENVELOPE'S NUMBER: unread mail that asks something of this reader (direct mail of
     # any grade, room broadcasts not graded fyi) — see mailbox.unread_split.
     needs: int = 0
+    # THE BAR'S `owe`: open obligations owned by THIS seat/lineage/handle, and how many are
+    # past their stale window (operator 2026-09-06: owed_here counted the operator's debts).
+    owed_mine: int = 0
+    stale_mine: int = 0
 
 
 async def _team_live(conn: Any, seat_id: str, *, live_secs: int) -> tuple[int, int]:
@@ -164,9 +168,13 @@ async def compute_heartbeat(
     resolved_intent = intent_hint
     resolved_seat_handle: str | None = None
     team, team_of = 0, 0
+    owed_mine, stale_mine = 0, 0
     if agent:
         from src.orchestrator.seats import held_seat, seat_facts
+        from src.orchestrator.stophook_logic import owned_obligations
 
+        mine = await owned_obligations(conn, agent)
+        owed_mine, stale_mine = mine["owned"], mine["stale"]
         seat = await held_seat(conn, agent)
         if seat:
             resolved_seat_handle = seat.get("handle")
@@ -200,4 +208,5 @@ async def compute_heartbeat(
         (seg.spend.data.get("spent", 0.0), seg.spend.data.get("cap", 0.0),
          seg.spend.data.get("blind", 0)),
         resolved_project, resolved_intent, resolved_seat_handle, team, team_of,
-        int(seg.mail.data.get("needs", seg.mail.data["mail"] + seg.mail.data["dm"])))
+        int(seg.mail.data.get("needs", seg.mail.data["mail"] + seg.mail.data["dm"])),
+        owed_mine, stale_mine)
