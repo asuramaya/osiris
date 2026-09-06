@@ -1261,12 +1261,17 @@ TOOL_CONTRACT_CEILING_CHARS = 115367
 # call) now default to a collapsed summary instead of the full list, same want_*
 # convention orient()'s blind_spots already uses. No new tool; two new docstring
 # sentences naming the opt-in. Measured exact (105,134), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 104866  # 2026-09-06 Khnum: +565, agent(action='correct_succession')
 # — a genuinely new capability (msg 7677/7680, decision 76d43073's half-heal-detect backlog:
 # no verb touched Agent.succeeded_by before this), docstring already trimmed to the category
 # rule's bare minimum; the remainder is the new action's own inputSchema (agent_id, value,
 # because, override_live), which cannot shrink further without dropping a param. Measured
 # exact, not estimated.
+# 104,301 -> 104,642 (2026-09-06, Seshat, Thoth DM 7667): tool_traffic() gains
+# total_bytes/avg_bytes reporting alongside its existing total_ms/avg_ms (the
+# mcp_tool_stats.response_bytes column round 2's own byte table had to substitute
+# live-probe measurement for, decision 32b0c88f) — one docstring paragraph naming the
+# new fields, no new tool, no new param. Measured exact (104,642), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 202871
 
 async def _measure_tool_contract() -> tuple[int, dict[str, int]]:
     """Returns (total_chars, {tool_name: its own wire chars}) — see `_tool_chars`."""
