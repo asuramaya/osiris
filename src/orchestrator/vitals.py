@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from src.orchestrator.agents import SOUL_SQL_TEMPLATE
+
 
 class _DB(Protocol):
     """The slice of asyncpg's pool/connection API the vitals need — both satisfy it."""
@@ -40,8 +42,10 @@ _SEATED_ROW = (
 
 # A SOUL is the lineage, not the row: a seat with three doors — its anchor, a tab view,
 # a resume bridge — is ONE mind (operator, 2026-07-17: 'fleet is showing 7 agents when
-# really its 4 live'). The roman-suffix strip folds generations to their base.
-_SOUL = "regexp_replace(m2.agent_id, '-[ivxlcdm]+$', '')"
+# really its 4 live'). The suffix strip folds generations to their base — SOUL_SQL_TEMPLATE
+# (agents.py, thread 25b57dca) so this shares the roman-AND-g<N> alternation with every
+# other site, instead of carrying its own roman-only copy that a g<N> id silently defeats.
+_SOUL = SOUL_SQL_TEMPLATE.format(col="m2.agent_id")
 
 
 async def live_souls(db: _DB, *, live_secs: int = 900) -> dict[str, int]:

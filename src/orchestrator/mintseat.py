@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from src.actions.core import Actions
+from src.orchestrator.agents import _GEN_SUFFIX_ALTERNATION
 from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
 from src.orchestrator.charter import charter_of
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _default_office_root
@@ -122,7 +123,7 @@ async def _person_collision(pool: Any, handle: str) -> str | None:
 # in his house and called it success. Identity deserves MORE conservatism than
 # open_thread's own near-dup dedup, not less: a false near-miss refusal costs a retry; a
 # missed one mints a twin wearing a stranger's face.
-_GEN_SUFFIX_RE = re.compile(r"[\s._-]+(?:[ivxlcdm]+|\d+)$")
+_GEN_SUFFIX_RE = re.compile(r"[\s._-]+(?:" + _GEN_SUFFIX_ALTERNATION + r"|\d+)$")
 _PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
 

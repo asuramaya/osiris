@@ -231,6 +231,27 @@ def next_generation(canonical: str) -> str:
     return f"{root}-{_to_roman(gen + 1)}"
 
 
+# THE SHARED SUFFIX SHAPE (thread 25b57dca): the exact "-<roman>" / "-g<N>" alternation
+# _generation()'s own segment parse recognizes — one string, reused everywhere a caller
+# needs the pattern rather than the full chain walk. Five sites had each hand-rolled their
+# own roman-only copy (stophook_logic.py, doors.py, vitals.py, compositions.py's
+# _ROMAN_HEIR, mintseat.py) and every one of them forgot the g<N> half independently — live
+# specimen: a compaction successor's own "-g115" suffix, misread as a brand-new lineage
+# root because nothing but `_generation()` itself knew g<N> was a generation marker too.
+_GEN_SUFFIX_ALTERNATION = r"[ivxlcdm]+|g[0-9]+"
+
+# Postgres's regexp_replace (POSIX ERE, Perl-style non-capturing groups included) accepts
+# this same alternation text verbatim — one pattern, two engines. `{col}` is the caller's
+# column/expression to strip.
+SOUL_SQL_TEMPLATE = "regexp_replace({col}, '-(?:" + _GEN_SUFFIX_ALTERNATION + ")$', '')"
+
+
+def soul_base(agent_id: str) -> str:
+    """The chain-aware root `_generation()` already computes, under the name every
+    single-hop-only caller should reach for instead of re-deriving its own suffix strip."""
+    return _generation(agent_id)[0]
+
+
 async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     """THE PREVENTION-HALF LOOKUP (thread 79e785d1, Lane 3 of Thoth msg 5906) — read-only,
     never a write: does this agent's own LINEAGE agree on a single project.

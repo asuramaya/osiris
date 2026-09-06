@@ -33,6 +33,7 @@ async def compute_stop_deliverable(
     function's docstring for the full rationale (the project resolution, the self-echo
     guard, the lineage rollup). Returns a JSON-shaped dict instead of a tuple so the /stop
     route can hand it back unchanged; the hook's own `_deliverable` wrapper unpacks it."""
+    from src.orchestrator.agents import soul_base
     from src.orchestrator.mounts import find_session_row
     from src.orchestrator.seats import resolve_project
 
@@ -41,8 +42,7 @@ async def compute_stop_deliverable(
         return {"n": 0, "senders": [], "window": None, "bands": {}, "project": None}
     project = await resolve_project(conn, str(row["agent_id"]), cwd)
     me = str(row["agent_id"])
-    root, sep, suffix = me.rpartition("-")
-    base = root if sep and root and suffix and set(suffix) <= set("ivxlcdm") else me
+    base = soul_base(me)
     n_row = await conn.fetchrow(
         "SELECT count(*) AS n, array_agg(DISTINCT m.from_agent) AS senders, "
         " count(*) FILTER (WHERE m.grade='ask') AS asks, "

@@ -74,6 +74,34 @@ async def test_compute_stop_deliverable_counts_unread_mail_for_a_mounted_session
     assert out["bands"] == {"ask": 1, "fyi": 0}
 
 
+async def test_compute_stop_deliverable_finds_mail_sent_to_a_g_n_lineage_base(
+    actions: Actions,
+) -> None:
+    """The live specimen (thread 25b57dca, msg 7707): a compaction successor's own id
+    carries a `-g<N>` suffix (past generation 39, `_to_roman`'s numeric fallback), not a
+    roman numeral — the old rpartition+roman-alphabet check here treated the whole id as
+    its own brand-new root, so mail addressed to the TRUE base never counted as deliverable.
+    """
+    a = "agent:stophooklogicgen-g115"
+    obj = await actions.create_or_find_object("Agent", a, a)
+    await actions.assert_property(obj, "project", "logicprojgen", a, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    sid = "logicgse-0000-4000-8000-000000000000"  # find_session_row's lane 1 matches on
+    # job_dir ending exactly '/jobs/' + sid[:8] — no trailing chars past that boundary
+    await save_mount(actions.pool, job_dir="/j/jobs/logicgse", agent_id=a,
+                     project="logicprojgen", cwd="/lp/office-gen", model="claude-fable-5",
+                     session_key=None)
+    from src.orchestrator.mailbox import send_message
+
+    await send_message(actions.pool, from_agent="agent:other",
+                       from_project="logicprojgen", to_agent="agent:stophooklogicgen",
+                       body="hi", grade="ask")
+
+    out = await compute_stop_deliverable(actions.pool, cwd="/lp/office-gen", session_id=sid)
+    assert out["n"] == 1
+    assert out["bands"] == {"ask": 1, "fyi": 0}
+
+
 # ═══════════ STAGE A/B/C, PORTED — dispatch 5441 LEG 1 parity fix ═══════════
 
 async def test_resolve_worker_identity_via_a_real_mount_row(
