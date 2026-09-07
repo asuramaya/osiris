@@ -549,15 +549,16 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     marker_dir = Path.home() / ".claude" / "jobs" / sid8 if len(sid8) == 8 else None
     soft = (marker_dir / ".osiris_offload_blocked") if marker_dir else None
     hard = (marker_dir / ".osiris_offload_blocked_hard") if marker_dir else None
-    soft_exists = soft is not None and soft.exists()
-    hard_exists = hard is not None and hard.exists()
+    transcript_for_life = str(hook.get("transcript_path") or "")
+    soft_exists = _marker_live(soft, transcript_for_life)
+    hard_exists = _marker_live(hard, transcript_for_life)
 
     # SELF-COMPACTION COMES BEFORE THE NUDGE SHORT-CIRCUITS (ruling a3fb7c11; caught live on
     # the first acceptance run, 2026-09-06: the body settled after the soft nudge, ended its
     # turn, and the hook returned at "soft already fired" without re-checking the boxes, so
     # the seam never came). Once every box is complete the ritual is DONE — the markers
     # below only govern how often to nag a body that has NOT settled.
-    if _self_compact_ready(session_id, cwd, marker_dir, pct):
+    if _self_compact_ready(session_id, cwd, marker_dir, pct, transcript=transcript_for_life):
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
 
@@ -577,7 +578,7 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     boxes = (resp2.get("result") or resp2)
     missing = _missing_boxes(boxes) if isinstance(boxes, dict) else []
     if not missing:
-        _self_compact_once(session_id, marker_dir, pct)
+        _self_compact_once(session_id, marker_dir, pct, transcript=transcript_for_life)
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
 
@@ -607,7 +608,8 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     return 0
 
 
-def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct: int) -> bool:
+def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct: int,
+                        *, transcript: str = "") -> bool:
     """At or past SELF_COMPACT_PCT with no marker yet: ask the offload phase once more and,
     if every box is complete, hand the seam to `_self_compact_once`. True when the boxes are
     complete (the caller stops nagging), False otherwise (the caller keeps its ritual)."""
@@ -618,7 +620,7 @@ def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct:
     if pct < SELF_COMPACT_PCT:
         return False
     marker = (marker_dir / ".osiris_self_compacted") if marker_dir else None
-    if marker is not None and marker.exists():
+    if _marker_live(marker, transcript):
         return False
     resp = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd, "session_id": session_id},
                  timeout=_TIMEOUTS["stop"])
@@ -627,11 +629,12 @@ def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct:
     boxes = (resp.get("result") or resp)
     if not isinstance(boxes, dict) or _missing_boxes(boxes):
         return False
-    _self_compact_once(session_id, marker_dir, pct)
+    _self_compact_once(session_id, marker_dir, pct, transcript=transcript)
     return True
 
 
-def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int) -> None:
+def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int,
+                       *, transcript: str = "") -> None:
     """SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): reached ONLY from the branch
     where every offload box is complete — settle first, then the seam. Asks the server's
     self_compact phase, which injects /compact into THIS session's own daemon job, at most
@@ -644,7 +647,7 @@ def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int) -> No
     if pct < SELF_COMPACT_PCT:
         return
     marker = (marker_dir / ".osiris_self_compacted") if marker_dir else None
-    if marker is not None and marker.exists():
+    if _marker_live(marker, transcript):
         return
     resp = _post(_URLS["stop"], {"phase": "self_compact", "session_id": session_id,
                                   "pct": pct}, timeout=_TIMEOUTS["stop"])
@@ -962,8 +965,78 @@ def _cmd_session_end(hook: dict[str, Any]) -> int:
     return 0
 
 
+_LIFE_MARKERS = (".osiris_offload_blocked", ".osiris_offload_blocked_hard",
+                 ".osiris_self_compacted")
+
+
+def _last_compaction_epoch(transcript: str, *, tail_bytes: int = 8_000_000) -> float | None:
+    """Epoch seconds of the transcript's LAST compact_boundary, or None when the tail holds
+    none. A background session keeps one session id, and so one job dir, across every
+    compaction (Seshat 8407756e: a soft-nudge marker dated 2026-08-23 muted every nudge of
+    the body living there on 2026-09-07). A marker is a fact about ONE life; anything older
+    than the last boundary belongs to a dead one."""
+    if not transcript:
+        return None
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - tail_bytes))
+            data = fh.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    latest: float | None = None
+    for line in data.split("\n"):
+        if '"compact_boundary"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("subtype") != "compact_boundary":
+            continue
+        ts = str(e.get("timestamp") or "")
+        try:
+            from datetime import datetime
+            epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        latest = epoch if latest is None or epoch > latest else latest
+    return latest
+
+
+def _marker_live(marker: Path | None, transcript: str) -> bool:
+    """True only for a marker written in THIS life: it exists and is newer than the
+    transcript's last compact_boundary (a marker with no boundary after it is current)."""
+    if marker is None or not marker.exists():
+        return False
+    boundary = _last_compaction_epoch(transcript)
+    if boundary is None:
+        return True
+    try:
+        return marker.stat().st_mtime >= boundary
+    except OSError:
+        return False
+
+
+def _clear_life_markers(marker_dir: Path | None) -> None:
+    """At a compaction the life ends: every once-per-life marker goes with it, so the next
+    generation's nudges and its own seam start from nothing."""
+    if marker_dir is None:
+        return
+    for name in _LIFE_MARKERS:
+        try:
+            (marker_dir / name).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
 def _cmd_precompact(hook: dict[str, Any]) -> int:
     transcript = str(hook.get("transcript_path") or "")
+    sid8 = str(hook.get("session_id") or "")[:8]
+    _clear_life_markers(Path.home() / ".claude" / "jobs" / sid8 if len(sid8) == 8 else None)
     if transcript.startswith("/"):
         url = _URLS["precompact"]
         resp = _post(url, {"transcript_path": transcript,

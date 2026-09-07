@@ -1317,3 +1317,105 @@ def test_statusline_owe_is_yours_and_briefs_is_gone(monkeypatch: Any, tmp_path: 
     out0 = _statusline(monkeypatch, tmp_path,
                        answer={"result": {**_COUNTS, "owed_mine": 0, "stale_mine": 0}})
     assert "owe" not in out0
+
+
+def _boundary_transcript(path: Path, *, used: int, boundary_ts: str) -> None:
+    """A transcript with one compact_boundary at `boundary_ts` and a usage entry after it."""
+    path.write_text(
+        json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": boundary_ts})
+        + "\n"
+        + json.dumps({"type": "assistant",
+                      "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": used}}})
+        + "\n")
+
+
+def test_precompact_clears_every_once_per_life_marker(monkeypatch: Any, tmp_path: Path) -> None:
+    """A background session keeps its id, and so its job dir, across compactions; the markers
+    are facts about ONE life. Seshat (8407756e, 2026-09-07): a soft marker from 2026-08-23
+    muted every nudge, so she never settled and the seam never came."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: {"ok": True})
+    monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: None,
+                                                       "flush": lambda self: None})())
+    jobs = tmp_path / "home" / ".claude" / "jobs" / "lifeclr1"
+    jobs.mkdir(parents=True)
+    for name in osiris_hook._LIFE_MARKERS:
+        (jobs / name).touch()
+    osiris_hook._cmd_precompact({"transcript_path": "/abs/t.jsonl",
+                                 "session_id": "lifeclr1-0000-4000-8000-000000000000"})
+    assert not any((jobs / name).exists() for name in osiris_hook._LIFE_MARKERS)
+
+
+def test_stale_soft_marker_from_a_dead_life_does_not_mute_the_nudge(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """The stop hook treats a marker OLDER than the transcript's last compact_boundary as
+    absent: the nudge fires again for the new life."""
+    import os as _os
+    t = tmp_path / "t.jsonl"
+    _boundary_transcript(t, used=150000, boundary_ts="2026-09-07T12:00:00.000Z")
+    phases: list[str] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        phases.append(data["phase"])
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
+        if data["phase"] == "offload":
+            return {"result": {"missing": ["a decision"]}}
+        return None
+
+    monkeypatch.setattr(osiris_hook, "_missing_boxes", lambda boxes: ["a decision"])
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    out: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
+    jobs = tmp_path / "home" / ".claude" / "jobs" / "stalesft"
+    jobs.mkdir(parents=True)
+    soft = jobs / ".osiris_offload_blocked"
+    soft.touch()
+    old = 1_700_000_000  # 2023: long before the boundary
+    _os.utime(soft, (old, old))
+    hook = {"session_id": "stalesft-0000-4000-8000-000000000000", "cwd": "/x",
+            "transcript_path": str(t)}
+    assert osiris_hook._cmd_stop(hook) == 0
+    assert out and "offload ritual" in out[0]            # the nudge fired again
+    assert soft.stat().st_mtime > old                    # re-touched for THIS life
+
+
+def test_self_compacted_marker_from_a_dead_life_does_not_mute_the_seam(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Same law for the seam's own marker: after a compaction the next life can self-compact
+    again, else every body would get exactly one seam per job dir, ever."""
+    import os as _os
+    t = tmp_path / "t.jsonl"
+    _boundary_transcript(t, used=180000, boundary_ts="2026-09-07T12:00:00.000Z")
+    phases: list[str] = []
+
+    def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
+        phases.append(data["phase"])
+        if data["phase"] == "deliverable":
+            return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
+        if data["phase"] == "offload":
+            return {"result": {}}
+        if data["phase"] == "self_compact":
+            return {"result": {"compacted": True}}
+        return None
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(osiris_hook, "_post", _fake_post)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    jobs = tmp_path / "home" / ".claude" / "jobs" / "staleslf"
+    jobs.mkdir(parents=True)
+    marker = jobs / ".osiris_self_compacted"
+    marker.touch()
+    old = 1_700_000_000
+    _os.utime(marker, (old, old))
+    hook = {"session_id": "staleslf-0000-4000-8000-000000000000", "cwd": "/x",
+            "transcript_path": str(t)}
+    assert osiris_hook._cmd_stop(hook) == 0
+    assert phases.count("self_compact") == 1
+    assert marker.stat().st_mtime > old
+    # a marker written in THIS life (newer than the boundary) still holds
+    assert osiris_hook._cmd_stop(hook) == 0
+    assert phases.count("self_compact") == 1
