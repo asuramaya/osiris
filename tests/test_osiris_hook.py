@@ -597,6 +597,20 @@ def test_render_whisper_drops_the_top_of_wall_reprint() -> None:
     assert "[12a58447]" not in text
 
 
+def test_render_whisper_mechanical_seat_mount_says_exactly_one_sentence(
+) -> None:
+    """THE MECHANICAL SEAT MOUNT short-circuit (thread dae06a32): a passive body dropped
+    into a project tree gets told exactly one thing, never the normal glance -- even when
+    the payload also carries mail/pulse/obligations, none of it prints."""
+    out = _whisper_base(
+        mechanical_seat_mount={"seat_id": "seat:x", "handle": "Chowder", "minted": True},
+        mail=7, mail_asks=2, pulse="3 live", obligations=[{"id": "abc", "summary": "x"}])
+    text = osiris_hook.render_whisper(out, cwd="/code/monsterhouse", env_job="")
+    assert text == "◈ OSIRIS — you are Chowder, mounted in osiris, do nothing until spoken to."
+    assert "mail" not in text.lower()
+    assert "pulse" not in text.lower()
+
+
 def test_render_whisper_hedges_an_unconfirmed_swap() -> None:
     out = _whisper_base(swap="claude-fable-5 → claude-haiku-4-5")
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")

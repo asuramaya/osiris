@@ -331,6 +331,44 @@ async def seat_by_handle(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | No
     return {"seat_id": seat_id, "handle": rows[0]["handle"], "house": house}
 
 
+async def tree_seat_hint(pool: asyncpg.Pool, *, cwd: str) -> str | None:
+    """A project-tree cwd's own DECLARED seat, by HANDLE (thread dae06a32, mechanical seat
+    mount): an already-bound seat's own `tree_cwd` wins first (an established binding is
+    more authoritative than a file line), else the `.osiris` pin's `seat = "<handle>"` line
+    (agents.py's `read_seat_handle`, ruling 719ed5b1 -- parseable since that ruling, zero
+    callers until this). None when neither signal is present -- a bare code checkout,
+    nobody's declared seat, the ordinary project-only mount stays untouched."""
+    row = await pool.fetchval(
+        "SELECT (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1",
+        cwd)
+    if row:
+        return str(row)
+    from src.orchestrator.agents import read_seat_handle
+    return read_seat_handle(cwd)
+
+
+async def project_coordinator_seat(pool: asyncpg.Pool, project: str) -> str | None:
+    """The seat that GOVERNS `project` and has no manager of its own -- the same
+    "unmanaged head" derivation `roster()`'s own shared-house branch already uses
+    (manager_of_seat(pool, seat_id) is None), reused here rather than a second notion of
+    "coordinator." None when no seat governs the project, or every seat that does is
+    itself managed (an org-chart shape this door refuses to guess through)."""
+    rows = await pool.fetch(
+        "SELECT s.canonical FROM links l "
+        "JOIN objects s ON s.id=l.from_id AND s.type='Seat' AND s.status='active' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' AND p.canonical=$1 "
+        "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        f"repo:{project}")
+    for r in rows:
+        if await manager_of_seat(pool, r["canonical"]) is None:
+            return str(r["canonical"])
+    return None
+
+
 async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """The seat-first half alone, shared by `resolve_project` and
     mcp_server._resolve_project_seat_first: a SEATED agent's project is its seat's own

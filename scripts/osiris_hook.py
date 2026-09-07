@@ -740,7 +740,16 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     day as the flip, alongside the statusline gap: `/automount` has only ever returned
     automount()'s own raw structured output, never a rendered "intro"/"message" string;
     this rendering has always been, and remains, the caller's job). Pure — no I/O, no
-    clock, no env reads beyond the two args."""
+    clock, no env reads beyond the two args.
+
+    MECHANICAL SEAT MOUNT (thread dae06a32) is the ONE short-circuit: a body dropped into
+    a project tree that declared its own seat gets told exactly one sentence, never the
+    normal glance (mail/pulse/obligations) a deliberately passive body has no business
+    reading — "do nothing until spoken to" is the whole point."""
+    msm = out.get("mechanical_seat_mount")
+    if msm:
+        return (f"◈ OSIRIS — you are {msm['handle']}, mounted in {out.get('project') or '?'}, "
+                "do nothing until spoken to.")
     anchored = bool(env_job) and env_job == str(out.get("job_dir") or "")
     who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
            + (f", {out['model']})" if out.get("model") else ")"))

@@ -27,12 +27,15 @@ from src.orchestrator.seats import (
     _seat_lock,
     attach_session,
     bind_holder,
+    bind_seat_tree,
     ensure_seat,
     find_seat,
     follow_binding,
     held_seat,
     mint_attach_token,
+    project_coordinator_seat,
     seat_of_mount,
+    tree_seat_hint,
 )
 
 
@@ -4746,6 +4749,124 @@ async def test_seat_lock_wedged_waiter_fails_loud_named(
     finally:
         release.set()
         await task
+
+
+# ═══ MECHANICAL SEAT MOUNT (thread dae06a32, operator 2026-09-07): a body dropped into
+# an existing project's own tree gets its seat mounted mechanically too, not just the
+# project — chowder's own mount row read seat_id None, dj had no seat at all. ═══════════
+
+async def test_tree_seat_hint_reads_the_osiris_pin_seat_line(tmp_path: Path) -> None:
+    from src.orchestrator.agents import read_seat_handle
+
+    cwd = tmp_path / "monsterhouse"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "monsterhouse"\nseat = "Chowder"\n')
+    assert read_seat_handle(str(cwd)) == "Chowder"
+
+
+async def test_tree_seat_hint_prefers_an_already_bound_tree_cwd_over_the_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "monsterhouse"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "monsterhouse"\nseat = "Wronghandle"\n')
+
+    seat = await ensure_seat(actions, house="monsterhouse", handle="Djseat", source="test")
+    result = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=str(cwd),
+                                  actor="operator", because="test setup")
+    assert "error" not in result
+
+    assert await tree_seat_hint(actions.pool, cwd=str(cwd)) == "Djseat"
+
+
+async def test_tree_seat_hint_none_with_no_declaration_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "bare-checkout"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "bare-checkout"\n')
+    assert await tree_seat_hint(actions.pool, cwd=str(cwd)) is None
+
+
+async def test_project_coordinator_seat_is_the_unmanaged_governor(
+    actions: Actions,
+) -> None:
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    coordinator = await ensure_seat(actions, house="pcshouse", handle="Pccoord",
+                                    source="test")
+    managed = await ensure_seat(actions, house="pcshouse", handle="Pcworker", source="test")
+    coordinator_oid = await actions.create_or_find_object(
+        "Seat", coordinator["seat_id"], "test")
+    managed_oid = await actions.create_or_find_object("Seat", managed["seat_id"], "test")
+    project_oid = await actions.create_or_find_object(
+        "SoftwareProject", "repo:pcshouse", "test")
+    await actions.create_link(coordinator_oid, project_oid, "governs", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(managed_oid, project_oid, "governs", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+    await actions.create_link(managed_oid, coordinator_oid, "managed_by", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+
+    assert (await project_coordinator_seat(actions.pool, "pcshouse")
+           == coordinator["seat_id"])
+
+
+async def test_project_coordinator_seat_none_when_nobody_governs_it(
+    actions: Actions,
+) -> None:
+    assert await project_coordinator_seat(actions.pool, "no-such-project-anywhere") is None
+
+
+async def test_automount_mechanically_mounts_a_seat_declared_by_the_osiris_pin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """chowder's own live specimen: a fresh body lands in an existing project's tree
+    carrying a `.osiris` pin naming its seat — mints under the project's coordinator,
+    binds THIS session as holder, stamps tree_cwd, all before the model's first token."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    coordinator = await ensure_seat(actions, house="chowderhouse", handle="Chowdercoord",
+                                    source="test")
+    await actions.create_or_find_object("Agent", "agent:chowdercoord-vii", "test")
+    await bind_holder(actions, seat_id=coordinator["seat_id"],
+                      agent_id="agent:chowdercoord-vii")
+    coordinator_oid = await actions.create_or_find_object(
+        "Seat", coordinator["seat_id"], "test")
+    project_oid = await actions.create_or_find_object(
+        "SoftwareProject", "repo:chowderhouse", "test")
+    await actions.create_link(coordinator_oid, project_oid, "governs", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+
+    cwd = tmp_path / "chowderhouse"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "chowderhouse"\nseat = "Chowder"\n')
+
+    out = await automount(actions, session_id="chowdersession01", cwd=str(cwd),
+                          actor="test", root=tmp_path)
+
+    assert out["mechanical_seat_mount"]["handle"] == "Chowder"
+    assert out["mechanical_seat_mount"]["minted"] is True
+    chowder_seat = await find_seat(actions.pool, house="chowderhouse", handle="Chowder")
+    assert chowder_seat is not None
+    held = await held_seat(actions.pool, out["agent"])
+    assert held is not None and held["handle"] == "Chowder"
+
+
+async def test_automount_never_mints_a_seat_for_a_bare_checkout(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No pin line, no bound tree_cwd — the ordinary project-only mount, untouched."""
+    cwd = tmp_path / "barecheckout"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "barecheckout"\n')
+
+    out = await automount(actions, session_id="baresession01", cwd=str(cwd),
+                          actor="test", root=tmp_path)
+
+    assert "mechanical_seat_mount" not in out
 
 
 async def test_mint_lock_wedged_waiter_fails_loud_named(
