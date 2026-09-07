@@ -257,45 +257,57 @@ class ClaudeJsonlAdapter:
     def read_turns(
         self, locator: SessionLocator, *, since_idx: int = 0,
     ) -> Iterator[TurnRow]:
+        """STREAMED, never a whole-file read (thread 0c03a685): a 30MB+ transcript used
+        to be materialized as one `str` via `read_text`, then `splitlines()`'d TWICE (once
+        for operator_swapped, once for the main loop) — three full copies alive at once,
+        times however many sessions the boot backfill sweeps in its first pass. Two
+        line-by-line passes over the same path (the OS page cache makes the second nearly
+        free) hold only one line at a time instead."""
         path = Path(locator.source_path)
         try:
-            text = path.read_text("utf-8", errors="replace")
+            with path.open(encoding="utf-8", errors="replace") as f:
+                deliberate = operator_swapped(f)
         except OSError:
             return
-        deliberate = operator_swapped(text.splitlines())
         idx = 0
-        for ln in text.splitlines():
-            try:
-                d = json.loads(ln)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if not isinstance(d, dict):
-                continue
-            if idx < since_idx:
+        try:
+            f = path.open(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        with f:
+            for ln in f:
+                try:
+                    d = json.loads(ln)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                if idx < since_idx:
+                    idx += 1
+                    continue
+                role = str(d.get("type") or "")
+                if role not in ("assistant", "user"):
+                    idx += 1
+                    continue
+                model = _model_of_line(d)
+                usage = _usage_of_line(d) if role == "assistant" else {}
+                summary = bool(d.get("isCompactSummary") or d.get("isMeta"))
+                # reminders only on live user turns: a compact summary QUOTES the past, and
+                # counting its quoted reminders again after every compaction would inflate
+                # the very churn number the lens exists to measure honestly
+                reminders = (_reminders_of_line(d) if role == "user" and not summary
+                             else None)
+                yield TurnRow(
+                    turn_idx=idx, role=role, model=model,
+                    tokens_in=usage.get("tokens_in"),
+                    tokens_out=usage.get("tokens_out"),
+                    cache_read=usage.get("cache_read"),
+                    cache_write=usage.get("cache_write"),
+                    recorded_at=_ts(ln),
+                    is_summary=summary,
+                    swap_deliberate=deliberate if role == "assistant" else None,
+                    source_ref=f"line:{idx}",
+                    reminders=reminders,
+                    is_compaction=bool(d.get("isCompactSummary")),
+                )
                 idx += 1
-                continue
-            role = str(d.get("type") or "")
-            if role not in ("assistant", "user"):
-                idx += 1
-                continue
-            model = _model_of_line(d)
-            usage = _usage_of_line(d) if role == "assistant" else {}
-            summary = bool(d.get("isCompactSummary") or d.get("isMeta"))
-            # reminders only on live user turns: a compact summary QUOTES the past, and
-            # counting its quoted reminders again after every compaction would inflate
-            # the very churn number the lens exists to measure honestly
-            reminders = _reminders_of_line(d) if role == "user" and not summary else None
-            yield TurnRow(
-                turn_idx=idx, role=role, model=model,
-                tokens_in=usage.get("tokens_in"),
-                tokens_out=usage.get("tokens_out"),
-                cache_read=usage.get("cache_read"),
-                cache_write=usage.get("cache_write"),
-                recorded_at=_ts(ln),
-                is_summary=summary,
-                swap_deliberate=deliberate if role == "assistant" else None,
-                source_ref=f"line:{idx}",
-                reminders=reminders,
-                is_compaction=bool(d.get("isCompactSummary")),
-            )
-            idx += 1

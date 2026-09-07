@@ -167,20 +167,38 @@ async def embed_backfill(
     """One incremental pass: embed every searchable winner text whose hash isn't already
     vectorized under this model, and drop vectors whose object went inactive (merged /
     retracted — the index must forget what the graph resolved away). Idempotent; the
-    hash watermark makes a no-change pass free."""
-    rows = await pool.fetch(
-        "SELECT DISTINCT ON (o.id, a.name) o.id AS object_id, a.name AS field, "
-        " a.value #>> '{}' AS text "
-        "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
-        "WHERE o.status='active' AND a.name = ANY($1::text[]) "
-        "  AND length(a.value #>> '{}') > 12 "
-        "ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC",
+    hash watermark makes a no-change pass free.
+
+    THE CORPUS QUERY USED TO FETCH EVERY WINNER (thread 0c03a685, the worker boot spike):
+    all ~218k current-assertion winners came back to Python every pass, then were diffed
+    against search_vectors' hashes in a dict — a steady-state (nothing changed) pass still
+    paid the full fetch. `left(text, N)` + `md5()` mirror `_hash` exactly (Postgres md5()
+    and Python's hashlib.md5().hexdigest() agree on identical UTF-8 bytes), so the
+    unchanged/changed diff runs server-side in the CTE join below and only the rows that
+    actually need re-embedding cross the wire."""
+    todo = await pool.fetch(
+        "WITH winners AS ( "
+        " SELECT DISTINCT ON (o.id, a.name) o.id AS object_id, a.name AS field, "
+        "  a.value #>> '{}' AS text "
+        " FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        " WHERE o.status='active' AND a.name = ANY($1::text[]) "
+        "   AND length(a.value #>> '{}') > 12 "
+        " ORDER BY o.id, a.name, a.confidence DESC, a.observed_at DESC "
+        ") "
+        "SELECT w.object_id, w.field, w.text FROM winners w "
+        "LEFT JOIN search_vectors sv ON sv.object_id=w.object_id AND sv.field=w.field "
+        " AND sv.model=$2 "
+        "WHERE sv.text_hash IS DISTINCT FROM md5(left(w.text, $3))",
+        list(_FIELDS), embedder.model, _MAX_CHARS)
+    corpus = await pool.fetchval(
+        "SELECT count(*) FROM ( "
+        " SELECT DISTINCT ON (o.id, a.name) 1 "
+        " FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+        " WHERE o.status='active' AND a.name = ANY($1::text[]) "
+        "   AND length(a.value #>> '{}') > 12 "
+        " ORDER BY o.id, a.name "
+        ") w",
         list(_FIELDS))
-    have = {(r["object_id"], r["field"]): r["text_hash"] for r in await pool.fetch(
-        "SELECT object_id, field, text_hash FROM search_vectors WHERE model=$1",
-        embedder.model)}
-    todo = [r for r in rows
-            if have.get((r["object_id"], r["field"])) != _hash(r["text"] or "")]
     embedded = 0
     for i in range(0, len(todo), batch):
         chunk = todo[i:i + batch]
@@ -199,7 +217,7 @@ async def embed_backfill(
         "SELECT count(*) FROM gone")
     if _matrix_cache and (embedded or dropped):
         _matrix_cache.clear()  # same-process searches see the new index immediately
-    return {"embedded": embedded, "dropped": int(dropped or 0), "corpus": len(rows)}
+    return {"embedded": embedded, "dropped": int(dropped or 0), "corpus": int(corpus or 0)}
 
 
 # --- query side: the cached matrix + brute-force cosine ---------------------------------

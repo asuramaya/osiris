@@ -37,6 +37,7 @@ from src.orchestrator.census import live_bodies, live_bodies_by_cwd
 from src.orchestrator.deploy_guard import (
     alarm_schema_drift,
     alarm_unreviewed_boot,
+    check_and_alarm_unreviewed_boot,
     check_and_resolve_clean_boot,
     check_schema_drift,
     check_unreviewed_boot,
@@ -81,6 +82,67 @@ def register_default_watchers() -> None:
         SOURCE_TICKS[f"form_d:{term}"] = make_form_d_watcher(term)
 
 
+async def _proc_mem_kb() -> dict[str, int | None]:
+    """This process's own RSS/swap off /proc/self/status — mirrors mcp_server.py's own
+    helper (thread 4746e7f4/0c03a685); small and process-local enough (stdlib-only) that
+    a shared import wasn't worth coupling this daemon's boot path to the other daemon's
+    HTTP route module. Fails open to None per field rather than raising."""
+    out: dict[str, int | None] = {"rss_kb": None, "swap_kb": None}
+    try:
+        for line in await asyncio.to_thread(
+                lambda: Path("/proc/self/status").read_text().splitlines()):
+            if line.startswith("VmRSS:"):
+                out["rss_kb"] = int(line.split()[1])
+            elif line.startswith("VmSwap:"):
+                out["swap_kb"] = int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+_WORKER_MEMTRACE_MAX_FRAMES = 5
+_WORKER_MEMTRACE_RSS_REFUSE_KB = 1_500_000
+_WORKER_MEMTRACE_CHECK_INTERVAL_S = 5.0
+
+
+async def _boot_memtrace(window_s: float) -> None:
+    """Ports 8c7100c's bounded-window safety rails to the worker's own boot burst (thread
+    0c03a685) — the exact incident that redesign exists to prevent (an unbounded
+    tracemalloc pinning a live event loop) must never repeat here either. 5 frames, an
+    RSS tripwire, a hard duration cap, self-terminating with nobody polling — but unlike
+    the mcp route, this daemon has no HTTP surface: it logs the top allocation sites ONCE,
+    at the end of the window, since that is the only channel this process has."""
+    import tracemalloc
+
+    baseline = await _proc_mem_kb()
+    tracemalloc.start(_WORKER_MEMTRACE_MAX_FRAMES)
+    deadline = time.monotonic() + window_s
+    try:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_WORKER_MEMTRACE_CHECK_INTERVAL_S)
+            mem = await _proc_mem_kb()
+            if mem["rss_kb"] is not None and mem["rss_kb"] > _WORKER_MEMTRACE_RSS_REFUSE_KB:
+                break
+        snapshot = tracemalloc.take_snapshot()
+        top = snapshot.statistics("lineno")[:_WORKER_MEMTRACE_MAX_FRAMES]
+        final = await _proc_mem_kb()
+        _log.warning(
+            "boot memtrace: baseline rss_kb=%s swap_kb=%s -> final rss_kb=%s swap_kb=%s; "
+            "top allocation sites: %s", baseline["rss_kb"], baseline["swap_kb"],
+            final["rss_kb"], final["swap_kb"],
+            [f"{stat.traceback[0]} {round(stat.size / 1024, 1)}kB x{stat.count}"
+             for stat in top])
+    finally:
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+
+
+# THE BOOT SERIALIZATION GATE (thread 0c03a685): held only within osiris_worker_boot_
+# serialize_s of process start (checked against ctx["boot_serialize_until"], stamped once
+# in startup()) — a scheduled tick past that deadline never touches this lock at all.
+_boot_lock = asyncio.Lock()
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
     pool = await create_pool(
@@ -97,6 +159,10 @@ async def startup(ctx: dict[str, Any]) -> None:
     )
     ctx["pool"] = pool
     ctx["redis"] = redis
+    ctx["boot_serialize_until"] = time.monotonic() + settings.osiris_worker_boot_serialize_s
+    if settings.osiris_worker_boot_memtrace_enabled:
+        ctx["boot_memtrace_task"] = asyncio.create_task(
+            _boot_memtrace(settings.osiris_worker_boot_serialize_s + 30.0))
     register_default_watchers()
     # THE SCHEDULE IS THE SOURCE OF TRUTH; a watermark is only residue. A cron that is removed
     # leaves its vitals behind, and three separate readers went on reporting "NOT SENSING" forever
@@ -138,16 +204,23 @@ async def startup(ctx: dict[str, Any]) -> None:
         try:
             reboot_drift = await check_unreviewed_boot(pool)
             if reboot_drift:
-                from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
+                # THE GRACE WINDOW (thread c27afb62): a ref still unrecorded past 60
+                # minutes alarms exactly once, across both services — an ordinary
+                # in-flight deploy (this same ref recorded by `osiris deploy` any moment
+                # now) alarms nothing at all.
+                gated_drift = await check_and_alarm_unreviewed_boot(
+                    pool, service="osiris-worker")
+                if gated_drift:
+                    from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
 
-                running_head = _git_head(_REPO_ROOT) or "unknown"
-                src_root = None
-                with contextlib.suppress(Exception):
-                    from src.orchestrator.deploy_guard import _resolve_imported_src_root
+                    running_head = _git_head(_REPO_ROOT) or "unknown"
+                    src_root = None
+                    with contextlib.suppress(Exception):
+                        from src.orchestrator.deploy_guard import _resolve_imported_src_root
 
-                    src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
-                await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
-                                           service="osiris-worker", src_root=src_root)
+                        src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
+                    await alarm_unreviewed_boot(pool, gated_drift, running_head=running_head,
+                                               service="osiris-worker", src_root=src_root)
             else:
                 # THE CLEAN-BOOT LEG of the boot-watchdog supersession mechanism (operator
                 # ruling, DM 7032): a confirmed-clean boot closes this service's own older
@@ -159,6 +232,9 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    task = ctx.get("boot_memtrace_task")
+    if task is not None:
+        task.cancel()
     await ctx["pool"].close()
     await ctx["redis"].aclose()
 
@@ -855,28 +931,42 @@ def watched(fn: Any, *, every: int) -> Any:
 
     `every` is the job's cadence in seconds, stamped WITH the outcome, so the reader can tell
     "late" from "dead" without a table of magic numbers somewhere else.
+
+    BOOT SERIALIZATION (thread 0c03a685): within `ctx["boot_serialize_until"]` (stamped
+    once in startup()) this acquires `_boot_lock` before running `fn` — the fifteen
+    run_at_startup jobs that used to fire concurrently in the same ~3s window now queue
+    one at a time instead. Past that deadline the check is a cheap monotonic comparison
+    and the lock is never touched — a scheduled tick's steady-state cost is unchanged.
     """
     @functools.wraps(fn)
     async def run(ctx: dict[str, Any]) -> int:
-        pool = ctx["cascade"].actions.pool
-        t0 = time.monotonic()
-        try:
-            n: int = await fn(ctx)
-        except asyncio.CancelledError:  # arq's timeout: confess before dying, shielded
-            with contextlib.suppress(Exception):
-                await asyncio.shield(record_job(
-                    pool, fn.__name__, every=every, secs=time.monotonic() - t0, error="timeout"))
-            raise
-        except Exception as exc:  # a hiccup must not kill the cron — but it MUST be recorded
-            _log.warning("%s failed: %r", fn.__name__, exc)
-            with contextlib.suppress(Exception):
-                await record_job(pool, fn.__name__, every=every,
-                                 secs=time.monotonic() - t0, error=repr(exc))
-            return 0
-        with contextlib.suppress(Exception):  # telemetry must never fail the work it watched
-            await record_job(pool, fn.__name__, every=every, secs=time.monotonic() - t0)
-        return n
+        deadline = ctx.get("boot_serialize_until")
+        if deadline is not None and time.monotonic() < deadline:
+            async with _boot_lock:
+                return await _run_watched(fn, ctx, every)
+        return await _run_watched(fn, ctx, every)
     return run
+
+
+async def _run_watched(fn: Any, ctx: dict[str, Any], every: int) -> int:
+    pool = ctx["cascade"].actions.pool
+    t0 = time.monotonic()
+    try:
+        n: int = await fn(ctx)
+    except asyncio.CancelledError:  # arq's timeout: confess before dying, shielded
+        with contextlib.suppress(Exception):
+            await asyncio.shield(record_job(
+                pool, fn.__name__, every=every, secs=time.monotonic() - t0, error="timeout"))
+        raise
+    except Exception as exc:  # a hiccup must not kill the cron — but it MUST be recorded
+        _log.warning("%s failed: %r", fn.__name__, exc)
+        with contextlib.suppress(Exception):
+            await record_job(pool, fn.__name__, every=every,
+                             secs=time.monotonic() - t0, error=repr(exc))
+        return 0
+    with contextlib.suppress(Exception):  # telemetry must never fail the work it watched
+        await record_job(pool, fn.__name__, every=every, secs=time.monotonic() - t0)
+    return n
 
 
 class WorkerSettings:

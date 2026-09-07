@@ -176,6 +176,34 @@ async def test_backfill_is_incremental_and_forgets_the_dead(
     assert n == baseline["embedded"] + 1
 
 
+async def test_backfill_never_returns_an_unchanged_winner_to_python(
+    actions: Actions, fake_embedder: FakeEmbedder,
+) -> None:
+    """THE BOOT SPIKE (thread 0c03a685): the corpus query used to fetch every winner text
+    (up to ~218k rows fleet-wide) into Python on EVERY pass, diffing hashes in a dict —
+    even a steady-state pass with nothing to embed paid the full fetch. The diff now runs
+    server-side (a CTE join against search_vectors, comparing md5(left(text,N)) directly)
+    so a no-change pass returns zero rows, not the whole corpus filtered down to zero in
+    Python."""
+    await _decision(actions, "decision:corpusdiet", "the warm swap demotion ruling stands")
+    await semantics.embed_backfill(actions.pool, fake_embedder)  # first pass: embeds it
+
+    real_fetch = actions.pool.fetch
+    rows_returned = {"n": None}
+
+    async def _counting_fetch(query: str, *args: object) -> object:
+        result = await real_fetch(query, *args)
+        if "WITH winners AS" in query:
+            rows_returned["n"] = len(result)
+        return result
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(actions.pool, "fetch", _counting_fetch)
+        r2 = await semantics.embed_backfill(actions.pool, fake_embedder)
+    assert r2["embedded"] == 0
+    assert rows_returned["n"] == 0  # the unchanged winner never crossed the wire
+
+
 async def test_matrix_cache_never_rebuilds_on_a_wall_clock_only_on_the_fingerprint(
     actions: Actions, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

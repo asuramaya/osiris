@@ -9527,6 +9527,7 @@ async def settle(
     threads_open: list[dict[str, Any]] | None = None,
     threads_resolve: list[dict[str, Any]] | None = None,
     repo_path: str | None = None,
+    standing_orders: str | None = None, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -9545,7 +9546,16 @@ async def settle(
     `repo_path` names your code repo for the git-status box (`uncommitted_git_files`) —
     your mounted cwd is checked only as a fallback, usually wrong for a seat-office
     agent. A decision's `resolves=` and a same-call `threads_resolve` item naming the
-    same thread get the closure edge wired automatically. consult_canon('settle')."""
+    same thread get the closure edge wired automatically.
+
+    `standing_orders='unchanged'` (thread 8686cba4, requires `because`) closes the
+    "standing orders touched this session" box HONESTLY for a seat whose charter.md/
+    CLAUDE.md genuinely did not change this session — a seat-office body otherwise reads
+    complete:false forever on this box alone (root cause thread 169e64ec), which starves
+    the self-compaction seam (ruling a3fb7c11) of the completeness it requires. Recorded
+    as a real property (`standing_orders_unchanged`), never a silent pass; the box also
+    now closes on its own from a `charter()`/`charter_for` or `practice(record|amend)`
+    call THIS session, with no extra argument needed. consult_canon('settle')."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — settle is a mind's own ritual, the graph must "
@@ -9553,6 +9563,27 @@ async def settle(
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     now = datetime.now(UTC)
+
+    rejected: list[dict[str, str]] = []
+    if standing_orders is not None:
+        if standing_orders != "unchanged":
+            rejected.append({
+                "kind": "standing_orders", "summary": standing_orders,
+                "error": "the only recognized value is 'unchanged' — anything else is "
+                         "either a typo or a claim this door doesn't know how to record",
+            })
+        elif not because:
+            rejected.append({
+                "kind": "standing_orders", "summary": "unchanged",
+                "error": "because is required — declaring standing orders unchanged is "
+                         "a deliberate claim, not a default",
+            })
+        else:
+            agent_oid = await Actions(pool).create_or_find_object(
+                "Agent", ident.agent_id, actor)
+            await Actions(pool).assert_property(
+                agent_oid, "standing_orders_unchanged", because.strip(), actor, now, 0.9,
+                evidence_class="self_declared")
 
     accepted: dict[str, list[Any]] = {"decisions": [], "threads_opened": [], "threads_resolved": []}
     # task #107's fork (Thoth's ruling, DM 2250): settle is the END-OF-CONTEXT RITUAL — its
@@ -9562,7 +9593,8 @@ async def settle(
     # inverse of resolves/confirms/grounds's own "one bad ref must not veto the rest of the
     # set" a few hundred lines above. `rejected` NAMES every dropped item and why (never a
     # silent partial accept — see `complete` below, which now reads False on any rejection).
-    rejected: list[dict[str, str]] = []
+    # (declared above, before the standing_orders handling, so a rejected standing_orders
+    # claim shows up in the same list as every other rejected item this call makes)
     # PHASE 1b (decision cb38d922, DM 2506): settle holds BOTH halves of a decision/thread
     # relationship in one payload — record which thread(s) each accepted decision answered
     # via its OWN resolves=, so the threads_resolve loop below can wire the reverse edge
@@ -10561,6 +10593,7 @@ async def _boot_check() -> None:
     from src.orchestrator.deploy_guard import (
         alarm_schema_drift,
         alarm_unreviewed_boot,
+        check_and_alarm_unreviewed_boot,
         check_and_resolve_clean_boot,
         check_schema_drift,
         check_unreviewed_boot,
@@ -10598,16 +10631,22 @@ async def _boot_check() -> None:
         try:
             reboot_drift = await check_unreviewed_boot(pool)
             if reboot_drift:
-                from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
+                # THE GRACE WINDOW (thread c27afb62): a ref still unrecorded past 60
+                # minutes alarms exactly once, across both services — an ordinary
+                # in-flight deploy (this same ref recorded by `osiris deploy` any moment
+                # now) alarms nothing at all.
+                gated_drift = await check_and_alarm_unreviewed_boot(pool, service="osiris-mcp")
+                if gated_drift:
+                    from src.orchestrator.deploy_guard import _REPO_ROOT, _git_head
 
-                running_head = _git_head(_REPO_ROOT) or "unknown"
-                src_root = None
-                with contextlib.suppress(Exception):
-                    from src.orchestrator.deploy_guard import _resolve_imported_src_root
+                    running_head = _git_head(_REPO_ROOT) or "unknown"
+                    src_root = None
+                    with contextlib.suppress(Exception):
+                        from src.orchestrator.deploy_guard import _resolve_imported_src_root
 
-                    src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
-                await alarm_unreviewed_boot(pool, reboot_drift, running_head=running_head,
-                                           service="osiris-mcp", src_root=src_root)
+                        src_root = str(await asyncio.to_thread(_resolve_imported_src_root))
+                    await alarm_unreviewed_boot(pool, gated_drift, running_head=running_head,
+                                               service="osiris-mcp", src_root=src_root)
             else:
                 # THE CLEAN-BOOT LEG of the boot-watchdog supersession mechanism (operator
                 # ruling, DM 7032): a confirmed-clean boot closes this service's own older

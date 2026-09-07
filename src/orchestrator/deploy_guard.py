@@ -373,6 +373,80 @@ async def alarm_unreviewed_boot(
         )
 
 
+_UNREVIEWED_BOOT_GRACE_S = 3600.0  # 60 minutes
+_UNREVIEWED_BOOT_GRACE_KEY = "unreviewed_boot:grace"
+
+
+async def check_and_alarm_unreviewed_boot(
+    pool: asyncpg.Pool, *, service: str, running_head: str | None = None,
+) -> str | None:
+    """THE GRACE WINDOW (thread c27afb62, operator's desk 2026-09-06: one condition folded
+    42 deep, from osiris-mcp and osiris-worker alike, every one stale within minutes
+    because `osiris deploy` recorded the same ref moments later). A bare check-then-alarm
+    pair fired on the VERY FIRST restart after any new commit landed, even on a completely
+    ordinary deploy where the ref was always going to be recorded seconds later — this is
+    the same "warm-up curve mistaken for a state" shape, just on a boot watchdog instead
+    of a metric.
+
+    A single shared watermark (`_UNREVIEWED_BOOT_GRACE_KEY`, keyed across BOTH services —
+    the whole point is one brief, not one per confessing service) tracks the CURRENT
+    unrecorded ref's own first-sighting time and whether it has already been alarmed:
+      - a clean boot (drift is None) clears the watermark — the NEXT genuinely new
+        unrecorded ref starts its own grace window fresh, never an inherited stale clock.
+      - the FIRST sighting of a given ref starts the clock and alarms nothing.
+      - the SAME ref seen again before `_UNREVIEWED_BOOT_GRACE_S` has elapsed alarms
+        nothing (an ordinary in-flight deploy, still well within its own normal cadence).
+      - the SAME ref still unrecorded PAST the grace window returns the drift text on
+        EXACTLY ONE call — this function never calls `alarm_unreviewed_boot` itself (the
+        caller does, on a non-None return, same as it always has); it marks the watermark
+        alarmed in the SAME call that returns non-None, so a further call as ANY service,
+        on the SAME ref, sees `alarmed` already set and gets None back — quiet by
+        construction, not by the caller remembering to check something extra.
+      - a DIFFERENT ref appearing mid-window (a second deploy landed before the first was
+        ever alarmed) resets the clock onto the new ref — `alarm_unreviewed_boot`'s own
+        `running_head`-keyed dedup already handles the case where a ref that WAS already
+        alarmed gets superseded (`resolve_alarms_superseded_by_clean_boot`).
+
+    Best-effort, not a strict distributed lock (same fail-open law as every check in this
+    module) — a narrow race between two services crossing the grace threshold in the same
+    instant could in principle both see the pre-flip state and both alarm; a spurious
+    extra brief is a strictly smaller cost than the 42-fold noise this exists to cure, so
+    no stronger primitive is worth it here. Returns the drift text on the ONE call the
+    caller should pass to `alarm_unreviewed_boot`, None on every other outcome — clean
+    boot, still inside the grace window, or someone else already alarmed this exact ref."""
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    drift = await check_unreviewed_boot(pool)
+    if drift is None:
+        with contextlib.suppress(Exception):
+            await set_cursor(pool, _UNREVIEWED_BOOT_GRACE_KEY, "")
+        return None
+    head = running_head or _git_head(_REPO_ROOT)
+    if not head:
+        return None  # can't name the ref to track — fail open, never a guessed alarm
+    try:
+        raw = await get_cursor(pool, _UNREVIEWED_BOOT_GRACE_KEY)
+        seen_head, _, rest = (raw or "").partition("|")
+        first_seen_iso, _, alarmed_flag = rest.partition("|")
+        if seen_head != head:
+            # a fresh ref (or no watermark yet) — start its own clock, alarm nothing yet
+            await set_cursor(pool, _UNREVIEWED_BOOT_GRACE_KEY,
+                             f"{head}|{datetime.now(UTC).isoformat()}|0")
+            return None
+        if alarmed_flag == "1":
+            return None  # this exact ref already alarmed, by this service or the other
+        first_seen = datetime.fromisoformat(first_seen_iso)
+        elapsed = (datetime.now(UTC) - first_seen).total_seconds()
+        if elapsed < _UNREVIEWED_BOOT_GRACE_S:
+            return None  # still inside the grace window — an ordinary in-flight deploy
+        await set_cursor(pool, _UNREVIEWED_BOOT_GRACE_KEY,
+                         f"{head}|{first_seen_iso}|1")
+    except Exception as exc:  # noqa: BLE001 — a watchdog failure must never itself alarm
+        _log.warning("unreviewed-boot grace-window check failed, staying quiet: %r", exc)
+        return None
+    return drift
+
+
 async def alarm_withheld_deploy_record(
     pool: asyncpg.Pool, *, running_head: str, reason: str,
 ) -> None:
