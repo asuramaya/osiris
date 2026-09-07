@@ -1354,7 +1354,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # kind='obligation' additionally refuses from an unmounted caller. No new tool, no new
 # schema param — one expanded docstring paragraph on open_thread naming both refusals.
 # Measured exact (113,926), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 113926
+# 113,246 -> 113,496 (2026-09-07, Imhotep, dispatch 2589353a, wave 4, operator's own
+# words "there has to be a verb that links the rename mechanically so agents don't get
+# lost"): project(action='rename')'s own ACTION TABLE line gains one sentence naming
+# the new cascade (every governing seat's pin/house/charter/office, under the verb's
+# own elevated authority) and the receipt's `manifest` field — no new tool, no new
+# schema param, the cascade itself lives entirely in project_identity.py/orchestrator
+# code the model never sees. Measured exact (113,496), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 114176
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

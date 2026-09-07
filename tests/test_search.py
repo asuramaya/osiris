@@ -28,6 +28,35 @@ async def _decision(actions: Actions, canonical: str, summary: str, source: str,
     await actions.assert_property(d, "summary", summary, source, NOW, conf, evidence_class=ec)
 
 
+async def _scoped_search(actions: Actions, q: str, project: str) -> dict:
+    spec = {"op": "function", "name": "search", "args": {"q": q, "project": project}}
+    out = await run_spec(actions.pool, spec, None, name="search")
+    return out["items"]
+
+
+async def test_search_project_scope_answers_under_either_name_after_a_rename(
+    actions: Actions,
+) -> None:
+    """THE RENAME READ ALIAS (dispatch 2589353a, the rename cascade verb): search's
+    `project=` scope filter used to match a literal `repo:<project>` canonical string —
+    permanently blind to the OLD label the moment a rename changed only the `name`
+    property (canonical never moves). `_resolve_repo`'s own name-or-canonical fallback
+    is what search's own GRAPH SCOPE FILTER now goes through."""
+    from src.orchestrator.capture import record_decision
+    from src.orchestrator.project_identity import rename_project
+
+    d = await record_decision(actions, "a decision about the search alias specimen",
+                              repo="searchaliasold")
+    await rename_project(actions, project="searchaliasold", new_name="searchaliasnew",
+                         because="test", actor="agent:test", dry_run=False)
+
+    under_new = await _scoped_search(actions, "search alias specimen", "searchaliasnew")
+    assert any(h["id"] == str(d) for h in under_new["hits"])
+
+    under_old = await _scoped_search(actions, "search alias specimen", "searchaliasold")
+    assert any(h["id"] == str(d) for h in under_old["hits"])
+
+
 async def test_search_reads_the_rooms_not_the_door_plaques(actions: Actions) -> None:
     """A decision whose SUMMARY says 'credence clamp' must be findable by those words —
     the exact miss the old name-only search shipped with."""

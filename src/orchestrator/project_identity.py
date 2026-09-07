@@ -455,6 +455,202 @@ def rename_evidence_verdict(evidence: dict[str, Any], new_name: str) -> str:
 
 # --- rename_project / fork_project (#110, decision 1db1ff41, rulings 1-2) -----------------
 
+def _dir_exists(target: str) -> bool:
+    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, same
+    convention identity_heal.py's own `_office_dir_exists`/trigger.py's `_tree_exists`
+    already document) — the tree-binding tier below only ever DETECTS, never provisions."""
+    return Path(target).is_dir()
+
+
+async def _cascade_governing_seats(
+    pool: asyncpg.Pool, *, project_oid: Any, old_name: str, new_name: str,
+    because: str, actor: str, dry_run: bool,
+) -> dict[str, Any]:
+    """THE RENAME CASCADE ITSELF (dispatch 2589353a, operator 2026-09-07 verbatim: "there
+    has to be a verb that links the rename mechanically so agents don't get lost, it's an
+    osiris problem"). For every seat governing the renamed project, reaches five tiers —
+    pin, house, charter, office render, tree binding — with the CASCADE'S OWN elevated
+    authority, never the caller's own: a project rename is a project-level act, not a
+    manager-subordinate one, so it calls the SAME "not headship-gated, callers
+    responsible" third-party doors this house already built for exactly this shape
+    (`correct_pin_value_third_party`, `resync_seat_house_third_party` — task #152/
+    fff496fe22b0's own precedent pair) plus the two doors that were never gated at all
+    (`set_charter`, `reissue_office` — Khnum's parallel fba386dc lane is what makes
+    `set_charter` atomic-with-read-back; this calls the identical function, no new one).
+
+    NEVER SILENCE ON A PARTIAL RESULT: returns a MANIFEST, every tier named 'touched' /
+    'already-correct' / 'could-not' per seat, so a caller sees the exact remainder
+    instead of a receipt that looks complete when it isn't. `dry_run=True` previews every
+    tier via each door's own peek/dry-run shape without writing anything; `dry_run=False`
+    executes them, one tier's failure caught and reported rather than aborting the rest
+    (a rename cascade that stops at the second seat because the first seat's office had
+    no CLAUDE.md would be strictly worse than a graph-only rename).
+
+    NEVER GUESSES A FILESYSTEM MOVE: tree binding is DETECT-ONLY — this verb reports
+    when a seat's `tree_cwd` still names the old label and whether a same-shaped new-
+    named path exists on disk, but never calls `bind_seat_tree` itself; inferring and
+    rebinding a code checkout's location is a deliberate act a human confirms, not
+    something a name-property write should trigger sight-unseen. Same law for the two
+    tiers this cascade can never reach at all: the project's own on-disk folder (never
+    moved by any Osiris verb, ff3bdc37) and the repo's own root `.osiris` file (a
+    third, distinct copy from any of a seat's own office/anchor/workspace pins that
+    `correct_pin_value_third_party` already reaches — no sanctioned write door exists
+    for it yet) — both named honestly in `could_not_reach`, never silently skipped."""
+    from src.orchestrator.boot_compiler import reissue_office
+    from src.orchestrator.charter import charter_of, set_charter
+    from src.orchestrator.offices import correct_pin_value_third_party
+    from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
+
+    seat_rows = await pool.fetch(
+        "SELECT s.canonical FROM links l JOIN objects s ON s.id=l.from_id "
+        "WHERE l.to_id=$1 AND l.type='governs' AND s.type='Seat' AND s.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", project_oid)
+    governing = [r["canonical"] for r in seat_rows]
+    actions = Actions(pool)
+
+    seats_out: dict[str, Any] = {}
+    for seat_id in governing:
+        facts = await seat_facts(pool, seat_id)
+        tiers: dict[str, Any] = {}
+
+        # PIN — correct_pin_value_third_party already reaches all three copies
+        # (office/anchor/workspace) in one call; its own dry_run=True IS the peek.
+        try:
+            peek = await correct_pin_value_third_party(
+                pool, seat_id, "project", new_name, reason=because, dry_run=True)
+            plan = peek.get("plan") or {}
+            if peek.get("error"):
+                tiers["pin"] = {"status": "could-not", "detail": peek["error"]}
+            elif not plan:
+                tiers["pin"] = {"status": "already-correct"}
+            elif dry_run:
+                tiers["pin"] = {"status": "touched", "plan": plan}
+            else:
+                real = await correct_pin_value_third_party(
+                    pool, seat_id, "project", new_name, reason=because, dry_run=False)
+                # PER-COPY SUCCESS, NOT THE BLUNT TOP-LEVEL ERROR: correct_own_pin_value
+                # (which this delegates to) reports the OFFICE copy's own outcome at the
+                # TOP LEVEL and the anchor/workspace copies nested under their own keys —
+                # a seat with no conventional office (only a real anchor/workspace copy,
+                # a live shape this house already treats as legitimate, #199) sees a
+                # top-level `error` from the office attempt alone even when the copy the
+                # PLAN actually named got written. Success is "any copy the plan named
+                # actually landed," never "the office copy in particular succeeded."
+                planned_ok = any(
+                    (real.get("written") is not False and not real.get("error")
+                     if label == "office" else
+                     isinstance(real.get(label), dict) and not real[label].get("error"))
+                    for label in plan
+                )
+                tiers["pin"] = ({"status": "touched", "detail": real} if planned_ok else
+                                {"status": "could-not",
+                                 "detail": real.get("error") or real})
+        except Exception as exc:  # noqa: BLE001 — one tier's failure must never sink the rest
+            tiers["pin"] = {"status": "could-not", "detail": str(exc)}
+
+        # HOUSE — only touch when it currently names the OLD label; a house a seat
+        # legitimately shares with siblings under a third name is never this cascade's
+        # to overwrite (house is DERIVED, ruling ff6148b0 — not every seat's house IS
+        # its project name).
+        house = facts.get("house")
+        if house == new_name:
+            tiers["house"] = {"status": "already-correct"}
+        elif house != old_name:
+            tiers["house"] = {"status": "already-correct",
+                              "note": f"house={house!r} names neither {old_name!r} nor "
+                                      f"{new_name!r} — left untouched, not this cascade's "
+                                      "to guess"}
+        elif dry_run:
+            tiers["house"] = {"status": "touched",
+                              "plan": f"{old_name!r} -> {new_name!r}"}
+        else:
+            try:
+                hres = await resync_seat_house_third_party(
+                    actions, seat_id, new_name, source=actor, reason=because)
+                tiers["house"] = ({"status": "could-not", "detail": hres["error"]}
+                                  if hres.get("error") else {"status": "touched", "detail": hres})
+            except Exception as exc:  # noqa: BLE001
+                tiers["house"] = {"status": "could-not", "detail": str(exc)}
+
+        # CHARTER — set_charter replaces the WHOLE list; read current, swap the old
+        # label for the new one, write back the full set (never a partial add).
+        try:
+            current_charter = await charter_of(pool, seat_id)
+            if old_name in current_charter:
+                new_charter = sorted({new_name if r == old_name else r
+                                      for r in current_charter})
+                if dry_run:
+                    tiers["charter"] = {"status": "touched",
+                                        "plan": f"{sorted(current_charter)} -> {new_charter}"}
+                else:
+                    cres = await set_charter(actions, seat_id, new_charter, actor=actor)
+                    tiers["charter"] = ({"status": "could-not", "detail": cres["error"]}
+                                        if cres.get("error")
+                                        else {"status": "touched", "detail": cres})
+            elif new_name in current_charter:
+                tiers["charter"] = {"status": "already-correct"}
+            else:
+                tiers["charter"] = {"status": "already-correct",
+                                    "note": "charter names neither the old nor the new "
+                                            "label — left untouched"}
+        except Exception as exc:  # noqa: BLE001
+            tiers["charter"] = {"status": "could-not", "detail": str(exc)}
+
+        # OFFICE RENDER — recompile CLAUDE.md so it reflects whatever charter/house
+        # this same call already corrected above (runs after, on purpose).
+        anchor = facts.get("anchor_cwd")
+        if not anchor or not (Path(anchor) / "CLAUDE.md").is_file():
+            tiers["office"] = {"status": "could-not",
+                               "detail": "no office/CLAUDE.md on record for this seat"}
+        elif dry_run:
+            tiers["office"] = {"status": "touched",
+                               "plan": "would reissue_office to reflect the updated "
+                                       "charter/house"}
+        else:
+            try:
+                ores = await reissue_office(actions, seat_id=seat_id, because=because,
+                                            actor=actor)
+                tiers["office"] = ({"status": "could-not", "detail": ores["error"]}
+                                   if ores.get("error") else {"status": "touched", "detail": ores})
+            except Exception as exc:  # noqa: BLE001
+                tiers["office"] = {"status": "could-not", "detail": str(exc)}
+
+        # TREE BINDING — DETECT ONLY, never written (see docstring above).
+        tree_cwd = facts.get("tree_cwd")
+        if tree_cwd and f"/{old_name}" in tree_cwd:
+            candidate = tree_cwd.replace(f"/{old_name}", f"/{new_name}")
+            if not _dir_exists(tree_cwd) and _dir_exists(candidate):
+                tiers["tree"] = {
+                    "status": "could-not",
+                    "detail": f"tree_cwd {tree_cwd!r} no longer exists on disk and "
+                             f"{candidate!r} does — this cascade never rebinds a tree "
+                             "automatically; confirm it, then call "
+                             f"seat(action='bind_tree', seat_id={seat_id!r}, "
+                             f"tree_cwd={candidate!r}) yourself"}
+            else:
+                tiers["tree"] = {
+                    "status": "could-not",
+                    "detail": f"tree_cwd {tree_cwd!r} references the old name — this "
+                             "cascade never moves or infers folders, only detects"}
+        else:
+            tiers["tree"] = {"status": "already-correct"}
+
+        seats_out[seat_id] = tiers
+
+    return {
+        "seats": seats_out,
+        "could_not_reach": {
+            "folder_path": "the project's on-disk directory is never moved by this "
+                           "verb — mv it yourself first if the rename should follow "
+                           "the code",
+            "repo_root_osiris": "a repo's own .osiris pin file at its root (distinct "
+                                "from any seat's own office/anchor/workspace pin "
+                                "copies) has no sanctioned write door yet — correct "
+                                "it by hand",
+        },
+    }
+
+
 async def rename_project(
     actions: Actions, *, project: str, new_name: str, because: str, actor: str,
     dry_run: bool = True, merge_into: bool = False,
@@ -476,9 +672,19 @@ async def rename_project(
     same shape fold_project's own estate move already handles) is re-addressed old bare
     canonical -> new_name, so a fresh mount under the corrected name resolves cleanly.
 
-    OUT OF SCOPE, deliberately, named honestly rather than silently skipped (the same
-    discipline rename_seat holds for the harness window title it cannot reach): a
-    seat's own `.osiris` pin file on disk. This is a graph-only verb.
+    THE CASCADE (dispatch 2589353a, operator 2026-09-07: "there has to be a verb that
+    links the rename mechanically so agents don't get lost, it's an osiris problem"):
+    this verb is no longer graph-only. Every SEAT governing this project (a live
+    `governs` link) has its own pin/house/charter/office cascaded under this verb's
+    OWN elevated authority — see `_cascade_governing_seats` — never left to drift the
+    way Deckard's/Metron's own specimens did (decisions 0afe7d35/76559373). The
+    receipt's `manifest` names every tier `touched`/`already-correct`/`could-not`, per
+    seat, so a partial cascade hands back the exact remainder rather than silence.
+    OUT OF SCOPE STILL, named honestly rather than silently skipped (the same
+    discipline rename_seat holds for the harness window title it cannot reach): the
+    project's own on-disk folder (never moved by any Osiris verb) and the repo's own
+    ROOT `.osiris` file (a third copy, distinct from any seat's own office/anchor/
+    workspace pins) — both named in the manifest's own `could_not_reach`.
 
     THE CALLER DECLARES; THIS FUNCTION NEVER INFERS (ruling 1db1ff41, verbatim:
     "declared, all roads lead to explicit"). `because` is mandatory — a rename is
@@ -550,11 +756,15 @@ async def rename_project(
         "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         row["id"])
     if dry_run:
+        manifest = await _cascade_governing_seats(
+            actions.pool, project_oid=row["id"], old_name=old_name or "", new_name=new_name,
+            because=because, actor=actor, dry_run=True)
         return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
                 "because": because, "dry_run": True,
                 "collision": (f"{collide['canonical']} (status={collide['status']}) — "
                               "would proceed only because merge_into=True"
                               if collide is not None else None),
+                "manifest": manifest,
                 "note": "preview only — pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "name", new_name, actor, now, _RENAME_CONF,
@@ -563,6 +773,9 @@ async def rename_project(
     mount_tag = await actions.pool.execute(
         "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
     mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
+    manifest = await _cascade_governing_seats(
+        actions.pool, project_oid=row["id"], old_name=old_name or bare_old, new_name=new_name,
+        because=because, actor=actor, dry_run=False)
     from src.orchestrator.capture import property_prior_art
     from src.orchestrator.identity_heal import detect_possibly_stale_seats
 
@@ -571,10 +784,13 @@ async def rename_project(
         new_value=new_name, because=because, actor=actor)
     stale = await detect_possibly_stale_seats(actions.pool, old_name or bare_old)
     return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
+           "manifest": manifest,
            "mounts_moved": mounts_moved, "because": because,
            "note": f"{row['canonical']}'s canonical id never changes; edges already "
-                   "pointing at it are unaffected; its own .osiris pin file on disk "
-                   "is NOT touched by this verb",
+                   "pointing at it are unaffected; every GOVERNING SEAT's own pin/"
+                   "house/charter/office is cascaded (see manifest) — the project's "
+                   "own on-disk folder and its repo-root .osiris are not (manifest's "
+                   "own could_not_reach names both)",
            "possibly_stale_seats": stale,
            **prior_art_bits}
 

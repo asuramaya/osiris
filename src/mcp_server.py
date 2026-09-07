@@ -3756,8 +3756,8 @@ async def _project_briefing(
     collapses into a counted line instead of riding forever), and the TRIAGE CARD: up to 3 of
     the oldest echoes handed to each session with the three honest verbs. Ranking + collapse
     at the LENS only — the record keeps every thread open until testimony says otherwise."""
-    proj = await pool.fetchval(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1", f"repo:{project}")
+    from src.orchestrator.capture import _resolve_repo
+    proj = await _resolve_repo(pool, project)
     if proj is None:
         return None
     # `me` is the wall's identity SET ({agent_id, project}, or {'operator'} from the
@@ -4013,9 +4013,8 @@ async def _get_thread_list_body(
     missing filter) by requiring `l.valid_until IS NULL OR l.valid_until > now()`, the
     same convention `create_link`'s own retraction path already documents."""
     pool = await _pool_get()
-    proj = await pool.fetchval(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-        f"repo:{project}")
+    from src.orchestrator.capture import _resolve_repo
+    proj = await _resolve_repo(pool, project)
     if proj is None:
         return {"error": f"no project {project!r}", "threads": [], "total": 0}
     project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
@@ -4127,9 +4126,8 @@ async def _get_decision_list_body(
     from get_decision_list's own top-level function body before the fold (task #202
     wave 4, decision 6fe4305c)."""
     pool = await _pool_get()
-    proj = await pool.fetchval(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-        f"repo:{project}")
+    from src.orchestrator.capture import _resolve_repo
+    proj = await _resolve_repo(pool, project)
     if proj is None:
         return {"error": f"no project {project!r}", "decisions": [], "total": 0}
     project_ids, charter_repos = await _charter_scoped_project_ids(pool, ctx, project, proj)
@@ -5151,9 +5149,8 @@ async def threads(project: str | None = None, render: str | None = None,
     proj = project or (ident.project if ident else None)
     if ident is None or proj is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
-    proj_id = await pool.fetchval(
-        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-        f"repo:{proj}")
+    from src.orchestrator.capture import _resolve_repo
+    proj_id = await _resolve_repo(pool, proj)
     if proj_id is None:
         return {"error": f"no project {proj!r}", "threads": []}
     from src.orchestrator.stophook_logic import owner_refs
@@ -6459,7 +6456,10 @@ async def project(
         given + because given is the THIRD-PARTY shape instead)
       rename: declare a project's new NAME, non-canonical (project, new_name, because).
         dry_run=True by default (pass dry_run=False to actually write) — refuses a
-        new_name already naming a DIFFERENT project of any status unless merge_into=True
+        new_name already naming a DIFFERENT project of any status unless merge_into=True.
+        CASCADES to every governing seat's pin/house/charter/office under this verb's
+        own elevated authority; the receipt's `manifest` names every tier touched/
+        already-correct/could-not, per seat — never silence on a partial result
       fork: declare two already-active projects a FORK pair (project, fork_into, because)
       unfork: reverse a fork pair's live edge (project, fork_into, because)
       retire: retire a dead project stub, third-party (project, because)
