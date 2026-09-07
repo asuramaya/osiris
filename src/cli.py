@@ -4353,6 +4353,53 @@ async def cmd_detach_seat(
     return 0
 
 
+async def cmd_promote(
+    target: str, workers: list[str], because: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris promote <target> <worker1> [worker2 ...] --because <str> [--actor W] — the
+    console-script door onto orchestrator.seats.promote_seat, the SAME function the seat
+    MCP tool's action='promote' branch wraps. Mints target as manager over each worker
+    (peer bonds invalidated, house derived, offices reissued), one transaction, per-worker
+    outcomes never a whole-call failure. `--actor` defaults to `_CONSOLE_ACTOR`
+    ('console'), one of promote_seat's own recognized operator sentinels — a bare
+    terminal invocation IS the operator's own hand by construction, same authority every
+    other third-party seat-write CLI door in this file already carries."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import promote_seat as _promote_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:promote")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris promote: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _promote_seat(Actions(pool), target, workers, because=because,
+                                  actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris promote: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"promoted {out['promoted']} over {len(workers)} worker(s)")
+    for worker, verdict in out.get("workers", {}).items():
+        print(f"  {worker}: {verdict}")
+    return 0
+
+
 async def cmd_vacate_seat(
     seat_id: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
@@ -4988,7 +5035,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         rebind-seat, correct-pin-value, heal-seat-anchor,
                         transition-seat-project, correct-agent-house, reconcile-merge,
                         retire-agent, heal-seat-transcript, attach-seat, detach-seat,
-                        vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
+                        promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
                         rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project
@@ -5763,6 +5810,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                help=f"who is performing this act — defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
+    p_promote = sub.add_parser(
+        "promote", description=_d(
+            "mint a seat as manager over one or more workers, self-managed only — the "
+            "console-script door onto orchestrator.seats.promote_seat, the SAME function "
+            "the seat MCP tool's action='promote' branch wraps (operator 2026-09-07: "
+            "'thoth cannot do it, it has to be self managed')"),
+        epilog="example: osiris promote nebbercracker jenny chowder dustin "
+              "--because \"nebbercracker leads monsterhouse now\"")
+    p_promote.add_argument("target", help="the seat becoming the manager")
+    p_promote.add_argument("workers", nargs="+", help="the seat(s) gaining this manager")
+    p_promote.add_argument("--because", required=True, help="why this promotion is real")
+    p_promote.add_argument("--actor", default=_CONSOLE_ACTOR,
+                           help=f"who is performing this act — defaults to "
+                                f"{_CONSOLE_ACTOR!r}")
+
     p_detach_seat = sub.add_parser(
         "detach-seat", description=_d(
             "invalidate a seat's active managed_by edge — the console-script door onto "
@@ -6109,6 +6171,9 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model, actor=args.actor))
     if args.command == "bootstrap":
         return asyncio.run(cmd_bootstrap(args.cwd, project=args.project, actor=args.actor))
+    if args.command == "promote":
+        return asyncio.run(cmd_promote(args.target, args.workers, args.because,
+                                       actor=args.actor))
     if args.command == "attach-seat":
         return asyncio.run(cmd_attach_seat(args.worker, args.manager, args.evidence,
                                            actor=args.actor))

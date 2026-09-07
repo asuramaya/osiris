@@ -3285,3 +3285,97 @@ async def attach_seat(
                                   _CONF, evidence_class=_EC)
     return {"attached": worker_row["canonical"], "now_managed_by": manager_row["canonical"],
             "evidence": evidence}
+
+
+async def promote_seat(
+    actions: Actions, target: str, workers: list[str], *, because: str, actor: str,
+) -> dict[str, Any]:
+    """The verb Thoth cannot run for another seat (operator, 2026-09-07: "it has to be
+    self managed"): mint `target` as manager over each named worker, in ONE transaction,
+    self-scoped to the promoted seat's own body (or the operator) so a coordinator can
+    never do this TO someone else's team. Per-worker outcome, never a whole-call failure —
+    a batch of promotions is a manifest of independent bets, not one atomic all-or-nothing
+    (the nebbercracker specimen: promoting over three workers where one already reports to
+    someone else should still bond the other two, not refuse the whole call over the one
+    name that needed a human to sort out).
+
+    Each worker's own OWN pair — invalidate an active peer_of bond to `target` (if any),
+    then attach `managed_by target` — IS atomic (both land or neither does): a crash
+    mid-worker must never leave a worker unpeered from `target` with no replacement bond.
+    Reuses `attach_seat`'s own guard shape (blank evidence, unknown/inactive seat, self-
+    management) inline rather than calling it, because attach_seat opens no transaction of
+    its own and this whole batch must share ONE (actions.atomic() from a caller already
+    inside one would nest a second transaction on the same connection, which asyncpg
+    permits but this file's own atomic() docstring never promises is safe to nest).
+
+    House is NEVER stamped here — derive_house (ruling ff6148b0) reads the new managed_by
+    chain live, same as every other seat. Office reissue and the in-process mount-cache
+    heal are the CALLER's job (src/mcp_server.py's `_seat_impl`): both touch state this
+    function's own `actions.pool` cannot reach (a Path write, a module-level dict), and
+    reissue in particular must run AFTER this transaction commits, not inside it.
+
+    Refuses the WHOLE call LOUDLY on: blank `because`; an unknown/inactive `target`; or an
+    unauthorized `actor` (neither `target`'s own holder nor an operator sentinel). Never
+    refuses the whole call over a single worker's own bad reference or existing manager —
+    those are per-worker verdicts in the returned `workers` manifest instead:
+    'bonded' | 'already-managed' | 'refused: <why>'."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — promoting a seat over workers is a "
+                         "deliberate act on the record"}
+    target = (target or "").strip()
+    target_row = await _resolve_active_seat(actions.pool, target)
+    if target_row is None:
+        return {"error": f"no such active seat: {target!r}"}
+    target_canonical = str(target_row["canonical"])
+
+    if actor not in _OPERATOR_ACTORS:
+        caller_seat = await held_seat(actions.pool, actor)
+        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+        if caller_seat_id is None or caller_seat_id != target_canonical:
+            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                          else f"{actor} (holds no seat)")
+            return {"error": f"{caller_desc} is not authorized to promote {target_canonical} "
+                             "over workers — this runs by the promoted seat's OWN body or "
+                             "the operator, never a coordinator acting on another's behalf"}
+
+    manifest: dict[str, str] = {}
+    affected: list[str] = [target_canonical]  # target's own office/cache always refreshes
+    now = datetime.now(UTC)
+    async with actions.atomic() as a:
+        for worker in workers:
+            worker_ref = (worker or "").strip()
+            worker_row = await _resolve_active_seat(a.pool, worker_ref)
+            if worker_row is None:
+                manifest[worker] = f"refused: no such active seat: {worker_ref!r}"
+                continue
+            worker_canonical = str(worker_row["canonical"])
+            if worker_row["id"] == target_row["id"]:
+                manifest[worker] = "refused: cannot promote a seat over itself"
+                continue
+            existing = await a.pool.fetchrow(
+                "SELECT t.canonical AS manager FROM links l JOIN objects t ON t.id=l.to_id "
+                "WHERE l.from_id=$1 AND l.type='managed_by' "
+                "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_row["id"])
+            if existing is not None:
+                if existing["manager"] == target_canonical:
+                    manifest[worker] = "already-managed"
+                    affected.append(worker_canonical)
+                else:
+                    manifest[worker] = f"refused: already managed by {existing['manager']}"
+                continue
+            peer = await _active_peer(a.pool, worker_row["id"])
+            if peer is not None and peer["peer"] == target_canonical:
+                await a.invalidate_link(peer["from_id"], peer["to_id"], "peer_of", actor, now)
+                for oid in (peer["from_id"], peer["to_id"]):
+                    await a.assert_property(oid, "unpeer_because", f"promoted: {because}",
+                                            actor, now, _CONF, evidence_class=_EC)
+            await a.create_link(worker_row["id"], target_row["id"], "managed_by", actor, now,
+                                _CONF, evidence_class=_EC)
+            await a.assert_property(worker_row["id"], "attached_evidence", because, actor, now,
+                                    _CONF, evidence_class=_EC)
+            manifest[worker] = "bonded"
+            affected.append(worker_canonical)
+
+    return {"promoted": target_canonical, "workers": manifest, "affected": affected,
+            "because": because}

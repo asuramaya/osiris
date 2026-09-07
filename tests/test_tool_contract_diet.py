@@ -1354,7 +1354,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # kind='obligation' additionally refuses from an unmounted caller. No new tool, no new
 # schema param — one expanded docstring paragraph on open_thread naming both refusals.
 # Measured exact (113,926), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 113926
+# 113,926 -> 114,316 (2026-09-07, Khnum, khnum-promotion-verb, operator 2026-09-07's
+# "promotion should be a verb ... self managed"): seat() gains action='promote' — a new
+# SEAT_INPUT_SCHEMA branch (target/workers/because) plus a one-line ACTION TABLE entry.
+# A genuinely new binding-moving verb, load-bearing growth per this file's own escape
+# valve, not incidental bloat trimmed away. No new tool. Measured exact (114,316), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 114316
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

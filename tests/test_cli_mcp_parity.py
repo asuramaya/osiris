@@ -338,6 +338,12 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # `send` needs no entry here: its name already matches the MCP tool's own 1:1.
     "decide": "record_decision",
     "thread": "thread:resolve",
+    # `promote` (khnum-promotion-verb, operator 2026-09-07) — a brand-new seat dispatcher
+    # action, same shape as stop/mint-seat/charter-for above: the CLI door's own params
+    # (target, workers, because) already match the dispatcher branch's own names 1:1, so
+    # this entry is only the tool-name pointer, nothing in CLI_ONLY_PARAMS/MCP_ONLY_PARAMS/
+    # RENAMED_PARAMS needed on top of it.
+    "promote": "seat:promote",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
