@@ -196,10 +196,14 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     from rebuilding an eval harness he had already written). This walks the census roots
     and makes 'exists on disk' a FIRST-CLASS graph fact: a repo the graph has never met
     is minted as a SoftwareProject with its on_disk_path and discovered='disk-census';
-    a known project gains its path if the graph lacked one. OBSERVATION ONLY — nothing
-    here grows the pulse's watch list (that remains a deliberate act, discover_trees'
-    doctrine), and remote-only repos stay honestly out of scope (no network read).
-    Idempotent: an unchanged disk costs reads, never writes.
+    a known project gains its path if the graph lacked one. A cwd whose `.git` is a FILE
+    (a worktree's own gitdir pointer, never a directory) is filed as a Worktree of its
+    parent project via a `worktree_of` link instead — see the worktree branch below,
+    thread 922d920c/migration 0062: this NEVER mints a second SoftwareProject for a
+    checkout that is really just another view onto one it already knows. OBSERVATION
+    ONLY — nothing here grows the pulse's watch list (that remains a deliberate act,
+    discover_trees' doctrine), and remote-only repos stay honestly out of scope (no
+    network read). Idempotent: an unchanged disk costs reads, never writes.
 
     THE MINT GOES THROUGH THE SAME CHOKE POINT AS EVERY OTHER LEGITIMATE MINT (ruling
     1db1ff41, both halves): `_mint_or_find_repo` runs `_validate_repo_name` before
@@ -247,7 +251,11 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     because the ambiguous case above refuses outright — a second confirmation walk would
     buy no correctness gain here, only latency."""
     from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo, _resolve_repo_by_remote
-    from src.orchestrator.project_identity import _git_remote
+    from src.orchestrator.project_identity import (
+        _git_remote,
+        git_current_branch,
+        worktree_parent_path,
+    )
 
     observed = datetime.now(UTC)
     ec = EvidenceClass.DIRECT_OBSERVATION.value
@@ -255,10 +263,59 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     pathed: list[str] = []
     remoted: list[str] = []
     reconnected: list[str] = []
+    worktrees: list[str] = []
     refused: list[dict[str, str]] = []
     known = 0
     for repo in _git_dirs(roots):
         name = repo.name
+
+        # WORKTREES AS A FIRST-CLASS SHAPE (thread 922d920c): `.git` a FILE, not a
+        # directory, is the unambiguous worktree signal `_git_dirs`'s own bare `.exists()`
+        # check can't distinguish from a real repo — before this, a worktree living as a
+        # SIBLING under a census root (never one nested under a repo's own `.claude/
+        # worktrees`, which `_git_dirs`'s early-return-on-`.git` already keeps unreached)
+        # minted its own SoftwareProject, keyed on the worktree dir's own basename (the
+        # ballgem-wt-* residue, census 583e2669/migration 0062). Filed as a Worktree of its
+        # PARENT project via a `worktree_of` link instead, never a second SoftwareProject.
+        if (repo / ".git").is_file():
+            parent_path = worktree_parent_path(str(repo))
+            if parent_path is None:
+                refused.append({"name": name, "path": str(repo),
+                                "reason": "looks like a worktree (.git is a file) but its "
+                                "parent checkout could not be resolved — refusing to guess"})
+                continue
+            parent_name = Path(parent_path).name
+            parent_obj = await _resolve_repo(actions.pool, parent_name)
+            if parent_obj is None:
+                try:
+                    parent_obj = await _mint_or_find_repo(
+                        actions, parent_name, observed, source="disk-census",
+                        evidence_class=ec, confidence=0.9)
+                    await actions.assert_property(parent_obj, "on_disk_path", parent_path,
+                                                  "disk-census", observed, 0.9,
+                                                  evidence_class=ec)
+                except ValueError as e:
+                    refused.append({"name": name, "path": str(repo),
+                                    "reason": f"parent project {parent_name!r}: {e}"})
+                    continue
+            tree_obj = await actions.create_or_find_object(
+                "Worktree", f"worktree:{name}", "disk-census")
+            await actions.assert_property(tree_obj, "on_disk_path", str(repo),
+                                          "disk-census", observed, 0.9, evidence_class=ec)
+            branch = git_current_branch(str(repo))
+            if branch:
+                await actions.assert_property(tree_obj, "branch", branch, "disk-census",
+                                              observed, 0.9, evidence_class=ec)
+            exists = await actions.pool.fetchval(
+                "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='worktree_of' "
+                "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1",
+                tree_obj, parent_obj)
+            if not exists:
+                await actions.create_link(tree_obj, parent_obj, "worktree_of",
+                                          "disk-census", observed, 0.9, evidence_class=ec)
+            worktrees.append(name)
+            continue
+
         _, remote_url = _git_remote(str(repo))
         existing = await _resolve_repo(actions.pool, name)
         if existing is None and remote_url:
@@ -340,7 +397,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                                               "disk-census", observed, 0.9, evidence_class=ec)
                 remoted.append(name)
     return {"known": known, "minted": minted, "pathed": pathed, "remoted": remoted,
-            "reconnected": reconnected, "refused": refused}
+            "reconnected": reconnected, "worktrees": worktrees, "refused": refused}
 
 
 async def neighborhoods_of(

@@ -354,6 +354,67 @@ async def test_census_trees_refuses_a_malformed_name_and_keeps_walking(
     assert minted_row == "active"
 
 
+def _real_repo_with_sibling_worktree(tmp_path: Path, repo_name: str, wt_name: str) -> None:
+    """The ballgem-wt-* shape (census 583e2669): a real worktree living as a SIBLING
+    directory directly under a census root, its OWN `.git` a FILE — never nested under
+    the parent's own `.claude/worktrees` (which `_git_dirs`'s early-return-on-`.git`
+    already keeps unreached, a different and already-safe case)."""
+    import subprocess
+    repo = tmp_path / "code" / repo_name
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "f.txt").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=repo, check=True)
+    wt = tmp_path / "code" / wt_name
+    subprocess.run(["git", "worktree", "add", "-q", "-b", wt_name, str(wt)],
+                   cwd=repo, check=True)
+
+
+async def test_census_trees_files_a_sibling_worktree_as_a_worktree_never_a_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 922d920c: a worktree's own `.git` is a FILE, not a directory — the one
+    signal `_git_dirs`'s bare `.exists()` check can't tell apart from a real repo, which
+    is exactly how ballgem-wt-358/359/361/363/nleg were minted as five phantom
+    SoftwareProjects (migration 0062 folds them). Filed as a Worktree of its parent via
+    `worktree_of` instead, carrying its own on_disk_path and checked-out branch — never a
+    second SoftwareProject for the same history."""
+    from src.orchestrator.neighborhoods import census_trees
+    _real_repo_with_sibling_worktree(tmp_path, "wtcensusparent", "wtcensusparent-branch")
+
+    out = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert out["minted"] == ["wtcensusparent"]
+    assert out["worktrees"] == ["wtcensusparent-branch"]
+    assert out["refused"] == []
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND status='active' "
+        "AND canonical LIKE 'repo:wtcensusparent%'") == 1
+
+    tree_row = await actions.pool.fetchrow(
+        "SELECT o.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='on_disk_path' LIMIT 1) AS path, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='branch' LIMIT 1) AS branch "
+        "FROM objects o WHERE o.type='Worktree' AND o.canonical='worktree:wtcensusparent-branch'")
+    assert tree_row is not None
+    assert tree_row["path"] == str(tmp_path / "code" / "wtcensusparent-branch")
+    assert tree_row["branch"] == "wtcensusparent-branch"
+    linked_parent = await actions.pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='worktree_of'", tree_row["id"])
+    assert linked_parent == "repo:wtcensusparent"
+
+    again = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert again["worktrees"] == ["wtcensusparent-branch"]  # idempotent, not a second link
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='worktree_of'",
+        tree_row["id"]) == 1
+
+
 # --- the read-back (thread 2309: "I could not have discovered my own zero") -------------
 
 async def test_discover_trees_includes_a_project_with_no_activity_at_all(

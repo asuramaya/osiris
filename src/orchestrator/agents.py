@@ -423,25 +423,36 @@ async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = Non
     house/project ruling, live specimen: Chad's statusline showed "Chad" — a mint-time
     fabrication — instead of the seat's own genuinely declared "cdking"). Resolution order,
     NEVER house: (1) the PIN at `cwd`, if given — `read_project_label`'s own climb-to-repo-
-    root, wins outright the instant it resolves to anything. (2) Absent a pin (or no `cwd`
-    given at all — most callers of this function have no cwd on hand, this is not an error,
-    it just skips straight to (2)): the agent's own seat's DECLARED charter (`charter_of`),
-    when it names exactly one repo — more than one is genuine ambiguity, not this
-    function's call to break, so it falls through. (3) Absent both: the agent's own
-    LINEAGE `works_in` (`lineage_works_in`), which already enforces the ABSTAIN law (only
-    when the WHOLE lineage agrees on one project) — resolved through `merged_into`
-    (`_normalize_project_label_through_merge`) so a since-folded project answers as its
-    live survivor. (4) Absent all three: None — an honest unresolved state (df646654/
-    68fba2e4: homeless is legal, a guess is not), never `house_of`'s raw stamp and never
-    `Seat.house`. Same law `heartbeat.compute_heartbeat` already ships for the statusline
-    (commit cbbb307) — this is that logic, generalized for every other caller."""
+    root (already transparent through a worktree's own gitlink, task #128), wins outright
+    the instant it resolves to anything. (1.5) Absent a pin ANYWHERE in that climb (task
+    #128 only helps once an `.osiris` exists somewhere above `cwd`; an unpinned repo like
+    ballgem has none at all, thread 922d920c/census 583e2669's own ballgem-wt-* residue):
+    if `cwd` is itself a git worktree (`worktree_parent_path`), its PARENT checkout's own
+    registered SoftwareProject name — a plain disk-structure signal, never a guess, and
+    None (never minted here) when the parent hasn't been censused yet. (2) Absent both:
+    the agent's own seat's DECLARED charter (`charter_of`), when it names exactly one repo
+    — more than one is genuine ambiguity, not this function's call to break, so it falls
+    through. (3) Absent all three: the agent's own LINEAGE `works_in` (`lineage_works_in`),
+    which already enforces the ABSTAIN law (only when the WHOLE lineage agrees on one
+    project) — resolved through `merged_into` (`_normalize_project_label_through_merge`)
+    so a since-folded project answers as its live survivor. (4) Absent everything: None —
+    an honest unresolved state (df646654/68fba2e4: homeless is legal, a guess is not),
+    never `house_of`'s raw stamp and never `Seat.house`. Same law
+    `heartbeat.compute_heartbeat` already ships for the statusline (commit cbbb307) — this
+    is that logic, generalized for every other caller."""
     from src.orchestrator.charter import charter_of
+    from src.orchestrator.project_identity import project_name_for_disk_path, worktree_parent_path
     from src.orchestrator.seats import held_seat
 
     if cwd:
         hint = read_project_label(cwd)
         if hint:
             return hint
+        parent_path = worktree_parent_path(cwd)
+        if parent_path:
+            parent_name = await project_name_for_disk_path(pool, parent_path)
+            if parent_name:
+                return parent_name
     seat = await held_seat(pool, agent_id)
     if seat and seat.get("seat_id"):
         repos = await charter_of(pool, seat["seat_id"])
