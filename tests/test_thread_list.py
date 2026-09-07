@@ -378,3 +378,67 @@ async def test_get_object_list_thread_branch_exposes_created_at_and_age_filter(
     assert str(fresh)[:8] not in ids
     row = next(th for th in out["threads"] if th["id"] == str(t)[:8])
     assert "created_at" in row and "T" in row["created_at"]
+
+
+# --- THE RENAME READ ALIAS (dispatch 2589353a, the rename cascade verb) -------------------
+#
+# "The old name stays a permanent READ alias (search/get_object_list/graph_search answer
+# under either)." Before this fix, every one of these resolved `project=` by a literal
+# `canonical = 'repo:' || project` string match — going permanently blind to items filed
+# under a project's OLD label the moment `rename_project` changed only its `name` property
+# (canonical never moves). `_resolve_repo`'s own name-or-canonical fallback already existed;
+# these call sites just never used it.
+
+async def test_get_thread_list_answers_under_the_new_name_after_a_rename(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.project_identity import rename_project
+
+    t = await open_thread(actions, "filed before any rename", repo="renamealiasold")
+    await rename_project(actions, project="renamealiasold", new_name="renamealiasnew",
+                         because="test", actor="agent:test", dry_run=False)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_thread_list("renamealiasnew")
+    finally:
+        srv._pool = saved_pool
+    assert str(t)[:8] in {th["id"] for th in out["threads"]}
+
+
+async def test_get_thread_list_still_answers_under_the_old_name_after_a_rename(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.project_identity import rename_project
+
+    t = await open_thread(actions, "filed before any rename, old-name read", repo="raoldstill")
+    await rename_project(actions, project="raoldstill", new_name="ranewstill",
+                         because="test", actor="agent:test", dry_run=False)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_thread_list("raoldstill")
+    finally:
+        srv._pool = saved_pool
+    assert str(t)[:8] in {th["id"] for th in out["threads"]}
+
+
+async def test_get_decision_list_answers_under_the_new_name_after_a_rename(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.project_identity import rename_project
+
+    d = await record_decision(actions, "a decision filed under the old project label",
+                              repo="radecold")
+    await rename_project(actions, project="radecold", new_name="radecnew",
+                         because="test", actor="agent:test", dry_run=False)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.get_decision_list("radecnew")
+    finally:
+        srv._pool = saved_pool
+    assert str(d)[:8] in {dd["id"] for dd in out["decisions"]}

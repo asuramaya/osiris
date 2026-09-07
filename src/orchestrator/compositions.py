@@ -528,14 +528,20 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # GRAPH SCOPE FILTER (Phase 2): hit-set filtering by project and/or lineage scope
     if (scope_project or scope_lineage) and hits:
         filters = []
-        sparams = []
+        sparams: list[Any] = []
         if scope_project:
-            proj_canon = "repo:" + scope_project
+            # RESOLVE BY NAME-OR-CANONICAL (dispatch 2589353a, the rename cascade
+            # verb): a renamed project's OLD label must still scope search — the same
+            # `_resolve_repo` law every other project reference already follows,
+            # never a literal `repo:<scope_project>` canonical match that goes blind
+            # the moment a rename changes only the `name` property.
+            from src.orchestrator.capture import _resolve_repo
+            scope_project_id = await _resolve_repo(pool, scope_project)
             filters.append("EXISTS (SELECT 1 FROM links l2 JOIN objects p2 ON p2.id=l2.to_id "
                            "WHERE l2.from_id=o.id AND l2.type='in_repo' "
                            "AND (l2.valid_until IS NULL OR l2.valid_until > now()) "
-                           "AND p2.canonical=$1 AND p2.status='active')")
-            sparams.append(proj_canon)
+                           "AND p2.id=$1 AND p2.status='active')")
+            sparams.append(scope_project_id)
         if scope_lineage:
             p = len(sparams) + 1
             filters.append("EXISTS (SELECT 1 FROM current_assertions sa "

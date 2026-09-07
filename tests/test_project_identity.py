@@ -643,6 +643,168 @@ async def test_rename_project_dry_run_writes_nothing(actions: Actions) -> None:
     assert mount_row == "drypreview"  # unchanged
 
 
+# --- THE RENAME CASCADE (dispatch 2589353a, operator 2026-09-07) --------------------------
+
+async def test_rename_cascade_reports_no_governing_seats_as_an_empty_manifest(
+    actions: Actions,
+) -> None:
+    await _mk_project(actions, "cascadelonely")
+    out = await rename_project(actions, project="cascadelonely", new_name="cascadelonelynew",
+                               because="x", actor="agent:test", dry_run=False)
+    assert out["manifest"]["seats"] == {}
+    assert "folder_path" in out["manifest"]["could_not_reach"]
+    assert "repo_root_osiris" in out["manifest"]["could_not_reach"]
+
+
+async def test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat(
+    actions: Actions, tmp_path,
+) -> None:
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "cascadeold"\n')
+    seat = await ensure_seat(actions, house="cascadeold", handle="Cascadeseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:casc0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:casc0001")
+    proj = await _mk_project(actions, "cascadeold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    dry = await rename_project(actions, project="cascadeold", new_name="cascadenew",
+                               because="x", actor="agent:test", dry_run=True)
+    dtiers = dry["manifest"]["seats"][seat["seat_id"]]
+    assert dtiers["pin"]["status"] == "touched"
+    assert dtiers["house"]["status"] == "touched"
+    assert dtiers["charter"]["status"] == "touched"
+    # a dry run previews only — nothing on disk or in the graph moved
+    assert (office / ".osiris").read_text() == 'project = "cascadeold"\n'
+
+    out = await rename_project(actions, project="cascadeold", new_name="cascadenew",
+                               because="operator ruling: rename", actor="agent:test",
+                               dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["pin"]["status"] == "touched"
+    assert tiers["house"]["status"] == "touched"
+    assert tiers["charter"]["status"] == "touched"
+    assert 'project = "cascadenew"' in (office / ".osiris").read_text()
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import seat_facts
+    # charter_of reports a CANONICAL-derived label, which never moves on a rename —
+    # "cascadeold" forever, by design (project_identity.rename_project's own contract).
+    # What matters is exactly ONE live governs edge, never a duplicate or a dropped one.
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["cascadeold"]
+    assert (await seat_facts(actions.pool, seat["seat_id"]))["house"] == "cascadenew"
+
+
+async def test_rename_cascade_reports_already_correct_on_a_second_run(
+    actions: Actions, tmp_path,
+) -> None:
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "idemold"\n')
+    seat = await ensure_seat(actions, house="idemold", handle="Idemseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:idem0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:idem0001")
+    proj = await _mk_project(actions, "idemold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    await rename_project(actions, project="idemold", new_name="idemnew", because="x",
+                         actor="agent:test", dry_run=False)
+
+    # renaming again (a truly free new_name this time) must never re-touch a seat
+    # already correct for the FIRST rename's target — proves "already-correct" isn't
+    # just "not the old name", it tracks the seat's own actual current state
+    dry2 = await rename_project(actions, project="idemnew", new_name="idemnew",
+                                because="x", actor="agent:test", dry_run=True)
+    tiers2 = dry2["manifest"]["seats"][seat["seat_id"]]
+    assert tiers2["pin"]["status"] == "already-correct"
+    assert tiers2["house"]["status"] == "already-correct"
+    assert tiers2["charter"]["status"] == "already-correct"
+
+
+async def test_rename_cascade_never_overwrites_an_unrelated_house(
+    actions: Actions, tmp_path,
+) -> None:
+    """A seat sharing a house with siblings under a THIRD name (neither old nor new) is
+    never this cascade's to guess — proven directly against the graph, not just the
+    receipt, since a wrong guess here is a silent identity corruption."""
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="thirdhouse", handle="Unrelatedseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:unrl0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:unrl0001")
+    proj = await _mk_project(actions, "unrelold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="unrelold", new_name="unrelnew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["house"]["status"] == "already-correct"
+    assert "note" in tiers["house"]
+    from src.orchestrator.seats import seat_facts
+    assert (await seat_facts(actions.pool, seat["seat_id"]))["house"] == "thirdhouse"
+
+
+async def test_rename_cascade_never_writes_or_infers_tree_binding(
+    actions: Actions, tmp_path,
+) -> None:
+    """Tree binding is DETECT-ONLY: even when the old-named path is gone and a same-
+    shaped new-named path genuinely exists on disk, the cascade must never call
+    bind_seat_tree itself — only report the finding."""
+    old_tree = tmp_path / "code" / "treeold"
+    new_tree = tmp_path / "code" / "treenew"
+    new_tree.mkdir(parents=True)
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Treeseat",
+                             anchor_cwd=str(office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     seat["seat_id"])),
+        "tree_cwd", str(old_tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:tree0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:tree0001")
+    proj = await _mk_project(actions, "treeold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="treeold", new_name="treenew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["tree"]["status"] == "could-not"
+    assert str(new_tree) in tiers["tree"]["detail"]
+    from src.orchestrator.seats import seat_facts
+    # unchanged — this cascade never rebinds a tree on its own
+    assert (await seat_facts(actions.pool, seat["seat_id"]))["tree_cwd"] == str(old_tree)
+
+
+async def test_rename_cascade_office_reports_could_not_with_no_claude_md(
+    actions: Actions, tmp_path,
+) -> None:
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Officeseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:offc0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:offc0001")
+    proj = await _mk_project(actions, "officeold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="officeold", new_name="officenew",
+                               because="x", actor="agent:test", dry_run=False)
+    assert out["manifest"]["seats"][seat["seat_id"]]["office"]["status"] == "could-not"
+
+
 # --- fork_project / unfork_project (#110, decision 1db1ff41) ------------------------------
 
 async def test_fork_project_mints_the_edge_and_moves_no_estate(actions: Actions) -> None:

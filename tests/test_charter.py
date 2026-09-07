@@ -120,6 +120,40 @@ async def test_set_charter_receipt_charter_field_is_the_committed_read_back(
                                         "declare your charter over it"}]
 
 
+async def test_set_charter_swapping_a_renamed_labels_old_for_new_leaves_exactly_one_edge(
+    actions: Actions,
+) -> None:
+    """THE SAME-OBJECT SELF-CANCELLATION (found building the rename cascade verb,
+    dispatch 2589353a; live specimen repo:xxit/handlingtheloop). A project's `repo:`
+    canonical never moves on a rename (project_identity.rename_project) — only its
+    `name` property does — so `_resolve_repo` resolves BOTH the pre-rename label and
+    the post-rename one to the IDENTICAL object. Swapping a charter's declared list
+    from the old label to the new one therefore resolves `added` and `removed` to the
+    same object id: before the fix, the unconditional `create_link` (added) then
+    `invalidate_link` (removed) sequence left ZERO live edges where there should be
+    exactly one — a real governance loss, not a display quirk."""
+    seat_id = await _seated(actions, "agent:swapster", "Swapster")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:oldlabel", "test")
+    await set_charter(actions, seat_id, ["oldlabel"], actor="agent:swapster")
+    n_before = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l WHERE l.from_id=(SELECT id FROM objects "
+        "WHERE canonical=$1) AND l.to_id=$2 AND l.type='governs' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id, proj)
+    assert n_before == 1
+
+    # simulate rename_project: canonical stays repo:oldlabel, only `name` changes —
+    # `_resolve_repo`'s own name-property fallback now answers "newlabel" too.
+    await actions.assert_property(proj, "name", "newlabel", "test", NOW, 0.95,
+                                  evidence_class="self_declared")
+
+    await set_charter(actions, seat_id, ["newlabel"], actor="agent:swapster")
+    live = await actions.pool.fetch(
+        "SELECT id FROM links l WHERE l.from_id=(SELECT id FROM objects WHERE "
+        "canonical=$1) AND l.to_id=$2 AND l.type='governs' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id, proj)
+    assert len(live) == 1  # neither zero (self-cancelled) nor two (duplicate mint)
+
+
 async def test_set_charter_is_idempotent(actions: Actions) -> None:
     seat_id = await _seated(actions, "agent:steward2", "Steward2")
     await _repo(actions, "a")
