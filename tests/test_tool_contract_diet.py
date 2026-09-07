@@ -1291,7 +1291,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # gains render='text' -- a new param plus a docstring paragraph naming the read-triangle's
 # server-side text mode (returns only {"text": <str>} instead of the structured receipt).
 # No new tool. Measured exact (106,940), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 106940  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 106,940 -> 107,376 (2026-09-07, Seshat, thread 68f1bafa, Thoth DM 7907, wave 2's settle.md
+# dependency): get_status gains `handoff_pending` -- a bare pointer ({"from", "refs"}) to an
+# unacknowledged ancestor handoff, so /settle can know one exists without paying orient()'s
+# full succession-note cost. Docstring paragraph + one new result field, no schema change
+# (no new param). Measured exact (107,376), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 107376  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
