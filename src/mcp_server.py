@@ -5091,7 +5091,8 @@ async def registry_census() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[str, Any]:
+async def roster(repo: str | None = None, want_caveats: bool = False,
+                 render: str | None = None) -> dict[str, Any]:
     """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
 
     `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — held but
@@ -5109,10 +5110,22 @@ async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[st
     Neither `chartered_repos` nor `pin` is certified canonical — this function's own
     blind spots (10 standing paragraphs, measured as this verb's own bytes/call
     offender) sit behind `want_caveats=True`; default is a one-line pointer.
-    consult_canon('roster') for more."""
+    consult_canon('roster') for more.
+
+    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
+    `repo=None` renders one line per seat, grouped by house, with an occupancy glyph
+    (`textrender.render_roster_text`); `repo=<name>` falls back to the generic
+    line-per-field renderer (already a small flat result, no hand-tuned shape needed)."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
-    return await _roster(pool, repo=repo, want_caveats=want_caveats)
+    result = await _roster(pool, repo=repo, want_caveats=want_caveats)
+    if render == "text":
+        if repo is None:
+            from src.orchestrator.textrender import render_roster_text
+            return {"text": render_roster_text(result.get("seats", []))}
+        from src.orchestrator.textrender import render_status_text
+        return {"text": render_status_text(result)}
+    return result
 
 
 @mcp.tool()

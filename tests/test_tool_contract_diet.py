@@ -1310,7 +1310,10 @@ TOOL_CONTRACT_EXPECTED_COUNT = 75
 # 108,579 -> 109,704 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): threads ships
 # as a new tool (its own docstring + inputSchema for project/render). Measured exact
 # (109,704), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 109704  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 109,704 -> 110,122 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): roster gains
+# render='text' -- a new param plus a docstring paragraph naming the read-triangle's
+# server-side text mode. No new tool. Measured exact (110,122), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 110122  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

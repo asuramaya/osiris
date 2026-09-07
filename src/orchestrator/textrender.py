@@ -68,6 +68,32 @@ def _render_backlog_row(row: dict[str, Any]) -> str:
     return f"{row['project']}: {row['open']}{target} open{past} — oldest: {owners}"
 
 
+_OCCUPANCY_GLYPH = {"occupied": "●", "cold": "○", "vacant": "·"}
+
+
+def render_roster_text(rows: list[dict[str, Any]]) -> str:
+    """One line per seat, grouped by house (a blank line between houses), an occupancy
+    glyph (thread 68f1bafa's own ask: "roster (house-scoped)") -- ● occupied, ○ cold
+    (held, nobody live this instant -- NOT vacant), · vacant (never held). No cap: a
+    fleet's seat count is bounded by the fleet itself, not an open-ended query."""
+    if not rows:
+        return "roster: no active seats"
+    by_house: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_house.setdefault(r.get("house") or "(no house)", []).append(r)
+    blocks = []
+    for house in sorted(by_house):
+        lines = [f"{house}:"]
+        for r in sorted(by_house[house], key=lambda r: r["handle"] or ""):
+            glyph = _OCCUPANCY_GLYPH.get(r["occupancy"], "?")
+            holder = f" ({r['holder']})" if r.get("holder") else ""
+            governs = ", ".join(r.get("chartered_repos") or [])
+            tail = f" — governs: {governs}" if governs else ""
+            lines.append(f"  {glyph} {r['handle']}{holder}{tail}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 THREADS_BAND_CAP = 30
 
 

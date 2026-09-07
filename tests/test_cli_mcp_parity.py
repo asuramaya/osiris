@@ -269,6 +269,8 @@ MCP_ONLY_PARAMS = {
         "terminal-side counterpart to be missing.",
     ("threads", "render"): "same reason as backlog's own entry above — the read "
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
+    ("roster", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
