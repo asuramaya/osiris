@@ -42,3 +42,140 @@ def _render_line(key: str, value: Any) -> str:
     if isinstance(value, (dict, list)):
         return f"{key}: {json.dumps(value, separators=(',', ':'))}"
     return f"{key}: {value}"
+
+
+BACKLOG_BAND_CAP = 20
+
+
+def render_backlog_text(rows: list[dict[str, Any]]) -> str:
+    """One line per project, already ordered by the caller (backlog()'s own sort: the
+    caller's own project first, then past-window projects, then by open count) — this
+    function only CAPS and FORMATS, never reorders. Caps at `BACKLOG_BAND_CAP`, the
+    remainder folded into one trailing count line rather than silently dropped."""
+    shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
+    if not shown:
+        return "backlog: no project carries an open obligation"
+    lines = [_render_backlog_row(r) for r in shown]
+    if remainder:
+        lines.append(f"+{remainder} more project(s)")
+    return "\n".join(lines)
+
+
+def _render_backlog_row(row: dict[str, Any]) -> str:
+    target = f"/{row['target']}" if row.get("target") is not None else ""
+    past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
+    owners = ", ".join(row.get("oldest_owners") or [])
+    return f"{row['project']}: {row['open']}{target} open{past} — oldest: {owners}"
+
+
+_OCCUPANCY_GLYPH = {"occupied": "●", "cold": "○", "vacant": "·"}
+
+
+def render_roster_text(rows: list[dict[str, Any]]) -> str:
+    """One line per seat, grouped by house (a blank line between houses), an occupancy
+    glyph (thread 68f1bafa's own ask: "roster (house-scoped)") -- ● occupied, ○ cold
+    (held, nobody live this instant -- NOT vacant), · vacant (never held). No cap: a
+    fleet's seat count is bounded by the fleet itself, not an open-ended query."""
+    if not rows:
+        return "roster: no active seats"
+    by_house: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_house.setdefault(r.get("house") or "(no house)", []).append(r)
+    blocks = []
+    for house in sorted(by_house):
+        lines = [f"{house}:"]
+        for r in sorted(by_house[house], key=lambda r: r["handle"] or ""):
+            glyph = _OCCUPANCY_GLYPH.get(r["occupancy"], "?")
+            holder = f" ({r['holder']})" if r.get("holder") else ""
+            governs = ", ".join(r.get("chartered_repos") or [])
+            tail = f" — governs: {governs}" if governs else ""
+            lines.append(f"  {glyph} {r['handle']}{holder}{tail}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def render_mail_text(messages: list[dict[str, Any]]) -> str:
+    """One line per ASK message (needs a reply/ack), FYI messages folded into a single
+    trailing count line rather than itemized (thread 68f1bafa's own "mail (fyi folded to
+    one line)" spec) — an inbox full of fyi noise must never bury the handful of asks
+    that actually need a decision."""
+    if not messages:
+        return "mail: empty"
+    asks = [m for m in messages if m.get("grade") == "ask"]
+    fyi = [m for m in messages if m.get("grade") != "ask"]
+    lines = [_render_mail_row(m) for m in asks]
+    if fyi:
+        lines.append(f"{len(fyi)} fyi message(s) — ack to settle")
+    if not lines:
+        return "mail: empty"
+    return "\n".join(lines)
+
+
+def _render_mail_row(m: dict[str, Any]) -> str:
+    thread = m.get("thread")
+    snippet = (m.get("body") or "")[:100]
+    return f"{m.get('id')} ask from:{m.get('from')} thread:{thread} — {snippet}"
+
+
+def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -> str:
+    """The operator desk (thread 68f1bafa's own "/desk with the backlog band first and
+    briefs collapsed to one count line"): the backlog view first (all-projects debt
+    pressure, when given), then owed/letters headline, then needs_decision/needs_hands/
+    fyi/dimmed/miner_guesses each folded to ONE COUNT LINE (never itemized -- a card's
+    real text is only in the structured receipt, since settling by id needs the ids the
+    collapsed view deliberately drops), then `your_queue` itemized one line per thread
+    (the canonical debt list, not a "brief" -- kept legible, not collapsed)."""
+    lines: list[str] = []
+    if backlog_text:
+        lines.append(backlog_text)
+        lines.append("")
+    lines.append(f"owed: {desk.get('owed', 0)}  letters: {desk.get('letters', 0)}")
+    for key, label in (("needs_decision", "needs decision"), ("needs_hands", "needs hands"),
+                       ("fyi", "fyi")):
+        n = len(desk.get(key) or [])
+        if n:
+            lines.append(f"{label}: {n}")
+    dimmed = desk.get("dimmed") or []
+    if dimmed:
+        lines.append(f"dimmed: {len(dimmed)}")
+    guesses = (desk.get("miner_guesses") or {}).get("threads") or []
+    if guesses:
+        lines.append(f"miner_guesses: {len(guesses)} (not counted in owed)")
+    queue = (desk.get("your_queue") or {}).get("threads") or []
+    if queue:
+        lines.append("your_queue:")
+        for t in queue:
+            lines.append(f"  {t.get('id')} — {t.get('summary')}")
+    if len(lines) == 1:  # only the owed/letters headline, nothing else at all
+        lines.append("desk clear")
+    return "\n".join(lines)
+
+
+def render_team_text(rows: list[dict[str, Any]]) -> str:
+    """One line per managed seat: live glyph, owe (stale flagged separately when nonzero),
+    envelope (unread asks for that seat's current holder). No cap: a manager's own team is
+    bounded by who they manage, not an open-ended query."""
+    if not rows:
+        return "team: manages no seats"
+    lines = []
+    for r in rows:
+        glyph = "●" if r.get("live") else "○"
+        owe = f"owe {r['owe']}" + (f" ({r['stale']} stale)" if r.get("stale") else "")
+        lines.append(f"{glyph} {r['handle']}: {owe}, envelope {r['envelope']}")
+    return "\n".join(lines)
+
+
+THREADS_BAND_CAP = 30
+
+
+def render_threads_text(rows: list[dict[str, Any]]) -> str:
+    """One line per thread, already ordered by the caller (threads()'s own oldest-first
+    query) — caps and formats only, never reorders. Caps at `THREADS_BAND_CAP`, the
+    remainder folded into one trailing count line."""
+    shown, remainder = rows[:THREADS_BAND_CAP], max(0, len(rows) - THREADS_BAND_CAP)
+    if not shown:
+        return "threads: none open in your name here"
+    lines = [f"{r['id']} [{r['kind'] or '?'}] {r['summary']}" for r in shown]
+    if remainder:
+        lines.append(f"+{remainder} more thread(s)")
+    return "\n".join(lines)

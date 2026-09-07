@@ -870,7 +870,19 @@ def _tool_chars(t: Any) -> int:
 # `graph_census` shipped new, then was demoted to a hidden deprecated alias by Thoth's own
 # fold correction (see the char ceiling's own changelog above for the full account) —
 # deprecated tools this ratchet does not count at all. Net zero.
-TOOL_CONTRACT_EXPECTED_COUNT = 73
+# 73 -> 74 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): backlog — the read
+# triangle's own obligation-pressure verb, standalone rather than only living inside
+# fleet_digest's fuller payload (digest.py's _obligation_pressure, additively extended
+# with a past_window count). Genuinely new capability, not padding.
+# 74 -> 75 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): threads — the read
+# triangle's own MINE verb, standalone (single-project, owner_refs-matched, one line each
+# with a short id) rather than a mode of get_object_list/get_thread_list (both take an
+# explicit owner and are charter-widened; this is the opposite shape by design).
+# 75 -> 76 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): team — the read
+# triangle's own manager-view verb (every seat managed_by the caller's own held seat:
+# live/owe/envelope), standalone rather than a mode of fleet() (fleet is the unscoped
+# fleet-wide roster+tree; this is self-scoped to what ONE manager governs).
+TOOL_CONTRACT_EXPECTED_COUNT = 76
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1302,7 +1314,26 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # instead of reading complete:false forever (which starves self-compaction's own
 # completeness requirement). One new docstring paragraph plus the two inputSchema
 # entries. No new tool. Measured exact (107,398), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 108207
+# 107,376 -> 108,579 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): backlog ships
+# as a new tool (its own docstring + inputSchema for all_projects/render). Measured exact
+# (108,579), not estimated.
+# 108,579 -> 109,704 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): threads ships
+# as a new tool (its own docstring + inputSchema for project/render). Measured exact
+# (109,704), not estimated.
+# 109,704 -> 110,122 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): roster gains
+# render='text' -- a new param plus a docstring paragraph naming the read-triangle's
+# server-side text mode. No new tool. Measured exact (110,122), not estimated.
+# 110,122 -> 110,537 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): inbox gains
+# render='text' -- a new param plus a docstring paragraph naming the read-triangle's
+# server-side text mode. No new tool. Measured exact (110,537), not estimated.
+# 110,537 -> 111,502 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): team ships as
+# a new tool (its own docstring + inputSchema for render). Measured exact (111,502), not
+# estimated.
+# 111,502 -> 111,826 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): inbox's own
+# render='text' docstring paragraph grows to name the operator desk's own collapsed-band
+# shape (desk.md's own rewrite). No new param, no new tool. Measured exact (111,826), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 112657
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

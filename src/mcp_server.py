@@ -5091,7 +5091,8 @@ async def registry_census() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[str, Any]:
+async def roster(repo: str | None = None, want_caveats: bool = False,
+                 render: str | None = None) -> dict[str, Any]:
     """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
 
     `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — held but
@@ -5109,10 +5110,184 @@ async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[st
     Neither `chartered_repos` nor `pin` is certified canonical — this function's own
     blind spots (10 standing paragraphs, measured as this verb's own bytes/call
     offender) sit behind `want_caveats=True`; default is a one-line pointer.
-    consult_canon('roster') for more."""
+    consult_canon('roster') for more.
+
+    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
+    `repo=None` renders one line per seat, grouped by house, with an occupancy glyph
+    (`textrender.render_roster_text`); `repo=<name>` falls back to the generic
+    line-per-field renderer (already a small flat result, no hand-tuned shape needed)."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
-    return await _roster(pool, repo=repo, want_caveats=want_caveats)
+    result = await _roster(pool, repo=repo, want_caveats=want_caveats)
+    if render == "text":
+        if repo is None:
+            from src.orchestrator.textrender import render_roster_text
+            return {"text": render_roster_text(result.get("seats", []))}
+        from src.orchestrator.textrender import render_status_text
+        return {"text": render_status_text(result)}
+    return result
+
+
+@mcp.tool()
+async def backlog(all_projects: bool = False, render: str | None = None,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """No-regrow hygiene item 4's own gauge (digest.py's `_obligation_pressure`), as a read
+    verb of its own (thread 68f1bafa, the read triangle) instead of only living inside
+    fleet_digest's fuller payload. Per project: `open` count against its `target` (osiris
+    40, every client 15, `(unfiled)` untargeted), `past_window` (how many are already
+    stale), `oldest_owners` (up to 3, longest-carried first).
+
+    SCOPED BY DEFAULT: your own mounted project's row only. `all_projects=True` (or
+    calling unmounted / as the operator) widens to every project. Ordering is always: your
+    own project's row first (when present in scope), then any row with `past_window > 0`,
+    then by `open` descending — never re-sorted by a slash command, so the same call always
+    reads the same regardless of caller.
+
+    `render='text'`: returns only {"text": <str>} -- one line per project, capped at
+    `textrender.BACKLOG_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    from src.orchestrator import digest as _digest
+    from src.orchestrator.textrender import render_backlog_text
+
+    rows = await _digest._obligation_pressure(Actions(pool))
+    mine = ident.project if ident and ident.project not in (None, OPERATOR_ADDR) else None
+    if mine and not all_projects:
+        rows = [r for r in rows if r["project"] == mine]
+
+    def _sort_key(r: dict[str, Any]) -> tuple[int, int, int, str]:
+        return (0 if r["project"] == mine else 1,
+                0 if r["past_window"] else 1, -r["open"], r["project"])
+    rows = sorted(rows, key=_sort_key)
+    if render == "text":
+        return {"text": render_backlog_text(rows)}
+    return {"projects": rows, "scope": "all" if (all_projects or not mine) else mine}
+
+
+@mcp.tool()
+async def threads(project: str | None = None, render: str | None = None,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """MINE: every OPEN thread you own (thread 68f1bafa, the read triangle) — one line
+    each with a short id, so a slash command can hand one straight to
+    thread(action=...)/recall(ref=...) without a separate lookup. "You" matches every
+    spelling an obligation can be owned under (owner_refs: your agent id, lineage root,
+    seat id, seat handle — same matching `owned_obligations`'s own /statusline `owe` cell
+    uses), never just your literal agent id.
+
+    `project` defaults to your mounted project. DELIBERATELY SINGLE-PROJECT, not
+    charter-widened like get_object_list — "mine, in front of me right now" is the whole
+    point; call again with an explicit `project` for another repo you govern.
+
+    `render='text'`: returns only {"text": <str>} -- one line per thread, capped at
+    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    proj = project or (ident.project if ident else None)
+    if ident is None or proj is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
+    proj_id = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        f"repo:{proj}")
+    if proj_id is None:
+        return {"error": f"no project {proj!r}", "threads": []}
+    from src.orchestrator.stophook_logic import owner_refs
+    from src.orchestrator.textrender import render_threads_text
+
+    owners = await owner_refs(pool, ident.agent_id)
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        "  COALESCE("
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "     LIMIT 1), "
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
+        "    AS summary, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "WHERE o.type='Thread' AND o.status='active' AND COALESCE("
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "  'open')='open' "
+        "  AND lower(COALESCE("
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "    '')) = ANY($2::text[]) "
+        "ORDER BY o.created_at ASC",
+        proj_id, owners)
+    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+           for r in rows]
+    if render == "text":
+        return {"text": render_threads_text(mine)}
+    return {"project": proj, "threads": mine, "total": len(mine)}
+
+
+@mcp.tool()
+async def team(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+    """A MANAGER's OWN SEATS (thread 68f1bafa, the read triangle) — every seat
+    `managed_by` your own held seat, each carrying: `live` (a body has mounted within the
+    fleet's own live window right now), `owe`/`stale` (open obligations owned by that
+    seat's handle, and how many are past their stale_after window — same definition
+    `owned_obligations`'s own statusline `owe` cell uses), `envelope` (that seat's current
+    holder's own unread ASK count — mail asking something of them specifically; 0 for a
+    cold/vacant seat with nobody to ask). Refuses cleanly if you hold no seat, or your
+    seat manages nobody (`fleet(full=True)` is the wider, unscoped roster for that case).
+
+    `render='text'`: returns only {"text": <str>} -- one line per managed seat, plain
+    text, server-rendered."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first"}
+    from src.orchestrator.seats import _LIVE_SECS, held_seat
+
+    mine = await held_seat(pool, ident.agent_id)
+    if mine is None:
+        return {"error": "you hold no seat — team is a manager's own view of the seats "
+                         "it manages, nothing to scope it to"}
+    rows = await pool.fetch(
+        "SELECT s.canonical AS seat, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        "  h.holder AS holder, "
+        "  (h.holder IS NOT NULL AND EXISTS ("
+        "    SELECT 1 FROM agent_mounts m WHERE m.agent_id=h.holder "
+        "      AND m.last_seen > now() - make_interval(secs => $2::float8))) AS live "
+        "FROM links mb JOIN objects s ON s.id=mb.from_id "
+        "JOIN objects mgr ON mgr.id=mb.to_id "
+        "LEFT JOIN LATERAL ("
+        "  SELECT a.canonical AS holder FROM links hl JOIN objects a ON a.id=hl.from_id "
+        "  WHERE hl.to_id=s.id AND hl.type='holds' "
+        "    AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
+        "  ORDER BY hl.created_at DESC LIMIT 1"
+        ") h ON true "
+        "WHERE mgr.canonical=$1::text AND mb.type='managed_by' AND s.status='active' "
+        "  AND (mb.valid_until IS NULL OR mb.valid_until > now()) "
+        "ORDER BY handle ASC",
+        mine["seat_id"], float(_LIVE_SECS))
+    if not rows:
+        return {"error": f"{mine['handle']} manages no seats"}
+    from src.orchestrator.stophook_logic import owned_obligations
+    from src.orchestrator.textrender import render_team_text
+
+    out_rows: list[dict[str, Any]] = []
+    for r in rows:
+        obl = await owned_obligations(pool, r["handle"] or r["seat"])
+        envelope = 0
+        if r["holder"]:
+            counts = await unread_counts(pool, mine["house"] or "", reader_agent=r["holder"])
+            envelope = counts["ask"]
+        out_rows.append({
+            "handle": r["handle"], "live": bool(r["live"]), "owe": obl["owned"],
+            "stale": obl["stale"], "envelope": envelope,
+        })
+    if render == "text":
+        return {"text": render_team_text(out_rows)}
+    return {"manager": mine["handle"], "team": out_rows}
 
 
 @mcp.tool()
@@ -5466,7 +5641,7 @@ async def stop(target: str | None = None, reason: str = "",
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
-                want_prior_art: bool = False,
+                want_prior_art: bool = False, render: str | None = None,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you. Defaults to your mounted project; pass
     `project` for another's ('operator' reads the human's desk). Reading LEASES a
@@ -5476,7 +5651,16 @@ async def inbox(project: str | None = None, peek: bool = False,
     only, settle only at the human's explicit word.
 
     `want_prior_art=True` returns each message's full prior_art list; default is a
-    `prior_art_count` only."""
+    `prior_art_count` only.
+
+    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
+    Your own mailbox renders one line per ASK message, FYI folded to a single trailing
+    count line (`textrender.render_mail_text`). The operator desk renders the backlog
+    band first (all-projects obligation pressure), then owed/letters, then
+    needs_decision/needs_hands/fyi/dimmed/miner_guesses each as ONE COUNT LINE (never
+    itemized -- settling by id needs the ids this collapsed glance deliberately drops;
+    re-call without `render` for the full structured bands first), then `your_queue`
+    itemized one line per thread (`textrender.render_desk_text`)."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -5514,7 +5698,15 @@ async def inbox(project: str | None = None, peek: bool = False,
         # the human's desk never leases; bands (needs_decision / needs_hands / fyi) ·
         # thread + same-story folds · dimmed moot annotations · the derived your_queue.
         desk = await read_desk(pool)
-        return {"project": OPERATOR_ADDR, **desk, **ack_keys}
+        out = {"project": OPERATOR_ADDR, **desk, **ack_keys}
+        if render == "text":
+            from src.orchestrator import digest as _digest
+            from src.orchestrator.textrender import render_backlog_text, render_desk_text
+            backlog_rows = await _digest._obligation_pressure(Actions(pool))
+            backlog_text = render_backlog_text(sorted(
+                backlog_rows, key=lambda r: (0 if r["past_window"] else 1, -r["open"])))
+            return {"text": render_desk_text(out, backlog_text=backlog_text)}
+        return out
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
     if not want_prior_art:
@@ -5541,6 +5733,13 @@ async def inbox(project: str | None = None, peek: bool = False,
     if flight:  # msg-78 lesson: an empty box with a held lease is NOT 'nothing happening'
         note += (f" — {len(flight)} in flight (leased by "
                  + ", ".join(sorted({f['leased_by'] for f in flight})) + ")")
+    if render == "text":
+        from src.orchestrator.textrender import render_mail_text
+        text = render_mail_text(msgs)
+        if ack_keys.get("settled"):
+            text += f"\nsettled: {ack_keys['settled']}"
+        text += f"\n{note}"
+        return {"text": text}
     return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
             **({"in_flight": flight} if flight else {}),
             **ack_keys, "note": note}

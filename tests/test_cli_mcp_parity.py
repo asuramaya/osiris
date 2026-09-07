@@ -158,6 +158,24 @@ CLI_ONLY_PARAMS = {
         "caller, so it has no second format to choose between — the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
         "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("backlog", "as_json"): "a PRESENTATION flag, not an act — same reason as roster's "
+        "own entry above (Thoth LXXXVII, 2026-08-28); the CLI's own counterpart to "
+        "backlog's MCP-only `render` param (see MCP_ONLY_PARAMS below).",
+    ("threads", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's "
+        "own entry above; the CLI's own counterpart to threads's MCP-only `render` param "
+        "(see MCP_ONLY_PARAMS below).",
+    ("inbox", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to inbox's MCP-only `render` param (see "
+        "MCP_ONLY_PARAMS below).",
+    ("team", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to team's MCP-only `render` param (see "
+        "MCP_ONLY_PARAMS below).",
+    ("status", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to get_status's MCP-only `render` param "
+        "(see MCP_ONLY_PARAMS below).",
+    ("search", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; search() has no render param of its own to counter (its receipt is "
+        "already small), so this is purely the terminal-vs-caller presentation split.",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
@@ -232,6 +250,11 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # fleet-reconcile's own entry above. record_practice has no CLI door at all
     # (nothing to reconcile there).
     "amend-practice": "practice:amend",
+    # status — the read triangle's own console face (thread 68f1bafa/3703a3a9) onto
+    # get_status(), the MCP tool's own established name (the "glance" verb, task #whatever
+    # first shipped it) — the CLI door is named for the human at a terminal, not renamed
+    # to match.
+    "status": "get_status",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -256,6 +279,31 @@ MCP_ONLY_PARAMS = {
         "above) is the same concept, inverted and renamed to match this house's --apply "
         "repair convention rather than the MCP tools' own dry_run=True default — "
         "identical shape to seat:heal_anchor's own entry above.",
+    ("backlog", "render"): "the read triangle's own server-side text mode (thread "
+        "68f1bafa/3703a3a9) — a slash-command/model caller's concern (avoid the model "
+        "re-prettifying JSON at token cost). The CLI already has its own presentation "
+        "split (--json vs the human view, src/cli_render.emit) so render='text' has no "
+        "terminal-side counterpart to be missing.",
+    ("threads", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
+    ("roster", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
+    ("inbox", "render"): "same reason as backlog's own entry above — the read triangle's "
+        "server-side text mode has no terminal-side counterpart to be missing.",
+    ("inbox", "peek"): "the CLI console door (thread 68f1bafa/3703a3a9) is ALWAYS a peek "
+        "-- a human glancing from a terminal never leases mail, same reasoning as `desk`'s "
+        "own always-peek design above (read_desk). Not a gap: peek=True is simply never a "
+        "variable on this door.",
+    ("inbox", "ack"): "settling mail (lease/ack/reply) is an agent's own act mid-session, "
+        "never a terminal glance's -- same boundary as `peek` above: this console door "
+        "reads, it does not act.",
+    ("inbox", "want_prior_art"): "a real gap, named rather than hidden: the CLI's own "
+        "render.emit already shows whatever the MCP tool returns, but no --want-prior-art "
+        "flag exists yet to ask for the fuller payload. Not yet built.",
+    ("team", "render"): "same reason as backlog's own entry above — the read triangle's "
+        "server-side text mode has no terminal-side counterpart to be missing.",
+    ("get_status", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -1235,6 +1283,26 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # here: _find_undeclared_new_tools skips any tool meta={"deprecated": True} before
     # ever checking this dict, same as run_composition/save_composition/list_compositions
     # above never needed one either.
+    # backlog — the read triangle's own obligation-pressure verb (thread 68f1bafa/3703a3a9,
+    # Thoth DM 7883/7907), standalone rather than only living inside fleet_digest's fuller
+    # payload. Not a binding-mover (read-only, no state change) and not a parameterization
+    # of fleet_digest -- fleet_digest's own obligation_pressure field stays as-is; this is
+    # a narrower, differently-scoped read (caller's-project-default vs. fleet_digest's
+    # always-every-project), not a mode switch on the same call.
+    "backlog": {"binding_verb": False},
+    # threads — the read triangle's own MINE verb (thread 68f1bafa/3703a3a9): every open
+    # thread the caller owns, single-project, one line each with a short id. Not a
+    # binding-mover, and not a parameterization of get_object_list/get_thread_list --
+    # those take an EXPLICIT owner and are charter-widened across every governed repo;
+    # this defaults to the caller's own identity (every owner_refs spelling) and is
+    # deliberately single-project ("mine, in front of me right now").
+    "threads": {"binding_verb": False},
+    # team — the read triangle's own manager-view verb (thread 68f1bafa/3703a3a9): every
+    # seat managed_by the caller's own held seat, live/owe/envelope. Not a binding-mover
+    # (read-only), and not a parameterization of fleet -- fleet() is the unscoped
+    # fleet-wide roster+tree; this is self-scoped to what ONE manager governs, an
+    # opposite-shape narrowing the same way threads narrows get_object_list.
+    "team": {"binding_verb": False},
 }
 
 
