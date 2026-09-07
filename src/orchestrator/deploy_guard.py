@@ -1264,8 +1264,12 @@ async def landing_audit(actions: Actions, repo_root: Path) -> dict[str, Any]:
     claims = await audit_graph_merge_claims(actions.pool, repo_root)
     minted: list[str] = []
     for s in stale:
+        # STABLE TEXT, OR THE IDEMPOTENCY ABOVE IS A LIE (operator 2026-09-06: 70 open
+        # threads for six branches, one per hourly run — the old summary embedded
+        # `~{age}h`, so every run read as a new specimen and open_thread's own dedup on the
+        # summary never fired). The age stays in this function's receipt, never in the key.
         summary = (f"LANDING AUDIT: branch {s['branch']!r} has sat unmerged into main for "
-                  f"~{s['age_hours']:.0f}h with no open held-work claim naming it")
+                  "longer than the 48h stale window with no open held-work claim naming it")
         with contextlib.suppress(Exception):
             # NEVER pass branch= here: open_held_work() treats ANY open Thread naming a
             # `branch` as a legitimate claim on it — this obligation's own existence would

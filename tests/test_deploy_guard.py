@@ -1854,3 +1854,25 @@ async def test_landing_audit_heartbeat_mints_when_flag_on_replaying_a_stranded_b
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='summary' "
         "WHERE o.type='Thread' AND a.value #>> '{}' ILIKE '%seshat-hook-flip%'")
     assert len(minted) == 1  # idempotent: one Thread, never a duplicate obligation
+
+
+async def test_landing_audit_stays_idempotent_as_the_branch_ages(
+    actions: Actions, main_repo: Path, monkeypatch: Any,
+) -> None:
+    """THE SPAM (operator 2026-09-06): 70 open LANDING AUDIT threads for six branches, one
+    per hourly run, because the summary embedded `~{age}h` — the idempotency test above
+    ran twice within one second and never saw the age move. Same branch an hour older
+    must reuse the same Thread."""
+    from src.orchestrator import deploy_guard as dg
+
+    ages = iter([74.0, 75.0])
+
+    async def _stale(repo_root: Path, *, claimed: set[str],
+                     min_age_hours: float = 48.0) -> list[dict[str, Any]]:
+        return [{"branch": "seshat-ageing-lane", "age_hours": next(ages)}]
+
+    monkeypatch.setattr(dg, "stale_unmerged_branches", _stale)
+    first = await landing_audit(actions, main_repo)
+    second = await landing_audit(actions, main_repo)
+    assert first["obligations"] == second["obligations"]
+    assert len(second["obligations"]) == 1
