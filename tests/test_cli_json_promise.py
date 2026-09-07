@@ -42,13 +42,16 @@ from src.actions.core import Actions
 from src.cli import (
     _build_parser,
     cmd_boot_status,
+    cmd_decide,
     cmd_desk,
     cmd_fleet,
     cmd_retention,
     cmd_roster,
+    cmd_send,
     cmd_show,
     cmd_smoke,
     cmd_stop,
+    cmd_thread,
     cmd_unmerge,
 )
 
@@ -65,7 +68,7 @@ READ_VERBS = frozenset({
 # never hand-trusted) — the population gate (2) exercises one edge invocation each for.
 JSON_COMMANDS = frozenset({
     "stop", "fleet", "roster", "backlog", "threads", "inbox", "team", "status", "search",
-    "desk", "show", "unmerge", "retention", "boot-status", "smoke",
+    "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
 })
 
 
@@ -208,6 +211,63 @@ async def test_cmd_fleet_emits_json(monkeypatch: Any) -> None:
     assert out == 0
     printed = json.loads(buf.getvalue())
     assert "nodes" in printed
+
+
+async def test_cmd_send_refusal_emits_json(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_send("hello", to="no-such-project-ever", as_json=True,
+                             pool=actions.pool)
+    assert out == 1
+    # THE REFUSAL PATH PRINTS TO STDERR, NOT STDOUT (unlike stop/unmerge's own JSON
+    # refusal shape): send_message raises ValueError before any receipt exists to
+    # render — there is nothing to json.loads() on a refusal, only on a real send.
+    assert buf.getvalue() == ""
+
+
+async def test_cmd_send_broadcast_emits_json(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir="/j/jsonsend01", agent_id="agent:jsonsend01",
+                            project="jsonsendhouse", cwd="/x", model=None, session_key=None)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_send("deploy shortly", to="jsonsendhouse", actor="agent:jsonsender",
+                             as_json=True, pool=actions.pool)
+    assert out == 0
+    printed = json.loads(buf.getvalue())
+    assert "sent" in printed
+
+
+async def test_cmd_decide_emits_json(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_decide("a decision proving the json promise", as_json=True,
+                               pool=actions.pool)
+    assert out == 0
+    printed = json.loads(buf.getvalue())
+    assert "id" in printed
+
+
+async def test_cmd_thread_refusal_emits_json(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_thread(["no such thread anywhere"], as_json=True, pool=actions.pool)
+    assert out == 1
+    # same shape as send's own refusal above — nothing to render on a no-match
+    assert buf.getvalue() == ""
 
 
 async def test_cmd_roster_emits_json(monkeypatch: Any) -> None:

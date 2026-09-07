@@ -1,0 +1,1 @@
+Record a decision. Call the osiris MCP tool `record_decision` with `summary` and any of `kind`/`rationale`/`repo`/`grounds`/`protocol`/`supersedes`/`resolves`/`obsoletes`/`confirms`/`refutes`/`implements`/`rediscovers`/`bears_on`/`narrows`/`cites` the caller named, and print the returned receipt dict verbatim in a code block. No commentary, no re-rendering.

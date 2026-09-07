@@ -1,0 +1,1 @@
+End a live body. Call the osiris MCP tool `seat` with action='stop', `target`=<handle> (and `reason` if given) — never the deprecated bare `stop` tool — and print the returned receipt dict verbatim in a code block. No commentary, no re-rendering.
