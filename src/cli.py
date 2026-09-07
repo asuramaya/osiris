@@ -1341,22 +1341,63 @@ async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
 
 # --- team (thread 68f1bafa/3703a3a9, the read triangle's own new verb) -----------------------
 
-async def cmd_team(*, as_json: bool = False) -> int:
-    """osiris team: a manager's own seats. NAMED GAP — team() is self-scoped off the
-    caller's own held seat with no override param (unlike threads' --project), so a bare
-    terminal session (no mount of its own) will always get team()'s "mount first" refusal
-    today; kept as a console face anyway since the MCP tool itself is the source of truth
-    and a future identity-bearing console session should just work."""
+async def cmd_team(*, seat: str | None = None, as_json: bool = False,
+                   pool: asyncpg.Pool | None = None) -> int:
+    """osiris team [--seat <handle>]: a manager's own seats. WITHOUT --seat, calls the MCP
+    tool over the wire, self-scoped off the caller's own held seat -- a bare terminal
+    session (no mount of its own) gets team()'s own "mount first" refusal, the named gap
+    from the read triangle (decision f49d8803). WITH --seat: the gap's own fix (thread
+    68f1bafa/642c4754) -- resolves the handle to a seat DIRECTLY against postgres (same
+    "resolve then call the shared logic" shape cmd_stop's own operator lane already uses
+    for trigger.stop_seat) and calls seats.team_roster, the identical query team() itself
+    calls, never a second copy -- WITHOUT changing team()'s own self-scoped MCP contract."""
     from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
 
-    url = await _mcp_url()
-    result = await call_mcp_tool(url, "team", {})
-    if isinstance(result, str):
-        print(f"osiris team: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+    if seat is None:
+        from src.orchestrator.mcp_client import call_mcp_tool
+
+        url = await _mcp_url()
+        result = await call_mcp_tool(url, "team", {})
+        if isinstance(result, str):
+            print(f"osiris team: {result} — is osiris-mcp running? "
+                  "(systemctl --user status osiris-mcp)", file=sys.stderr)
+            return 1
+        render.emit(result, as_json=as_json, title="team")
+        return 0
+
+    from src.orchestrator.seats import seat_by_handle, team_roster
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:team")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris team: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        mgr = await seat_by_handle(pool, seat)
+        if mgr is None:
+            print(f"osiris team: no active seat named {seat!r} (or more than one does)",
+                  file=sys.stderr)
+            return 1
+        rows = await team_roster(pool, mgr["seat_id"], manager_house=mgr["house"])
+    finally:
+        if owns_pool:
+            await pool.close()
+
+    if not rows:
+        print(f"osiris team: {mgr['handle']} manages no seats", file=sys.stderr)
         return 1
-    render.emit(result, as_json=as_json, title="team")
+    render.emit({"manager": mgr["handle"], "team": rows}, as_json=as_json,
+               title=f"team · {mgr['handle']}")
     return 0
 
 
@@ -4420,9 +4461,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_team = sub.add_parser("team", description=_d(
         "a manager's own seats: live, owe, envelope — the same team() the MCP tool "
-        "answers, called over the wire. Self-scoped off the caller's own held seat "
-        "(no --project override; see cmd_team's own docstring for the known gap)"),
-        epilog="example: osiris team")
+        "answers, called over the wire (self-scoped off the caller's own held seat). "
+        "--seat resolves the manager by handle directly, off the wire, for a bare "
+        "terminal with no mount of its own"),
+        epilog="example: osiris team\nexample: osiris team --seat Thoth")
+    p_team.add_argument("--seat", default=None,
+                        help="the manager's own handle (bypasses the MCP self-scoping gap)")
     p_team.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
 
@@ -5050,7 +5094,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inbox":
         return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json))
     if args.command == "team":
-        return asyncio.run(cmd_team(as_json=args.as_json))
+        return asyncio.run(cmd_team(seat=args.seat, as_json=args.as_json))
     if args.command == "desk":
         return asyncio.run(cmd_desk(as_json=args.as_json))
     if args.command == "show":

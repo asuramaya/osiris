@@ -5249,50 +5249,17 @@ async def team(render: str | None = None, ctx: Context | None = None) -> dict[st
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first"}
-    from src.orchestrator.seats import _LIVE_SECS, held_seat
+    from src.orchestrator.seats import held_seat, team_roster
 
     mine = await held_seat(pool, ident.agent_id)
     if mine is None:
         return {"error": "you hold no seat — team is a manager's own view of the seats "
                          "it manages, nothing to scope it to"}
-    rows = await pool.fetch(
-        "SELECT s.canonical AS seat, "
-        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
-        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS handle, "
-        "  h.holder AS holder, "
-        "  (h.holder IS NOT NULL AND EXISTS ("
-        "    SELECT 1 FROM agent_mounts m WHERE m.agent_id=h.holder "
-        "      AND m.last_seen > now() - make_interval(secs => $2::float8))) AS live "
-        "FROM links mb JOIN objects s ON s.id=mb.from_id "
-        "JOIN objects mgr ON mgr.id=mb.to_id "
-        "LEFT JOIN LATERAL ("
-        "  SELECT a.canonical AS holder FROM links hl JOIN objects a ON a.id=hl.from_id "
-        "  WHERE hl.to_id=s.id AND hl.type='holds' "
-        "    AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
-        "  ORDER BY hl.created_at DESC LIMIT 1"
-        ") h ON true "
-        "WHERE mgr.canonical=$1::text AND mb.type='managed_by' AND s.status='active' "
-        "  AND (mb.valid_until IS NULL OR mb.valid_until > now()) "
-        "ORDER BY handle ASC",
-        mine["seat_id"], float(_LIVE_SECS))
-    if not rows:
+    out_rows = await team_roster(pool, mine["seat_id"], manager_house=mine["house"])
+    if not out_rows:
         return {"error": f"{mine['handle']} manages no seats"}
-    from src.orchestrator.stophook_logic import owned_obligations
-    from src.orchestrator.textrender import render_team_text
-
-    out_rows: list[dict[str, Any]] = []
-    for r in rows:
-        obl = await owned_obligations(pool, r["handle"] or r["seat"])
-        envelope = 0
-        if r["holder"]:
-            counts = await unread_counts(pool, mine["house"] or "", reader_agent=r["holder"])
-            envelope = counts["ask"]
-        out_rows.append({
-            "handle": r["handle"], "live": bool(r["live"]), "owe": obl["owned"],
-            "stale": obl["stale"], "envelope": envelope,
-        })
     if render == "text":
+        from src.orchestrator.textrender import render_team_text
         return {"text": render_team_text(out_rows)}
     return {"manager": mine["handle"], "team": out_rows}
 

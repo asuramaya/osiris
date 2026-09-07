@@ -305,6 +305,32 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     return {"seat_id": best["seat_id"], "handle": best["handle"], "house": house}
 
 
+async def seat_by_handle(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | None:
+    """A bare handle -> its Seat, by NAME alone (case-insensitive exact match), no liveness
+    or holder involved -- `held_seat`'s own counterpart for the case an agent id is not
+    what the caller has. Built for the `team` console door's own `--seat` argument (thread
+    68f1bafa/642c4754): a terminal has no mounted identity of its own to resolve team()'s
+    self-scoped contract, so it names the manager by handle instead and this resolves it
+    directly, the same "resolve then call the shared logic" shape cmd_stop's own operator
+    lane already uses for trigger.stop_seat. None when no active seat carries that handle,
+    or more than one does (a caller should not silently pick between two)."""
+    rows = await pool.fetch(
+        "SELECT t.canonical AS seat_id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle "
+        "FROM objects t WHERE t.type='Seat' AND t.status='active' "
+        "AND lower((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=t.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
+        "   = lower($1)",
+        handle)
+    if len(rows) != 1:
+        return None
+    seat_id = rows[0]["seat_id"]
+    house = await derive_house(pool, seat_id)
+    return {"seat_id": seat_id, "handle": rows[0]["handle"], "house": house}
+
+
 async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """The seat-first half alone, shared by `resolve_project` and
     mcp_server._resolve_project_seat_first: a SEATED agent's project is its seat's own
@@ -1357,6 +1383,57 @@ async def seats_managed_by(pool: asyncpg.Pool, seat_id: str) -> list[str]:
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "ORDER BY l.first_seen ASC", seat_id)
     return [r["canonical"] for r in rows]
+
+
+async def team_roster(
+    pool: asyncpg.Pool, manager_seat_id: str, *, manager_house: str | None = None,
+    live_secs: int = _LIVE_SECS,
+) -> list[dict[str, Any]]:
+    """The `team` MCP tool's own core query, pulled out of mcp_server.py (thread 68f1bafa/
+    642c4754) so the console door's own seat-argument path (a direct-DB console command,
+    same shape as cmd_stop/cmd_correct_pin_value -- it resolves a handle to a seat and
+    calls the SAME logic, never a second copy) can call it without going through team()'s
+    own deliberately self-scoped MCP contract. Every seat `managed_by` `manager_seat_id`:
+    `live` (a body mounted within `live_secs`), `owe`/`stale` (open obligations owned by
+    that seat's handle, same definition `owned_obligations` uses), `envelope` (that seat's
+    current holder's own unread ASK count, scoped to `manager_house` -- 0 with no live
+    holder). Empty list means manages nobody; the caller decides what that means."""
+    rows = await pool.fetch(
+        "SELECT s.canonical AS seat, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
+        "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS handle, "
+        "  h.holder AS holder, "
+        "  (h.holder IS NOT NULL AND EXISTS ("
+        "    SELECT 1 FROM agent_mounts m WHERE m.agent_id=h.holder "
+        "      AND m.last_seen > now() - make_interval(secs => $2::float8))) AS live "
+        "FROM links mb JOIN objects s ON s.id=mb.from_id "
+        "JOIN objects mgr ON mgr.id=mb.to_id "
+        "LEFT JOIN LATERAL ("
+        "  SELECT a.canonical AS holder FROM links hl JOIN objects a ON a.id=hl.from_id "
+        "  WHERE hl.to_id=s.id AND hl.type='holds' "
+        "    AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
+        "  ORDER BY hl.created_at DESC LIMIT 1"
+        ") h ON true "
+        "WHERE mgr.canonical=$1::text AND mb.type='managed_by' AND s.status='active' "
+        "  AND (mb.valid_until IS NULL OR mb.valid_until > now()) "
+        "ORDER BY handle ASC",
+        manager_seat_id, float(live_secs))
+    from src.orchestrator.mailbox import unread_counts
+    from src.orchestrator.stophook_logic import owned_obligations
+
+    out_rows: list[dict[str, Any]] = []
+    for r in rows:
+        obl = await owned_obligations(pool, r["handle"] or r["seat"])
+        envelope = 0
+        if r["holder"]:
+            counts = await unread_counts(pool, manager_house or "", reader_agent=r["holder"])
+            envelope = counts["ask"]
+        out_rows.append({
+            "handle": r["handle"], "live": bool(r["live"]), "owe": obl["owned"],
+            "stale": obl["stale"], "envelope": envelope,
+        })
+    return out_rows
 
 
 async def _managed_by_source(pool: asyncpg.Pool, seat_id: str) -> str | None:
