@@ -108,7 +108,28 @@ async def set_charter(
     `seat_id` resolves by canonical, by `handle`, or by raw object id (`_resolve_active_seat`,
     thread 8673ddb7's own precedent) — a SEVENTH specimen of that exact-canonical-only gap
     (thread c851c81b, Tantra: `charter_for('Tantra', ...)` read "no such active seat" although
-    her Seat was active and held that literal handle)."""
+    her Seat was active and held that literal handle).
+
+    RESOLVED BY CANONICAL, NEVER BY THE CALLER'S OWN SPELLING (thread fba386dc, "rename
+    honesty seams"): `_resolve_repo` matches a name against a project's `name` PROPERTY
+    too, not just its canonical (the whole point — a caller should be able to charter a
+    repo by whatever it's currently called). The diff below used to compare the caller's
+    RAW input strings against `charter_of`'s own canonical-derived `current` set — so a
+    seat chartering "Osiris" today and "osiris" (or the project's post-rename display
+    name) tomorrow read as two DIFFERENT repos, invalidating the real grant and minting a
+    twin that itself gets invalidated the call after — never settling, never idempotent,
+    the exact "not idempotent on first application" symptom. Every candidate is resolved
+    to its project's own CANONICAL before the diff, so the comparison is always canonical-
+    vs-canonical, whatever spelling the caller typed.
+
+    ATOMIC (same thread): the read-diff-write sequence used to be five-plus independent
+    transactions — a crash or a concurrent write between the read and the writes could
+    leave the charter partially applied (the "receipt says added, read says empty" live
+    specimen). The whole sequence — reading the CURRENT charter, then every `create_link`/
+    `invalidate_link` — now runs inside one `actions.atomic()` transaction: all of it lands
+    together or none of it does. The receipt's own `charter` field is READ BACK from the
+    graph after the transaction commits (never the pre-write `wanted` list) — it can never
+    claim a state the graph doesn't actually hold."""
     from src.orchestrator.capture import _resolve_repo
     from src.orchestrator.seats import _resolve_active_seat
 
@@ -119,33 +140,44 @@ async def set_charter(
                          "seat, and this one doesn't exist (or isn't active)"}
     seat_oid, seat_id = seat_row["id"], seat_row["canonical"]
     candidates = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
-    resolved: dict[str, Any] = {}
+    # name typed -> (project object id, project's own canonical, bare) — resolved ONCE,
+    # before the transaction, since `_resolve_repo` itself is a plain read.
+    resolved: dict[str, tuple[Any, str]] = {}
     rejected: list[dict[str, str]] = []
     for name in candidates:
-        proj = await _resolve_repo(actions.pool, name)
-        if proj is None:
+        proj_id = await _resolve_repo(actions.pool, name)
+        if proj_id is None:
             rejected.append({"repo": name, "error": "not a known repo — the graph has no "
                              "independent evidence it's real (no git ingest, no prior record); "
                              "ingest it or confirm it exists, then declare your charter over it"})
             continue
-        resolved[name] = proj
-    wanted = sorted(resolved)
-    current = set(await charter_of(actions.pool, seat_id))
-    added = [r for r in wanted if r not in current]
-    removed = sorted(current - set(wanted))
-    out: dict[str, Any] = {"seat": seat_id, "charter": wanted, "added": added,
+        proj_canon = await actions.pool.fetchval(
+            "SELECT canonical FROM objects WHERE id=$1", proj_id)
+        resolved[name] = (proj_id, str(proj_canon).removeprefix("repo:"))
+
+    async with actions.atomic() as a:
+        current = set(await charter_of(a.pool, seat_id))
+        # by CANONICAL now, never the caller's own spelling — a name/case-differing
+        # re-declaration of an already-governed repo is the no-op it was always meant to be.
+        wanted_by_canon = {canon: proj_id for _name, (proj_id, canon) in resolved.items()}
+        wanted = sorted(wanted_by_canon)
+        added = [c for c in wanted if c not in current]
+        removed = sorted(current - set(wanted))
+        for canon in added:
+            await a.create_link(seat_oid, wanted_by_canon[canon], "governs", seat_id, now,
+                                _CONF, evidence_class=_EC, actor=actor)
+        for canon in removed:
+            proj_id = await _resolve_repo(a.pool, canon)
+            if proj_id is not None:
+                await a.invalidate_link(seat_oid, proj_id, "governs", actor, now)
+
+    # read-back TRUTH, outside the transaction (committed by now) — never the pre-write
+    # `wanted` list, so the receipt can never claim a charter the graph doesn't hold.
+    settled = await charter_of(actions.pool, seat_id)
+    out: dict[str, Any] = {"seat": seat_id, "charter": settled, "added": added,
                            "removed": removed}
     if rejected:
         out["rejected"] = rejected
-    if not added and not removed:
-        return out
-    for repo in added:
-        await actions.create_link(seat_oid, resolved[repo], "governs", seat_id, now, _CONF,
-                                  evidence_class=_EC, actor=actor)
-    for repo in removed:
-        proj = await _resolve_repo(actions.pool, repo)
-        if proj is not None:
-            await actions.invalidate_link(seat_oid, proj, "governs", actor, now)
     return out
 
 
