@@ -1333,7 +1333,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # render='text' docstring paragraph grows to name the operator desk's own collapsed-band
 # shape (desk.md's own rewrite). No new param, no new tool. Measured exact (111,826), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 112657
+# 106,567 -> 106,871 (2026-09-07, Imhotep, Thoth dispatch wave msg 7882 item 1, thread
+# f4209591, specimen msg 7873): send() now refuses a broadcast whose body opens with a
+# real seat's name/@handle when that seat's holder sits in a different project than `to`
+# (binding_of_handle's own authoritative resolution, never a guess), naming the correct
+# to_agent= instead of silently delivering to the wrong room — no new tool, no new schema
+# param, one docstring paragraph naming the new refusal and the receipt's
+# `addressee_resolved` field. Measured exact (106,871), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 112961
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

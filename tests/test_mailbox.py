@@ -925,6 +925,135 @@ async def test_send_still_uses_the_assertion_fallback_for_an_unseated_name(
     assert dm["to_agent"] == "agent:unseated01"
 
 
+async def test_send_door_refuses_a_broadcast_naming_a_seat_from_another_room(
+    actions: Actions,
+) -> None:
+    """THE EXACT SPECIMEN (thread f4209591, operator 2026-09-06, msg 7873): nebbercracker
+    (project monsterhouse) sends `send(to='monsterhouse', body='cupid — spin down the
+    demo…')`. cupid holds a seat whose current mount is in project 'network' — nobody in
+    monsterhouse is cupid. Before this fix the door filed it as an ordinary room broadcast;
+    now it must refuse outright, naming the correct address, and write nothing."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    p = actions.pool
+    await _seed(p, "monsterhouse")
+    seat = await ensure_seat(actions, house="network", handle="cupid", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:cupid0001")
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now())",
+        "/test/cupid-job", "agent:cupid0001", "network", "/test")
+
+    with pytest.raises(ValueError, match="cupid is .* in project network"):
+        await send_message(p, from_agent="agent:nebbercracker", from_project="monsterhouse",
+                           to_project="monsterhouse", body="cupid — spin down the demo VM")
+
+    assert await p.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE body LIKE 'cupid %'") == 0
+
+
+async def test_send_door_allows_a_broadcast_naming_a_seat_in_its_own_room(
+    actions: Actions,
+) -> None:
+    """A leading vocative that resolves to a seat ALREADY mounted in the addressed room is
+    not a mismatch — the broadcast goes through, and the receipt names what resolved."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    p = actions.pool
+    await _seed(p, "monsterhouse")
+    seat = await ensure_seat(actions, house="monsterhouse", handle="jenny", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:jenny0001")
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now())",
+        "/test/jenny-job", "agent:jenny0001", "monsterhouse", "/test")
+
+    out = await send_message(p, from_agent="agent:nebbercracker", from_project="monsterhouse",
+                             to_project="monsterhouse", body="jenny: box mechanics are yours")
+    assert out["addressee_resolved"]["name"] == "jenny"
+    assert out["addressee_resolved"]["seat_id"] == seat["seat_id"]
+    assert out["addressee_resolved"]["project"] == "monsterhouse"
+    assert await p.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE id=$1", out["id"]) == 1
+
+
+async def test_send_door_ignores_ordinary_prose_with_no_addressing_shape(
+    actions: Actions,
+) -> None:
+    """REGRESSION PROOF: a body with no leading vocative punctuation and no @handle is just
+    prose — even one that happens to start with a real seat's name — and must never be
+    scraped or refused. Only the exact shapes (leading 'name —/:/,/-' or '@handle') count."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    p = actions.pool
+    await _seed(p, "monsterhouse")
+    seat = await ensure_seat(actions, house="network", handle="cupid", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:cupid0002")
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now())",
+        "/test/cupid-job2", "agent:cupid0002", "network", "/test")
+
+    out = await send_message(p, from_agent="agent:nebbercracker", from_project="monsterhouse",
+                             to_project="monsterhouse", body="cupid spun down the demo already")
+    assert "addressee_resolved" not in out
+
+
+async def test_send_door_catches_an_at_handle_mid_body_too(actions: Actions) -> None:
+    """The second addressing shape (an @handle anywhere in body, not just a leading
+    vocative) must trip the same guard."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    p = actions.pool
+    await _seed(p, "monsterhouse")
+    seat = await ensure_seat(actions, house="network", handle="cupid", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:cupid0003")
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now())",
+        "/test/cupid-job3", "agent:cupid0003", "network", "/test")
+
+    with pytest.raises(ValueError, match="cupid is .* in project network"):
+        await send_message(p, from_agent="agent:nebbercracker", from_project="monsterhouse",
+                           to_project="monsterhouse", body="heads up @cupid the demo is stuck")
+
+
+async def test_send_door_leaves_unresolvable_names_untouched(actions: Actions) -> None:
+    """A leading vocative that names NOBODY real must never refuse a broadcast — the guard
+    only ever fires on binding_of_handle's own authoritative resolution, never a guess."""
+    p = actions.pool
+    await _seed(p, "monsterhouse")
+
+    out = await send_message(p, from_agent="agent:nebbercracker", from_project="monsterhouse",
+                             to_project="monsterhouse", body="Reminder: standup at 10am")
+    assert "addressee_resolved" not in out
+    assert await p.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE id=$1", out["id"]) == 1
+
+
+async def test_to_agent_by_name_resolves_fleet_wide_regardless_of_room(
+    actions: Actions,
+) -> None:
+    """ITEM 2 OF THE DISPATCH (f4209591): 'when to_agent names a handle, resolve it fleet-
+    wide, not within the caller's project' — a DM by name must reach its addressee even when
+    the sender and the addressee's own room are entirely different projects. This confirms
+    the door never regresses into scoping resolve_seat by the caller's project."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    p = actions.pool
+    seat = await ensure_seat(actions, house="network", handle="cupid", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:cupid0004")
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, last_seen) "
+        "VALUES ($1, $2, $3, $4, now())",
+        "/test/cupid-job4", "agent:cupid0004", "network", "/test")
+
+    dm = await send_message(p, from_agent="agent:boss", from_project="some-other-project",
+                            to_agent="cupid", body="ship it")
+    assert dm["to_agent"] == seat["seat_id"]
+    assert dm["seat"] == "cupid"
+
+
 async def test_inbox_is_scoped_and_normalized(actions: Actions) -> None:
     p = actions.pool
     await _seed(p, "sibling-one")

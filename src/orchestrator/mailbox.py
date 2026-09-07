@@ -139,6 +139,32 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
+# THE SEND-DOOR ADDRESSING GUARD's OWN VOCABULARY (thread f4209591, operator 2026-09-06,
+# specimen msg 7873): a LEADING VOCATIVE ('cupid — spin down…', 'cupid: …', 'cupid, …') or
+# an @HANDLE anywhere in the body — the two shapes a human types when they mean a specific
+# seat, not the room at large. This is intentionally narrow (a leading word immediately
+# followed by one of these four punctuation marks, or an explicit @-sigil) rather than any
+# capitalized word: ordinary prose ("The build is done") never matches either shape, and a
+# candidate that DOESN'T also resolve through binding_of_handle's own authoritative check
+# (see send_message) is left untouched either way — this never infers MEANING from body,
+# only ever a NAME worth checking, the same distinction the `threads=` NO-PROSE-INFERENCE
+# law draws for ownership (send_message's own docstring).
+_LEADING_VOCATIVE_RE = re.compile(r"^\s*([A-Za-z][\w-]*)\s*[—:,-]")
+_AT_HANDLE_RE = re.compile(r"@([A-Za-z][\w-]*)")
+
+
+def _addressee_in_body(body: str) -> str | None:
+    """The bare name/handle a leading vocative or an @handle names, or None when the body
+    carries neither shape."""
+    m = _LEADING_VOCATIVE_RE.match(body)
+    if m:
+        return m.group(1)
+    m = _AT_HANDLE_RE.search(body)
+    if m:
+        return m.group(1)
+    return None
+
+
 async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """WHY may this id not receive a DM — or None if it may. The resolver-eligibility law
     (thread 21596481): a retired or false-mint agent is never a DM target — mail parked
@@ -269,7 +295,23 @@ async def send_message(
     prefix the same night this shipped). Requires a resolved single addressee (`to_agent`
     or a name that resolves to one) — ownership transfer has nowhere to land on a
     broadcast. New work with no prior thread needs nothing here: open_thread(assignee=...)
-    already covers dispatch-time minting on the RECIPIENT's own end."""
+    already covers dispatch-time minting on the RECIPIENT's own end.
+
+    THE SEND DOOR ADDRESSING GUARD (thread f4209591, operator 2026-09-06, specimen msg
+    7873): a broadcast (`to_project` set, `to_agent` absent) whose body opens with a
+    leading vocative ('cupid — …', 'cupid: …') or names an @handle is checked against
+    `binding_of_handle`'s own authoritative Seat resolution (never the wider assertion
+    fallback — a coincidence must never trigger this) purely to catch the mismatch
+    nebbercracker's specimen made: addressing a real seat's name in the body while
+    broadcasting to a room that seat's current holder never mounted under. When it
+    resolves to a holder in a DIFFERENT room, this refuses outright, naming the correct
+    address (`to_agent=<name>`) — never silently delivers to the wrong room. When it
+    resolves and agrees, the receipt's `addressee_resolved` field still names what was
+    found, so a caller sees the match rather than having to infer it. A candidate that
+    doesn't resolve through this authoritative binding at all is left untouched — this
+    is NOT a second instance of the `threads=` NO-PROSE-INFERENCE ban above (that ban
+    is against ACTING on an inferred meaning); this door only ever refuses or
+    annotates, never silently sends anywhere the caller didn't explicitly ask."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     if grade is not None and grade not in MAIL_GRADES:
@@ -322,6 +364,7 @@ async def send_message(
     via_reply_routing = False  # set True only where `to_a` is copied from `ref`, below —
     # never for explicit to_agent=/to=, whose staleness stays an act of intent (see the
     # REPLY ROUTING FOLLOWS THE LINEAGE comment further down)
+    addressee_resolved: dict[str, Any] | None = None
     if to_agent or to_project:  # explicit addressing wins
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None
@@ -354,6 +397,44 @@ async def send_message(
                 raise ValueError(
                     f"no such project: {to_project!r} — nobody has ever mounted there, so "
                     f"no inbox() call would ever see this broadcast{hint}")
+            else:
+                # THE SEND DOOR ADDRESSING GUARD (thread f4209591, operator 2026-09-06,
+                # specimen msg 7873): nebbercracker (project monsterhouse) sent `send(
+                # to='monsterhouse', body='cupid — spin down the demo…')`. cupid holds
+                # seat:76c1ff57 in project network — nobody in monsterhouse is cupid —
+                # and the door filed it as an ordinary room broadcast anyway, delivered
+                # to nebbercracker's own room, and cupid never saw it: "there is no
+                # mechanism to catch it or stop it from making that mistake
+                # mechanically, the messaging system runs partly on prior knowledge and
+                # faith which is dangerous" (the operator). A leading vocative or an
+                # @handle in `body` names a SPECIFIC seat the sender believes they're
+                # reaching; when it resolves through the SAME authoritative binding an
+                # explicit to_agent=<name> itself trusts (binding_of_handle, Phase B1 —
+                # a unique living Seat with an eligible holder, never the wider
+                # assertion-fallback that could also find a coincidence) to a holder
+                # whose OWN current room disagrees with the room being broadcast into,
+                # this is never a guess worth risking silently: refuse, naming the
+                # correct address, exactly as an explicit to_agent=<bad-name> already
+                # refuses rather than parking mail nowhere readable. A candidate that
+                # doesn't resolve this way is left untouched — just prose, per the
+                # NO-PROSE-INFERENCE law above.
+                candidate = _addressee_in_body(body)
+                if candidate:
+                    from src.orchestrator.seats import binding_of_handle
+                    bound = await binding_of_handle(pool, candidate)
+                    if bound is not None:
+                        holder_room = await pool.fetchval(
+                            "SELECT project FROM agent_mounts WHERE agent_id=$1 "
+                            "ORDER BY last_seen DESC LIMIT 1", bound["holder"])
+                        addressee_resolved = {
+                            "name": candidate, "seat_id": bound["seat_id"],
+                            "holder": bound["holder"], "project": holder_room,
+                        }
+                        if holder_room and _norm(holder_room) != to_p:
+                            raise ValueError(
+                                f"{candidate} is {bound['seat_id']} in project "
+                                f"{holder_room} — nobody in {to_p} is {candidate}; use "
+                                f"to_agent={candidate!r} to reach them directly")
     elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
         via_reply_routing = True
@@ -602,7 +683,8 @@ async def send_message(
                 **({"redirect": redirect} if redirect else {}),
                 **({"folded_from": folded_from} if folded_from else {}),
                 **({"redirected_from": redirected_from} if redirected_from else {}),
-                **({"threads_stamped": stamped} if stamped else {})}
+                **({"threads_stamped": stamped} if stamped else {}),
+                **({"addressee_resolved": addressee_resolved} if addressee_resolved else {})}
     mid = await pool.fetchval(
         "INSERT INTO fleet_messages (from_agent, from_project, to_project, to_agent, body, "
         "reply_to, thread_id, desk_kind, grade) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) "
@@ -695,7 +777,8 @@ async def send_message(
             **({"redirect": redirect} if redirect else {}),
             **({"folded_from": folded_from} if folded_from else {}),
             **({"redirected_from": redirected_from} if redirected_from else {}),
-            **({"threads_stamped": stamped} if stamped else {})}
+            **({"threads_stamped": stamped} if stamped else {}),
+            **({"addressee_resolved": addressee_resolved} if addressee_resolved else {})}
 
 
 async def unread_count(
