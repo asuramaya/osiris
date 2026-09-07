@@ -239,6 +239,44 @@ async def test_projects_index_named_project_is_not_unnamed(
     assert mine["name"] == "namedprojtest"
 
 
+async def test_projects_index_nests_worktrees_under_their_parent(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Thread 922d920c/55992ca9: a Worktree is never a project of its own (Sekhmet's own
+    Worktree/worktree_of shape) — /projects must nest it under its parent's own row, never
+    list it as a flat sibling that could misread as a project (the exact ballgem-wt-*
+    misfiling shape this whole mechanism exists to stop)."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wtparenttest", "test")
+    await actions.assert_property(proj, "name", "wtparenttest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    wt = await actions.create_or_find_object("Worktree", "worktree:wtparenttest-feature",
+                                             "test")
+    await actions.assert_property(wt, "branch", "khnum-feature", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(wt, proj, "worktree_of", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    r = await client.get("/projects")
+    body = r.json()
+    mine = next(row for row in body if row["canonical"] == "repo:wtparenttest")
+    assert mine["worktrees"] == [
+        {"canonical": "worktree:wtparenttest-feature", "name": "wtparenttest-feature",
+         "branch": "khnum-feature"},
+    ]
+    assert not any(row["canonical"] == "worktree:wtparenttest-feature"
+                  for row in body)  # never a flat sibling row
+
+
+async def test_projects_index_ordinary_project_has_no_worktrees(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    await actions.create_or_find_object("SoftwareProject", "repo:nowtreetest", "test")
+    r = await client.get("/projects")
+    mine = next(row for row in r.json() if row["canonical"] == "repo:nowtreetest")
+    assert mine["worktrees"] == []
+
+
 async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = await _seed(actions)
     # an object in a *different* case must not appear when scoping to this one

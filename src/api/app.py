@@ -375,6 +375,30 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         if not rows:
             return []
+        # WORKTREES NESTED UNDER THEIR PARENT (thread 922d920c/55992ca9, Sekhmet's own
+        # Worktree/worktree_of shape, deferred to avoid colliding with this same page's
+        # concurrent badge/unnamed lane): one query for every active worktree_of link,
+        # never a call per project — same "one query for all, not one per row" discipline
+        # object_count/bucket already follow above. A worktree with no resolvable parent
+        # (the census's own `refused` case) never reaches here at all — worktree_of is
+        # only ever written once the parent is known.
+        worktree_rows = await p.fetch(
+            "SELECT w.id, w.canonical, proj.id AS parent_id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=w.id "
+            "   AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AS branch "
+            "FROM links l "
+            "JOIN objects w ON w.id = l.from_id AND w.type = 'Worktree' "
+            "JOIN objects proj ON proj.id = l.to_id AND proj.type = 'SoftwareProject' "
+            "WHERE l.type = 'worktree_of' AND (l.valid_until IS NULL OR l.valid_until > now())"
+        )
+        worktrees_by_parent: dict[uuid.UUID, list[dict[str, Any]]] = {}
+        for wr in worktree_rows:
+            worktrees_by_parent.setdefault(wr["parent_id"], []).append({
+                "canonical": wr["canonical"],
+                "name": wr["canonical"].removeprefix("worktree:"),
+                "branch": wr["branch"],
+            })
         label_props = await fetch_label_props(p, [r["id"] for r in rows])
         count_rows = await p.fetch(
             "SELECT proj.id AS project_id, o.type, COUNT(*) AS n "
@@ -426,6 +450,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 "last_touch": b.get("last_touch"),
                 "bucket": b.get("bucket", "normal"),
                 "contradicted_on": b.get("contradicted_on"),
+                "worktrees": sorted(worktrees_by_parent.get(r["id"], []),
+                                    key=lambda w: w["name"]),
             })
         return items
 

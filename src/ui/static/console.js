@@ -449,10 +449,22 @@ function projectRow(r) {
   if (r.bucket === 'orphan') flags += ' <span class="proj-flag" title="zero live links — often just a repo nobody has worked yet, not necessarily a problem (link-count alone is not a phantom test)">no links</span>';
   else if (r.bucket === 'contradicted') flags += ' <span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
   var nameCell = r.unnamed ? '<em>' + esc(r.name) + '</em>' : esc(r.name);
-  return '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + nameCell + flags + '</td>' +
+  var row = '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + nameCell + flags + '</td>' +
     '<td><span class="card-tag-status status-' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
     '<td style="text-align:right">' + (r.object_count || 0).toLocaleString() + '</td>' +
     '<td>' + esc(lastTouch) + '</td></tr>';
+  // WORKTREES NESTED UNDER THEIR PARENT (thread 922d920c/55992ca9): a worktree is never
+  // a project of its own (Sekhmet's own Worktree/worktree_of shape) — a plain sibling
+  // row would misread as one, exactly the ballgem-wt-* misfiling this shape exists to
+  // stop repeating in the UI too. Indented, muted, no status/object-count columns (a
+  // Worktree carries neither) — just enough to say "this checkout lives under that repo".
+  (r.worktrees || []).forEach(function(w){
+    row += '<tr class="ee-row" style="color:var(--muted);font-size:12px">' +
+      '<td style="padding-left:28px">↳ ' + esc(w.name) +
+      (w.branch ? ' <span class="proj-flag" title="checked out branch">' + esc(w.branch) + '</span>' : '') +
+      '</td><td></td><td></td><td></td></tr>';
+  });
+  return row;
 }
 function openProjectInBrowse(name) {
   // A drill-in stand-in for the real project PAGE (#93 step 2, blocked on the operator's
