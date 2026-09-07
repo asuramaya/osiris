@@ -608,9 +608,12 @@ async def test_settle_threads_open_defaults_an_ownerless_obligation_and_names_it
     just settle's own kind='obligation' case."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
+    from src.orchestrator.seats import held_seat
 
     await claim_name(actions, "agent:settledefault1", "Settledefault",
                      source="agent:settledefault1")
+    seat = await held_seat(actions.pool, "agent:settledefault1")
+    assert seat is not None
 
     class _Ctx:
         class request_context:  # noqa: N801
@@ -632,7 +635,7 @@ async def test_settle_threads_open_defaults_an_ownerless_obligation_and_names_it
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     entry = out["accepted"]["threads_opened"][0]
-    assert entry["owner_defaulted"]["to"] == "Settledefault"
+    assert entry["owner_defaulted"]["to"] == seat["seat_id"]
 
 
 async def test_settle_bulk_loops_default_repo_to_the_callers_own_project(

@@ -2890,6 +2890,68 @@ async def _resolve_active_seat(pool: asyncpg.Pool, ref: str) -> asyncpg.Record |
         "AND id=$1", oid)
 
 
+async def resolve_owner_seat(
+    pool: asyncpg.Pool, raw: str, *, project: str | None = None,
+) -> str | None:
+    """THE SHARED OWNER RESOLVER (thread b5ae6773/0af7b202, #203's write-time laws AND
+    migration 0060 — one function, per Thoth's own instruction, not two copies deriving
+    the same three rules twice): an owner is a Seat's own canonical or the literal
+    'operator', nothing else. This resolves everything short of that ON ENTRY, never
+    guesses past what it can prove:
+      - 'operator' -> itself, unchanged (the literal string only — `_OPERATOR_ACTORS`'s
+        other sentinels, 'analyst:operator'/'console', identify a CALLER's actor, not a
+        thread's owner, and are deliberately not accepted here).
+      - `seat:<...>` already active -> itself, confirmed live via `_resolve_active_seat`.
+      - `agent:<...>` -> `lineage_head`'s own currently-held seat (a dead generation
+        resolves through its lineage to whoever is holding the seat now, not a grave).
+      - anything else -> a bare handle, matched CASE-INSENSITIVELY against an active
+        Seat's own `handle` property. Deliberately NOT `binding_of_handle` (which also
+        requires a currently-active HOLDER): an owner names the ROLE a thread belongs
+        to, not who happens to be answering mail for it at this exact instant — a
+        briefly-vacant seat is still a valid owner.
+      - if the handle match also fails and `project` is given, the coordinator seat
+        holding a live `governs` edge over that project.
+    None when nothing above resolves — the caller's own job to refuse (the write-time
+    gate) or fall back further (migration 0060's own project-coordinator default),
+    never this function's job to guess past its four rules."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw == "operator":
+        return "operator"
+    if raw.startswith("seat:"):
+        row = await _resolve_active_seat(pool, raw)
+        return row["canonical"] if row else None
+    if raw.startswith("agent:"):
+        from src.orchestrator.agents import lineage_head
+
+        head = await lineage_head(pool, raw)
+        seat = await held_seat(pool, head)
+        return seat["seat_id"] if seat else None
+    seat_row = await pool.fetchrow(
+        "SELECT o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='handle' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1)",
+        raw)
+    if seat_row:
+        return str(seat_row["canonical"])
+    if project:
+        from src.orchestrator.capture import _resolve_repo
+
+        proj_oid = await _resolve_repo(pool, project)
+        if proj_oid is not None:
+            coord = await pool.fetchval(
+                "SELECT s.canonical FROM links l JOIN objects s "
+                "  ON s.id=l.from_id AND s.type='Seat' "
+                "WHERE l.type='governs' AND l.to_id=$1 "
+                "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1",
+                proj_oid)
+            if coord:
+                return str(coord)
+    return None
+
+
 async def peer_seats(
     actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
 ) -> dict[str, Any]:

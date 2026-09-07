@@ -1340,7 +1340,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # to_agent= instead of silently delivering to the wrong room — no new tool, no new schema
 # param, one docstring paragraph naming the new refusal and the receipt's
 # `addressee_resolved` field. Measured exact (106,871), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 112961
+# 112,961 -> 113,246 (2026-09-07, Sekhmet, thread b5ae6773, #203's write-time
+# classification laws): open_thread() gains a one-sentence docstring note that `kind`
+# is now REQUIRED (a missing kind refuses rather than minting a kindless thread) — no
+# new tool, no new schema param. The owner-resolution and derived-write laws named in
+# the same dispatch were held (broke a wide swath of the suite's own informal
+# `agent:<name>` owner/assignee placeholders; flagged back rather than shipped as a
+# guess), so only this one law's prose landed. Measured exact (113,246), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 113246
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

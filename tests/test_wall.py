@@ -437,7 +437,8 @@ async def test_open_thread_tool_refuses_an_arc_outside_the_locked_taxonomy(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.open_thread("a duty with a bad arc", arc="Not-A-Real-Arc")
+        out = await srv.open_thread("a duty with a bad arc", arc="Not-A-Real-Arc",
+                                    kind="task")
     finally:
         srv._pool = saved_pool
     assert "error" in out and "arc must be one of" in out["error"]

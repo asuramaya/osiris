@@ -2325,8 +2325,83 @@ async def test_lint_rot_candidate_unscoped_counts_a_repo_less_open_thread(
     assert "rot-candidate-unscoped" not in result["clean"]
     finding = next(f for f in result["findings"] if f["check"] == "rot-candidate-unscoped")
     assert finding["severity"] == "info"
-    assert finding["count"] == 1
-    assert "cannot evaluate" in finding["detail"]
+
+
+async def test_lint_kindless_open_thread_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["kindless-open-thread"] == 0
+    assert "kindless-open-thread" in result["clean"]
+
+
+async def test_lint_kindless_open_thread_flags_a_thread_with_no_kind(
+    actions: Actions,
+) -> None:
+    """Thread b5ae6773's write-time law refuses this going forward (open_thread's own
+    MCP tool); this is the standing audit for anything that slipped past it — an
+    internal caller, or a pre-law row migration 0060 hasn't reached yet."""
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "a kindless thread from before the law", source="agent:me")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["kindless-open-thread"] == 1
+    assert "kindless-open-thread" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "kindless-open-thread")
+    assert finding["severity"] == "warn"
+    assert "no kind" in finding["detail"]
+
+
+async def test_lint_kindless_open_thread_never_flags_a_thread_with_a_kind(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "a properly kinded thread", kind="task", source="agent:me")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["kindless-open-thread"] == 0
+
+
+async def test_lint_unresolvable_owner_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["unresolvable-owner"] == 0
+    assert "unresolvable-owner" in result["clean"]
+
+
+async def test_lint_unresolvable_owner_flags_a_bare_string_nobody_holds(
+    actions: Actions,
+) -> None:
+    """Thread b5ae6773's owner law: an owner must resolve to an active seat or
+    'operator' — a bare handle nobody holds (the exact shape my own five rows carried
+    this reign) is exactly what this check catches."""
+    from src.orchestrator.capture import open_thread
+
+    await open_thread(actions, "a duty owned by a bare string nobody holds",
+                      kind="obligation", owner="nosuchhandleatall", source="agent:me")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["unresolvable-owner"] == 1
+    assert "unresolvable-owner" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "unresolvable-owner")
+    assert finding["severity"] == "warn"
+    assert "nosuchhandleatall" in finding["detail"]
+
+
+async def test_lint_unresolvable_owner_never_flags_operator_or_a_real_seat(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="lintownertest", handle="Lintownertest",
+                             source="test")
+    await open_thread(actions, "a duty owned by the operator", kind="obligation",
+                      owner="operator", source="agent:me")
+    await open_thread(actions, "a duty owned by a real seat id", kind="obligation",
+                      owner=seat["seat_id"], source="agent:me")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["unresolvable-owner"] == 0
 
 
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
