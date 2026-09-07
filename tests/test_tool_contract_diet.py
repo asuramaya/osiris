@@ -1287,7 +1287,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 73
 # only, default 14) — a docstring sentence plus the new inputSchema entry. No new tool.
 # fleet_digest's own docstring also gained one clause naming item 4's obligation_pressure
 # field. Measured exact (105,817), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 106567  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 106,567 -> 106,871 (2026-09-07, Imhotep, Thoth dispatch wave msg 7882 item 1, thread
+# f4209591, specimen msg 7873): send() now refuses a broadcast whose body opens with a
+# real seat's name/@handle when that seat's holder sits in a different project than `to`
+# (binding_of_handle's own authoritative resolution, never a guess), naming the correct
+# to_agent= instead of silently delivering to the wrong room — no new tool, no new schema
+# param, one docstring paragraph naming the new refusal and the receipt's
+# `addressee_resolved` field. Measured exact (106,871), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 106871  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

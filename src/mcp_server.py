@@ -5128,7 +5128,11 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
     """Message the fleet. `to`=<project> is a BROADCAST, the group chat ('operator' reaches
     the human's desk); `to_agent`=<agent:id> is a private DM (ids from orient()/fleet). `to`
-    refuses a project nobody has mounted under rather than filing mail nobody will read.
+    refuses a project nobody has mounted under rather than filing mail nobody will read; it
+    also refuses when `body` opens with a real seat's name ('cupid — …') or @handle whose
+    holder sits in a DIFFERENT project than `to` — naming the right `to_agent` instead of
+    silently delivering to the wrong room. `addressee_resolved` in the receipt names what
+    it found, agreeing or not.
     `reply_to=<id>` answers a message (routes by channel, joins the thread) and settles it.
     At-least-once, deduped. For durable knowledge use record_decision/open_thread instead.
 
@@ -5191,6 +5195,12 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                                       "failed — this message won't show up in search()/"
                                       "prior-art/orient() until a later repair recovers it"}
            if res.get("graphed") is False else {}),
+        # THE SEND DOOR ADDRESSING GUARD (thread f4209591): a leading vocative or @handle
+        # in `body` that resolved through binding_of_handle's own authoritative Seat check —
+        # named here whether it agreed with the addressed room or (see the ValueError path
+        # above, which never reaches this receipt at all) disagreed with it.
+        **({"addressee_resolved": res["addressee_resolved"]}
+           if res.get("addressee_resolved") else {}),
     }
     if res["to_agent"]:  # a DM — report the addressee, its seat + lineage head, and its liveness
         out["dm_to"] = res["to_agent"]
