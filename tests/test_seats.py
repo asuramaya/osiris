@@ -4890,3 +4890,55 @@ async def test_mint_lock_wedged_waiter_fails_loud_named(
     finally:
         release.set()
         await task
+
+
+# ═══ pause_seat_or_agent (thread fba386dc item 5) — extracted from the MCP dispatcher's ═══
+# own inlined seat(action='pause') branch so a console/CLI door can wire it directly.
+
+async def test_pause_seat_or_agent_is_directly_callable_outside_the_mcp_dispatcher(
+    actions: Actions,
+) -> None:
+    """The whole point of the extraction: the resolve+write logic is a standalone function
+    in seats.py, callable with nothing but an Actions and a target string — no MCP Context,
+    no dispatcher plumbing. Proves both the pause and the release, plus the queued-DM
+    count and the receipt shape the MCP tool's own callers already depend on."""
+    seat_id = (await ensure_seat(actions, house="test", handle="PauseExtract",
+                                 source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:pause-extract-holder")
+
+    out = await seats_mod.pause_seat_or_agent(
+        actions, who=seat_id, paused=True, reason="deep work", actor="agent:pauser")
+    assert out == {"paused": seat_id, "by": "agent:pauser", "reason": "deep work",
+                   "note": "the DM push lane now queues this seat's mail — release with "
+                          "seat(action='pause', paused=False, target=...)"}
+    stamped = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='paused' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat_id)
+    assert stamped == "true"
+
+    released = await seats_mod.pause_seat_or_agent(
+        actions, who=seat_id, paused=False, reason="", actor="agent:pauser")
+    assert released == {"released": seat_id, "by": "agent:pauser",
+                        "note": "the queue drains on the next dispatch (a fresh send, or "
+                               "the worker sweep within the minute)"}
+
+
+async def test_pause_seat_or_agent_refuses_an_ineligible_bare_name(
+    actions: Actions,
+) -> None:
+    """The same refusal `seat_holder_ineligible` names for send_message — a plain-name
+    target whose only holder is retired/false_mint must never fall through to a dead
+    generation, extraction or not."""
+    seat_id = (await ensure_seat(actions, house="test", handle="PauseGhostExtract",
+                                 source="test"))["seat_id"]
+    holder = "agent:pause-ghost-extract"
+    await bind_holder(actions, seat_id=seat_id, agent_id=holder)
+    await actions.assert_property(
+        await actions.create_or_find_object("Agent", holder, holder), "retired", True,
+        holder, datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await seats_mod.pause_seat_or_agent(
+        actions, who="PauseGhostExtract", paused=True, reason="", actor="agent:pauser")
+    assert "cannot pause" in out.get("error", "")
+    assert "address the seat directly" in out["error"]

@@ -63,6 +63,63 @@ async def test_set_charter_mints_governs_links(actions: Actions) -> None:
     assert all(r["valid_until"] is None for r in links)
 
 
+async def test_set_charter_is_idempotent_when_declared_by_a_renamed_display_name(
+    actions: Actions,
+) -> None:
+    """Thread fba386dc: `_resolve_repo` matches a project's `name` PROPERTY too, not just
+    its canonical — so a seat chartering a repo by whatever it's CURRENTLY called (a
+    post-rename display name, or a differently-cased spelling of the same repo) used to
+    diff the caller's own raw string against `charter_of`'s canonical-derived set, never
+    settling: every call invalidated the prior canonical-spelled grant and minted a
+    twin under the caller's own spelling, which the NEXT identical call then invalidated
+    again — perpetual churn, never idempotent. Every candidate now resolves to its own
+    project's stable canonical before the diff, so a name-property match is exactly as
+    idempotent as an exact-canonical match."""
+    from src.parsers.base import EvidenceClass
+
+    seat_id = await _seated(actions, "agent:renamed-owner", "RenamedOwner")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:oldcanon", "test")
+    await actions.assert_property(proj, "name", "NewDisplayName", "test", NOW, 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    first = await set_charter(actions, seat_id, ["NewDisplayName"],
+                              actor="agent:renamed-owner")
+    assert first["charter"] == ["oldcanon"]          # canonical, never the caller's spelling
+    assert first["added"] == ["oldcanon"]
+    assert first["removed"] == []
+
+    second = await set_charter(actions, seat_id, ["NewDisplayName"],
+                               actor="agent:renamed-owner")
+    assert second["charter"] == ["oldcanon"]
+    assert second["added"] == []
+    assert second["removed"] == []                   # the old bug: this used to be ["oldcanon"]
+
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links l JOIN objects s ON s.id=l.from_id "
+        "WHERE s.canonical=$1 AND l.type='governs' AND l.valid_until IS NULL", seat_id)
+    assert n == 1                                     # never a churned pair of links
+
+
+async def test_set_charter_receipt_charter_field_is_the_committed_read_back(
+    actions: Actions,
+) -> None:
+    """Thread fba386dc: the receipt's `charter` field is read back from the graph AFTER
+    the write commits, never the pre-write `wanted` computation — it can never claim a
+    charter state the graph doesn't actually hold. A mixed call (one real add, one
+    rejected unknown name) proves the receipt reflects only what actually landed."""
+    seat_id = await _seated(actions, "agent:readback", "Readback")
+    await _repo(actions, "realrepo")
+
+    out = await set_charter(actions, seat_id, ["realrepo", "no-such-repo"],
+                            actor="agent:readback")
+    assert out["charter"] == await charter_of(actions.pool, seat_id) == ["realrepo"]
+    assert out["rejected"] == [{"repo": "no-such-repo",
+                                "error": "not a known repo — the graph has no independent "
+                                        "evidence it's real (no git ingest, no prior "
+                                        "record); ingest it or confirm it exists, then "
+                                        "declare your charter over it"}]
+
+
 async def test_set_charter_is_idempotent(actions: Actions) -> None:
     seat_id = await _seated(actions, "agent:steward2", "Steward2")
     await _repo(actions, "a")

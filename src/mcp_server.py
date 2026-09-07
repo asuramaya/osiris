@@ -3279,51 +3279,10 @@ async def _seat_impl(
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         a = Actions(pool)
-        from src.orchestrator.folds import canonical_agent, living_head
-        from src.orchestrator.seats import held_seat, seat_receipt
+        from src.orchestrator.seats import pause_seat_or_agent
         who = target or ident.agent_id
-        if who.startswith("seat:"):
-            if await seat_receipt(pool, who) is None:
-                return {"error": f"no such living seat: '{who}' — check fleet()"}
-            stamp_on = who
-        elif who.startswith("agent:"):
-            head = await living_head(pool, await canonical_agent(pool, who))
-            bound = await held_seat(pool, head)
-            stamp_on = (bound or {}).get("seat_id") or head
-        else:  # a plain name — resolve like a DM address does
-            from src.orchestrator.agents import resolve_seat
-            from src.orchestrator.seats import seat_holder_ineligible
-            ineligible = await seat_holder_ineligible(pool, who)
-            if ineligible is not None:
-                return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
-                                 "directly (target='seat:<id>') once a new holder claims "
-                                 "it, or pause the seat id itself if you mean to gate the "
-                                 "chair."}
-            resolved = await resolve_seat(a, who)
-            if resolved["agent"] is None:
-                return {"error": f"no seat or agent named '{who}' — check fleet()"}
-            stamp_on = resolved.get("seat_id") or resolved["agent"]
-        obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
-        oid = await a.create_or_find_object(obj_type, stamp_on, ident.agent_id)
-        now = datetime.now(UTC)
-        await a.assert_property(oid, "paused", paused, ident.agent_id, now, 0.9,
-                                evidence_class="self_declared")
-        if reason:
-            await a.assert_property(oid, "paused_reason", reason[:500], ident.agent_id, now,
-                                    0.9, evidence_class="self_declared")
-        queued = 0
-        if stamp_on.startswith("agent:") or stamp_on.startswith("seat:"):
-            queued = await pool.fetchval(
-                "SELECT count(*) FROM fleet_messages m WHERE m.to_agent=$1 AND "
-                "m.read_at IS NULL AND NOT EXISTS (SELECT 1 FROM message_recipients r "
-                "WHERE r.message_id=m.id AND r.read_at IS NOT NULL)", stamp_on) or 0
-        return {"paused" if paused else "released": stamp_on, "by": ident.agent_id,
-                **({"reason": reason} if reason else {}),
-                **({"queued_dms": queued} if queued else {}),
-                "note": ("the DM push lane now queues this seat's mail — release with "
-                         "seat(action='pause', paused=False, target=...)" if paused else
-                         "the queue drains on the next dispatch (a fresh send, or the "
-                         "worker sweep within the minute)")}
+        return await pause_seat_or_agent(a, who=who, paused=paused, reason=reason,
+                                         actor=ident.agent_id)
 
     if action == "vacate":
         assert target is not None  # pre-dispatch validation already required it

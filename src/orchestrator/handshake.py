@@ -1026,14 +1026,25 @@ async def automount(
     # the THIN-PROJECT flag (field report msg 124): an agent auto-mounted to a young/empty
     # project reads its own orient()'s silence as an empty GRAPH — a lie of omission. Cheap
     # check: does the project have any recorded decisions/threads at all?
+    #
+    # RESOLVED THROUGH THE PROJECT'S OWN CANONICAL, NEVER A RAW STRING MATCH (thread
+    # fba386dc, "rename honesty seams" — Metron's own specimen: 431 real decisions, still
+    # called "young"). `ident.project` is not guaranteed to be a project's stable
+    # canonical suffix — project_identity.py's own law is that the canonical stays fixed
+    # forever while only the mutable `name` property changes on a rename, and callers are
+    # meant to resolve THROUGH that law (`_resolve_repo`'s canonical-or-name-property
+    # lookup), never assume a literal `'repo:' || ident.project` string match. The old
+    # query silently read "no activity" for any project whose current label differs from
+    # its own canonical — indistinguishable from a genuinely new, empty project.
     thin = False
     if ident.project:
         try:
-            thin = not bool(await actions.pool.fetchval(
-                "SELECT 1 FROM links l JOIN objects p ON p.id = l.to_id "
-                "JOIN objects s ON s.id = l.from_id "
-                "WHERE p.canonical = 'repo:' || $1 AND s.type IN ('Decision','Thread') "
-                "LIMIT 1", ident.project))
+            from src.orchestrator.capture import _resolve_repo
+
+            proj_id = await _resolve_repo(actions.pool, ident.project)
+            thin = proj_id is None or not bool(await actions.pool.fetchval(
+                "SELECT 1 FROM links l JOIN objects s ON s.id = l.from_id "
+                "WHERE l.to_id = $1 AND s.type IN ('Decision','Thread') LIMIT 1", proj_id))
         except Exception:  # noqa: BLE001 — the flag must never break the whisper
             thin = False
     # INLINE THE FOLD (thread a3a3d512): the thing a resumed mind re-derives every single

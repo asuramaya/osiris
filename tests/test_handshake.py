@@ -1683,3 +1683,57 @@ async def test_automount_refuses_an_inherited_job_dirs_leaked_binding(
     out = await automount(actions, session_id=SID, cwd="/w/owner-repo",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert out["agent"] != "agent:leaker01"          # refused the leaked binding
+
+
+# ═══ THE THIN-PROJECT FLAG (thread fba386dc item 1) — resolved through the project's own ═══
+# canonical, never a raw ident.project string match.
+
+async def test_automount_thin_flag_resolves_through_the_projects_own_canonical(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Metron's own specimen: a project with 431 real decisions still read 'young' because
+    the old check matched `'repo:' || ident.project` literally — any caller whose own
+    project label differs from the canonical (a post-rename display name, or simply a
+    name-property match rather than the exact canonical) saw a false 'thin' flag. The
+    project here is chartered under a canonical the SessionStart banner never sees
+    directly (`ident.project` carries the DISPLAY name via `project_label`) — real
+    Decision activity must still be found."""
+    from src.orchestrator.capture import record_decision
+
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:thinflag-oldcanon", "test")
+    await actions.assert_property(proj, "name", "ThinflagNewName", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await record_decision(actions, "a real decision this project actually made",
+                          repo="thinflag-oldcanon", source="test")
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/thinflag")
+    await mounts_mod.save_mount(
+        actions.pool, job_dir="/test/seed/thinflag", agent_id="agent:seed-thinflag",
+        project="ThinflagNewName", cwd="/test", model=None, session_key=None, alive=False)
+
+    out = await automount(actions, session_id="39fb22a2-0000-4000-8000-00000000thin",
+                          cwd="/w/thinflag", actor="analyst:operator", root=root,
+                          jobs_home=tmp_path / "jobs", project_label="ThinflagNewName")
+
+    assert out["thin"] is False
+
+
+async def test_automount_thin_flag_true_for_a_genuinely_new_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The honest positive: a project with no SoftwareProject on record at all (never
+    chartered, never ingested) still reads thin — this fix must not make every project
+    read as non-thin by accident."""
+    root = tmp_path / "projects"
+    _transcript(root, "/w/thinflag-fresh")
+    await mounts_mod.save_mount(
+        actions.pool, job_dir="/test/seed/thinflag-fresh", agent_id="agent:seed-fresh",
+        project="brand-new-project", cwd="/test", model=None, session_key=None, alive=False)
+
+    out = await automount(actions, session_id="39fb22a2-0000-4000-8000-0000000fresh",
+                          cwd="/w/thinflag-fresh", actor="analyst:operator", root=root,
+                          jobs_home=tmp_path / "jobs", project_label="brand-new-project")
+
+    assert out["thin"] is True
