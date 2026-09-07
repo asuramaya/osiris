@@ -47,8 +47,8 @@ async def _thread(
         await actions.assert_property(t, "owner", owner, _SRC, now, 0.9,
                                       evidence_class="self_declared")
     if repo is not None:
-        await actions.assert_property(t, "repo", repo, _SRC, now, 0.9,
-                                      evidence_class="self_declared")
+        from src.orchestrator.capture import link_repo
+        await link_repo(actions, t, repo, now, source=_SRC)
     return canonical
 
 
@@ -77,6 +77,26 @@ async def test_owner_law_resolves_an_empty_owner_via_the_project_coordinator(
     seat_id = await _seat(actions, "M60EmptyOwnerSeat")
     await set_charter(actions, seat_id, ["m60-proj-empty"], actor="test")
     t = await _thread(actions, "m60-thread-empty-owner", owner=None, repo="m60-proj-empty")
+
+    await apply_migration_0060(actions)
+
+    assert await _current_prop(actions, t, "owner") == seat_id
+
+
+async def test_owner_law_resolves_a_literal_project_name_owner_via_the_in_repo_link(
+    actions: Actions,
+) -> None:
+    """Migration 0061, census 583e2669: the `repo` this migration reads for a thread
+    comes ONLY from the real `in_repo` LINK (`link_repo`'s own convention) -- a `repo`
+    PROPERTY assertion structurally never exists in this graph. A present-but-
+    unresolvable owner (a bare project name, same as production's literal-'osiris'
+    residue) must resolve through that link-derived project just as reliably as the
+    empty-owner rung above."""
+    await _repo(actions, "m60-proj-literal")
+    seat_id = await _seat(actions, "M60LiteralOwnerSeat")
+    await set_charter(actions, seat_id, ["m60-proj-literal"], actor="test")
+    t = await _thread(actions, "m60-thread-literal-owner", owner="m60-proj-literal",
+                      repo="m60-proj-literal")
 
     await apply_migration_0060(actions)
 

@@ -14,6 +14,7 @@ from src.orchestrator.owner_normalization import (
     apply_owner_normalization,
     classify_thread_owner,
     plan_owner_normalization,
+    resolve_owner_seat,
 )
 from src.orchestrator.seats import ensure_seat
 
@@ -143,6 +144,32 @@ async def test_a_project_name_with_no_charter_at_all_has_no_coordinator(
     assert out["new_owner"] is None
     assert out["project"] == "onown-orphan"
     assert "no seat's charter or pin names" in out["reason"]
+
+
+# ═══ resolve_owner_seat: the shared resolver (migration 0061, census 583e2669) ══════════
+
+async def test_resolve_owner_seat_falls_a_malformed_agent_id_through_to_the_coordinator(
+    actions: Actions,
+) -> None:
+    """agent:deckard/agent:d00dbe16 (census 583e2669): a string shaped like an agent id
+    that never was one -- lineage_head/held_seat finds nothing, and this used to return
+    None right there, the one prefix that never reached the project-coordinator rung a
+    plain string already got. Fixed: it now falls through same as everything else."""
+    await _repo(actions, "onown-malformed-agent")
+    seat_id = await _seat(actions, "OnownMalformedAgentSeat")
+    await set_charter(actions, seat_id, ["onown-malformed-agent"], actor="test")
+
+    resolved = await resolve_owner_seat(
+        actions.pool, "agent:not-a-real-agent-id", project="onown-malformed-agent")
+
+    assert resolved == seat_id
+
+
+async def test_resolve_owner_seat_still_refuses_a_malformed_agent_id_with_no_project(
+    actions: Actions,
+) -> None:
+    resolved = await resolve_owner_seat(actions.pool, "agent:not-a-real-agent-id")
+    assert resolved is None
 
 
 # ═══ plan_owner_normalization / apply_owner_normalization: end to end ═══════════════════

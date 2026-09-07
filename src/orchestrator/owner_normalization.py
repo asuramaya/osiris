@@ -133,7 +133,15 @@ async def resolve_owner_seat(
         trusts, not a second, cheaper re-derivation via a bare governs-edge lookup.
     None when nothing above resolves — the caller's own job to refuse (the write-time
     gate) or fall back further (migration 0060's own project-coordinator default),
-    never this function's job to guess past its four rules."""
+    never this function's job to guess past its four rules.
+
+    A MALFORMED `agent:<...>` (migration 0061, census 583e2669: agent:deckard,
+    agent:d00dbe16 — strings shaped like an agent id that were never one, so
+    `lineage_head`/`held_seat` finds nothing) used to return None immediately here,
+    never reaching the handle or project rungs a bare string gets — the ONE prefix
+    that couldn't fall through. It now falls through same as everything else: no
+    seat holds that lineage, so try it as a bare handle, then as a project's
+    coordinator, before finally giving up."""
     from src.orchestrator.agents import lineage_head
     from src.orchestrator.seats import _resolve_active_seat, held_seat
 
@@ -148,7 +156,8 @@ async def resolve_owner_seat(
     if raw.startswith("agent:"):
         head = await lineage_head(pool, raw)
         seat = await held_seat(pool, head)
-        return seat["seat_id"] if seat else None
+        if seat is not None:
+            return str(seat["seat_id"])
     seat_canon = await pool.fetchval(
         "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type='Seat' AND o.status='active' AND a.name='handle' "

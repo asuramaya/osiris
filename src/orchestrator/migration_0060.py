@@ -1,5 +1,15 @@
 """MIGRATION 0060, THE THREE CLASSIFICATION LAWS (thread 0af7b202, decision 0d863363's
-own "ships mechanically, never a coordinator's hand pass" mandate, #203 to zero):
+own "ships mechanically, never a coordinator's hand pass" mandate, #203 to zero).
+CORRECTED BY MIGRATION 0061 (census 583e2669, msg 8000/8001): the `repo` this module's
+own query derives for a Thread was read off a `repo` PROPERTY assertion that
+structurally never exists — `link_repo` (capture.py) attaches a project ONLY via the
+`in_repo` LINK, never a property, so this rung silently misfired for every thread on
+both the empty-owner AND the present-but-unresolvable-owner branches below. Fixed in
+place (not forked into a new module — this function is idempotent by construction, the
+bug was in the read, not the law) by deriving `repo` from the `in_repo` link's target
+SoftwareProject instead. Migration 0061 simply re-invokes `apply_migration_0060` with
+this fix live, so every row the deploy gap or this bug left stranded gets its one more
+touch.
 
   (1) OWNER LAW: an owner is a Seat's own canonical or the literal 'operator', nothing
       else. Every open Thread's owner is resolved through `resolve_owner_seat`
@@ -56,8 +66,14 @@ _OPEN_THREADS_SQL = """
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
          AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
         AS owner,
-        (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
-         AND a.name='repo' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
+        (SELECT COALESCE(
+            (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id
+             AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),
+            regexp_replace(p.canonical, '^repo:', ''))
+         FROM links l JOIN objects p ON p.id = l.to_id
+         WHERE l.from_id=o.id AND l.type='in_repo'
+           AND (l.valid_until IS NULL OR l.valid_until > now())
+         ORDER BY l.first_seen DESC NULLS LAST LIMIT 1)
         AS repo,
         (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id
          AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)
