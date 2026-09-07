@@ -219,6 +219,27 @@ async def filed_under_check(
     if not went_to:
         return None
     mismatched = [p for p in went_to if p != project]
+    # A DEAD/DISPLAY NAME, RESOLVED (thread fba386dc item 2): `_normalize_project_label_
+    # through_merge` above only ever matches an EXACT (or case-variant) CANONICAL — it has
+    # no name-property fallback, unlike `_resolve_repo` (set_charter's own resolver). A
+    # `filed_under` that's a bare handle, a seat's derived house label, or any other alias
+    # for one of `went_to`'s own projects (`_seated_house`'s own multi-charter fallback
+    # returns exactly this shape) stayed permanently mismatched, incoherent whenever the
+    # seat's charter didn't happen to cover the spread either. Resolved the SAME way a
+    # charter declaration is: canonical-or-name-property, one real project, unambiguous.
+    if mismatched:
+        try:
+            from src.orchestrator.capture import _resolve_repo
+
+            proj_id = await _resolve_repo(conn_or_pool, project)
+            if proj_id is not None:
+                real_canon = await conn_or_pool.fetchval(
+                    "SELECT canonical FROM objects WHERE id=$1", proj_id)
+                real = str(real_canon).removeprefix("repo:") if real_canon else None
+                if real is not None and real in went_to:
+                    mismatched = [p for p in went_to if p != real]
+        except Exception:  # noqa: BLE001 — a diagnostic refinement must never be the
+            pass          # reason this check goes blind (577988ed) — report-only, unchanged
     result: dict[str, Any] = {
         "filed_under": project, "writes_went_to": went_to, "coherent": not mismatched,
         "spans_multiple": len(went_to) > 1,

@@ -2176,6 +2176,69 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
             "no eligible holder exists")
 
 
+async def pause_seat_or_agent(
+    actions: Actions, *, who: str, paused: bool, reason: str = "", actor: str,
+) -> dict[str, Any]:
+    """THE PAUSE WRITE, EXTRACTED (thread fba386dc item 5, Khnum's own flag from 5bf6447c):
+    used to be inlined in the MCP dispatcher's `seat(action='pause')` branch, unreachable
+    for a console/CLI door to wire without duplicating the resolution ladder. Same
+    resolution as always: `seat:<id>` confirmed living, `agent:<id>` resolved through its
+    lineage's own living head to whichever seat it holds (falling back to the head itself
+    when unseated), or a bare name resolved the same way a DM address is (refusing loudly
+    on `seat_holder_ineligible`'s own shape rather than silently falling through to a dead
+    generation). Stamps `paused`/`paused_reason` on whichever object (Seat or Agent) the
+    resolution landed on, counts this address's own queued-but-unread DMs, and returns the
+    exact receipt shape the MCP tool always has.
+
+    `who` is the caller's OWN resolved target string (already defaulted to the caller's
+    own agent id upstream when no explicit target was given) — this function never
+    re-derives that default, it only resolves whatever string it's handed."""
+    pool = actions.pool
+    from src.orchestrator.agents import resolve_seat
+    from src.orchestrator.folds import canonical_agent, living_head
+
+    if who.startswith("seat:"):
+        if await seat_receipt(pool, who) is None:
+            return {"error": f"no such living seat: '{who}' — check fleet()"}
+        stamp_on = who
+    elif who.startswith("agent:"):
+        head = await living_head(pool, await canonical_agent(pool, who))
+        bound = await held_seat(pool, head)
+        stamp_on = (bound or {}).get("seat_id") or head
+    else:  # a plain name — resolve like a DM address does
+        ineligible = await seat_holder_ineligible(pool, who)
+        if ineligible is not None:
+            return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
+                             "directly (target='seat:<id>') once a new holder claims "
+                             "it, or pause the seat id itself if you mean to gate the "
+                             "chair."}
+        resolved = await resolve_seat(actions, who)
+        if resolved["agent"] is None:
+            return {"error": f"no seat or agent named '{who}' — check fleet()"}
+        stamp_on = resolved.get("seat_id") or resolved["agent"]
+    obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
+    oid = await actions.create_or_find_object(obj_type, stamp_on, actor)
+    now = datetime.now(UTC)
+    await actions.assert_property(oid, "paused", paused, actor, now, 0.9,
+                                  evidence_class="self_declared")
+    if reason:
+        await actions.assert_property(oid, "paused_reason", reason[:500], actor, now,
+                                      0.9, evidence_class="self_declared")
+    queued = 0
+    if stamp_on.startswith("agent:") or stamp_on.startswith("seat:"):
+        queued = await pool.fetchval(
+            "SELECT count(*) FROM fleet_messages m WHERE m.to_agent=$1 AND "
+            "m.read_at IS NULL AND NOT EXISTS (SELECT 1 FROM message_recipients r "
+            "WHERE r.message_id=m.id AND r.read_at IS NOT NULL)", stamp_on) or 0
+    return {"paused" if paused else "released": stamp_on, "by": actor,
+           **({"reason": reason} if reason else {}),
+           **({"queued_dms": queued} if queued else {}),
+           "note": ("the DM push lane now queues this seat's mail — release with "
+                    "seat(action='pause', paused=False, target=...)" if paused else
+                    "the queue drains on the next dispatch (a fresh send, or the "
+                    "worker sweep within the minute)")}
+
+
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     """Handle + house for a seat ADDRESS. `house` is DERIVED (ruling ff6148b0, decision
     4c9e4bd7 — reaffirmed as the consolidation target by 1db1ff41's ruling 1), never this

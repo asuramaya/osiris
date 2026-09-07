@@ -453,3 +453,43 @@ def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
 
 def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:
     assert boot_rollout_gap_notes([]) == []
+
+
+# ═══ THE CHARTER RENDERS TRUE AFTER A REISSUE (thread fba386dc item 4) ══════════════════
+
+async def test_reissue_renders_the_real_charter_never_never_formally_declared(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Deckard/Metron's own specimen: a chartered seat's office text read 'Your charter
+    was never formally declared' after a reissue. `compile_managed_body`'s own
+    `charter_block` is a live `charter_of()` read at reissue time (never cached) — this
+    is downstream of set_charter's own atomicity fix (fba386dc item 3): the SAME
+    declared-by-display-name-then-re-declared shape item 3's own regression test proves
+    (a real charter, wiped by a second declaration under the old code's raw-string diff)
+    must still render its real governance after a reissue, not the never-declared
+    fallback. A single plain-canonical declaration alone never reproduces the old bug —
+    confirmed empirically against pre-item-3-fix code before writing this specimen."""
+    from src.orchestrator.charter import set_charter
+    from src.parsers.base import EvidenceClass
+
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:reissue-charter-proj", "test")
+    await actions.assert_property(proj, "name", "ReissueCharterProjDisplay", "test",
+                                  datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await ensure_seat(actions, house="reissuecharterhouse", handle="ReissueCharterBoss",
+                      source="test")
+    minted = await mint_seat(actions, manager="ReissueCharterBoss",
+                             handle="ReissueChartered", office_root=tmp_path / "seats",
+                             actor="agent:test")
+    seat_id = minted["seat_id"]
+    orders_path = tmp_path / "seats" / "reissuechartered" / "CLAUDE.md"
+
+    await set_charter(actions, seat_id, ["ReissueCharterProjDisplay"], actor="agent:test")
+    await set_charter(actions, seat_id, ["ReissueCharterProjDisplay"], actor="agent:test")
+    out = await reissue_office(actions, seat_id=seat_id,
+                               because="charter landed, recompiling", actor="agent:test")
+    assert out["changed"] is True
+    after = orders_path.read_text()
+    assert "never formally declared" not in after
+    assert "You govern: `reissue-charter-proj`." in after

@@ -503,6 +503,52 @@ async def test_filed_under_check_stays_incoherent_without_a_seat_id(actions: Act
     assert "charter_repos" not in out
 
 
+async def test_filed_under_check_coherent_when_filed_under_is_a_dead_display_name(
+    actions: Actions,
+) -> None:
+    """Thread fba386dc item 2, the real gap: `_normalize_project_label_through_merge`
+    only ever matches an EXACT (or case-variant) canonical — it has no name-property
+    fallback. `_seated_house`'s own multi-charter/no-charter fallback hands `ident.
+    project` a seat's derived HOUSE label, never necessarily a project's own canonical —
+    and even a single-project seat can be `filed_under` a plain display name (a bare
+    handle, a project's `name` property post-rename) that was never itself the literal
+    canonical suffix. Without a covering charter, the OLD code reported this incoherent
+    forever: a real, single-project write, misdiagnosed purely because the label doesn't
+    string-match. No seat_id, no charter at all here — proves the fix stands on its own,
+    not riding the charter-aware fallback."""
+    agent = "agent:fu10"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:fu10-oldcanon",
+                                               "test")
+    await actions.assert_property(proj, "name", "Fu10DisplayName", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await record_decision(actions, "fu10's own ruling", repo="fu10-oldcanon", source=agent)
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="Fu10DisplayName")
+    assert out is not None
+    assert out["coherent"] is True
+    assert out["writes_went_to"] == ["fu10-oldcanon"]
+    assert out["filed_under"] == "Fu10DisplayName"   # the receipt still names what was given
+    assert "charter_repos" not in out                 # never touched the charter rescue
+
+
+async def test_filed_under_check_stays_incoherent_when_the_dead_name_names_nothing_real(
+    actions: Actions,
+) -> None:
+    """A `filed_under` that resolves to no real SoftwareProject at all (canonical or name)
+    is a genuine, honest mismatch — the fix must never manufacture a false rescue."""
+    agent = "agent:fu11"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await record_decision(actions, "fu11's own ruling", repo="fu11-real", source=agent)
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="fu11-nothing-names-this")
+    assert out is not None
+    assert out["coherent"] is False
+    assert out["writes_went_to"] == ["fu11-real"]
+
+
 # ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
 # TRAVERSABLE TRACE" — report-only, same discipline as filed_under_check above.
 
