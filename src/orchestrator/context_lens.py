@@ -23,17 +23,21 @@ from typing import Any
 WINDOW_DEFAULT = 200_000
 WINDOW_1M = 1_000_000
 # occupancy above this is the write-back alarm: compaction can land any turn
-ALARM_PCT = 80
+ALARM_PCT = 60
 # the offload ritual's SECOND tier (moved here from scripts/osiris_stophook.py during the
 # hook-migration parity fix, dispatch 5441 LEG 1/4): one authority for both, same law as
 # ALARM_PCT above — a soft nudge at ALARM_PCT re-arms once more here, never a second
 # independently-tuned constant living beside it.
-HARD_ALARM_PCT = 95
+HARD_ALARM_PCT = 85
 # SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): once the offload boxes are ALL
 # complete at or past this line, the stop hook asks the body's own daemon job to /compact —
 # settle first, then the seam, never the reverse. Deliberately its own constant even though it
-# coincides with ALARM_PCT today: the operator may re-rule one without moving the other.
-SELF_COMPACT_PCT = 80
+# sits ABOVE ALARM_PCT (operator 2026-09-07, "95 is dangerous, could trigger on any tick";
+# decision 431537e5's live reading: one long worker turn adds 8-10 points and the settle
+# ritual needs one or two more turns, so every line keeps ~20 points of runway under the
+# harness's own ceiling): the soft nudge starts the ritual at 60, the compact is injected
+# at 70 once the boxes are complete, the blocking nudge holds at 85.
+SELF_COMPACT_PCT = 70
 
 
 def window_for(raw_model: str | None, used: int | None = None) -> tuple[int, bool]:

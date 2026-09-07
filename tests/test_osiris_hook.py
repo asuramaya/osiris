@@ -43,8 +43,8 @@ def test_alarm_thresholds_match_the_one_authority() -> None:
     from src.orchestrator.context_lens import ALARM_PCT as _A
     from src.orchestrator.context_lens import HARD_ALARM_PCT as _H
 
-    assert ALARM_PCT == _A == 80
-    assert HARD_ALARM_PCT == _H == 95
+    assert ALARM_PCT == _A == 60
+    assert HARD_ALARM_PCT == _H == 85
 
 
 # --- stop_hook_active: never loop on unsettleable mail -----------------------------------
@@ -1237,7 +1237,7 @@ def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
         if data["phase"] == "offload":
             return {"result": {}}  # nothing missing — settle already complete
         if data["phase"] == "self_compact":
-            assert data["pct"] >= 80
+            assert data["pct"] >= 70
             return {"result": {"compacted": True, "job_short": "selfcomp"}}
         return None
 

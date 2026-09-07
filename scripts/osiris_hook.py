@@ -47,7 +47,7 @@ try:
     from src.orchestrator.context_lens import occupancy as _cl_occupancy
     from src.orchestrator.context_lens import window_for as _cl_window_for
 except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
-    ALARM_PCT, HARD_ALARM_PCT = 80, 95
+    ALARM_PCT, HARD_ALARM_PCT = 60, 85
 
 _URLS = {
     "statusline": os.environ.get("OSIRIS_HEARTBEAT_URL", "http://127.0.0.1:8790/heartbeat"),
@@ -332,7 +332,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     vitals: list[str] = []
     pct = ctx_pct if ctx_pct is not None else _context_pct(transcript, window_size)
     if pct is not None:
-        color = _GREEN if pct < 60 else (_AMBER if pct < 85 else _RED)
+        color = _GREEN if pct < 50 else (_AMBER if pct < 70 else _RED)
         vitals.append(f"{color}ctx {pct}%{_RESET}")
 
     rl = hook.get("rate_limits") or {}
@@ -345,7 +345,7 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
                 vals.append((tag, round(v)))
         if vals:
             worst = max(v for _, v in vals)
-            color = _GREEN if worst < 60 else (_AMBER if worst < 85 else _RED)
+            color = _GREEN if worst < 50 else (_AMBER if worst < 70 else _RED)
             vitals.append(color + " \u00b7 ".join(f"{t} {v}%" for t, v in vals) + _RESET)
 
     if model_id:

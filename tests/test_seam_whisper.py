@@ -47,12 +47,12 @@ def test_seam_pct_refuses_a_guessed_window(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_seam_note_tiers_and_silences() -> None:
-    assert srv._seam_note(None, 70) is None
-    assert srv._seam_note(65, 70) is None
+    assert srv._seam_note(None, 50) is None
+    assert srv._seam_note(48, 50) is None
     assert srv._seam_note(90, 0) is None            # 0 disables the whisper entirely
-    soon = srv._seam_note(72, 70)
-    assert soon is not None and "seam soon" in soon and "72%" in soon
-    alarm = srv._seam_note(ALARM_PCT, 70)
+    soon = srv._seam_note(55, 50)
+    assert soon is not None and "seam soon" in soon and "55%" in soon
+    alarm = srv._seam_note(ALARM_PCT, 50)
     assert alarm is not None and "WRITE BACK NOW" in alarm
 
 
@@ -62,47 +62,47 @@ def test_seam_note_tiers_and_silences() -> None:
 # offload ritual's own marker files already have. ------------------------------------------
 
 def test_seam_band_tiers_and_the_floor() -> None:
-    assert srv._seam_band(None, 70, ALARM_PCT) is None
-    assert srv._seam_band(65, 70, ALARM_PCT) is None       # below the whisper floor
+    assert srv._seam_band(None, 50, ALARM_PCT) is None
+    assert srv._seam_band(48, 50, ALARM_PCT) is None       # below the whisper floor
     assert srv._seam_band(90, 0, ALARM_PCT) is None        # 0 disables the whisper entirely
-    assert srv._seam_band(72, 70, ALARM_PCT) == "seam"
-    assert srv._seam_band(ALARM_PCT, 70, ALARM_PCT) == "alarm"
+    assert srv._seam_band(55, 50, ALARM_PCT) == "seam"
+    assert srv._seam_band(ALARM_PCT, 50, ALARM_PCT) == "alarm"
 
 
 def test_seam_note_once_fires_on_first_entry_then_falls_silent() -> None:
     srv._seam_last_band.clear()
-    first = srv._seam_note_once("agent:wallpaper1", 65, 63)
+    first = srv._seam_note_once("agent:wallpaper1", 50, 45)
     assert first is not None and "seam soon" in first
     # ~40 consecutive calls at an unchanged pct: the exact wallpaper Thoth's dispatch named
     for _ in range(40):
-        assert srv._seam_note_once("agent:wallpaper1", 65, 63) is None
+        assert srv._seam_note_once("agent:wallpaper1", 50, 45) is None
     # a DIFFERENT pct still inside the SAME band is still wallpaper, not news
-    assert srv._seam_note_once("agent:wallpaper1", 71, 63) is None
+    assert srv._seam_note_once("agent:wallpaper1", 55, 45) is None
 
 
 def test_seam_note_once_re_fires_on_a_real_escalation() -> None:
     srv._seam_last_band.clear()
-    srv._seam_note_once("agent:escalate1", 65, 63)
-    alarm = srv._seam_note_once("agent:escalate1", ALARM_PCT, 63)
+    srv._seam_note_once("agent:escalate1", 50, 45)
+    alarm = srv._seam_note_once("agent:escalate1", ALARM_PCT, 45)
     assert alarm is not None and "WRITE BACK NOW" in alarm
     # the alarm tier is ALSO once-per-crossing, not once-per-call
-    assert srv._seam_note_once("agent:escalate1", ALARM_PCT + 5, 63) is None
+    assert srv._seam_note_once("agent:escalate1", ALARM_PCT + 5, 45) is None
 
 
 def test_seam_note_once_re_arms_after_dropping_below_the_floor() -> None:
     srv._seam_last_band.clear()
-    srv._seam_note_once("agent:rearm1", 65, 63)
-    assert srv._seam_note_once("agent:rearm1", 65, 63) is None
+    srv._seam_note_once("agent:rearm1", 50, 45)
+    assert srv._seam_note_once("agent:rearm1", 50, 45) is None
     # a real write-back/compaction happened — pct falls back under the whisper floor
-    assert srv._seam_note_once("agent:rearm1", 10, 63) is None
+    assert srv._seam_note_once("agent:rearm1", 10, 45) is None
     # climbing back into the seam band is real news again, not a repeat
-    again = srv._seam_note_once("agent:rearm1", 65, 63)
+    again = srv._seam_note_once("agent:rearm1", 50, 45)
     assert again is not None and "seam soon" in again
 
 
 def test_seam_note_once_tracks_each_agent_independently() -> None:
     srv._seam_last_band.clear()
-    srv._seam_note_once("agent:solo1", 65, 63)
+    srv._seam_note_once("agent:solo1", 50, 45)
     # a DIFFERENT agent's first crossing is real news, unaffected by agent:solo1's own state
-    fresh = srv._seam_note_once("agent:solo2", 65, 63)
+    fresh = srv._seam_note_once("agent:solo2", 50, 45)
     assert fresh is not None
