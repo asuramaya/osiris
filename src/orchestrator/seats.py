@@ -2967,6 +2967,8 @@ async def _resolve_active_seat(pool: asyncpg.Pool, ref: str) -> asyncpg.Record |
         "AND id=$1", oid)
 
 
+
+
 async def peer_seats(
     actions: Actions, seat_a: str, seat_b: str, *, because: str, actor: str,
 ) -> dict[str, Any]:

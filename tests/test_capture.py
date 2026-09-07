@@ -285,10 +285,11 @@ async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Acti
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        omitted = await srv.open_thread("a thread with no arc chosen", repo="arcproj")
+        omitted = await srv.open_thread("a thread with no arc chosen", repo="arcproj",
+                                        kind="task")
         named = await srv.open_thread(
             "a thread deliberately filed under Fleet-Hygiene", repo="osiris",
-            arc="Fleet-Hygiene")
+            arc="Fleet-Hygiene", kind="task")
     finally:
         srv._pool = saved_pool
     assert omitted["arc"] == capture._ARC_UNSORTED
@@ -315,7 +316,7 @@ async def test_mcp_open_thread_receipt_names_the_out_of_scope_arc_honestly(
     try:
         out = await srv.open_thread(
             "a ballgem thread with an osiris-shaped arc", repo="ballgem",
-            arc="Fleet-Hygiene")
+            arc="Fleet-Hygiene", kind="task")
     finally:
         srv._pool = saved_pool
     assert out["arc"] != "Fleet-Hygiene"
@@ -346,7 +347,7 @@ async def test_mcp_open_thread_surfaces_prior_art_on_a_standing_decision(
             kind="ruling", repo="priorartproj")
         out = await srv.open_thread(
             f"rediscovering the fnord-shaped defect already ruled on in {d['id']}",
-            repo="priorartproj")
+            repo="priorartproj", kind="task")
         assert "prior_art" in out
         assert any(h["type"] == "Decision" and h["id"] == d["id"][:8] for h in out["prior_art"])
         assert "prior_art_flag" in out
@@ -369,10 +370,10 @@ async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
     try:
         older = await srv.open_thread(
             "PRIOR-ART THREAD ROW: a rare zorble-shaped defect awaiting a fix",
-            repo="priorartproj2")
+            repo="priorartproj2", kind="obligation")
         out = await srv.open_thread(
             f"picking up the zorble-shaped defect from thread {older['id']}",
-            repo="priorartproj2")
+            repo="priorartproj2", kind="task")
         assert out["deduped"] == "false"  # distinct text, not a near-exact twin
         assert "prior_art" in out
         assert any(h["type"] == "Thread" and h["id"] == older["id"][:8]
@@ -395,12 +396,12 @@ async def test_mcp_open_thread_dedup_scope_names_what_was_actually_checked(
     srv._pool = actions.pool
     try:
         fresh = await srv.open_thread(
-            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj")
+            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj", kind="task")
         assert fresh["deduped"] == "false"
         assert "dedup_scope" in fresh
         assert "twin" in fresh["dedup_scope"]
         twin = await srv.open_thread(
-            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj")
+            "a wholly novel dedup-scope acceptance row", repo="dedupscopeproj", kind="task")
         assert twin["deduped"] == "true"
         assert "dedup_scope" in twin
     finally:
@@ -435,8 +436,9 @@ async def test_mcp_reclassify_thread_receipt_names_the_out_of_scope_arc_honestly
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        opened = await srv.open_thread("a ballgem thread awaiting triage", repo="ballgem")
-        out = await srv.reclassify_thread(opened["id"], kind="obligation",
+        opened = await srv.open_thread("a ballgem thread awaiting triage", repo="ballgem",
+                                       kind="task")
+        out = await srv.reclassify_thread(opened["id"], kind="question",
                                           arc="Fleet-Hygiene")
     finally:
         srv._pool = saved_pool
@@ -3837,7 +3839,7 @@ async def test_open_thread_tool_reports_batch_receipt_per_entry(actions: Actions
     srv._pool = actions.pool
     try:
         out = await srv.open_thread(
-            "STATE OF THE BOARD — Sekhmet III, settling",
+            "STATE OF THE BOARD — Sekhmet III, settling", kind="task",
             resolves=[str(t1), "no-such-thread-anywhere"])
     finally:
         srv._pool = saved_pool
@@ -3861,7 +3863,7 @@ async def test_open_thread_tool_single_string_resolves_still_errors_on_a_miss(
     srv._pool = actions.pool
     try:
         out = await srv.open_thread(
-            "STATE OF THE BOARD — a ghost ancestor, tool layer",
+            "STATE OF THE BOARD — a ghost ancestor, tool layer", kind="task",
             resolves="not-a-real-thread")
     finally:
         srv._pool = saved_pool
@@ -4154,7 +4156,8 @@ async def test_open_thread_tool_falls_back_to_the_lineage_when_identity_has_no_p
         model=None, cwd=None)
     try:
         out = await srv.open_thread(
-            "a thread opened by an orphan generation of a well-known lineage", ctx=ctx)
+            "a thread opened by an orphan generation of a well-known lineage", ctx=ctx,
+            kind="task")
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -4202,7 +4205,8 @@ async def test_open_thread_tool_abstains_and_records_why_on_lineage_ambiguity(
         model=None, cwd=None)
     try:
         out = await srv.open_thread(
-            "a thread opened under a lineage whose own works_in disagrees", ctx=ctx)
+            "a thread opened under a lineage whose own works_in disagrees", ctx=ctx,
+            kind="task")
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -4473,7 +4477,8 @@ async def test_open_thread_defaulted_repo_link_grades_direct_observation(
         agent_id="agent:tiergrade4", session="tiergrade4", project="tiergradeproj4",
         model=None, cwd=None)
     try:
-        out = await srv.open_thread("a thread filed by identity, no repo= typed", ctx=ctx)
+        out = await srv.open_thread("a thread filed by identity, no repo= typed", ctx=ctx,
+                                    kind="task")
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -4496,7 +4501,8 @@ async def test_open_thread_explicit_repo_link_stays_self_declared(
     srv._pool = actions.pool
     try:
         await srv.open_thread(
-            "a thread with repo= typed explicitly, not defaulted", repo="tiergradeproj5")
+            "a thread with repo= typed explicitly, not defaulted", repo="tiergradeproj5",
+            kind="task")
     finally:
         srv._pool = saved_pool
     row = await _in_repo_grade(actions.pool, "Thread", "tiergradeproj5")
@@ -4549,14 +4555,19 @@ async def test_open_thread_defaults_an_ownerless_obligation_to_the_callers_own_s
     all. A refusal would block real work at the exact moment someone tries to record a
     duty; a silent pick would hide a wrong guess for a week — so a kind='obligation' call
     with no owner/assignee defaults to the CALLER'S OWN SEAT (resolved from `source` via
-    held_seat), landing visibly, never silently."""
+    held_seat), landing visibly, never silently. Stamped as the seat's own canonical id
+    (thread b5ae6773's owner law: an owner is a seat id or 'operator', never a bare
+    handle), not its display handle."""
     from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
 
     await claim_name(actions, "agent:defaultowner1", "Defaultowner", source="agent:defaultowner1")
+    seat = await held_seat(actions.pool, "agent:defaultowner1")
+    assert seat is not None
     t = await open_thread(actions, "a duty minted with no owner at all",
                           kind="obligation", source="agent:defaultowner1")
     props = await _props(actions.pool, t)
-    assert props["owner"] == "Defaultowner"
+    assert props["owner"] == seat["seat_id"]
 
 
 async def test_open_thread_default_never_fires_for_a_general_thread(
@@ -4652,7 +4663,8 @@ async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.open_thread("a genuinely new thread, never seen before", repo="freshmint")
+        out = await srv.open_thread("a genuinely new thread, never seen before",
+                                    repo="freshmint", kind="task")
     finally:
         srv._pool = saved_pool
     assert out["deduped"] == "false"
@@ -4664,8 +4676,11 @@ async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) 
     `owner_defaulted` is present only when neither owner nor assignee were supplied."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
+    from src.orchestrator.seats import held_seat
 
     await claim_name(actions, "agent:mcpdefault1", "Mcpdefault", source="agent:mcpdefault1")
+    seat = await held_seat(actions.pool, "agent:mcpdefault1")
+    assert seat is not None
 
     class _Ctx:
         class request_context:  # noqa: N801
@@ -4684,7 +4699,7 @@ async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) 
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["owner_defaulted"]["to"] == "Mcpdefault"
+    assert out["owner_defaulted"]["to"] == seat["seat_id"]
 
 
 async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
@@ -4726,10 +4741,10 @@ async def test_open_thread_dedup_names_a_discarded_arc(actions: Actions) -> None
     srv._pool = actions.pool
     try:
         first = await srv.open_thread(
-            "wire the composed watcher into the meter", repo="discardproj")
+            "wire the composed watcher into the meter", repo="discardproj", kind="task")
         second = await srv.open_thread(
             "Wire the composed watcher into the meter.", repo="discardproj",
-            arc="Fleet-Hygiene")
+            arc="Fleet-Hygiene", kind="task")
     finally:
         srv._pool = saved_pool
     assert second["id"] == first["id"] and second["deduped"] == "true"

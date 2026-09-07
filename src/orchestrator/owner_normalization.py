@@ -102,6 +102,66 @@ async def _coordinating_seat_for_project(
     return None, reason
 
 
+async def resolve_owner_seat(
+    pool: asyncpg.Pool, raw: str, *, project: str | None = None,
+) -> str | None:
+    """THE SHARED OWNER RESOLVER (thread b5ae6773/0af7b202, #203's write-time laws AND
+    migration 0060 — one function, per Thoth's own instruction, not two copies deriving
+    the same three rules twice; msg 7949, Khnum's own catch — this is the ONE gap
+    `classify_thread_owner` deliberately left alone, since a bare handle is already
+    durable enough for the MIGRATION's own purposes and it never needed the resolved
+    canonical back, only "leave it alone"). An owner is a Seat's own canonical or the
+    literal 'operator', nothing else. This resolves everything short of that ON ENTRY,
+    never guesses past what it can prove:
+      - 'operator' -> itself, unchanged (the literal string only — `_OPERATOR_ACTORS`'s
+        other sentinels, 'analyst:operator'/'console', identify a CALLER's actor, not a
+        thread's owner, and are deliberately not accepted here).
+      - `seat:<...>` already active -> itself, confirmed live via `_resolve_active_seat`.
+      - `agent:<...>` -> `lineage_head`'s own currently-held seat (a dead generation
+        resolves through its lineage to whoever is holding the seat now, not a grave).
+      - anything else -> a bare handle, matched CASE-INSENSITIVELY against an active
+        Seat's own `handle` property — the exact query `obligation_hygiene.
+        resolve_owner_target`'s own rung 0 already uses (msg 7425's correction: a
+        seat's bare handle and a project's bare name are indistinguishable strings, so
+        this is checked BEFORE any project-name attempt). Deliberately NOT
+        `binding_of_handle` (which also requires a currently-active HOLDER): an owner
+        names the ROLE a thread belongs to, not who happens to be answering mail for it
+        at this exact instant — a briefly-vacant seat is still a valid owner.
+      - if the handle match also fails and `project` is given, `_coordinating_seat_for_
+        project` — the SAME agreement-classification (governed/shared-house/single-
+        match/conflict/no-match) migration 0059's own owner-normalization already
+        trusts, not a second, cheaper re-derivation via a bare governs-edge lookup.
+    None when nothing above resolves — the caller's own job to refuse (the write-time
+    gate) or fall back further (migration 0060's own project-coordinator default),
+    never this function's job to guess past its four rules."""
+    from src.orchestrator.agents import lineage_head
+    from src.orchestrator.seats import _resolve_active_seat, held_seat
+
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw == "operator":
+        return "operator"
+    if raw.startswith("seat:"):
+        row = await _resolve_active_seat(pool, raw)
+        return row["canonical"] if row else None
+    if raw.startswith("agent:"):
+        head = await lineage_head(pool, raw)
+        seat = await held_seat(pool, head)
+        return seat["seat_id"] if seat else None
+    seat_canon = await pool.fetchval(
+        "SELECT o.canonical FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Seat' AND o.status='active' AND a.name='handle' "
+        "AND lower(a.value #>> '{}') = lower($1) LIMIT 1", raw)
+    if seat_canon is not None:
+        return str(seat_canon)
+    if project:
+        coord, _reason = await _coordinating_seat_for_project(pool, project)
+        if coord is not None:
+            return coord
+    return None
+
+
 async def classify_thread_owner(
     pool: asyncpg.Pool, owner: str | None, repo: str | None,
 ) -> dict[str, Any]:

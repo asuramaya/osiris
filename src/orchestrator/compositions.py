@@ -1495,7 +1495,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     finding was actually withheld), HELD-PAST-DEADLINE (warn: a hold_action() thread still
     open past its own time-box — task #76 item 4b, the mutual HOLD's auto-escalation half
     built as a lint check rather than a new daemon; testimony a mind takes to the
-    operator's desk, never lint's own push).
+    operator's desk, never lint's own push), KINDLESS-OPEN-THREAD (warn: an open Thread
+    with no `kind` at all — thread b5ae6773's write-time law refuses this going forward;
+    this is the standing audit for anything that slipped past it), UNRESOLVABLE-OWNER
+    (warn: an open Thread's `owner` that resolves to neither an active Seat nor
+    'operator' via `resolve_owner_seat` — the same function migration 0060 backfills the
+    existing stock with).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -2249,6 +2254,63 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "counts (thread 09bde57e's own recurrence tripwire)"}
         for r in stale_flags])
     counts["stale-current-flag"] = int(stale_flag_total or 0)
+
+    # KINDLESS-OPEN-THREAD (thread b5ae6773, #203's write-time classification laws): an
+    # open Thread with no `kind` at all — the write-time refusal (open_thread's own MCP
+    # tool) stops this going forward; this is the standing audit that catches anything
+    # that slipped past it (an internal caller, a pre-law row migration 0060 hasn't
+    # reached yet). Never a REPAIR — reclassify_thread is the mind's own act.
+    kindless = await pool.fetch(
+        "SELECT o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS summary "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='kind')")
+    land("kindless-open-thread", "warn", [
+        {"subject": r["canonical"],
+         "detail": f"open with no kind at all — {(r['summary'] or '')[:120]!r}; "
+                   "reclassify_thread(kind=...) is the fix, never a silent default"}
+        for r in kindless])
+
+    # UNRESOLVABLE-OWNER (thread b5ae6773, same law's other half): an open Thread's
+    # `owner` that resolves to neither an active Seat nor the literal 'operator' — a
+    # bare handle nobody holds, a dead agent id, a project name with no chartered
+    # coordinator. `resolve_owner_seat` is the SAME function migration 0060 uses to
+    # backfill the existing stock, so a row this check clears is a row the migration
+    # would also have accepted.
+    from src.orchestrator.owner_normalization import resolve_owner_seat
+
+    owned = await pool.fetch(
+        "SELECT o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner "
+        "FROM objects o "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='status' "
+        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND EXISTS (SELECT 1 FROM current_assertions a "
+        "   WHERE a.object_id=o.id AND a.name='owner')")
+    bad_owner: list[dict[str, Any]] = []
+    for r in owned:
+        owner_val = r["owner"]
+        if not owner_val:
+            continue
+        if await resolve_owner_seat(pool, owner_val) is None:
+            bad_owner.append({
+                "subject": r["canonical"],
+                "detail": f"owner {owner_val!r} resolves to no active seat or "
+                         "'operator' — a bare handle nobody holds, a dead agent id, "
+                         "or a project with no chartered coordinator seat",
+            })
+    land("unresolvable-owner", "warn", bad_owner)
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:

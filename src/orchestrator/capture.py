@@ -2466,14 +2466,15 @@ async def open_thread(
         # standing shape (#137) applies: the write always proceeds, nothing is refused,
         # nothing is silently chosen — the caller (mcp_server.open_thread) reads back
         # whether a default landed via `_current_owner` and names it in the receipt.
-        # Single-seat-project case (population-read bucket 4) resolves for free — the
-        # caller's own seat IS the unambiguous answer there; a multi-seat project just
-        # gets a visible, correctable default instead of an invisible gap.
+        # Stamped as the caller's own SEAT ID now (thread b5ae6773's owner law), not its
+        # bare handle — the same population-read bucket 4 case resolves for free either
+        # way, but the stored value must itself already satisfy the law, not just look
+        # plausible to a human reader.
         from src.orchestrator.seats import held_seat
 
         seat = await held_seat(actions.pool, source)
-        if seat and seat.get("handle"):
-            effective_owner = seat["handle"]
+        if seat and seat.get("seat_id"):
+            effective_owner = seat["seat_id"]
     to_resolve: list[uuid.UUID] = []
     if isinstance(resolves, list):
         for ref in resolves:
