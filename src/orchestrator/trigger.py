@@ -2723,12 +2723,16 @@ def _window_name(house: str | None, handle: str | None, project: str | None = No
     return f"[{tag}] {handle}" if tag else str(handle or "")
 
 
-async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None) -> str | None:
-    """The single project this seat governs (its `governs` edge target's winning name), or
-    None when it governs none or more than one — the window tag's fallback when the seat
-    has no house. One read; never a mint."""
+async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None,
+                                 *, cwd: str | None = None) -> str | None:
+    """The single project this seat governs (its `governs` edge target's winning name), else
+    the project the seat's own pin declares at `cwd` (read_project_label, the seat's own
+    hand — correct_own_pin_value fixes a wrong tag from inside the seat), else None. The
+    window tag's fallback when the seat has no house (ruling 860b0306). One read; never a
+    mint."""
     if not seat_id:
-        return None
+        from src.orchestrator.agents import read_project_label
+        return read_project_label(cwd) if cwd else None
     rows = await pool.fetch(
         "SELECT p.canonical, (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=p.id AND a.name='name' "
@@ -2737,9 +2741,10 @@ async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None) -> str
         "WHERE s.canonical=$1 AND l.type='governs' AND p.type='SoftwareProject' "
         "AND p.status='active' AND (l.valid_until IS NULL OR l.valid_until > now())",
         seat_id)
-    if len(rows) != 1:
-        return None
-    return str(rows[0]["name"] or rows[0]["canonical"].removeprefix("repo:"))
+    if len(rows) == 1:
+        return str(rows[0]["name"] or rows[0]["canonical"].removeprefix("repo:"))
+    from src.orchestrator.agents import read_project_label
+    return read_project_label(cwd) if cwd else None
 
 
 def _tree_exists(tree_cwd: str) -> bool:

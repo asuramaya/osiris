@@ -141,19 +141,11 @@ async def _default_manager(req: dict[str, Any]) -> dict[str, Any]:
     return await manager_call(req, socket_path=str(default_socket_path()))
 
 
-def _house_tag(house: str | None) -> str:
-    """Mirrors trigger.py's own private `_house_tag` exactly (not imported: this CLI is a
-    human's own hand spawning via the manager daemon directly, a deliberately different path
-    from launch_seat()'s seat-to-seat lane — see cmd_launch's own docstring)."""
-    h = (house or "").strip()
-    return h[:2].upper() if h else "OS"
-
-
 def match_session(sessions: list[dict[str, Any]], handle: str) -> tuple[str | None, list[str]]:
     """(name, candidates). `name` is set only for an unambiguous match against the manager
     daemon's own pty_list roster; `candidates` lists every session name that matched loosely,
     for an honest disambiguation message when `name` is None. A handle is matched against the
-    TAIL of the window's own '[TAG] Handle' name (trigger.py's _house_tag convention) so a
+    TAIL of the window's own '[TAG] Handle' name (trigger.py's _window_name convention) so a
     caller of this CLI never needs to know that formatting exists at all."""
     h = handle.strip().lower()
     if not h:
@@ -802,7 +794,9 @@ async def _cmd_launch_harness(
         print(f"osiris launch: {handle!r} — {dormant_history_note(dormant)}",
               file=sys.stderr)
 
-    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    from src.orchestrator.trigger import _governed_project_name, _window_name
+    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
+        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
     # BOUND BEFORE SPAWN, THIS DOOR TOO (Thoth dispatch 6713, closing the hole above
     # Khnum's own claim_name backstop, 2c65c6d): THIS IS THE EXACT LIVE SPECIMEN —
@@ -904,7 +898,9 @@ async def _cmd_launch_pty(
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
     argv = ["claude", *(["--model", resolved_model] if resolved_model else [])]
-    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    from src.orchestrator.trigger import _governed_project_name, _window_name
+    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
+        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
     child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
     child_env["CLAUDE_JOB_DIR"] = anchor
@@ -1102,7 +1098,9 @@ async def _cmd_resume_harness(
     # trigger.py's dispatch_dm/launch_seat lines exactly (two doors, one receipt).
     spawn_cwd = materialized_at or await _resume_office(
         pool, facts["seat_id"], fallback=facts["anchor_cwd"])
-    name = f"[{_house_tag(facts['house'])}] {facts['handle']}"
+    from src.orchestrator.trigger import _governed_project_name, _window_name
+    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
+        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     cleared = await clear_stale_record(resumed_session_id[:8])
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,

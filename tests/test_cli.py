@@ -1,5 +1,5 @@
 """osiris — the console-script (task #69, ruling 45b074bf). The pure decision layer
-(`match_session`, `resolve_model`, `_house_tag`) is fully covered with no IO at all; the async
+(`match_session`, `resolve_model`) is fully covered with no IO at all; the async
 commands are tested with a REAL pool (this repo's own "never mock the DB" rule) but a FAKE
 `manager` callable — the manager daemon itself is test_manager.py's territory, and actually
 spawning a claude process is exactly what these tests must never risk doing by accident.
@@ -4734,3 +4734,32 @@ def test_window_tag_never_falls_back_to_osiris() -> None:
     assert _window_name("osiris", "Thoth") == "[OS] Thoth"
     assert _window_name(None, "Lilguy", "lilguy") == "[LI] Lilguy"
     assert _window_name("", "Lilguy", None) == "Lilguy"
+
+
+async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) -> None:
+    """A houseless seat with no `governs` edge still gets a window tag from its OWN pin
+    (operator 2026-09-07, chowder: minted for monsterhouse, launched as "[OS] chowder" by
+    the CLI's private tag copy that still fell back to osiris). The pin is the seat's own
+    hand — correct_own_pin_value fixes the tag from inside the seat."""
+    from src.orchestrator.trigger import _governed_project_name, _window_name
+
+    (tmp_path / ".osiris").write_text('project = "monsterhouse"\n')
+
+    class _NoRows:
+        async def fetch(self, *_a, **_k):  # type: ignore[no-untyped-def]
+            return []
+
+    pool: Any = _NoRows()
+    assert await _governed_project_name(pool, "seat:nobody", cwd=str(tmp_path)) == "monsterhouse"
+    assert await _governed_project_name(pool, None, cwd=str(tmp_path)) == "monsterhouse"
+    assert await _governed_project_name(pool, "seat:nobody") is None
+    assert _window_name(None, "chowder", "monsterhouse") == "[MO] chowder"
+
+
+def test_cli_has_no_private_house_tag_copy() -> None:
+    """The CLI's own `_house_tag` mirror kept the pre-860b0306 "OS" fallback for three
+    launch/resume doors after trigger.py dropped it — two resolvers, one drifted. One
+    resolver now: the CLI imports trigger's `_window_name`."""
+    from src import cli
+
+    assert not hasattr(cli, "_house_tag")
