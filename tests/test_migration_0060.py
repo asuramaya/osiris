@@ -210,3 +210,35 @@ async def test_plan_reports_every_bucket(actions: Actions) -> None:
     assert any(e["thread"] == "m60-plan-kindless" for e in plan["kind_assigned"])
     assert any(e["thread"] == "m60-plan-expiring" for e in plan["to_expire"])
     assert plan["threads_scanned"] >= 3
+
+
+# ═══ THE STALE-WINDOW SWEEP CRON (thread 28fa9e22): the fresh-install path re-applies
+# these same three laws on a schedule, with no coordinator's hand on it ═════════════════
+
+async def test_classification_laws_heartbeat_wires_through_to_apply_migration_0060(
+    actions: Actions,
+) -> None:
+    """The arq cron shim (thread 28fa9e22): a thin wrapper around apply_migration_0060,
+    same shape as this codebase's other undedicated-test heartbeat siblings (obligation_
+    hygiene_heartbeat, backfill_decided_in_heartbeat) — the real logic lives in (and is
+    fully tested by) the function it wraps. This proves the WIRING: ctx["cascade"].actions
+    reaches the real actions, and a seeded expired derived thread closes on the FIRST
+    sweep -- the dispatch's own explicit acceptance test."""
+    from types import SimpleNamespace
+
+    from src.workers.arq_worker import classification_laws_heartbeat
+
+    await _thread(actions, "m60-cron-expiring", kind="finding",
+                 summary_evidence_class="derived", age_days=40)
+
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    acted = await classification_laws_heartbeat(ctx)
+    assert acted >= 1
+
+    async def _status(canonical: str) -> str | None:
+        return await _current_prop(actions, canonical, "status")
+
+    assert await _status("m60-cron-expiring") == "resolved"
+
+    again = await classification_laws_heartbeat(ctx)  # idempotent, same as the sweep itself
+    assert again == 0
