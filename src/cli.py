@@ -4257,6 +4257,700 @@ async def cmd_bootstrap(
 
 # --- argv dispatch -----------------------------------------------------------------------------
 
+
+# ============================================================================================
+# WAVE 3 (thread 5bf6447c, Thoth dispatch 7943): the 25 NO_CLI_EQUIVALENT excuses re-read
+# one by one against today's code. These sixteen had a real, standalone, third-party-capable
+# orchestrator function all along — the console door was simply never scoped (each earlier
+# entry's own generic "not on the jesus/chad path; not ruled out" reason, from a narrower
+# dispatch that never claimed these were impossible, only out of scope). Every one below
+# calls the SAME function its own MCP tool wraps — verified by reading each tool's own
+# forwarding body in src/mcp_server.py before writing its CLI twin, never guessed from the
+# orchestrator module alone (a hidden alias's own MCP-facing param names, not the internal
+# orchestrator function's, are the parity contract this file's forward detector checks).
+# ============================================================================================
+
+
+async def cmd_attach_seat(
+    worker: str, manager: str, evidence: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris attach-seat <worker> <manager> <evidence> [--actor W] — the console-script
+    door onto orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool
+    wraps (forwards to seat_edge(action='attach')). Creates a managed_by edge."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import attach_seat as _attach_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:attach-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris attach-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _attach_seat(Actions(pool), worker, manager, evidence=evidence,
+                                 actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris attach-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"attached {worker} -> {manager}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_detach_seat(
+    seat: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris detach-seat <seat> <because> [--actor W] — the console-script door onto
+    orchestrator.seats.detach_seat, the SAME function the detach_seat MCP tool wraps
+    (forwards to seat_edge(action='detach')). Invalidates an active managed_by edge."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import detach_seat as _detach_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:detach-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris detach-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _detach_seat(Actions(pool), seat, because=because, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris detach-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"detached {seat}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_vacate_seat(
+    seat_id: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris vacate-seat <seat> <because> [--actor W] — the console-script door onto
+    orchestrator.trigger.vacate_dead_seat, the SAME function the vacate_seat MCP tool
+    wraps (forwards to seat(action='vacate')). Releases a dead holder without retiring
+    the seat itself."""
+    from src.actions.core import Actions
+    from src.orchestrator.trigger import vacate_dead_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:vacate-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris vacate-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await vacate_dead_seat(Actions(pool), seat_id=seat_id, actor=actor,
+                                     because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris vacate-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"vacated {seat_id}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_retire_seat(
+    seat_id: str, reason: str = "", *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris retire-seat <seat> [--reason R] [--actor W] — the console-script door onto
+    orchestrator.seats.retire_seat, the SAME function the retire_seat MCP tool wraps
+    (forwards to retire_object(kind='seat')). Marks a Seat permanently CLOSED."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import retire_seat as _retire_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:retire-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris retire-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _retire_seat(Actions(pool), seat_id, reason=reason, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris retire-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"retired {seat_id}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_bind_seat_tree(
+    seat_id: str, tree_cwd: str, because: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris bind-seat-tree <seat> <tree_cwd> <because> [--actor W] — the console-script
+    door onto orchestrator.seats.bind_seat_tree, the SAME function the bind_seat_tree MCP
+    tool wraps (forwards to seat(action='bind_tree')). Points a seat's CODE checkout,
+    distinct from its anchor office."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import bind_seat_tree as _bind_seat_tree
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:bind-seat-tree")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris bind-seat-tree: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _bind_seat_tree(Actions(pool), seat_id=seat_id, tree_cwd=tree_cwd,
+                                    actor=actor, because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris bind-seat-tree: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"bound {seat_id} tree -> {tree_cwd}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_sweep_seat_disk(
+    handle: str, dry_run: bool = True, because: str = "",
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris sweep-seat-disk <handle> [--apply] [--because R] — the console-script door
+    onto orchestrator.offices.sweep_retired_office + sweep_seat_workspace, the SAME two
+    functions the sweep_seat_disk MCP tool wraps (forwards to seat(action='sweep_disk')).
+    Dry-run by default; --apply writes."""
+    from src.orchestrator.offices import sweep_retired_office, sweep_seat_workspace
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:sweep-seat-disk")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris sweep-seat-disk: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    because_arg = because.strip() or None
+    try:
+        office_out = await sweep_retired_office(pool, handle=handle, dry_run=dry_run,
+                                                because=because_arg)
+        workspace_out = await sweep_seat_workspace(pool, handle=handle, dry_run=dry_run,
+                                                   because=because_arg)
+    finally:
+        if owns_pool:
+            await pool.close()
+    verb = "swept" if not dry_run else "would sweep (dry run — pass --apply to write)"
+    print(f"{handle} {verb}:")
+    print(f"  office: {office_out}")
+    print(f"  workspace: {workspace_out}")
+    return 0
+
+
+async def cmd_rename_seat(
+    seat_id: str, new_handle: str, because: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rename-seat <seat> <new_handle> <because> [--actor W] — the console-script
+    door onto orchestrator.seats.rename_seat, the SAME function the rename_seat MCP tool
+    wraps (forwards to seat(action='rename'))."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import rename_seat as _rename_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rename-seat")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rename-seat: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _rename_seat(Actions(pool), seat_id=seat_id, new_handle=new_handle,
+                                 actor=actor, because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris rename-seat: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"renamed {seat_id} -> {new_handle}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_set_seat_attended(
+    seat_id: str, attended: str, because: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris set-seat-attended <seat> <attended> <because> [--actor W] — the console-
+    script door onto orchestrator.seats.set_seat_attended, the SAME function the
+    set_seat_attended MCP tool wraps (forwards to seat(action='set_attended'))."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import set_seat_attended as _set_seat_attended
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:set-seat-attended")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris set-seat-attended: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _set_seat_attended(Actions(pool), seat_id=seat_id, attended=attended,
+                                       actor=actor, because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris set-seat-attended: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{seat_id} attended -> {attended}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_reissue_office(
+    seat_id: str, because: str, *, adopt: bool = False, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris reissue-office <seat> <because> [--adopt] [--actor W] — the console-script
+    door onto orchestrator.boot_compiler.reissue_office, the SAME function the
+    reissue_office MCP tool wraps (forwards to seat(action='reissue_office'))."""
+    from src.actions.core import Actions
+    from src.orchestrator.boot_compiler import reissue_office as _reissue_office
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:reissue-office")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris reissue-office: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _reissue_office(Actions(pool), seat_id=seat_id, because=because,
+                                    actor=actor, adopt=adopt)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris reissue-office: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"reissued office for {seat_id}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_establish_office(
+    seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris establish-office <seat> [--actor W] — the console-script door onto
+    orchestrator.offices.establish_office, the SAME function the establish_office MCP
+    tool wraps (forwards to seat(action='establish_office')). The full office ceremony,
+    one receipt."""
+    from src.actions.core import Actions
+    from src.orchestrator.offices import establish_office as _establish_office
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:establish-office")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris establish-office: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _establish_office(Actions(pool), seat_or_agent=seat, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris establish-office: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"established office for {seat}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_resync_seat_house(
+    seat_id: str, new_house: str | None, reason: str, *, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris resync-seat-house <seat> <new_house|--none> <reason> [--actor W] — the
+    console-script door onto orchestrator.seats.resync_seat_house_third_party, the SAME
+    function the resync_seat_house MCP tool wraps (forwards to
+    seat(action='resync_house')). `new_house=None` unsets a redundant house third-party
+    (thread dc1b5a20's own door note: this, never retire_assertion, is how a house third-
+    party is genuinely unset)."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:resync-seat-house")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris resync-seat-house: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await resync_seat_house_third_party(
+            Actions(pool), seat_id, new_house, source=actor, reason=reason)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris resync-seat-house: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{seat_id} house -> {new_house!r}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_reconcile_seat_identity(
+    seat_id: str, because: str, *, agent_id: str | None = None, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris reconcile-seat-identity <seat> <because> [--agent-id A] [--actor W] — the
+    console-script door onto orchestrator.identity_heal.reconcile_seat_identity_third_
+    party, the SAME function reconcile_seat_identity_third_party (and, third-party-wise,
+    reconcile_seat_identity) MCP-forwards to (seat(action='reconcile_identity')). Always
+    third-party here — a raw terminal has no mounted identity to reconcile self-wise."""
+    from src.actions.core import Actions
+    from src.orchestrator.identity_heal import reconcile_seat_identity_third_party
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:reconcile-seat-identity")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris reconcile-seat-identity: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await reconcile_seat_identity_third_party(
+            Actions(pool), seat_id=seat_id, agent_id=agent_id, because=because,
+            actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris reconcile-seat-identity: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"reconciled {seat_id}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_create_project(
+    name: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris create-project <name> <because> [--actor W] — the console-script door onto
+    orchestrator.project_identity.create_project, the SAME function the create_project
+    MCP tool wraps (forwards to project(action='create'))."""
+    from src.actions.core import Actions
+    from src.orchestrator.project_identity import create_project as _create_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:create-project")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris create-project: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _create_project(Actions(pool), name=name, because=because, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris create-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"created project {name!r}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_rename_project(
+    project: str, new_name: str, because: str, *, dry_run: bool = True,
+    merge_into: bool = False, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rename-project <project> <new_name> <because> [--apply] [--merge-into]
+    [--actor W] — the console-script door onto orchestrator.project_identity.
+    rename_project, the SAME function the rename_project MCP tool wraps (forwards to
+    project(action='rename')). Dry-run by default; --apply writes."""
+    from src.actions.core import Actions
+    from src.orchestrator.project_identity import rename_project as _rename_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rename-project")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rename-project: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _rename_project(Actions(pool), project=project, new_name=new_name,
+                                    because=because, actor=actor, dry_run=dry_run,
+                                    merge_into=merge_into)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris rename-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    verb = "renamed" if not dry_run else "would rename (dry run — pass --apply to write)"
+    print(f"{project} {verb} -> {new_name}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_retire_project(
+    project: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris retire-project <project> <because> [--actor W] — the console-script door
+    onto orchestrator.projects.retire_project, the SAME function the retire_project MCP
+    tool wraps (forwards to retire_object(kind='project'))."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import retire_project as _retire_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:retire-project")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris retire-project: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _retire_project(Actions(pool), project=project, actor=actor,
+                                    because=because)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris retire-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"retired project {project!r}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_fork_project(
+    project: str, fork_into: str, because: str, *, direction: str = "fork", actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris fork-project <project> <fork_into> <because> [--direction fork|unfork]
+    [--actor W] — the console-script door onto orchestrator.project_identity.
+    fork_project, the SAME function the fork_project MCP tool wraps (forwards to
+    project(action='fork'/'unfork') by direction)."""
+    from src.actions.core import Actions
+    from src.orchestrator.project_identity import fork_project as _fork_project
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:fork-project")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris fork-project: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        if direction == "unfork":
+            from src.orchestrator.project_identity import unfork_project as _unfork
+            out = await _unfork(Actions(pool), project=project, fork_into=fork_into,
+                                because=because, actor=actor)
+        else:
+            out = await _fork_project(Actions(pool), project=project, fork_into=fork_into,
+                                      because=because, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris fork-project: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{project} {direction} -> {fork_into}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
 # dispatch 3678, "make the cli a front door instead of a dump": bare `osiris` used to be
 # an argparse error (`the following arguments are required: command`) followed, on -h/
 # --help, by a flat alphabetical dump of thirteen verbs with no sense of what a newcomer
@@ -4293,7 +4987,11 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
                         transition-seat-project, correct-agent-house, reconcile-merge,
-                        retire-agent, heal-seat-transcript
+                        retire-agent, heal-seat-transcript, attach-seat, detach-seat,
+                        vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
+                        rename-seat, set-seat-attended, reissue-office,
+                        establish-office, resync-seat-house, reconcile-seat-identity,
+                        create-project, rename-project, retire-project, fork-project
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile
 
@@ -5051,6 +5749,228 @@ def _build_parser() -> argparse.ArgumentParser:
                              help=f"who is performing this act — defaults to "
                                   f"{_CONSOLE_ACTOR!r}")
 
+
+    p_attach_seat = sub.add_parser(
+        "attach-seat", description=_d(
+            "create a managed_by edge between two seats — the console-script door onto "
+            "orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool "
+            "wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris attach-seat Cassandra Thoth \"cross-house adoption\"")
+    p_attach_seat.add_argument("worker", help="the seat gaining a manager")
+    p_attach_seat.add_argument("manager", help="the seat becoming that manager")
+    p_attach_seat.add_argument("evidence", help="why this edge is real")
+    p_attach_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this act — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_detach_seat = sub.add_parser(
+        "detach-seat", description=_d(
+            "invalidate a seat's active managed_by edge — the console-script door onto "
+            "orchestrator.seats.detach_seat, the SAME function the detach_seat MCP tool "
+            "wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris detach-seat Cassandra \"now self-managed\"")
+    p_detach_seat.add_argument("seat", help="the seat losing its manager")
+    p_detach_seat.add_argument("because", help="why this edge is being cut")
+    p_detach_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this act — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_vacate_seat = sub.add_parser(
+        "vacate-seat", description=_d(
+            "release a dead holder without retiring the seat itself — the console-"
+            "script door onto orchestrator.trigger.vacate_dead_seat, the SAME function "
+            "the vacate_seat MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris vacate-seat seat:e355913e \"holder confirmed dead\"")
+    p_vacate_seat.add_argument("seat_id", help="the seat's own canonical id")
+    p_vacate_seat.add_argument("because", help="why this holder is being released")
+    p_vacate_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this act — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_retire_seat = sub.add_parser(
+        "retire-seat", description=_d(
+            "mark a Seat permanently CLOSED, no successor, no merge target — the "
+            "console-script door onto orchestrator.seats.retire_seat, the SAME function "
+            "the retire_seat MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris retire-seat seat:e355913e --reason \"role is over\"")
+    p_retire_seat.add_argument("seat_id", help="the seat's own canonical id")
+    p_retire_seat.add_argument("--reason", default="", help="why this role is over")
+    p_retire_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this act — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_bind_seat_tree = sub.add_parser(
+        "bind-seat-tree", description=_d(
+            "point a seat's CODE checkout, distinct from its anchor office — the "
+            "console-script door onto orchestrator.seats.bind_seat_tree, the SAME "
+            "function the bind_seat_tree MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris bind-seat-tree seat:e355913e ~/code/osiris \"tree moved\"")
+    p_bind_seat_tree.add_argument("seat_id", help="the seat's own canonical id")
+    p_bind_seat_tree.add_argument("tree_cwd", help="the code checkout's directory")
+    p_bind_seat_tree.add_argument("because", help="why this tree is moving")
+    p_bind_seat_tree.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is performing this act — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
+
+    p_sweep_seat_disk = sub.add_parser(
+        "sweep-seat-disk", description=_d(
+            "sweep a retired seat's office and workspace off disk — the console-script "
+            "door onto orchestrator.offices.sweep_retired_office + "
+            "sweep_seat_workspace, the SAME two functions the sweep_seat_disk MCP tool "
+            "wraps (wave 3, thread 5bf6447c). Dry-run by default"),
+        epilog="example: osiris sweep-seat-disk OldHandle --apply --because retired")
+    p_sweep_seat_disk.add_argument("handle", help="the retired seat's own handle")
+    p_sweep_seat_disk.add_argument("--apply", action="store_true", dest="apply_",
+                                   help="write; default is a dry-run report")
+    p_sweep_seat_disk.add_argument("--because", default="", help="why this is being swept")
+
+    p_rename_seat = sub.add_parser(
+        "rename-seat", description=_d(
+            "rename a seat's handle deliberately — the console-script door onto "
+            "orchestrator.seats.rename_seat, the SAME function the rename_seat MCP "
+            "tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris rename-seat seat:e355913e Till \"casing correction\"")
+    p_rename_seat.add_argument("seat_id", help="the seat's own canonical id")
+    p_rename_seat.add_argument("new_handle", help="the corrected handle")
+    p_rename_seat.add_argument("because", help="why this rename is happening")
+    p_rename_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this act — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
+    p_set_seat_attended = sub.add_parser(
+        "set-seat-attended", description=_d(
+            "stamp a seat's real human-attendance signal — the console-script door onto "
+            "orchestrator.seats.set_seat_attended, the SAME function the "
+            "set_seat_attended MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris set-seat-attended seat:34f4e5fa true \"Thoth is human-driven\"")
+    p_set_seat_attended.add_argument("seat_id", help="the seat's own canonical id")
+    p_set_seat_attended.add_argument("attended", help="'true' or 'false'")
+    p_set_seat_attended.add_argument("because", help="why this signal is being set")
+    p_set_seat_attended.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                     help=f"who is performing this act — defaults to "
+                                          f"{_CONSOLE_ACTOR!r}")
+
+    p_reissue_office = sub.add_parser(
+        "reissue-office", description=_d(
+            "recompile a seat's managed office section on demand — the console-script "
+            "door onto orchestrator.boot_compiler.reissue_office, the SAME function the "
+            "reissue_office MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris reissue-office seat:e355913e \"manager changed\"")
+    p_reissue_office.add_argument("seat_id", help="the seat's own canonical id")
+    p_reissue_office.add_argument("because", help="why this office needs recompiling")
+    p_reissue_office.add_argument("--adopt", action="store_true",
+                                  help="one-time on-ramp for an office predating the "
+                                       "compiler")
+    p_reissue_office.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is performing this act — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
+
+    p_establish_office = sub.add_parser(
+        "establish-office", description=_d(
+            "the full office ceremony, one receipt — the console-script door onto "
+            "orchestrator.offices.establish_office, the SAME function the "
+            "establish_office MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris establish-office seat:e355913e")
+    p_establish_office.add_argument("seat", help="a claimed handle, raw agent id, or "
+                                    "unclaimed seat's own handle/canonical")
+    p_establish_office.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                    help=f"who is performing this act — defaults to "
+                                         f"{_CONSOLE_ACTOR!r}")
+
+    p_resync_seat_house = sub.add_parser(
+        "resync-seat-house", description=_d(
+            "correct or unset a Seat's own house third-party — the console-script door "
+            "onto orchestrator.seats.resync_seat_house_third_party, the SAME function "
+            "the resync_seat_house MCP tool wraps (wave 3, thread 5bf6447c). Omit "
+            "--house to UNSET a redundant house (never retire-assertion — thread "
+            "dc1b5a20's own door note)"),
+        epilog="example: osiris resync-seat-house seat:e355913e \"canon spelling\" "
+              "--house ramstein"
+              "\nexample, unsetting: osiris resync-seat-house seat:e355913e "
+              "\"redundant with project\"")
+    p_resync_seat_house.add_argument("seat_id", help="the seat's own canonical id")
+    p_resync_seat_house.add_argument("reason", help="why this house is changing")
+    p_resync_seat_house.add_argument("--house", default=None, dest="new_house",
+                                     help="the corrected house — omit entirely to unset")
+    p_resync_seat_house.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                     help=f"who is performing this act — defaults to "
+                                          f"{_CONSOLE_ACTOR!r}")
+
+    p_reconcile_seat_identity = sub.add_parser(
+        "reconcile-seat-identity", description=_d(
+            "third-party identity reconciliation for a seat that cannot correct itself "
+            "— the console-script door onto orchestrator.identity_heal."
+            "reconcile_seat_identity_third_party, the SAME function "
+            "reconcile_seat_identity_third_party wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris reconcile-seat-identity seat:e355913e \"stale house row\"")
+    p_reconcile_seat_identity.add_argument("seat_id", help="the seat's own canonical id")
+    p_reconcile_seat_identity.add_argument("because", help="why this needs reconciling")
+    p_reconcile_seat_identity.add_argument("--agent-id", default=None, dest="agent_id",
+                                           help="omit to heal house alone")
+    p_reconcile_seat_identity.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                           help=f"who is performing this act — defaults "
+                                                f"to {_CONSOLE_ACTOR!r}")
+
+    p_create_project = sub.add_parser(
+        "create-project", description=_d(
+            "declare a NEW SoftwareProject — the console-script door onto "
+            "orchestrator.project_identity.create_project, the SAME function the "
+            "create_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris create-project newthing \"standalone repo, no seat yet\"")
+    p_create_project.add_argument("name", help="the new project's own name")
+    p_create_project.add_argument("because", help="why this project is being declared")
+    p_create_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is performing this act — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
+
+    p_rename_project = sub.add_parser(
+        "rename-project", description=_d(
+            "rename a SoftwareProject's own `name` property (canonical never moves) — "
+            "the console-script door onto orchestrator.project_identity.rename_project, "
+            "the SAME function the rename_project MCP tool wraps (wave 3, thread "
+            "5bf6447c). Dry-run by default"),
+        epilog="example: osiris rename-project oldname newname \"spelling fix\" --apply")
+    p_rename_project.add_argument("project", help="the project's current name/canonical")
+    p_rename_project.add_argument("new_name", help="the corrected name")
+    p_rename_project.add_argument("because", help="why this rename is happening")
+    p_rename_project.add_argument("--apply", action="store_true", dest="apply_",
+                                  help="write; default is a dry-run report")
+    p_rename_project.add_argument("--merge-into", action="store_true", dest="merge_into",
+                                  help="lift the collision refusal when the new name "
+                                       "already names an active project — folds into it")
+    p_rename_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is performing this act — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
+
+    p_retire_project = sub.add_parser(
+        "retire-project", description=_d(
+            "retire a dead SoftwareProject stub — the console-script door onto "
+            "orchestrator.projects.retire_project, the SAME function the "
+            "retire_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris retire-project deadthing \"never went anywhere\"")
+    p_retire_project.add_argument("project", help="the project's own name/canonical")
+    p_retire_project.add_argument("because", help="why this project is being retired")
+    p_retire_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                  help=f"who is performing this act — defaults to "
+                                       f"{_CONSOLE_ACTOR!r}")
+
+    p_fork_project = sub.add_parser(
+        "fork-project", description=_d(
+            "declare (or reverse) a fork relationship between two ALREADY-active "
+            "SoftwareProjects — the console-script door onto "
+            "orchestrator.project_identity.fork_project/unfork_project, the SAME "
+            "functions the fork_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+        epilog="example: osiris fork-project redmonth ballgem \"new sibling project\""
+              "\nexample, reversing: osiris fork-project redmonth ballgem \"mistake\" "
+              "--direction unfork")
+    p_fork_project.add_argument("project", help="the ancestor project")
+    p_fork_project.add_argument("fork_into", help="the successor project")
+    p_fork_project.add_argument("because", help="why this fork is happening")
+    p_fork_project.add_argument("--direction", choices=["fork", "unfork"], default="fork",
+                                help="'unfork' invalidates a live forked_from edge instead")
+    p_fork_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                help=f"who is performing this act — defaults to "
+                                     f"{_CONSOLE_ACTOR!r}")
     return p
 
 
@@ -5189,6 +6109,50 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model, actor=args.actor))
     if args.command == "bootstrap":
         return asyncio.run(cmd_bootstrap(args.cwd, project=args.project, actor=args.actor))
+    if args.command == "attach-seat":
+        return asyncio.run(cmd_attach_seat(args.worker, args.manager, args.evidence,
+                                           actor=args.actor))
+    if args.command == "detach-seat":
+        return asyncio.run(cmd_detach_seat(args.seat, args.because, actor=args.actor))
+    if args.command == "vacate-seat":
+        return asyncio.run(cmd_vacate_seat(args.seat_id, args.because, actor=args.actor))
+    if args.command == "retire-seat":
+        return asyncio.run(cmd_retire_seat(args.seat_id, args.reason, actor=args.actor))
+    if args.command == "bind-seat-tree":
+        return asyncio.run(cmd_bind_seat_tree(args.seat_id, args.tree_cwd, args.because,
+                                              actor=args.actor))
+    if args.command == "sweep-seat-disk":
+        return asyncio.run(cmd_sweep_seat_disk(args.handle, dry_run=not args.apply_,
+                                               because=args.because))
+    if args.command == "rename-seat":
+        return asyncio.run(cmd_rename_seat(args.seat_id, args.new_handle, args.because,
+                                           actor=args.actor))
+    if args.command == "set-seat-attended":
+        return asyncio.run(cmd_set_seat_attended(args.seat_id, args.attended, args.because,
+                                                  actor=args.actor))
+    if args.command == "reissue-office":
+        return asyncio.run(cmd_reissue_office(args.seat_id, args.because, adopt=args.adopt,
+                                              actor=args.actor))
+    if args.command == "establish-office":
+        return asyncio.run(cmd_establish_office(args.seat, actor=args.actor))
+    if args.command == "resync-seat-house":
+        return asyncio.run(cmd_resync_seat_house(args.seat_id, args.new_house, args.reason,
+                                                  actor=args.actor))
+    if args.command == "reconcile-seat-identity":
+        return asyncio.run(cmd_reconcile_seat_identity(
+            args.seat_id, args.because, agent_id=args.agent_id, actor=args.actor))
+    if args.command == "create-project":
+        return asyncio.run(cmd_create_project(args.name, args.because, actor=args.actor))
+    if args.command == "rename-project":
+        return asyncio.run(cmd_rename_project(
+            args.project, args.new_name, args.because, dry_run=not args.apply_,
+            merge_into=args.merge_into, actor=args.actor))
+    if args.command == "retire-project":
+        return asyncio.run(cmd_retire_project(args.project, args.because, actor=args.actor))
+    if args.command == "fork-project":
+        return asyncio.run(cmd_fork_project(
+            args.project, args.fork_into, args.because, direction=args.direction,
+            actor=args.actor))
     return 2  # pragma: no cover - every real subparser choice is handled above; argparse
     # itself refuses anything not in `sub.choices`, so this is unreachable in practice
 
