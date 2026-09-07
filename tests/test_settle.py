@@ -17,6 +17,7 @@ from src.orchestrator.settle import (
     missing_boxes,
     seat_chartered,
     settle_boxes,
+    standing_orders_status,
     standing_orders_touched,
     uncommitted_git_work,
     unevaluated_boxes,
@@ -42,6 +43,155 @@ def test_standing_orders_touched_checks_mtime_against_session_start(tmp_path: Pa
 
 def test_standing_orders_touched_none_cwd_cannot_be_evaluated() -> None:
     assert standing_orders_touched(None, datetime.now(UTC)) is None
+
+
+async def test_standing_orders_status_none_for_an_ordinary_session_untouched(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A repo cwd with no charter.md and no charter()/practice()/unchanged-confirmation
+    this session — the ordinary, non-office common case — still fails open (None), never
+    collapsed into False just because the three graph signals are always evaluable."""
+    agent = "agent:standing01"
+    await actions.create_or_find_object("Agent", agent, agent)
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=datetime.now(UTC), cwd=str(tmp_path)
+    ) is None
+
+
+async def test_standing_orders_status_true_from_the_file_mtime_alone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    agent = "agent:standing02"
+    await actions.create_or_find_object("Agent", agent, agent)
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    (tmp_path / "charter.md").write_text("# notes\n")
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is True
+
+
+async def test_standing_orders_status_true_from_charter_for_this_session(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE SEAT-OFFICE SPECIMEN (thread 8686cba4): a seat-office body whose charter.md
+    never happens to change can still close this box by declaring/amending its own
+    governs edge THIS session — a real signal `standing_orders_touched` alone could never
+    see. Keyed on `actor` (the mind that typed it), not `source_id` (set_charter stamps
+    that as the SEAT, deliberately, so two generations of one lineage read as one source)."""
+    from src.orchestrator.charter import set_charter
+
+    agent = "agent:standing03"
+    await actions.create_or_find_object("Agent", agent, agent)
+    seat_id = "seat:standing03"
+    await actions.create_or_find_object("Seat", seat_id, agent)
+    await actions.create_or_find_object("SoftwareProject", "repo:standingdemo", agent)
+    mounted_at = datetime.now(UTC)
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is None  # nothing yet — still an ordinary, unevaluated case
+    await set_charter(actions, seat_id, ["standingdemo"], actor=agent)
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is True
+
+
+async def test_standing_orders_status_never_credited_to_a_different_actor(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A charter declared by SOMEONE ELSE'S hand (a manager's charter_for, or a stale
+    fixture) must never close THIS session's own box — `actor` is who typed it, not
+    who the edge is about."""
+    from src.orchestrator.charter import set_charter
+
+    agent = "agent:standing04"
+    await actions.create_or_find_object("Agent", agent, agent)
+    seat_id = "seat:standing04"
+    await actions.create_or_find_object("Seat", seat_id, agent)
+    await actions.create_or_find_object("SoftwareProject", "repo:standingdemo2", agent)
+    mounted_at = datetime.now(UTC)
+    await set_charter(actions, seat_id, ["standingdemo2"], actor="someone-else")
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is None
+
+
+async def test_standing_orders_status_true_from_a_practice_recorded_this_session(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    agent = "agent:standing05"
+    await actions.create_or_find_object("Agent", agent, agent)
+    mounted_at = datetime.now(UTC)
+    await capture.record_practice(
+        actions, "standing05's own technique this session", source=agent)
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is True
+
+
+async def test_standing_orders_status_true_from_an_explicit_unchanged_confirmation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The FIFTH shape: settle(standing_orders='unchanged', because=...) records a real
+    property this function reads back directly — never a silent pass."""
+    agent = "agent:standing06"
+    a = await actions.create_or_find_object("Agent", agent, agent)
+    mounted_at = datetime.now(UTC)
+    await actions.assert_property(
+        a, "standing_orders_unchanged", "confirmed unchanged for this reign", agent,
+        datetime.now(UTC), 0.9, evidence_class="self_declared")
+    assert await standing_orders_status(
+        actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
+    ) is True
+
+
+async def test_settle_tool_standing_orders_unchanged_closes_the_box_honestly(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """END TO END (thread 8686cba4): a seat-office body whose charter.md genuinely never
+    changed this session declares so explicitly, and the SAME box the file-mtime check
+    feeds reads True off it — never a silent pass, a real recorded property."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    agent = "agent:standingtool1"
+    job_dir = str(tmp_path / "jobs" / "standtl1")  # exactly 8 chars, find_session_row's convention
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="someproj",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET mounted_at=$1 WHERE job_dir=$2", mounted_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent, session="standtl1", project="someproj", model=None,
+        cwd=str(tmp_path))
+    try:
+        rejected_out = await srv.settle(ctx=ctx, standing_orders="unchanged")
+        assert any(r.get("kind") == "standing_orders" for r in rejected_out["rejected"])
+        # no because given -> nothing was written, so the box is still whatever it was
+        # before (None here — an ordinary cwd with no charter.md), never silently False
+        assert rejected_out["boxes"]["standing orders touched this session"] is None
+
+        out = await srv.settle(
+            ctx=ctx, standing_orders="unchanged",
+            because="reign was pure graph hygiene, charter.md never touched")
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["boxes"]["standing orders touched this session"] is True
+    assert "standing orders touched this session" not in out["missing_boxes"]
+    stamped = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name='standing_orders_unchanged'", agent)
+    assert stamped == "reign was pure graph hygiene, charter.md never touched"
 
 
 async def test_seat_chartered_none_seat_id_cannot_be_evaluated(actions: Actions) -> None:

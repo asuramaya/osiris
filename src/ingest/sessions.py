@@ -248,7 +248,7 @@ def latest_model_at(lines: list[str]) -> tuple[str | None, datetime | None]:
 _MODEL_CMD = "<command-name>/model</command-name>"
 
 
-def operator_swapped(lines: list[str]) -> bool:
+def operator_swapped(lines: Iterable[str]) -> bool:
     """True when the OPERATOR's own /model command appears in this transcript — the swap (if
     any) was chosen, not suffered. Main-loop user entries only (a sidechain can't /model).
     Candidate lines are parsed, not substring-matched — serializer whitespace must not decide."""

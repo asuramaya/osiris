@@ -67,7 +67,8 @@ async def settle_boxes(
             "AND a.source_id = $1 AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
     except Exception:  # noqa: BLE001
         boxes["threads trued this session (opened or resolved)"] = None
-    boxes["standing orders touched this session"] = standing_orders_touched(cwd, mounted_at)
+    boxes["standing orders touched this session"] = await standing_orders_status(
+        conn_or_pool, agent_id=agent_id, mounted_at=mounted_at, cwd=cwd)
     # RULING 205668ec: two things were both called "charter" — the graph DECLARATION
     # (governs edges, charter_of/set_charter, the thing with authority) and the on-disk
     # FILE (prose, still literally charter.md, the Boot Compiler's own "standing orders"
@@ -301,7 +302,13 @@ def standing_orders_touched(cwd: str | None, mounted_at: datetime) -> bool | Non
     is the prose one, the Boot Compiler's own "standing orders" output). Still literally
     named charter.md on disk — the RENAME is a held migration (35 offices, a boot-injection
     pointer, a compiler that writes it), not authorized here; only the box's own label and
-    this function's name changed, matching what they actually check."""
+    this function's name changed, matching what they actually check.
+
+    ONE OF FOUR SIGNALS `standing_orders_status` now ORs together (thread 8686cba4) — kept
+    standalone (not inlined there) since it's the only one of the four that's synchronous
+    and file-based rather than a graph query, and reissue_office's own effect (the Boot
+    Compiler rewriting charter.md) is already fully covered by THIS check alone — it needs
+    no separate signal of its own."""
     if not cwd:
         return None
     from pathlib import Path
@@ -312,6 +319,75 @@ def standing_orders_touched(cwd: str | None, mounted_at: datetime) -> bool | Non
         return charter.stat().st_mtime >= mounted_at.timestamp()
     except OSError:
         return None
+
+
+async def standing_orders_status(
+    conn_or_pool: _Fetchable, *, agent_id: str, mounted_at: datetime, cwd: str | None,
+) -> bool | None:
+    """THE STANDING-ORDERS BOX NEVER CLOSED FOR A SEAT-OFFICE BODY (thread 8686cba4,
+    Sekhmet msg 7869): `standing_orders_touched` alone only ever asked one question — did
+    charter.md's own mtime move — and a seat whose work never happens to touch that exact
+    file read `complete: false` forever, indistinguishable from a seat that genuinely never
+    considered its own standing orders at all. Since self-compaction (ruling a3fb7c11)
+    requires a complete settle before the seam, that seat gets nudged at 80%/95% and never
+    actually compacts — the precise failure the mechanism exists to prevent.
+
+    FOUR SIGNALS, any one of which is "this session's own standing orders were touched or
+    deliberately confirmed unchanged":
+      1. charter.md's own mtime moved this session (`standing_orders_touched` above — this
+         alone already covers reissue_office, the Boot Compiler's own rewrite of that file).
+      2. `charter()`/`charter_for` declared or amended a governs edge this session — the
+         `links` row itself carries no actor/timestamp of its own (`source_id` is
+         deliberately the SEAT, per set_charter's own docstring, so two generations of one
+         lineage read as one source there); `create_link`/`invalidate_link` stamp the
+         actual caller into `audit_log` on every call, so THAT is what this checks.
+      3. `practice(record|amend)` wrote to a Practice object this session — the standing
+         doctrine a CLAUDE.md compiles from is not only charter.md's prose.
+      4. An explicit `settle(standing_orders='unchanged', because=...)` this session — for
+         a seat whose orders genuinely did not change, recorded as a real property
+         (`standing_orders_unchanged`, self_declared) rather than a silent pass; the
+         SAME query below reads back that own write, so it's just a fifth-shaped case of
+         "this session touched its own standing-orders record", not a special case.
+
+    THE FILE CHECK ALONE STILL OWNS "does this box even apply" (None vs. False): an
+    ordinary non-office session with no charter.md gets None from `standing_orders_touched`
+    — the other three signals are always evaluable (a query that finds no matching row is a
+    real False, not fog-of-war) and would otherwise collapse that legitimate None into
+    False for every session that has never called charter()/practice(), which is most of
+    them. So the three graph signals only ever ADD a True on top of the file check's own
+    None/False — they never turn a genuine None into a False."""
+    file_state = standing_orders_touched(cwd, mounted_at)
+    if file_state:
+        return True
+    try:
+        governed = bool(await conn_or_pool.fetchval(
+            "SELECT 1 FROM audit_log WHERE actor=$1 "
+            "AND action IN ('create_link', 'invalidate_link') "
+            "AND payload->>'type' = 'governs' AND created_at >= $2 LIMIT 1",
+            agent_id, mounted_at))
+    except Exception:  # noqa: BLE001 — fail open, same law as every box above
+        governed = False
+    if governed:
+        return True
+    try:
+        practiced = bool(await conn_or_pool.fetchval(
+            "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
+            "WHERE o.type = 'Practice' AND a.source_id = $1 AND a.observed_at >= $2 "
+            "LIMIT 1", agent_id, mounted_at))
+    except Exception:  # noqa: BLE001
+        practiced = False
+    if practiced:
+        return True
+    try:
+        confirmed_unchanged = bool(await conn_or_pool.fetchval(
+            "SELECT 1 FROM assertions a JOIN objects o ON o.id = a.object_id "
+            "WHERE o.canonical = $1 AND a.name = 'standing_orders_unchanged' "
+            "AND a.source_id = $1 AND a.observed_at >= $2 LIMIT 1", agent_id, mounted_at))
+    except Exception:  # noqa: BLE001
+        confirmed_unchanged = False
+    if confirmed_unchanged:
+        return True
+    return file_state
 
 
 async def seat_chartered(conn_or_pool: _Fetchable, seat_id: str | None) -> bool | None:

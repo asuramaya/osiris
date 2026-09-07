@@ -20,6 +20,7 @@ from src.orchestrator.deploy_guard import (
     alarm_unreviewed_boot,
     alarm_withheld_deploy_record,
     audit_graph_merge_claims,
+    check_and_alarm_unreviewed_boot,
     check_diverged_since_last_deploy,
     check_schema_drift,
     check_unreviewed_boot,
@@ -843,18 +844,129 @@ async def test_a_withheld_deploy_followed_by_a_recorded_one_leaves_exactly_one_o
     assert await _open_alarm_count(actions) == 1
 
 
+# --- the grace window (thread c27afb62): a ref still unrecorded past 60 minutes alarms
+# exactly once, across both services combined — an ordinary in-flight deploy (recorded
+# by `osiris deploy` moments after this restart) alarms nothing at all. --------------------
+
+async def test_grace_window_first_sighting_starts_the_clock_and_alarms_nothing(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "freshhead1")
+    out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
+    assert out is None
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%") == 0
+
+
+async def test_grace_window_a_recorded_deploy_within_the_window_files_nothing(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE ACCEPTANCE TEST, Thoth's own words: a restart followed by a recorded deploy
+    within the window files nothing."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "freshhead2")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+
+    # `osiris deploy` records the ref before the grace window elapses
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "freshhead2")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+    assert await _open_alarm_count(actions, like="UNREVIEWED BOOT%") == 0
+
+
+async def test_grace_window_still_unrecorded_past_the_window_alarms_exactly_once(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE OTHER HALF: a ref left unrecorded past the window files exactly one brief for
+    both services combined — a SECOND service seeing the identical still-unrecorded ref
+    after the first already alarmed must stay quiet, not double the confession."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    monkeypatch.setattr(guard, "_UNREVIEWED_BOOT_GRACE_S", 0.0)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "stalehead1")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+    out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
+    assert out is not None and "stalehead1" in out
+
+    # a SECOND service, same still-unrecorded ref — already alarmed, stays quiet
+    again = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-worker")
+    assert again is None
+    # and a THIRD call from the original service too — no re-alarm on its own ref either
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+
+
+async def test_grace_window_a_different_ref_mid_window_resets_the_clock(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second deploy landing before the first was ever alarmed must not inherit the
+    first ref's already-elapsed clock — the new ref gets its own fresh grace window."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    monkeypatch.setattr(guard, "_UNREVIEWED_BOOT_GRACE_S", 0.0)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "oldref1")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+
+    monkeypatch.setattr(guard, "_git_head", lambda root: "newref2")
+    # the new ref is a FRESH sighting even though grace_s is 0 — it must not inherit the
+    # old ref's already-past-window clock
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+    out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
+    assert out is not None and "newref2" in out
+
+
+async def test_grace_window_a_clean_boot_clears_the_pending_clock(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ref that gets recorded WITHOUT ever crossing the grace window must not leave a
+    stale watermark behind for the next, genuinely different, unrecorded ref to inherit."""
+    import src.orchestrator.deploy_guard as guard
+    from src.orchestrator.monitor import set_cursor
+
+    monkeypatch.setattr(guard, "_UNREVIEWED_BOOT_GRACE_S", 0.0)
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "willberecorded")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "willberecorded")  # clean now
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+
+    # a genuinely new unrecorded ref right after — must get its OWN fresh sighting, not
+    # read as "already past window" off the cleared ref's old clock
+    await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
+    monkeypatch.setattr(guard, "_git_head", lambda root: "brandnewref")
+    assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
+    out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
+    assert out is not None and "brandnewref" in out
+
+
 # --- wiring: both services actually call the reboot guard at their own boot too ------------
 
-async def test_mcp_boot_check_alarms_on_an_unrecorded_head(actions: Actions) -> None:
+async def test_mcp_boot_check_alarms_on_an_unrecorded_head(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The grace window (thread c27afb62) means the FIRST sighting of an unrecorded ref
+    never alarms — zeroed here so this test still proves the wiring end to end without
+    waiting out a real 60 minutes."""
     import src.orchestrator.deploy_guard as guard
     from src import mcp_server as srv
     from src.orchestrator.monitor import set_cursor
 
+    monkeypatch.setattr(guard, "_UNREVIEWED_BOOT_GRACE_S", 0.0)
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        await srv._boot_check()
+        await srv._boot_check()  # first sighting — starts the grace clock, alarms nothing
+        await srv._boot_check()  # grace_s=0 — this ref is already "past" the window
     finally:
         srv._pool = saved_pool
     thread = await actions.pool.fetchval(
@@ -903,17 +1015,22 @@ async def test_worker_startup_gate_runs_and_dedups_with_the_role_var_set(
 ) -> None:
     """The var present is what the real osiris-worker.service unit sets — the guard must
     actually run (mints one Thread), same claim `test_mcp_boot_check_alarms_on_an_unrecorded_
-    head` already carries for the sibling service."""
+    head` already carries for the sibling service. Grace window zeroed (thread c27afb62) so
+    a second startup, not the first, is the one that actually alarms."""
     import src.orchestrator.deploy_guard as guard
     from src.orchestrator.monitor import set_cursor
     from src.workers.arq_worker import shutdown, startup
 
+    monkeypatch.setattr(guard, "_UNREVIEWED_BOOT_GRACE_S", 0.0)
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
     monkeypatch.setenv("DATABASE_URL", pg_dsn)
     monkeypatch.setenv("REDIS_URL", redis_url)
     monkeypatch.setenv("OSIRIS_WORKER_ROLE", "primary")
     ctx: dict[str, Any] = {}
     await startup(ctx)
+    await shutdown(ctx)
+    ctx2: dict[str, Any] = {}
+    await startup(ctx2)
     try:
         thread = await actions.pool.fetchval(
             "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
@@ -921,7 +1038,7 @@ async def test_worker_startup_gate_runs_and_dedups_with_the_role_var_set(
             "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%'")
         assert thread == 1
     finally:
-        await shutdown(ctx)
+        await shutdown(ctx2)
 
 
 # --- the ref-race detector (thread 771366d1: two agents moved main/composer out from under

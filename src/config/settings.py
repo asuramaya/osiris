@@ -109,7 +109,11 @@ class Settings(BaseSettings):
     # The shared server's pool: ONE pool for the whole fleet (min_size stays 1 so it's cheap
     # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
     # per-agent 10 × 56 = 560 that would have exhausted it.
-    osiris_mcp_pool_size: int = 20
+    # 20 -> 8 (thread 0c03a685, 2026-09-07): the boot-spike measurement's other half — a
+    # shrunken Postgres shared_buffers (9.7 GB -> 3 GB, the same dispatch) makes every idle
+    # backend's ~1 GB RSS cost more relatively, and this daemon's own concurrency never
+    # measured near its old ceiling the way the worker's did (msg 5340 was worker-specific).
+    osiris_mcp_pool_size: int = 8
     # THE OTHER TWO LONG-RUNNING DAEMONS (task #180 piece 2 (c)): osiris-worker and the
     # console (src/api/app.py) each called create_pool with no size override, silently
     # inheriting the bare asyncpg.create_pool default (max_size=10) — unconfigured, not a
@@ -120,7 +124,15 @@ class Settings(BaseSettings):
     # daemon that peaked near its own ceiling under a real hour of fleet activity — 9 of
     # 10 connections, 90% — measured via fleet()'s pool_health, not guessed. The other
     # three daemons stayed comfortably under half their own caps in the same window.
-    osiris_worker_pool_size: int = 16
+    # 16 -> 4 (thread 0c03a685, 2026-09-07): the boot-spike measurement found 34 idle
+    # backends fleet-wide, each ~1 GB of Postgres shared-buffer RSS in the task manager —
+    # a real cost this daemon's own pool_size sets independent of whether it ever uses
+    # more than a handful concurrently at boot. Dispatch cited this as a 10->4 cut, which
+    # assumed the PRE-msg-5340 value; the actual prior value was 16, not 10 — surfaced to
+    # Thoth rather than silently reconciled, since the two measurements answer different
+    # questions (peak concurrency under load vs. idle-backend memory at boot) and only the
+    # operator/manager can weigh which one governs. Applied as directed pending that.
+    osiris_worker_pool_size: int = 4
     osiris_api_pool_size: int = 10
     osiris_manager_pool_size: int = 10
     # chrome (the read-only HTTP console, src/api/app.py) — a SEPARATE process/port from
@@ -483,6 +495,22 @@ class Settings(BaseSettings):
     # start over 1.5 GB RSS) — this flag still gates it entirely dark by default, but the
     # route itself can no longer run away even while the flag is on.
     osiris_memory_diag_enabled: bool = False
+    # THE WORKER BOOT SPIKE (thread 0c03a685, 2026-09-07): fifteen run_at_startup crons
+    # used to fire concurrently in the same ~3s window, racing for CPU/memory during the
+    # single costliest moment of the process's life — measured at 2.1 GB RSS + 1.0 GB
+    # swap at 100% CPU ninety seconds after restart. This bounds that window: cron jobs
+    # (arq_worker.watched) serialize one-at-a-time behind a lock for this many seconds
+    # after boot, then run concurrently as normal for the rest of the process's life —
+    # cheap once the burst has passed, since a scheduled tick past this deadline never
+    # touches the lock at all.
+    osiris_worker_boot_serialize_s: float = 90.0
+    # Ports 8c7100c's bounded-tracemalloc safety rails (5 frames, an RSS tripwire, a hard
+    # duration cap, self-terminating with nobody polling) to the worker's own boot burst,
+    # gated OFF by default for the same reason osiris_memory_diag_enabled is: tracing
+    # costs real overhead even bounded, so it must never run silently. Unlike the mcp
+    # route this has no HTTP surface to poll — it logs the top allocation sites once, at
+    # the end of the window (see arq_worker._boot_memtrace).
+    osiris_worker_boot_memtrace_enabled: bool = False
 
 
 def get_settings() -> Settings:
