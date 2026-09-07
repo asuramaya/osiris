@@ -2938,6 +2938,134 @@ async def test_dispatch_dm_refuses_to_fork_a_body_confirmed_via_agents_json(
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
+# ═══ thread 78f5a39e: a live-but-IDLE self-holder gets nudged, not left to wait on an ═══
+# unscheduled next turn — a `claude --bg` body with no turn coming has no way to ever read
+# mail sitting in a box it never opens. The daemon reply lane (no fork) closes that gap;
+# a genuinely busy addressee stays exactly as before (its own turn's end surfaces the DM).
+
+
+async def test_self_branch_idle_holder_is_nudged_through_the_daemon_reply_lane(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Imhotep's own specimen: the daemon's OWN live job list can hold a session that the
+    door-registry rung (agent_mounts.job_dir, possibly stale) never matches — exactly the
+    shape of a session that outlived its own mount row. `jobs` is stateful here: no match
+    on the door-registry rung's own first call (falls through to the resume-candidate
+    path, same as `test_dispatch_dm_refuses_to_fork_a_body_confirmed_via_agents_json`
+    above), a real match on the self-branch's own second, session-id-keyed call."""
+    sense = await _stale_resumable_owner(actions, tmp_path)   # aged transcript == idle
+    msg_id = await _dm_to_owner(actions)
+    calls: list[set] = []
+    nudges: list[tuple[dict[str, Any], str]] = []
+
+    async def _jobs(ids: set) -> dict[str, Any] | None:
+        calls.append(ids)
+        if len(calls) < 2:
+            return None                      # the door-registry rung finds nothing
+        assert FULL_SID[:8] in ids            # the self-branch's own session-id lookup
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        nudges.append((job, text))
+        return True
+
+    async def _agents_json() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "sessionId": FULL_SID, "cwd": "/wherever"}]
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("an idle self-holder must be nudged, never resumed or forked")
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                          agents_json=_agents_json)
+    assert d["mode"] == "nudged-live-holder"
+    assert len(nudges) == 1
+    _job, text = nudges[0]
+    assert f"DM #{msg_id}" in text and "agent:abcd1234" in text
+    assert await actions.pool.fetchval(
+        "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-reply"
+
+
+async def test_self_branch_idle_holder_nudge_is_never_renudged(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Once per message covers this lane too — a redelivery or a concurrent backstop tick
+    must skip the second attempt, exactly like the daemon-nudge rung's own idempotency."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    msg_id = await _dm_to_owner(actions)
+    calls: list[set] = []
+
+    async def _jobs(ids: set) -> dict[str, Any] | None:
+        calls.append(ids)
+        if len(calls) % 2 == 1:
+            return None
+        return {"short": "abcd1234", "sessionId": FULL_SID, "_sock": "/nowhere"}
+
+    async def _nudge(job: dict[str, Any], text: str) -> bool:
+        return True
+
+    async def _agents_json() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "sessionId": FULL_SID, "cwd": "/wherever"}]
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("nothing may spawn in this test")
+
+    st = _settings(enabled=True, sense=str(sense))
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_boom,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender", settings=st, spawn=_boom,
+                           windows=_no_windows, jobs=_jobs, nudge=_nudge,
+                           agents_json=_agents_json)
+    assert d1["mode"] == "nudged-live-holder"
+    assert d2["mode"] == "skipped-once-per-message"
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 1
+
+
+async def test_self_branch_busy_holder_is_never_nudged_or_resumed(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A GENUINELY mid-turn addressee (a transcript with a fresh, moving timestamp) keeps
+    its own existing outcome — its own turn's end surfaces the DM. No fork (spawn), and no
+    poke either: a busy mind gets no unsolicited injection competing with its live turn."""
+    import time as _time
+
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    # age the mount row (still "not live" by the occupancy signals this fixture already
+    # relies on) but make the TRANSCRIPT itself fresh and moving — busy, not idle.
+    t = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    signed = ('{"type":"user","toolUseResult":'
+              '"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
+    now_iso = datetime.now(UTC).isoformat()
+    t.write_text(signed + f'{{"type":"assistant","timestamp":"{now_iso}"}}\n')
+    import os
+    os.utime(t, (_time.time(), _time.time()))
+    msg_id = await _dm_to_owner(actions)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a busy addressee must never be nudged, resumed, or forked")
+
+    async def _agents_json() -> list[dict[str, Any]]:
+        return [{"id": "abcd1234", "sessionId": FULL_SID, "cwd": "/wherever"}]
+
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
+                          agents_json=_agents_json)
+    # caught by the EARLIER mid-turn gate ("delivered") in this specimen, before ever
+    # reaching the self-branch at all — confirmed live rather than assumed. The self-
+    # branch's own busy check (this fix) is the second line of defense for the case where
+    # `wake_target`'s own mount-based candidate diverges from graph_resume's own, never
+    # the only one; either way the observable contract holds: no nudge, no fork.
+    assert d["mode"] == "delivered"
+    assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
+
+
 async def test_dispatch_dm_refuses_to_fork_a_body_found_via_proc(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

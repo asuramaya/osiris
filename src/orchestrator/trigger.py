@@ -2250,11 +2250,63 @@ async def dispatch_dm(
     if occupied is not None:
         which, reason = occupied
         if which == "self":
-            # NOT A FAILURE. The addressee is live and holds this exact session; the mail
-            # is in its box and its next turn's inbox() finds it. Resuming would fork the
-            # mind for no gain, so we don't — but saying "refused, pull-only" here reads
-            # as unreachable and is how a reader (Alfred on 60bc15db, Thoth on 2026-08-28)
-            # concludes a reachable seat is lost and escalates. Name the outcome instead.
+            # NOT A FAILURE — the addressee is live and holds this exact session; a resume
+            # would fork the mind for no gain, so we never spend one. But "it reads this at
+            # its next turn" is only true for a body with a NEXT TURN COMING: a genuinely
+            # mid-turn addressee earns that on its own, while an IDLE `claude --bg` body
+            # (compacted, or simply between turns) has no next turn until something pokes
+            # it — thread 78f5a39e, operator "imhotep dispatch failed, why?": Thoth's
+            # dispatch 7882 sat unread 70 minutes in Imhotep's idle session while three
+            # sibling sends the same minute were nudged and read within seconds. The daemon
+            # reply lane (job_for + reply, the SAME lane the earlier daemon-nudge rung and
+            # wake()/self-compaction already use) pokes an idle body without forking it —
+            # `-p --resume` is the only thing that forks a mind, and this never calls it.
+            root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
+                else Path.home() / ".claude" / "projects"
+            busy = await asyncio.to_thread(
+                _turn_fresh_sync, root, session_id, st.osiris_dm_active_secs, graph_resume[3])
+            if not busy:
+                ids = {i for i in (session_id, session_id[:8],
+                                   Path(graph_resume[3]).name if graph_resume[3] else None)
+                       if i}
+                job = await jobs(ids)
+                if job is not None:
+                    s_handle = (((await held_seat(pool, sender)) or {}).get("handle")
+                               if sender else None)
+                    a_handle = ((await held_seat(pool, target)) or {}).get("handle")
+                    env = _mail_envelope(
+                        msg_id, grade=grade, preview=preview,
+                        sender_label=(f"{s_handle} ({sender})" if s_handle
+                                     else (sender or "the fleet")),
+                        addressee_label=(f"you — {a_handle} ({target})" if a_handle
+                                        else f"you ({target})"))
+                    nudged = False
+                    async with pool.acquire() as conn, conn.transaction():
+                        await conn.execute(
+                            "SELECT pg_advisory_xact_lock("
+                            "hashtextextended('osiris-dm-' || $1, 7445))", str(msg_id))
+                        prior = await conn.fetchval(
+                            "SELECT 1 FROM agent_wakes WHERE message_id=$1 "
+                            "AND mode IN ('dm-reply','dm-resume','dm-poke')", msg_id)
+                        if prior:
+                            return {"mode": "skipped-once-per-message",
+                                    "detail": "another dispatcher already woke for this "
+                                             "message"}
+                        nudged = bool(await nudge(job, env))
+                        if nudged:
+                            await conn.execute(
+                                "INSERT INTO agent_wakes (to_project, from_agent, "
+                                "message_id, mode) VALUES ($1,$2,$3,'dm-reply')",
+                                project, sender, msg_id)
+                    if nudged:
+                        return {"mode": "nudged-live-holder",
+                                "detail": f"{reason}, idle (no turn in flight) — poked "
+                                         "through the daemon reply lane instead of "
+                                         "waiting on an unscheduled next turn; no fork, "
+                                         "no resume"}
+            # busy (a turn is genuinely moving), or the daemon has no matching job, or the
+            # poke itself failed — every one of those falls back to the honest pull-only
+            # outcome, exactly as before this fix existed.
             return {"mode": "queued-live-holder",
                     "detail": f"{reason} — it reads this from its own inbox at its next "
                               "turn; a resume would only fork the mind, so none was "
@@ -2525,6 +2577,10 @@ _WAKE_STATUS = {
     # the addressee's OWN live session is a DELIVERY OUTCOME (it reads at its next turn,
     # exactly what `queued-live-unresolved` above exists to stop mislabelling)...
     "queued-live-holder": "queued",
+    # thread 78f5a39e: the self-branch's own idle case actually POKES the addressee via
+    # the daemon reply lane (no fork) — a real delivery, same bucket as "nudged", not the
+    # unscheduled-pull-only wording "queued-live-holder" still carries for a busy addressee.
+    "nudged-live-holder": "delivered",
     # ...while an unidentified body in the office is a real refusal with an unknown reader.
     "resume-refused-occupied-foreign": "refused-occupied-foreign",
     # the pre-split mode, kept mapped so stored receipts never fall to a default.
