@@ -3924,9 +3924,14 @@ async def _project_briefing(
 # ---- Phase 2: GRANULAR GETTERS (graphy tool surface) -------------------
 
 @mcp.tool()
-async def get_status(ctx: Context | None = None) -> dict[str, Any]:
+async def get_status(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Your identity, mail count, and fleet pulse -- the "glance". Returns only:
-    you, model, project, seat, mail, fleet_pulse. No threads, no succession."""
+    you, model, project, seat, mail, fleet_pulse. No threads, no succession.
+
+    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>} --
+    one line per field, server-rendered -- for a slash command to print verbatim instead
+    of a model re-prettifying JSON at token cost. Omit (or any other value) for the
+    ordinary structured receipt."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = ident.project if ident else None
@@ -3951,6 +3956,9 @@ async def get_status(ctx: Context | None = None) -> dict[str, Any]:
     result["mail"] = mail
     if pulse:
         result["fleet_pulse"] = pulse
+    if render == "text":
+        from src.orchestrator.textrender import render_status_text
+        return {"text": render_status_text(result)}
     return result
 
 

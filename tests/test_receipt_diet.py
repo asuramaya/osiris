@@ -402,3 +402,39 @@ async def test_roster_caveats_collapse_to_a_count_by_default(actions: Actions) -
     assert after_bytes <= 400, (
         f"roster() receipt (no want_caveats requested) grew to {after_bytes} bytes, over "
         f"the ratchet of 400 (before-diet equivalent was {before_bytes})")
+
+
+# --- THE READ TRIANGLE, WAVE 1 (thread 68f1bafa, Thoth DM 7883): get_status(render='text')
+# returns ONLY {"text": <str>} -- one line per field, server-rendered, so a slash command
+# prints it verbatim instead of a model receiving JSON and re-prettifying it.
+
+async def test_get_status_render_text_returns_only_a_text_field(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    proj = "rd-statustext"
+    await _seed(actions.pool, proj)
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rd-statustext", session="rdstatustext", project=proj,
+        model="claude-sonnet-5", cwd=None)
+    try:
+        structured = await srv.get_status(ctx=ctx)
+        text = await srv.get_status(render="text", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert set(text.keys()) == {"text"}
+    assert isinstance(text["text"], str)
+    # every field the structured receipt carries shows up as its own line in the text render
+    for key, value in structured.items():
+        if isinstance(value, (dict, list)):
+            continue
+        assert f"{key}: {value}" in text["text"].splitlines()
+    before_bytes = _receipt_bytes(structured)
+    after_bytes = _receipt_bytes(text)
+    assert after_bytes < before_bytes, (before_bytes, after_bytes)
