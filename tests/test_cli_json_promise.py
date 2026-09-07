@@ -57,14 +57,14 @@ from src.cli import (
 # explicitly here (never inferred by parsing the prose, which is fragile) so a rename or
 # a removal fails a staleness check below rather than silently going untested.
 READ_VERBS = frozenset({
-    "fleet", "roster", "backlog", "threads", "boot-status", "smoke", "desk", "show",
+    "fleet", "roster", "backlog", "threads", "inbox", "boot-status", "smoke", "desk", "show",
 })
 
 # Every subcommand that actually registers `--json` today (cross-checked live below,
 # never hand-trusted) — the population gate (2) exercises one edge invocation each for.
 JSON_COMMANDS = frozenset({
-    "stop", "fleet", "roster", "backlog", "threads", "desk", "show", "unmerge", "retention",
-    "boot-status", "smoke",
+    "stop", "fleet", "roster", "backlog", "threads", "inbox", "desk", "show", "unmerge",
+    "retention", "boot-status", "smoke",
 })
 
 

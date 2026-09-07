@@ -1309,6 +1309,26 @@ async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
     return 0
 
 
+# --- inbox (thread 68f1bafa/3703a3a9, the read triangle's own new console face; `desk` is
+# the operator's own organized queue, this is an ORDINARY project's mailbox) -----------------
+
+async def cmd_inbox(*, project: str, as_json: bool = False) -> int:
+    """osiris inbox --project <repo>: a peek at a project's own mailbox, terminal-native.
+    Always a peek (never leases) -- settling mail is an agent's own act mid-session, not
+    a human glancing from a terminal."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "inbox", {"project": project, "peek": True})
+    if isinstance(result, str):
+        print(f"osiris inbox: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title=f"inbox · {project}")
+    return 0
+
+
 # --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
 # CLI shipped 22 write-shaped subcommands and zero read-shaped ones over the record itself
 # (mail, threads, decisions) — a human at his own terminal could WRITE annotate-thread but
@@ -3887,7 +3907,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, backlog, boot-status, smoke
-  read the record       desk, show, threads
+  read the record       desk, show, threads, inbox
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project, rebind-seat, correct-pin-value,
                         heal-seat-anchor, transition-seat-project, correct-agent-house,
@@ -4040,6 +4060,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="the repo to list open threads for")
     p_threads.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_inbox = sub.add_parser("inbox", description=_d(
+        "a peek at a project's own mailbox — the same inbox() the MCP tool answers, "
+        "called over the wire. Always a peek; settling mail is an agent's own act"),
+        epilog="example: osiris inbox --project osiris")
+    p_inbox.add_argument("--project", required=True, help="the project mailbox to peek at")
+    p_inbox.add_argument("--json", action="store_true", dest="as_json",
+                         help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_desk = sub.add_parser("desk", description=_d(
         "the operator's own organized queue — needs_decision / needs_hands / fyi bands, "
@@ -4552,6 +4580,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_backlog(all_projects=args.all_projects, as_json=args.as_json))
     if args.command == "threads":
         return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json))
+    if args.command == "inbox":
+        return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json))
     if args.command == "desk":
         return asyncio.run(cmd_desk(as_json=args.as_json))
     if args.command == "show":

@@ -5576,7 +5576,7 @@ async def stop(target: str | None = None, reason: str = "",
 async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
-                want_prior_art: bool = False,
+                want_prior_art: bool = False, render: str | None = None,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you. Defaults to your mounted project; pass
     `project` for another's ('operator' reads the human's desk). Reading LEASES a
@@ -5586,7 +5586,12 @@ async def inbox(project: str | None = None, peek: bool = False,
     only, settle only at the human's explicit word.
 
     `want_prior_art=True` returns each message's full prior_art list; default is a
-    `prior_art_count` only."""
+    `prior_art_count` only.
+
+    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
+    Your own mailbox renders one line per ASK message, FYI folded to a single trailing
+    count line (`textrender.render_mail_text`); the operator desk (whose shape is bands,
+    not a flat list) falls back to the generic line-per-field renderer."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -5624,7 +5629,11 @@ async def inbox(project: str | None = None, peek: bool = False,
         # the human's desk never leases; bands (needs_decision / needs_hands / fyi) ·
         # thread + same-story folds · dimmed moot annotations · the derived your_queue.
         desk = await read_desk(pool)
-        return {"project": OPERATOR_ADDR, **desk, **ack_keys}
+        out = {"project": OPERATOR_ADDR, **desk, **ack_keys}
+        if render == "text":
+            from src.orchestrator.textrender import render_status_text
+            return {"text": render_status_text(out)}
+        return out
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
     if not want_prior_art:
@@ -5651,6 +5660,13 @@ async def inbox(project: str | None = None, peek: bool = False,
     if flight:  # msg-78 lesson: an empty box with a held lease is NOT 'nothing happening'
         note += (f" — {len(flight)} in flight (leased by "
                  + ", ".join(sorted({f['leased_by'] for f in flight})) + ")")
+    if render == "text":
+        from src.orchestrator.textrender import render_mail_text
+        text = render_mail_text(msgs)
+        if ack_keys.get("settled"):
+            text += f"\nsettled: {ack_keys['settled']}"
+        text += f"\n{note}"
+        return {"text": text}
     return {"project": proj.removeprefix("repo:").strip(), "messages": msgs,
             **({"in_flight": flight} if flight else {}),
             **ack_keys, "note": note}

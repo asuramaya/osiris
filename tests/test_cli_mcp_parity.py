@@ -164,6 +164,9 @@ CLI_ONLY_PARAMS = {
     ("threads", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's "
         "own entry above; the CLI's own counterpart to threads's MCP-only `render` param "
         "(see MCP_ONLY_PARAMS below).",
+    ("inbox", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to inbox's MCP-only `render` param (see "
+        "MCP_ONLY_PARAMS below).",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
@@ -271,6 +274,18 @@ MCP_ONLY_PARAMS = {
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
     ("roster", "render"): "same reason as backlog's own entry above — the read "
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
+    ("inbox", "render"): "same reason as backlog's own entry above — the read triangle's "
+        "server-side text mode has no terminal-side counterpart to be missing.",
+    ("inbox", "peek"): "the CLI console door (thread 68f1bafa/3703a3a9) is ALWAYS a peek "
+        "-- a human glancing from a terminal never leases mail, same reasoning as `desk`'s "
+        "own always-peek design above (read_desk). Not a gap: peek=True is simply never a "
+        "variable on this door.",
+    ("inbox", "ack"): "settling mail (lease/ack/reply) is an agent's own act mid-session, "
+        "never a terminal glance's -- same boundary as `peek` above: this console door "
+        "reads, it does not act.",
+    ("inbox", "want_prior_art"): "a real gap, named rather than hidden: the CLI's own "
+        "render.emit already shows whatever the MCP tool returns, but no --want-prior-art "
+        "flag exists yet to ask for the fuller payload. Not yet built.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO

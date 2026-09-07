@@ -94,6 +94,29 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def render_mail_text(messages: list[dict[str, Any]]) -> str:
+    """One line per ASK message (needs a reply/ack), FYI messages folded into a single
+    trailing count line rather than itemized (thread 68f1bafa's own "mail (fyi folded to
+    one line)" spec) — an inbox full of fyi noise must never bury the handful of asks
+    that actually need a decision."""
+    if not messages:
+        return "mail: empty"
+    asks = [m for m in messages if m.get("grade") == "ask"]
+    fyi = [m for m in messages if m.get("grade") != "ask"]
+    lines = [_render_mail_row(m) for m in asks]
+    if fyi:
+        lines.append(f"{len(fyi)} fyi message(s) — ack to settle")
+    if not lines:
+        return "mail: empty"
+    return "\n".join(lines)
+
+
+def _render_mail_row(m: dict[str, Any]) -> str:
+    thread = m.get("thread")
+    snippet = (m.get("body") or "")[:100]
+    return f"{m.get('id')} ask from:{m.get('from')} thread:{thread} — {snippet}"
+
+
 THREADS_BAND_CAP = 30
 
 
