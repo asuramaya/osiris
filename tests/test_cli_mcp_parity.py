@@ -187,6 +187,11 @@ CLI_ONLY_PARAMS = {
     ("search", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
         "entry above; search() has no render param of its own to counter (its receipt is "
         "already small), so this is purely the terminal-vs-caller presentation split.",
+    ("team", "seat"): "the named gap's own fix (thread 68f1bafa/642c4754): a terminal has "
+        "no mounted identity for team()'s deliberately self-scoped MCP contract to resolve "
+        "-- --seat resolves the manager by handle DIRECTLY against postgres (seats.py's "
+        "seat_by_handle + team_roster, the identical query team() itself calls, never a "
+        "second copy) rather than adding an override param to the MCP tool's own contract.",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "

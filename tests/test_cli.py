@@ -56,6 +56,7 @@ from src.cli import (
     cmd_send,
     cmd_show,
     cmd_smoke_chaos,
+    cmd_team,
     cmd_thread,
     cmd_unmerge,
     commit_deployed_notes,
@@ -303,6 +304,46 @@ async def test_cmd_launch_no_anchor_cwd_is_honest(actions: Actions) -> None:
 
     assert await cmd_launch("roomless", model=None, pool=actions.pool,
                             manager=_unreachable, debug=True) == 1
+
+
+# --- cmd_team --seat: the read triangle's own named gap fix (thread 68f1bafa/642c4754) —
+# a real pool, direct-DB resolve-by-handle, no MCP wire involved -----------------------------
+
+async def test_cmd_team_seat_resolves_the_manager_by_handle_and_lists_its_seats(
+    actions: Actions, capsys: Any,
+) -> None:
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    manager = await ensure_seat(actions, house="cliteamhouse", handle="Cliteammgr",
+                                source="test", anchor_cwd="/test/cliteammgr")
+    await actions.create_or_find_object("Agent", "agent:cliteam-mgr-vii", "test")
+    await bind_holder(actions, seat_id=manager["seat_id"], agent_id="agent:cliteam-mgr-vii")
+    worker = await ensure_seat(actions, house="cliteamhouse", handle="Cliteamwk",
+                               source="test", anchor_cwd="/test/cliteamwk")
+    await actions.create_or_find_object("Agent", "agent:cliteam-wk-vii", "test")
+    await bind_holder(actions, seat_id=worker["seat_id"], agent_id="agent:cliteam-wk-vii")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    await actions.create_link(worker_oid, manager_oid, "managed_by", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+
+    assert await cmd_team(seat="Cliteammgr", pool=actions.pool, as_json=True) == 0
+    out = capsys.readouterr().out
+    assert "Cliteamwk" in out
+    assert '"manager":"Cliteammgr"' in out
+
+
+async def test_cmd_team_seat_is_honest_about_an_unknown_handle(actions: Actions) -> None:
+    assert await cmd_team(seat="No-Such-Manager-Anywhere", pool=actions.pool) == 1
+
+
+async def test_cmd_team_seat_is_honest_when_the_manager_manages_nobody(
+    actions: Actions,
+) -> None:
+    await ensure_seat(actions, house="cliteamlonehouse", handle="Cliteamlone",
+                      source="test", anchor_cwd="/test/cliteamlone")
+    assert await cmd_team(seat="Cliteamlone", pool=actions.pool) == 1
 
 
 async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
