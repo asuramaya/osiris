@@ -2805,6 +2805,17 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     never reused either — a caller landing here with the same garbage label a second time
     must not keep growing its edge count.
 
+    REFUSES THE OPERATOR'S OWN SENTINELS (console thread, repo:operator measured live:
+    the human's desk address, never a real repository, minted as a SoftwareProject
+    because `_REPO_NAME_RE` happily matches the bare word "operator"). This is THE choke
+    point for every project label an agent's own mount/succession ever mints through
+    (mount()'s register_agent via `identity.project`, mint_heir via `heir_project`) — both
+    call sites pass whatever `project`/`house` basename-guess or pin resolved to, with no
+    upstream filter for the house's own non-project sentinels. Excludes the WHOLE
+    `_OPERATOR_ACTORS` set (seats.py), not just the literal 'operator', for the same
+    reason `_seat_lineage_ancestor` already does — 'analyst:operator' and 'console' are
+    exactly as much "not a repository" as 'operator' is.
+
     THE RENAME STUB (thread 04907b12, live specimen: xxit renamed to handlingtheloop —
     the canonical STAYS repo:xxit forever, only the `name` property changes, per
     rename_project's own law): a canonical-only lookup goes blind to that new name
@@ -2820,12 +2831,14 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     like two or more canonical matches above, is not this function's call to arbitrate
     and falls through to the literal mint-or-find."""
     from src.orchestrator.capture import _REPO_NAME_RE
-    if not _REPO_NAME_RE.fullmatch(project):
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+    if not _REPO_NAME_RE.fullmatch(project) or project in _OPERATOR_ACTORS:
         return None
     matches = await actions.pool.fetch(
         "SELECT canonical FROM objects WHERE type='SoftwareProject' AND status='active' "
         "AND lower(canonical) = lower($1)", f"repo:{project}")
     canonical: str | None = matches[0]["canonical"] if len(matches) == 1 else None
+    minted = False
     if canonical is None and not matches:
         name_matches = await actions.pool.fetch(
             "SELECT o.canonical FROM objects o WHERE o.type='SoftwareProject' "
@@ -2837,7 +2850,31 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
             canonical = name_matches[0]["canonical"]
     if canonical is None:
         canonical = f"repo:{project}"
-    return await actions.create_or_find_object("SoftwareProject", canonical, actor)
+        # THE CORPSE CHECK, NOT THE ACTIVE-ONLY ONE (Marquee's own self-reinfecting-fold
+        # regression, ruling a73aafa2 — guarded above by
+        # test_register_agent_mount_never_resurrects_a_merged_husks_name): the two lookups
+        # above filter to status='active' on purpose (a merged/retired object must never
+        # win the case/name-collision arbitration), but that means a MERGED husk sharing
+        # this exact canonical falls through here too — `create_or_find_object` below still
+        # FINDS it (its find-or-create is on bare canonical, no status filter), it never
+        # mints a new row. Asking "does ANY object already hold this canonical" (not just
+        # an active one) is the only question that actually predicts whether the create
+        # below mints — answering it with the active-only `matches`/`name_matches` result
+        # would stamp `name` on the husk's own corpse and resurrect its pre-fold label.
+        minted = not await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical=$1", canonical)
+    proj_id = await actions.create_or_find_object("SoftwareProject", canonical, actor)
+    if minted:
+        # NEVER MINT WITHOUT A NAME ASSERTION (the general form of the operator-sentinel
+        # fix above): unlike `_mint_or_find_repo` (capture.py), which has always stamped
+        # `name` on a fresh mint, this path minted bare — every SoftwareProject reaching
+        # /projects through mount()/mint_heir with no OTHER name property fell straight to
+        # resolve_label's canonical tier, leaking `repo:<label>` into the UI even for a
+        # perfectly legitimate label. `project` here IS the label that resolved the
+        # canonical, so it is exactly what `name` should say.
+        await actions.assert_property(proj_id, "name", project, actor,
+                                      datetime.now(UTC), _CONF, evidence_class=_EC)
+    return proj_id
 
 
 async def mint_heir(

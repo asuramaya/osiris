@@ -367,9 +367,87 @@ async def test_resolve_or_mint_project_never_arbitrates_a_pre_existing_twin(
     assert a != b
     got = await _resolve_or_mint_project(actions, "RAMstein", "test")
     assert got == a  # the literal, exact match — unchanged, pre-existing behavior
+
+
+# --- _resolve_or_mint_project refuses the operator's own sentinels (console thread,
+# 2026-09-07: repo:operator measured live — the human's desk address, `_OPERATOR_ADDR`,
+# is not a real repository, but `_REPO_NAME_RE` happily matches the bare word "operator"
+# and nothing upstream of this choke point filtered it out before mint). Exercised
+# through `register_agent`, the actual public door a resolved `identity.project` of
+# "operator" would reach (a cwd whose basename guess IS the literal word "operator" —
+# `resolve_identity`'s own documented basename fallback, the same shape #107's `repo:?`
+# regression was caught through above), not a synthetic bypass of `_resolve_or_mint_project`
+# alone. ---------------------------------------------------------------------------------
+
+async def test_resolve_or_mint_project_refuses_the_operator_sentinel(actions: Actions) -> None:
+    got = await _resolve_or_mint_project(actions, "operator", "test")
+    assert got is None
+    minted = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:operator'")
+    assert minted is None, "repo:operator was minted from the human's own desk address"
+
+
+async def test_resolve_or_mint_project_refuses_every_operator_actors_sentinel(
+    actions: Actions,
+) -> None:
+    """Not just the literal 'operator' — the WHOLE `_OPERATOR_ACTORS` set (seats.py) is
+    excluded, the same set `_seat_lineage_ancestor` already trusts for the same reason."""
+    for sentinel in ("operator", "console"):
+        assert await _resolve_or_mint_project(actions, sentinel, "test") is None
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
-        "AND lower(canonical) = lower('repo:RAMstein')") == 2  # still exactly 2, never 3
+        "AND canonical IN ('repo:operator', 'repo:console')") == 0
+
+
+async def test_register_agent_never_mints_repo_operator_from_a_basename_guess(
+    actions: Actions,
+) -> None:
+    """The actual live mechanism a project label of 'operator' would reach: a cwd whose
+    basename guess resolves to the bare word "operator" (resolve_identity's own documented
+    fallback — no `.osiris` pin present), flowing through register_agent's ordinary
+    `identity.project` mint path (agents.py), exactly like the `repo:?` regression above."""
+    ident = resolve_identity(cwd="/w/operator", session="sess-opsentinel",
+                             model="claude-fable-5")
+    assert ident.project == "operator"  # confirms the fixture exercises the real basename shape
+    a = await register_agent(actions, ident, actor="analyst:operator")
+    project_prop = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='project'", a)
+    # the Agent's own property is unaffected — only the SoftwareProject mint is refused
+    assert project_prop == "operator"
+    minted = await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:operator'")
+    assert minted is None
+    works_in = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a)
+    assert works_in == 0
+
+
+# --- _resolve_or_mint_project never mints without a `name` assertion (the general form of
+# the operator-sentinel fix: `_mint_or_find_repo`, capture.py's own choke point, has always
+# stamped `name` on a fresh mint; this one minted bare, so a legitimately-named project
+# still fell to resolve_label's canonical tier and leaked `repo:<label>` into the UI). ----
+
+async def test_resolve_or_mint_project_stamps_a_name_on_a_fresh_mint(actions: Actions) -> None:
+    proj = await _resolve_or_mint_project(actions, "freshmintnametest", "test")
+    assert proj is not None
+    name = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name'", proj)
+    assert name == "freshmintnametest"
+
+
+async def test_resolve_or_mint_project_does_not_reassert_name_on_an_existing_find(
+    actions: Actions,
+) -> None:
+    """Finding an existing object (by canonical or by name) must not overwrite whatever
+    `name` it already carries — only a genuinely NEW mint gets the fresh stamp."""
+    first = await _resolve_or_mint_project(actions, "reuseexistingnametest", "test")
+    await actions.assert_property(first, "name", "custom display name", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    again = await _resolve_or_mint_project(actions, "reuseexistingnametest", "test")
+    assert again == first
+    name = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name'", first)
+    assert name == "custom display name"
 
 
 async def test_register_agent_mount_with_case_variant_pin_reuses_the_existing_project(
