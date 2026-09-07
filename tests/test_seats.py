@@ -25,6 +25,7 @@ from src.orchestrator.seats import (
     LockWedged,
     _peer_lock,
     _seat_lock,
+    attach_seat,
     attach_session,
     bind_holder,
     bind_seat_tree,
@@ -2895,6 +2896,233 @@ async def test_attach_seat_after_detach_seat_succeeds(actions: Actions) -> None:
     assert await manager_of_seat(actions.pool, "seat:att7aaaa") == "seat:att7cccc"
 
 
+# ═══ PROMOTE_SEAT (khnum-promotion-verb, operator 2026-09-07: "promotion should be a verb
+# that agents can handle on their own with my word ... thoth cannot do it, it has to be
+# self managed") — the nebbercracker specimen: a target seat that's currently a PEER of
+# its workers, promoted over them in one call. ═══════════════════════════════════════════
+
+async def test_promote_seat_converts_a_peer_bond_and_derives_house(actions: Actions) -> None:
+    from src.orchestrator.seats import (
+        derive_house,
+        manager_of_seat,
+        peer_of_seat,
+        peer_seats,
+        promote_seat,
+    )
+
+    head = await ensure_seat(actions, house="monsterhouse", handle="PromHouse",
+                             source="test")
+    target = (await ensure_seat(actions, house=None, handle="Nebbercracker",
+                                source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="Jenny", source="test"))[
+        "seat_id"]
+    await attach_seat(actions, target, head["seat_id"], evidence="joins monsterhouse",
+                      actor="test")
+    await peer_seats(actions, target, worker, because="today's peer pairing", actor="test")
+    await bind_holder(actions, seat_id=target, agent_id="agent:nebbercracker-holder",
+                      source="test")
+
+    # SELF-MANAGED, the operator's own stated primary calling convention ("it has to be
+    # self managed") — deliberately NOT actor="operator": derive_house's own pre-existing
+    # house-ANCHOR rule (ruling b4208fa3) stops the walk at ANY managed_by edge an operator
+    # sentinel sourced, regardless of whether a house boundary was genuinely crossed, so an
+    # operator-run promotion would leave `worker` anchored at its own (unset) house instead
+    # of inheriting target's — a real interaction with existing code, reported in this
+    # commit's own brief, not something this verb papers over by stamping a different
+    # source than attach_seat's own established precedent does.
+    out = await promote_seat(actions, target, [worker], because="nebbercracker leads now",
+                             actor="agent:nebbercracker-holder")
+
+    assert out["workers"][worker] == "bonded"
+    assert out["promoted"] == target
+    assert worker in out["affected"] and target in out["affected"]
+    assert await peer_of_seat(actions.pool, target) is None
+    assert await peer_of_seat(actions.pool, worker) is None
+    assert await manager_of_seat(actions.pool, worker) == target
+    assert await derive_house(actions.pool, worker) == "monsterhouse"
+
+
+async def test_promote_seat_worker_already_managed_by_target_is_a_noop(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr1", source="test"))[
+        "seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromWkr1", source="test"))[
+        "seat_id"]
+    await attach_seat(actions, worker, target, evidence="already org chart", actor="test")
+
+    out = await promote_seat(actions, target, [worker], because="reaffirm",
+                             actor="operator")
+
+    assert out["workers"][worker] == "already-managed"
+    links = await actions.pool.fetch(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "WHERE f.canonical=$1 AND l.type='managed_by' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", worker)
+    assert len(links) == 1, "no duplicate managed_by edge minted for an already-managed worker"
+
+
+async def test_promote_seat_worker_managed_by_someone_else_is_refused(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import manager_of_seat, peer_seats, promote_seat
+
+    other_manager = (await ensure_seat(actions, house=None, handle="PromOther",
+                                       source="test"))["seat_id"]
+    target = (await ensure_seat(actions, house=None, handle="PromMgr2", source="test"))[
+        "seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromWkr2", source="test"))[
+        "seat_id"]
+    bystander = (await ensure_seat(actions, house=None, handle="PromBystander",
+                                   source="test"))["seat_id"]
+    await attach_seat(actions, worker, other_manager, evidence="pre-existing", actor="test")
+    await peer_seats(actions, target, bystander, because="unrelated pairing", actor="test")
+
+    out = await promote_seat(actions, target, [worker], because="try to take it",
+                             actor="operator")
+
+    assert out["workers"][worker] == f"refused: already managed by {other_manager}"
+    assert await manager_of_seat(actions.pool, worker) == other_manager
+    # the refusal touched nothing else — target's own unrelated peer bond stands
+    from src.orchestrator.seats import peer_of_seat
+    assert await peer_of_seat(actions.pool, target) == bystander
+
+
+async def test_promote_seat_unauthorized_caller_is_refused(actions: Actions) -> None:
+    from src.orchestrator.seats import manager_of_seat, promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr3", source="test"))[
+        "seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromWkr3", source="test"))[
+        "seat_id"]
+    await bind_holder(actions, seat_id=target, agent_id="agent:prom-holder", source="test")
+
+    out = await promote_seat(actions, target, [worker], because="a stranger tries",
+                             actor="agent:some-coordinator")
+
+    assert "not authorized" in out["error"]
+    assert await manager_of_seat(actions.pool, worker) is None
+
+
+async def test_promote_seat_allows_the_targets_own_holder(actions: Actions) -> None:
+    from src.orchestrator.seats import manager_of_seat, promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr4", source="test"))[
+        "seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromWkr4", source="test"))[
+        "seat_id"]
+    await bind_holder(actions, seat_id=target, agent_id="agent:prom-self", source="test")
+
+    out = await promote_seat(actions, target, [worker], because="self-managed promotion",
+                             actor="agent:prom-self")
+
+    assert out["workers"][worker] == "bonded"
+    assert await manager_of_seat(actions.pool, worker) == target
+
+
+async def test_promote_seat_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.seats import promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr5", source="test"))[
+        "seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromWkr5", source="test"))[
+        "seat_id"]
+
+    out = await promote_seat(actions, target, [worker], because="  ", actor="operator")
+    assert "because is required" in out["error"]
+
+
+async def test_promote_seat_refuses_an_unknown_target(actions: Actions) -> None:
+    from src.orchestrator.seats import promote_seat
+
+    out = await promote_seat(actions, "seat:no-such-target", [], because="test",
+                             actor="operator")
+    assert "no such active seat" in out["error"]
+
+
+async def test_promote_seat_unknown_worker_reads_as_a_manifest_refusal(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr6", source="test"))[
+        "seat_id"]
+
+    out = await promote_seat(actions, target, ["seat:no-such-worker"], because="test",
+                             actor="operator")
+    assert out["workers"]["seat:no-such-worker"].startswith("refused: no such active seat")
+
+
+async def test_promote_seat_every_worker_appears_in_the_manifest_never_dropped(
+    actions: Actions,
+) -> None:
+    """Three workers, three different outcomes — the manifest names all three, never
+    silently drops the one that failed (the spec's own explicit requirement)."""
+    from src.orchestrator.seats import promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr7", source="test"))[
+        "seat_id"]
+    already = (await ensure_seat(actions, house=None, handle="PromAlready7",
+                                 source="test"))["seat_id"]
+    fresh = (await ensure_seat(actions, house=None, handle="PromFresh7", source="test"))[
+        "seat_id"]
+    other_manager = (await ensure_seat(actions, house=None, handle="PromOther7",
+                                       source="test"))["seat_id"]
+    taken = (await ensure_seat(actions, house=None, handle="PromTaken7", source="test"))[
+        "seat_id"]
+    await attach_seat(actions, already, target, evidence="pre-existing", actor="test")
+    await attach_seat(actions, taken, other_manager, evidence="pre-existing", actor="test")
+
+    out = await promote_seat(
+        actions, target, [already, fresh, taken, "seat:no-such-worker"],
+        because="mixed batch", actor="operator")
+
+    assert out["workers"][already] == "already-managed"
+    assert out["workers"][fresh] == "bonded"
+    assert out["workers"][taken] == f"refused: already managed by {other_manager}"
+    assert out["workers"]["seat:no-such-worker"].startswith(
+        "refused: no such active seat")
+    assert len(out["workers"]) == 4
+
+
+async def test_promote_seat_a_mid_batch_refusal_does_not_roll_back_an_earlier_bond(
+    actions: Actions,
+) -> None:
+    """THE TRANSACTION-SEMANTIC QUESTION THE BRIEF ASKED FOR: promote_seat's own
+    docstring says the batch shares ONE actions.atomic() block, but a per-worker
+    REFUSAL (unlike a real DB error) never raises inside that block — it just
+    `continue`s, contributing zero writes for that worker while an earlier worker's
+    successful writes in the SAME transaction still commit at the end. Proven here by
+    putting the refusal (an already-managed-by-someone-else worker) BETWEEN two workers
+    that must both still bond."""
+    from src.orchestrator.seats import manager_of_seat, promote_seat
+
+    target = (await ensure_seat(actions, house=None, handle="PromMgr8", source="test"))[
+        "seat_id"]
+    first = (await ensure_seat(actions, house=None, handle="PromFirst8", source="test"))[
+        "seat_id"]
+    other_manager = (await ensure_seat(actions, house=None, handle="PromOther8",
+                                       source="test"))["seat_id"]
+    blocked = (await ensure_seat(actions, house=None, handle="PromBlocked8",
+                                 source="test"))["seat_id"]
+    third = (await ensure_seat(actions, house=None, handle="PromThird8", source="test"))[
+        "seat_id"]
+    await attach_seat(actions, blocked, other_manager, evidence="pre-existing", actor="test")
+
+    out = await promote_seat(actions, target, [first, blocked, third],
+                             because="worker 2 of 3 fails", actor="operator")
+
+    assert out["workers"][first] == "bonded"
+    assert out["workers"][blocked] == f"refused: already managed by {other_manager}"
+    assert out["workers"][third] == "bonded"
+    # the refusal in the MIDDLE of the batch left the first and third bonds committed
+    assert await manager_of_seat(actions.pool, first) == target
+    assert await manager_of_seat(actions.pool, third) == target
+    assert await manager_of_seat(actions.pool, blocked) == other_manager
+
+
 # --- the MCP tool wrapper (same srv._pool monkey-patch pattern test_doors.py's own wrapper
 # test uses) -------------------------------------------------------------------------------
 
@@ -2944,6 +3172,70 @@ async def test_attach_seat_mcp_wrapper_refuses_before_mount(actions: Actions) ->
 # ═══ RESOLVE_PROJECT (ruling 577988ed, hoisted msg 1888) — the ONE project resolver every
 # reader (mount, the stop hook, census) now funnels through, replacing four hand-rolled
 # `Path(cwd).name` copies that could mint a phantom "seats" project. ═══════════
+
+async def test_promote_mcp_dispatcher_delegates_reissues_offices_and_heals_the_cache(
+    actions: Actions,
+) -> None:
+    """The FULL door: `seat(action='promote')` through `_seat_impl`, not the bare
+    orchestrator function — proves the authorization check, the office-reissue call (best-
+    effort: no real CLAUDE.md on disk here, so it reports its own per-seat error rather
+    than raising), and the `_agents` in-process cache heal (thread text: 'refresh...mount
+    cache') all actually run from the live dispatcher path, not just documented as
+    intended."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import manager_of_seat
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    target = (await ensure_seat(actions, house=None, handle="PromDoorMgr",
+                                source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="PromDoorWkr",
+                                source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=target, agent_id="agent:promdoor-holder",
+                      source="test")
+
+    ident = AgentIdentity(agent_id="agent:promdoor-holder", session="promdoor",
+                          project="p", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv._seat_impl(
+            "promote", target=target, workers=[worker], because="door test",
+            session_anchor=None, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["promoted"] == target
+    assert out["workers"][worker] == "bonded"
+    assert await manager_of_seat(actions.pool, worker) == target
+    # office_refresh names BOTH affected seats — best-effort, no real office on disk here
+    assert set(out["office_refresh"]) == {target, worker}
+    for verdict in out["office_refresh"].values():
+        assert "error" in verdict  # no CLAUDE.md/anchor exists for either seat in this test
+
+
+async def test_promote_mcp_dispatcher_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    target = (await ensure_seat(actions, house=None, handle="PromDoorMgr2",
+                                source="test"))["seat_id"]
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv._seat_impl(
+            "promote", target=target, workers=["seat:whoever"], because="test", ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
 
 async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
     actions: Actions,

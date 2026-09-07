@@ -3082,6 +3082,10 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("wake_preflight"), "target": _s(),
         }, ["action", "target"]),
+        _dispatcher_action_schema({
+            "action": _action_const("promote"), "target": _s(), "workers": _list_s(),
+            "because": _s(),
+        }, ["action", "target", "workers", "because"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["seat"] = SEAT_INPUT_SCHEMA
@@ -3128,6 +3132,7 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "resume": (["target", "message", "model"], ["target"]),
     "wake": (["target", "message"], ["target", "message"]),
     "wake_preflight": (["target"], ["target"]),
+    "promote": (["target", "workers", "because"], ["target", "workers", "because"]),
 }
 
 # THE FOLD MAP (task #202/#204, Thoth msg 7039/7040/7059, piece 2/3 of the gate-half):
@@ -3172,7 +3177,8 @@ async def _seat_impl(
     stale_project: str | None = None, fabricated_project: str | None = None,
     real_project: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
-    session_anchor: str | None = None, ctx: Context | None = None,
+    session_anchor: str | None = None, workers: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `seat` and its 22 hidden single-purpose aliases (mint_seat,
     stop, walk_in, pause_seat, vacate_seat, retire_object(kind='seat'), rebind_seat,
@@ -3604,6 +3610,41 @@ async def _seat_impl(
         resolved_target, seat_id = wake_resolved
         return await wake_gate_preflight(pool, resolved_target, seat_id=seat_id)
 
+    if action == "promote":
+        assert target is not None and workers is not None  # already validated
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount first — a promotion must say whose hand called it",
+                    "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        from src.orchestrator.seats import promote_seat as _promote_seat
+        result = await _promote_seat(Actions(pool), target, workers, because=because,
+                                     actor=ident.agent_id)
+        if result.get("error"):
+            return result
+        from src.orchestrator.boot_compiler import reissue_office as _reissue_office
+        from src.orchestrator.seats import held_seat as _held_seat
+
+        office_refresh: dict[str, Any] = {}
+        for seat_id_affected in result.get("affected", []):
+            office_refresh[seat_id_affected] = await _reissue_office(
+                Actions(pool), seat_id=seat_id_affected,
+                because=f"promotion: {because}", actor=ident.agent_id)
+        result["office_refresh"] = office_refresh
+
+        # THE MOUNT CACHE (spec text, "refresh... mount cache"): `_agents` (this process's
+        # own live identity cache, healed the same way correct_house/transition_project/
+        # rebind/invalidate_works_in already do after a house-moving write) — but those all
+        # heal the CALLER'S OWN generation; promote's affected seats are usually SOMEONE
+        # ELSE'S, so this walks every cached identity and asks held_seat which seat it's
+        # actually bound to, rather than the cheaper generation-prefix match those four use.
+        affected_seats = set(result.get("affected", []))
+        for cached in list(_agents.values()):
+            bound = await _held_seat(pool, cached.agent_id)
+            if bound and bound["seat_id"] in affected_seats:
+                await _resolve_project_seat_first(pool, cached)
+        return result
+
     return {"error": f"unhandled action {action!r} — this is a dispatcher bug, not a "
                      "caller error, report it"}
 
@@ -3624,7 +3665,8 @@ async def seat(
     stale_project: str | None = None, fabricated_project: str | None = None,
     real_project: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
-    session_anchor: str | None = None, ctx: Context | None = None,
+    session_anchor: str | None = None, workers: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE SEAT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one door,
     many actions over Seat/Agent lifecycle. Each `action` accepts only its own params
@@ -3666,6 +3708,7 @@ async def seat(
       resume: continue a seat's dormant session (target) — ALSO its own named tool
       wake: knock on your managed_by pair's other half (target, message) — ALSO named
       wake_preflight: check wake()'s gates before calling it (target) — ALSO named
+      promote: mint target as manager over workers, self-managed only (target, workers, because)
 
     DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
     transition_project, sweep_disk, resync_pin) — same convention as their standalone
@@ -3680,7 +3723,7 @@ async def seat(
         wants_office=wants_office, cwd=cwd, job_dir=job_dir, message=message,
         stale_project=stale_project, fabricated_project=fabricated_project,
         real_project=real_project, subagent_id=subagent_id, subagent_type=subagent_type,
-        session_anchor=session_anchor, ctx=ctx)
+        session_anchor=session_anchor, workers=workers, ctx=ctx)
 
 
 @mcp.tool(meta={
