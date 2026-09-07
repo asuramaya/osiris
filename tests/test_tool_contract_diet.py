@@ -878,7 +878,11 @@ def _tool_chars(t: Any) -> int:
 # triangle's own MINE verb, standalone (single-project, owner_refs-matched, one line each
 # with a short id) rather than a mode of get_object_list/get_thread_list (both take an
 # explicit owner and are charter-widened; this is the opposite shape by design).
-TOOL_CONTRACT_EXPECTED_COUNT = 75
+# 75 -> 76 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): team — the read
+# triangle's own manager-view verb (every seat managed_by the caller's own held seat:
+# live/owe/envelope), standalone rather than a mode of fleet() (fleet is the unscoped
+# fleet-wide roster+tree; this is self-scoped to what ONE manager governs).
+TOOL_CONTRACT_EXPECTED_COUNT = 76
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1316,7 +1320,10 @@ TOOL_CONTRACT_EXPECTED_COUNT = 75
 # 110,122 -> 110,537 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): inbox gains
 # render='text' -- a new param plus a docstring paragraph naming the read-triangle's
 # server-side text mode. No new tool. Measured exact (110,537), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 110537  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 110,537 -> 111,502 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): team ships as
+# a new tool (its own docstring + inputSchema for render). Measured exact (111,502), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 111502  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

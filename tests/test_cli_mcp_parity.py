@@ -167,6 +167,15 @@ CLI_ONLY_PARAMS = {
     ("inbox", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
         "entry above; the CLI's own counterpart to inbox's MCP-only `render` param (see "
         "MCP_ONLY_PARAMS below).",
+    ("team", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to team's MCP-only `render` param (see "
+        "MCP_ONLY_PARAMS below).",
+    ("status", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; the CLI's own counterpart to get_status's MCP-only `render` param "
+        "(see MCP_ONLY_PARAMS below).",
+    ("search", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+        "entry above; search() has no render param of its own to counter (its receipt is "
+        "already small), so this is purely the terminal-vs-caller presentation split.",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
@@ -241,6 +250,11 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # fleet-reconcile's own entry above. record_practice has no CLI door at all
     # (nothing to reconcile there).
     "amend-practice": "practice:amend",
+    # status — the read triangle's own console face (thread 68f1bafa/3703a3a9) onto
+    # get_status(), the MCP tool's own established name (the "glance" verb, task #whatever
+    # first shipped it) — the CLI door is named for the human at a terminal, not renamed
+    # to match.
+    "status": "get_status",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
@@ -286,6 +300,10 @@ MCP_ONLY_PARAMS = {
     ("inbox", "want_prior_art"): "a real gap, named rather than hidden: the CLI's own "
         "render.emit already shows whatever the MCP tool returns, but no --want-prior-art "
         "flag exists yet to ask for the fuller payload. Not yet built.",
+    ("team", "render"): "same reason as backlog's own entry above — the read triangle's "
+        "server-side text mode has no terminal-side counterpart to be missing.",
+    ("get_status", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -1279,6 +1297,12 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # this defaults to the caller's own identity (every owner_refs spelling) and is
     # deliberately single-project ("mine, in front of me right now").
     "threads": {"binding_verb": False},
+    # team — the read triangle's own manager-view verb (thread 68f1bafa/3703a3a9): every
+    # seat managed_by the caller's own held seat, live/owe/envelope. Not a binding-mover
+    # (read-only), and not a parameterization of fleet -- fleet() is the unscoped
+    # fleet-wide roster+tree; this is self-scoped to what ONE manager governs, an
+    # opposite-shape narrowing the same way threads narrows get_object_list.
+    "team": {"binding_verb": False},
 }
 
 

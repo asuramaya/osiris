@@ -1236,6 +1236,38 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
     return 1
 
 
+# --- status (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
+
+async def cmd_status(*, as_json: bool = False) -> int:
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "get_status", {})
+    if isinstance(result, str):
+        print(f"osiris status: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title="status")
+    return 0
+
+
+# --- search (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
+
+async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False) -> int:
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "search", {"query": query, "limit": limit})
+    if isinstance(result, str):
+        print(f"osiris search: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title=f"search · {query}")
+    return 0
+
+
 # --- fleet -----------------------------------------------------------------------------------
 
 async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
@@ -1306,6 +1338,27 @@ async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     render.emit(result, as_json=as_json, title=f"threads · {project}" if project else "threads")
+    return 0
+
+
+# --- team (thread 68f1bafa/3703a3a9, the read triangle's own new verb) -----------------------
+
+async def cmd_team(*, as_json: bool = False) -> int:
+    """osiris team: a manager's own seats. NAMED GAP — team() is self-scoped off the
+    caller's own held seat with no override param (unlike threads' --project), so a bare
+    terminal session (no mount of its own) will always get team()'s "mount first" refusal
+    today; kept as a console face anyway since the MCP tool itself is the source of truth
+    and a future identity-bearing console session should just work."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "team", {})
+    if isinstance(result, str):
+        print(f"osiris team: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title="team")
     return 0
 
 
@@ -3906,8 +3959,8 @@ to the house name.)
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
-  see the fleet         fleet, roster, backlog, boot-status, smoke
-  read the record       desk, show, threads, inbox
+  see the fleet         fleet, roster, backlog, team, status, boot-status, smoke
+  read the record       desk, show, threads, inbox, search
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project, rebind-seat, correct-pin-value,
                         heal-seat-anchor, transition-seat-project, correct-agent-house,
@@ -4017,6 +4070,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p_stop.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line")
 
+    p_status = sub.add_parser("status", description=_d(
+        "your identity, mail count, and fleet pulse — the same get_status() the MCP tool "
+        "answers, called over the wire"),
+        epilog="example: osiris status")
+    p_status.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_search = sub.add_parser("search", description=_d(
+        "search the graph's knowledge — the same search() the MCP tool answers, called "
+        "over the wire"),
+        epilog="example: osiris search 'quorumlatch counter'")
+    p_search.add_argument("query", help="words, phrases, or \"quoted phrases\" (websearch syntax)")
+    p_search.add_argument("--limit", type=int, default=15, help="max results (default 15)")
+    p_search.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line, for a script or an agent")
+
     p_fleet = sub.add_parser("fleet", description=_d(
         "the fleet roster, grouped by project — the same "
                                          "fleet() the MCP tool answers, called over the wire"),
@@ -4060,6 +4129,14 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="the repo to list open threads for")
     p_threads.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_team = sub.add_parser("team", description=_d(
+        "a manager's own seats: live, owe, envelope — the same team() the MCP tool "
+        "answers, called over the wire. Self-scoped off the caller's own held seat "
+        "(no --project override; see cmd_team's own docstring for the known gap)"),
+        epilog="example: osiris team")
+    p_team.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_inbox = sub.add_parser("inbox", description=_d(
         "a peek at a project's own mailbox — the same inbox() the MCP tool answers, "
@@ -4571,6 +4648,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_resume(args.handle, model=args.model))
     if args.command == "stop":
         return asyncio.run(cmd_stop(args.handle, reason=args.reason, as_json=args.as_json))
+    if args.command == "status":
+        return asyncio.run(cmd_status(as_json=args.as_json))
+    if args.command == "search":
+        return asyncio.run(cmd_search(args.query, limit=args.limit, as_json=args.as_json))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":
@@ -4582,6 +4663,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json))
     if args.command == "inbox":
         return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json))
+    if args.command == "team":
+        return asyncio.run(cmd_team(as_json=args.as_json))
     if args.command == "desk":
         return asyncio.run(cmd_desk(as_json=args.as_json))
     if args.command == "show":

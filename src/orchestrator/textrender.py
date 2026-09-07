@@ -117,6 +117,20 @@ def _render_mail_row(m: dict[str, Any]) -> str:
     return f"{m.get('id')} ask from:{m.get('from')} thread:{thread} — {snippet}"
 
 
+def render_team_text(rows: list[dict[str, Any]]) -> str:
+    """One line per managed seat: live glyph, owe (stale flagged separately when nonzero),
+    envelope (unread asks for that seat's current holder). No cap: a manager's own team is
+    bounded by who they manage, not an open-ended query."""
+    if not rows:
+        return "team: manages no seats"
+    lines = []
+    for r in rows:
+        glyph = "●" if r.get("live") else "○"
+        owe = f"owe {r['owe']}" + (f" ({r['stale']} stale)" if r.get("stale") else "")
+        lines.append(f"{glyph} {r['handle']}: {owe}, envelope {r['envelope']}")
+    return "\n".join(lines)
+
+
 THREADS_BAND_CAP = 30
 
 
