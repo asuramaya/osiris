@@ -42,3 +42,43 @@ def _render_line(key: str, value: Any) -> str:
     if isinstance(value, (dict, list)):
         return f"{key}: {json.dumps(value, separators=(',', ':'))}"
     return f"{key}: {value}"
+
+
+BACKLOG_BAND_CAP = 20
+
+
+def render_backlog_text(rows: list[dict[str, Any]]) -> str:
+    """One line per project, already ordered by the caller (backlog()'s own sort: the
+    caller's own project first, then past-window projects, then by open count) — this
+    function only CAPS and FORMATS, never reorders. Caps at `BACKLOG_BAND_CAP`, the
+    remainder folded into one trailing count line rather than silently dropped."""
+    shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
+    if not shown:
+        return "backlog: no project carries an open obligation"
+    lines = [_render_backlog_row(r) for r in shown]
+    if remainder:
+        lines.append(f"+{remainder} more project(s)")
+    return "\n".join(lines)
+
+
+def _render_backlog_row(row: dict[str, Any]) -> str:
+    target = f"/{row['target']}" if row.get("target") is not None else ""
+    past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
+    owners = ", ".join(row.get("oldest_owners") or [])
+    return f"{row['project']}: {row['open']}{target} open{past} — oldest: {owners}"
+
+
+THREADS_BAND_CAP = 30
+
+
+def render_threads_text(rows: list[dict[str, Any]]) -> str:
+    """One line per thread, already ordered by the caller (threads()'s own oldest-first
+    query) — caps and formats only, never reorders. Caps at `THREADS_BAND_CAP`, the
+    remainder folded into one trailing count line."""
+    shown, remainder = rows[:THREADS_BAND_CAP], max(0, len(rows) - THREADS_BAND_CAP)
+    if not shown:
+        return "threads: none open in your name here"
+    lines = [f"{r['id']} [{r['kind'] or '?'}] {r['summary']}" for r in shown]
+    if remainder:
+        lines.append(f"+{remainder} more thread(s)")
+    return "\n".join(lines)

@@ -1277,6 +1277,38 @@ async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: b
     return 0
 
 
+# --- backlog (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
+
+async def cmd_backlog(*, all_projects: bool, as_json: bool = False) -> int:
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "backlog", {"all_projects": all_projects})
+    if isinstance(result, str):
+        print(f"osiris backlog: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title="backlog")
+    return 0
+
+
+# --- threads (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
+
+async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "threads", {"project": project})
+    if isinstance(result, str):
+        print(f"osiris threads: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    render.emit(result, as_json=as_json, title=f"threads · {project}" if project else "threads")
+    return 0
+
+
 # --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
 # CLI shipped 22 write-shaped subcommands and zero read-shaped ones over the record itself
 # (mail, threads, decisions) — a human at his own terminal could WRITE annotate-thread but
@@ -3854,8 +3886,8 @@ to the house name.)
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
-  see the fleet         fleet, roster, boot-status, smoke
-  read the record       desk, show
+  see the fleet         fleet, roster, backlog, boot-status, smoke
+  read the record       desk, show, threads
   write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
                         merge, unmerge, fold-project, rebind-seat, correct-pin-value,
                         heal-seat-anchor, transition-seat-project, correct-agent-house,
@@ -3988,6 +4020,26 @@ def _build_parser() -> argparse.ArgumentParser:
                                "a one-line count+pointer, same diet as the MCP tool)")
     p_roster.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_backlog = sub.add_parser("backlog", description=_d(
+        "per-project open obligations against target, past-window first, oldest owners — "
+        "the same backlog() the MCP tool answers, called over the wire. Scoped to your own "
+        "mounted project by default"),
+        epilog="example: osiris backlog\nexample: osiris backlog --all-projects")
+    p_backlog.add_argument("--all-projects", action="store_true", dest="all_projects",
+                           help="every project, not just your own mounted one")
+    p_backlog.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one compact JSON line, for a script or an agent")
+
+    p_threads = sub.add_parser("threads", description=_d(
+        "MINE: every OPEN thread you own, one line each with a short id — the same "
+        "threads() the MCP tool answers, called over the wire. A raw terminal has no "
+        "mounted identity of its own, so --project is effectively required here"),
+        epilog="example: osiris threads --project osiris")
+    p_threads.add_argument("--project", default=None,
+                           help="the repo to list open threads for")
+    p_threads.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_desk = sub.add_parser("desk", description=_d(
         "the operator's own organized queue — needs_decision / needs_hands / fyi bands, "
@@ -4496,6 +4548,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "roster":
         return asyncio.run(cmd_roster(repo=args.repo, want_caveats=args.want_caveats,
                                       as_json=args.as_json))
+    if args.command == "backlog":
+        return asyncio.run(cmd_backlog(all_projects=args.all_projects, as_json=args.as_json))
+    if args.command == "threads":
+        return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json))
     if args.command == "desk":
         return asyncio.run(cmd_desk(as_json=args.as_json))
     if args.command == "show":

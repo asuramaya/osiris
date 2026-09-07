@@ -1,0 +1,1 @@
+Call the osiris MCP tool `backlog` with render='text' and print the returned `text` field verbatim in a code block. No commentary, no re-rendering. Pass all_projects=True only if the human explicitly asks to see every project, not just the current one.

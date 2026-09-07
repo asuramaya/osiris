@@ -5116,6 +5116,103 @@ async def roster(repo: str | None = None, want_caveats: bool = False) -> dict[st
 
 
 @mcp.tool()
+async def backlog(all_projects: bool = False, render: str | None = None,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """No-regrow hygiene item 4's own gauge (digest.py's `_obligation_pressure`), as a read
+    verb of its own (thread 68f1bafa, the read triangle) instead of only living inside
+    fleet_digest's fuller payload. Per project: `open` count against its `target` (osiris
+    40, every client 15, `(unfiled)` untargeted), `past_window` (how many are already
+    stale), `oldest_owners` (up to 3, longest-carried first).
+
+    SCOPED BY DEFAULT: your own mounted project's row only. `all_projects=True` (or
+    calling unmounted / as the operator) widens to every project. Ordering is always: your
+    own project's row first (when present in scope), then any row with `past_window > 0`,
+    then by `open` descending — never re-sorted by a slash command, so the same call always
+    reads the same regardless of caller.
+
+    `render='text'`: returns only {"text": <str>} -- one line per project, capped at
+    `textrender.BACKLOG_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    from src.orchestrator import digest as _digest
+    from src.orchestrator.textrender import render_backlog_text
+
+    rows = await _digest._obligation_pressure(Actions(pool))
+    mine = ident.project if ident and ident.project not in (None, OPERATOR_ADDR) else None
+    if mine and not all_projects:
+        rows = [r for r in rows if r["project"] == mine]
+
+    def _sort_key(r: dict[str, Any]) -> tuple[int, int, int, str]:
+        return (0 if r["project"] == mine else 1,
+                0 if r["past_window"] else 1, -r["open"], r["project"])
+    rows = sorted(rows, key=_sort_key)
+    if render == "text":
+        return {"text": render_backlog_text(rows)}
+    return {"projects": rows, "scope": "all" if (all_projects or not mine) else mine}
+
+
+@mcp.tool()
+async def threads(project: str | None = None, render: str | None = None,
+                  ctx: Context | None = None) -> dict[str, Any]:
+    """MINE: every OPEN thread you own (thread 68f1bafa, the read triangle) — one line
+    each with a short id, so a slash command can hand one straight to
+    thread(action=...)/recall(ref=...) without a separate lookup. "You" matches every
+    spelling an obligation can be owned under (owner_refs: your agent id, lineage root,
+    seat id, seat handle — same matching `owned_obligations`'s own /statusline `owe` cell
+    uses), never just your literal agent id.
+
+    `project` defaults to your mounted project. DELIBERATELY SINGLE-PROJECT, not
+    charter-widened like get_object_list — "mine, in front of me right now" is the whole
+    point; call again with an explicit `project` for another repo you govern.
+
+    `render='text'`: returns only {"text": <str>} -- one line per thread, capped at
+    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    pool = await _pool_get()
+    ident = await _ident_for(ctx)
+    proj = project or (ident.project if ident else None)
+    if ident is None or proj is None:
+        return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
+    proj_id = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
+        f"repo:{proj}")
+    if proj_id is None:
+        return {"error": f"no project {proj!r}", "threads": []}
+    from src.orchestrator.stophook_logic import owner_refs
+    from src.orchestrator.textrender import render_threads_text
+
+    owners = await owner_refs(pool, ident.agent_id)
+    rows = await pool.fetch(
+        "SELECT o.id, "
+        "  COALESCE("
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "     LIMIT 1), "
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
+        "    AS summary, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "FROM objects o "
+        "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "WHERE o.type='Thread' AND o.status='active' AND COALESCE("
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "  'open')='open' "
+        "  AND lower(COALESCE("
+        "    (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "     AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),"
+        "    '')) = ANY($2::text[]) "
+        "ORDER BY o.created_at ASC",
+        proj_id, owners)
+    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+           for r in rows]
+    if render == "text":
+        return {"text": render_threads_text(mine)}
+    return {"project": proj, "threads": mine, "total": len(mine)}
+
+
+@mcp.tool()
 async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, Any]:
     """THE PIN-VS-GRAPH DISAGREEMENT REPORT. Read-only, fleet-wide, two sections.
 

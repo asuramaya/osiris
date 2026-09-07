@@ -488,12 +488,21 @@ async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
     naming the oldest three points at exactly that. `(unfiled)` (no in_repo link at all)
     is its own bucket, same convention `obligation_hygiene.hygiene_status` already uses,
     and is never scored against a target (an unfiled obligation is a filing gap, not a
-    project's own pressure)."""
+    project's own pressure).
+
+    `past_window` (the `backlog` verb's own addition, thread 68f1bafa/3703a3a9): how many
+    of a project's open obligations are already past their own `stale_after` window (same
+    definition `owned_obligations`/`compute_stale_obligations` in stophook_logic.py use) —
+    0 for a row with none, or every row whose obligations predate the stale_after_days
+    migration (no window stamped at all)."""
     rows = await actions.pool.fetch(
         "SELECT COALESCE(p.canonical, '(unfiled)') AS project, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS owner "
+        "   AS owner, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS stale_after "
         "FROM objects o "
         "LEFT JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -506,18 +515,23 @@ async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
         "    AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "    ='obligation' "
         "ORDER BY project, o.created_at ASC")
+    now = datetime.now(UTC)
     by_project: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         by_project.setdefault(r["project"], []).append(
-            {"created_at": r["created_at"], "owner": r["owner"]})
+            {"created_at": r["created_at"], "owner": r["owner"],
+             "stale_after": r["stale_after"]})
     out: list[dict[str, Any]] = []
     for project, items in sorted(by_project.items()):
         target = (None if project == "(unfiled)" else
                   _OBLIGATION_TARGET_OSIRIS if project.removeprefix("repo:") == "osiris"
                   else _OBLIGATION_TARGET_CLIENT)
         oldest = [it["owner"] or "(unowned)" for it in items[:3]]
+        past_window = sum(
+            1 for it in items
+            if it["stale_after"] and datetime.fromisoformat(it["stale_after"]) <= now)
         out.append({"project": project.removeprefix("repo:"), "open": len(items),
-                   "target": target, "oldest_owners": oldest})
+                   "target": target, "oldest_owners": oldest, "past_window": past_window})
     return out
 
 

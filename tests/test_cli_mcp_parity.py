@@ -158,6 +158,12 @@ CLI_ONLY_PARAMS = {
         "caller, so it has no second format to choose between — the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
         "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+    ("backlog", "as_json"): "a PRESENTATION flag, not an act — same reason as roster's "
+        "own entry above (Thoth LXXXVII, 2026-08-28); the CLI's own counterpart to "
+        "backlog's MCP-only `render` param (see MCP_ONLY_PARAMS below).",
+    ("threads", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's "
+        "own entry above; the CLI's own counterpart to threads's MCP-only `render` param "
+        "(see MCP_ONLY_PARAMS below).",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
@@ -256,6 +262,13 @@ MCP_ONLY_PARAMS = {
         "above) is the same concept, inverted and renamed to match this house's --apply "
         "repair convention rather than the MCP tools' own dry_run=True default — "
         "identical shape to seat:heal_anchor's own entry above.",
+    ("backlog", "render"): "the read triangle's own server-side text mode (thread "
+        "68f1bafa/3703a3a9) — a slash-command/model caller's concern (avoid the model "
+        "re-prettifying JSON at token cost). The CLI already has its own presentation "
+        "split (--json vs the human view, src/cli_render.emit) so render='text' has no "
+        "terminal-side counterpart to be missing.",
+    ("threads", "render"): "same reason as backlog's own entry above — the read "
+        "triangle's server-side text mode has no terminal-side counterpart to be missing.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
@@ -1235,6 +1248,20 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # here: _find_undeclared_new_tools skips any tool meta={"deprecated": True} before
     # ever checking this dict, same as run_composition/save_composition/list_compositions
     # above never needed one either.
+    # backlog — the read triangle's own obligation-pressure verb (thread 68f1bafa/3703a3a9,
+    # Thoth DM 7883/7907), standalone rather than only living inside fleet_digest's fuller
+    # payload. Not a binding-mover (read-only, no state change) and not a parameterization
+    # of fleet_digest -- fleet_digest's own obligation_pressure field stays as-is; this is
+    # a narrower, differently-scoped read (caller's-project-default vs. fleet_digest's
+    # always-every-project), not a mode switch on the same call.
+    "backlog": {"binding_verb": False},
+    # threads — the read triangle's own MINE verb (thread 68f1bafa/3703a3a9): every open
+    # thread the caller owns, single-project, one line each with a short id. Not a
+    # binding-mover, and not a parameterization of get_object_list/get_thread_list --
+    # those take an EXPLICIT owner and are charter-widened across every governed repo;
+    # this defaults to the caller's own identity (every owner_refs spelling) and is
+    # deliberately single-project ("mine, in front of me right now").
+    "threads": {"binding_verb": False},
 }
 
 
