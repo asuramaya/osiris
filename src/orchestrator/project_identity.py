@@ -118,6 +118,67 @@ def _git_remote(path: str) -> tuple[bool, str | None]:
         return True, None  # a real repo, just no `origin` configured — ballgem's own shape
 
 
+def worktree_parent_path(path: str) -> str | None:
+    """WORKTREES AS A FIRST-CLASS SHAPE (thread 922d920c): `path`'s own MAIN checkout —
+    None when `path` is not a git worktree at all (including "not a git repo" and "IS the
+    main checkout"). `--git-common-dir` is always the shared `.git` (worktree or not);
+    `--git-dir` is the PRIVATE one a worktree gets (`<main>/.git/worktrees/<name>`) — they
+    agree exactly when `path` is the main checkout itself, so comparing them (never
+    hand-parsing the `.git` FILE's own `gitdir: ...` pointer text, which can be relative or
+    absolute and is git's own implementation detail, not a contract) is the one signal that
+    is both necessary and sufficient. The parent's root is `--git-common-dir` with its own
+    trailing `/.git` stripped — never re-derived from `--show-toplevel` run FROM `path`,
+    which answers "top of THIS worktree", not "top of the main checkout"."""
+    try:
+        common = subprocess.run(["git", "-C", path, "rev-parse", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=5, check=True)
+        own = subprocess.run(["git", "-C", path, "rev-parse", "--git-dir"],
+                             capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError, subprocess.CalledProcessError):
+        return None
+    common_dir, own_dir = common.stdout.strip(), own.stdout.strip()
+    if not common_dir or not own_dir:
+        return None
+    common_abs = str(Path(path) / common_dir) if not common_dir.startswith("/") else common_dir
+    own_abs = str(Path(path) / own_dir) if not own_dir.startswith("/") else own_dir
+    if str(Path(common_abs).resolve()) == str(Path(own_abs).resolve()):
+        return None  # the main checkout, not a worktree
+    common_resolved = Path(common_abs).resolve()
+    if common_resolved.name != ".git":
+        return None  # an unexpected shape (bare repo, submodule) — refuse rather than guess
+    return str(common_resolved.parent)
+
+
+def git_current_branch(path: str) -> str | None:
+    """The checked-out branch at `path`, or None on a detached HEAD or any git failure —
+    same never-raise shape as `_git_remote`."""
+    try:
+        out = subprocess.run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"],
+                             capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError, subprocess.CalledProcessError):
+        return None
+    branch = out.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
+async def project_name_for_disk_path(pool: asyncpg.Pool, path: str) -> str | None:
+    """The registered SoftwareProject `name` for a checkout at `path` — read off its own
+    `on_disk_path` assertion, never re-derived from the directory basename (the same
+    binding-line discipline `census_trees`'s rename fix already established: a renamed
+    directory keeps its OLD name/canonical on purpose). None when nothing at this exact
+    path is registered — this never mints, never guesses a nearby path, it is a plain
+    lookup for `project_of`'s own worktree rung (thread 922d920c): a worktree whose
+    parent checkout the disk census hasn't reached yet correctly falls through to
+    charter/lineage instead of a fabricated answer."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT (SELECT a2.value #>> '{}' FROM current_assertions a2 "
+        " WHERE a2.object_id=o.id AND a2.name='name' "
+        " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) "
+        "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='SoftwareProject' AND o.status='active' AND a.name='on_disk_path' "
+        "AND a.value #>> '{}' = $1 LIMIT 1", path)
+
+
 def _self_authored(office: str | None) -> dict[str, Any]:
     """Existence/path/size/mtime for a seat's own CLAUDE.md and charter.md at its office —
     never their content. What they SAY is a human's read (same reasoning as tier 1); what

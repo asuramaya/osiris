@@ -136,6 +136,12 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     # proof that the engine is a general substrate, not OSINT-only).
     ObjectType("SoftwareProject", "Software", "#8ab4f8", "round-rectangle",
                "A software repository / project.", ("repo:",)),
+    ObjectType("Worktree", "Software", "#4c9be8", "round-rectangle",
+               "A git worktree of a SoftwareProject — a second checkout (`.git` a FILE, "
+               "never a directory) sharing its parent's history but its own branch and "
+               "on-disk path. Never a SoftwareProject of its own (thread 922d920c): filed "
+               "via a `worktree_of` link, resolved back to its parent by `project_of`.",
+               ("worktree:",)),
     ObjectType("Commit", "Software", "#a371f7", "ellipse",
                "A version-control commit — an event in a project's history.", ("commit:",)),
     ObjectType("Thread", "Software", "#f0883e", "diamond",
@@ -370,6 +376,10 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
+    LinkType("worktree_of", "A Worktree's own parent SoftwareProject — the main checkout "
+             "its history is shared with (thread 922d920c). Written only by the disk "
+             "census/migration, never by a hand write.",
+             ("Worktree",), ("SoftwareProject",)),
     LinkType("in_repo", "Belongs to a repository — commits and files from the git ingest, "
              "and captured session items (decisions, threads, tensions, reflections, blind "
              "spots, superstitions, practices) filed to their project by link_repo.",

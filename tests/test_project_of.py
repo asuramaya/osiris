@@ -8,6 +8,7 @@ docstring.
 """
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +16,25 @@ from src.actions.core import Actions
 from src.orchestrator import mounts
 from src.orchestrator.agents import project_of
 from src.orchestrator.seats import bind_holder, ensure_seat
+
+
+def _real_repo_with_worktree(tmp_path: Path, repo_name: str, wt_name: str) -> Path:
+    """A real git repo (no `.osiris` anywhere) plus one real worktree of it — the
+    ballgem-wt-* shape (census 583e2669): an UNPINNED repo, so read_project_label's own
+    climb (task #128) never finds anything to win with, leaving project_of's disk-
+    structure rung (thread 922d920c) as the only signal that isn't charter/lineage."""
+    repo = tmp_path / repo_name
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "f.txt").write_text("x")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=repo, check=True)
+    wt = tmp_path / wt_name
+    subprocess.run(["git", "worktree", "add", "-q", "-b", wt_name, str(wt)],
+                   cwd=repo, check=True)
+    return wt
 
 
 async def _seated(actions: Actions, *, handle: str, house: str, anchor_cwd: str) -> str:
@@ -103,3 +123,36 @@ async def test_project_of_ignores_a_disagreeing_lineage(actions: Actions, tmp_pa
     await actions.create_link(agent_oid, proj_b, "works_in", agent, datetime.now(UTC), 0.9)
 
     assert await project_of(actions.pool, agent) is None
+
+
+async def test_project_of_resolves_an_unpinned_worktree_to_its_registered_parent(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 922d920c/census 583e2669: a worktree of a repo with NO `.osiris` pin
+    anywhere (task #128's climb-fix has nothing to find) must still resolve to its
+    parent's own registered project name — a disk-structure signal, not a charter/
+    lineage guess."""
+    wt = _real_repo_with_worktree(tmp_path, "wtparentpo", "wtparentpo-branch")
+    (tmp_path / "elsewhere").mkdir()
+    agent = await _seated(actions, handle="Wtparentpo", house="Wtparentpo",
+                          anchor_cwd=str(tmp_path / "elsewhere"))
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:wtparentpo", "test")
+    await actions.assert_property(proj, "name", "wtparentpo", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(proj, "on_disk_path", str(tmp_path / "wtparentpo"), "test",
+                                  datetime.now(UTC), 0.9)
+
+    assert await project_of(actions.pool, agent, cwd=str(wt)) == "wtparentpo"
+
+
+async def test_project_of_falls_through_when_the_worktree_parent_is_not_yet_registered(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No SoftwareProject registered at the parent's on_disk_path yet (never censused) —
+    the worktree rung stays silent (never mints, never guesses) and falls to charter/
+    lineage/None like any other unresolved cwd."""
+    wt = _real_repo_with_worktree(tmp_path, "wtunregisteredpo", "wtunregisteredpo-branch")
+    (tmp_path / "elsewhere2").mkdir()
+    agent = await _seated(actions, handle="Wtunregisteredpo", house="Wtunregisteredpo",
+                          anchor_cwd=str(tmp_path / "elsewhere2"))
+
+    assert await project_of(actions.pool, agent, cwd=str(wt)) is None
