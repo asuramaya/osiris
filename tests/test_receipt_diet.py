@@ -17,6 +17,7 @@ own history), never a reflex.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -438,3 +439,37 @@ async def test_get_status_render_text_returns_only_a_text_field(actions: Actions
     before_bytes = _receipt_bytes(structured)
     after_bytes = _receipt_bytes(text)
     assert after_bytes < before_bytes, (before_bytes, after_bytes)
+
+
+async def test_get_status_surfaces_a_bare_handoff_pointer_not_the_full_text(
+    actions: Actions,
+) -> None:
+    """settle.md's own wave-2 dependency (Thoth DM 7907): get_status must know an
+    unacknowledged handoff exists, WITHOUT paying orient()'s full succession-note cost --
+    a pointer (`from` + `refs`), never the handoff's own text."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    proj = "rd-statushandoff"
+    await _seed(actions.pool, proj)
+    long_handoff = "the estate is settled, read before taking up any work here " * 5
+    did = await record_decision(
+        actions, long_handoff, kind="choice", source="agent:rdsh-ancestor", repo=proj)
+    await actions.assert_property(did, "is_handoff", "true", "agent:rdsh-ancestor",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:rdsh-heir", session="rdshheir", project=proj, model=None, cwd=None,
+        succeeded_from="agent:rdsh-ancestor")
+    try:
+        out = await srv.get_status(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["handoff_pending"]["from"] == "agent:rdsh-ancestor"
+    assert out["handoff_pending"]["refs"] == [str(did)[:8]]
+    assert long_handoff not in json.dumps(out)  # pointer only, never the text itself

@@ -3926,7 +3926,12 @@ async def _project_briefing(
 @mcp.tool()
 async def get_status(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
     """Your identity, mail count, and fleet pulse -- the "glance". Returns only:
-    you, model, project, seat, mail, fleet_pulse. No threads, no succession.
+    you, model, project, seat, mail, fleet_pulse, handoff_pending. No thread/decision
+    text, no succession notes -- `handoff_pending` is a BARE POINTER only (thread
+    68f1bafa: `/settle` needs to know whether an unread handoff exists without paying
+    orient()'s full succession-note cost) -- {"from": <agent_id>, "refs": [<short-id>,
+    ...]} when your nearest ancestor left one unacknowledged, else omitted entirely.
+    Read the real text with recall(ref=<one of refs>); ack_handoff(ref=...) once read.
 
     `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>} --
     one line per field, server-rendered -- for a slash command to print verbatim instead
@@ -3947,7 +3952,8 @@ async def get_status(render: str | None = None, ctx: Context | None = None) -> d
         pulse = await mounts.fleet_pulse(pool, lease_secs=lease)
     except Exception:
         pass
-    result = {"you": ident.agent_id if ident else "unmounted", "project": proj}
+    result: dict[str, Any] = {
+        "you": ident.agent_id if ident else "unmounted", "project": proj}
     if ident:
         sb = await seat_bearings(pool, ident.agent_id)
         result["model"] = ident.model
@@ -3956,6 +3962,12 @@ async def get_status(render: str | None = None, ctx: Context | None = None) -> d
     result["mail"] = mail
     if pulse:
         result["fleet_pulse"] = pulse
+    if ident and ident.succeeded_from:
+        found, _complete = await nearest_handoff_ancestor(pool, ident.succeeded_from)
+        if found:
+            from_id, picks = found
+            result["handoff_pending"] = {
+                "from": from_id, "refs": [str(p["id"])[:8] for p in picks]}
     if render == "text":
         from src.orchestrator.textrender import render_status_text
         return {"text": render_status_text(result)}
