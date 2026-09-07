@@ -56,6 +56,27 @@ _OPEN = "The wall — what's genuinely unresolved"
 _RESOLVED = "Resolved — self-healed by later commits"
 
 
+class _MountedCtx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def _mounted(actions: Actions, agent_id: str, handle: str) -> Any:
+    """A real, seated agent identity mounted for an MCP tool call (thread b5ae6773's
+    ruling: kind='obligation' and any resolved owner/assignee both require a live
+    agent/seat behind the call, never the unmounted 'session' fallback). claim_name
+    itself mints/binds the real Seat — no separate ensure_seat call needed."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity, claim_name
+
+    await claim_name(actions, agent_id, handle, source=agent_id)
+    ctx = _MountedCtx()
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=agent_id, session=handle.lower(), project=None, model=None, cwd=None)
+    return ctx
+
+
 async def test_record_decision_renders_in_the_decision_log(actions: Actions) -> None:
     await record_decision(actions, "We event-source merges", kind="ruling",
                           rationale="object_events is the truth; status is a projection")
@@ -367,10 +388,11 @@ async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
 
     saved_pool = srv._pool
     srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:priorartthread1", "Priorartthread1")
     try:
         older = await srv.open_thread(
             "PRIOR-ART THREAD ROW: a rare zorble-shaped defect awaiting a fix",
-            repo="priorartproj2", kind="obligation")
+            repo="priorartproj2", kind="obligation", ctx=ctx)
         out = await srv.open_thread(
             f"picking up the zorble-shaped defect from thread {older['id']}",
             repo="priorartproj2", kind="task")
@@ -382,6 +404,7 @@ async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
         assert "resolves=" in out["prior_art_flag"]
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
 
 
 async def test_mcp_open_thread_dedup_scope_names_what_was_actually_checked(
@@ -4702,27 +4725,146 @@ async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) 
     assert out["owner_defaulted"]["to"] == seat["seat_id"]
 
 
+async def test_mcp_open_thread_refuses_kind_obligation_from_an_unmounted_caller(
+    actions: Actions,
+) -> None:
+    """Thread b5ae6773's ruling: a duty is a mind's own testimony — an unmounted caller
+    (`actor` reads 'session', the back-compat fallback) cannot declare kind='obligation'
+    through this tool. capture.open_thread itself is unaffected (internal callers keep
+    their own conventions); this refusal is scoped to the MCP door alone."""
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "an anonymous duty nobody mounted to declare", kind="obligation")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert "unmounted caller" in out["error"]
+    n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    assert n == 0
+
+
+async def test_mcp_open_thread_refuses_an_owner_that_resolves_to_nothing(
+    actions: Actions,
+) -> None:
+    """Thread b5ae6773's owner law: a bare string nobody holds refuses rather than
+    storing an unresolvable value."""
+    from src import mcp_server as srv
+
+    ctx = await _mounted(actions, "agent:ownerrefusal1", "Ownerrefusal1")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "a thread with an owner nobody holds", kind="task",
+            owner="nosuchhandleatallanywhere", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "error" in out
+    assert "nosuchhandleatallanywhere" in out["error"]
+    n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    assert n == 0
+
+
+async def test_mcp_open_thread_accepts_an_agent_id_with_an_active_held_seat(
+    actions: Actions,
+) -> None:
+    """The ruling's own example: an agent:<id> owner is accepted when lineage_head
+    resolves it to a currently HELD seat — a graph Agent object with no seat is not
+    an owner (the case the previous test proves refuses)."""
+    from src import mcp_server as srv
+    from src.orchestrator.seats import held_seat
+
+    ctx = await _mounted(actions, "agent:ownerok1", "Ownerok1")
+    seat = await held_seat(actions.pool, "agent:ownerok1")
+    assert seat is not None
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.open_thread(
+            "a thread owned by a real seated agent", kind="task",
+            owner="agent:ownerok1", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "error" not in out
+    props = await _props(actions.pool, uuid.UUID(out["id"]))
+    assert props["owner"] == seat["seat_id"]
+
+
+async def test_mcp_reclassify_thread_refuses_kind_obligation_from_an_unmounted_caller(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    ctx = await _mounted(actions, "agent:reclassifyunmounted1", "Reclassifyunmounted1")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        opened = await srv.open_thread(
+            "a question later reclassified without a mount", kind="question", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    srv._pool = actions.pool
+    try:
+        out = await srv.reclassify_thread(opened["id"], kind="obligation")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert "unmounted caller" in out["error"]
+
+
+async def test_mcp_reclassify_thread_refuses_an_owner_that_resolves_to_nothing(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    ctx = await _mounted(actions, "agent:reclassifyowner1", "Reclassifyowner1")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        opened = await srv.open_thread(
+            "a task later reclassified with a bad owner", kind="task", ctx=ctx)
+        out = await srv.reclassify_thread(
+            opened["id"], kind="task", owner="nosuchhandleatallanywhere", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "error" in out
+    assert "nosuchhandleatallanywhere" in out["error"]
+
+
 async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
     actions: Actions,
 ) -> None:
     """A repeat ask for near-duplicate work, from the SAME assignee, finds its own open
     build instead of minting a twin — `leased_to` names the holder (itself)."""
     from src import mcp_server as srv
+    from src.orchestrator.seats import held_seat
 
     saved_pool = srv._pool
     srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:alfred", "Alfred")
+    seat = await held_seat(actions.pool, "agent:alfred")
+    assert seat is not None
     try:
         first = await srv.open_thread(
             "wire the daemon's PTY broker into the fleet rail", repo="leasewall",
-            kind="obligation", assignee="agent:alfred")
+            kind="obligation", assignee="agent:alfred", ctx=ctx)
         second = await srv.open_thread(
             "Wire the daemon's PTY broker into the fleet rail.", repo="leasewall",
-            kind="obligation", assignee="agent:alfred")
+            kind="obligation", assignee="agent:alfred", ctx=ctx)
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
     assert second["id"] == first["id"]
     assert second["deduped"] == "true"
-    assert second["leased_to"] == "agent:alfred"
+    assert second["leased_to"] == seat["seat_id"]
     assert "already leased" in second["note"]
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
     assert n == 1
@@ -4766,15 +4908,17 @@ async def test_open_thread_dedup_is_silent_when_the_repeat_matches_exactly(
 
     saved_pool = srv._pool
     srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:exactrepeat1", "Exactrepeat1")
     try:
         first = await srv.open_thread(
             "the exact-repeat no-op case", repo="osiris", kind="obligation",
-            arc="Fleet-Hygiene")
+            arc="Fleet-Hygiene", ctx=ctx)
         second = await srv.open_thread(
             "The exact-repeat no-op case.", repo="osiris", kind="obligation",
-            arc="Fleet-Hygiene")
+            arc="Fleet-Hygiene", ctx=ctx)
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
     assert second["id"] == first["id"] and second["deduped"] == "true"
     assert "discarded" not in second
 
@@ -4786,21 +4930,30 @@ async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
     — a double-assignment made visible, never silently doubled (the whole point of a
     single-assignee leased obligation)."""
     from src import mcp_server as srv
+    from src.orchestrator.seats import held_seat
 
     saved_pool = srv._pool
     srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:alfred", "Alfred")
+    seat_alfred = await held_seat(actions.pool, "agent:alfred")
+    assert seat_alfred is not None
+    ctx_maat = await _mounted(actions, "agent:maat", "Maat")
+    seat_maat = await held_seat(actions.pool, "agent:maat")
+    assert seat_maat is not None
     try:
         first = await srv.open_thread(
             "wire the seat rebind primitive for house bytebye", repo="leasewall2",
-            kind="obligation", assignee="agent:alfred")
+            kind="obligation", assignee="agent:alfred", ctx=ctx)
         second = await srv.open_thread(
             "Wire the seat rebind primitive for house bytebye.", repo="leasewall2",
-            kind="obligation", assignee="agent:maat")
+            kind="obligation", assignee="agent:maat", ctx=ctx)
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+        srv._agents.pop(srv._conn_key(ctx_maat), None)
     assert second["id"] == first["id"]
-    assert second["leased_to"] == "agent:alfred"
-    assert "agent:maat" in second["note"] and "agent:alfred" in second["note"]
+    assert second["leased_to"] == seat_alfred["seat_id"]
+    assert seat_maat["seat_id"] in second["note"] and seat_alfred["seat_id"] in second["note"]
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
     assert n == 1
 
@@ -6475,16 +6628,20 @@ async def test_open_thread_tool_names_a_colliding_held_work_thread(actions: Acti
 
     saved_pool = srv._pool
     srv._pool = actions.pool
+    ctx = await _mounted(actions, "agent:collideproj1", "Collideproj1")
     try:
         first = await srv.open_thread(
             "held: batch the props read", repo="collideproj", kind="obligation",
-            branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"])
+            branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"],
+            ctx=ctx)
         second = await srv.open_thread(
             "held: a different branch touching the same file", repo="collideproj",
             kind="obligation", branch="khnum-other-branch",
-            files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"])
+            files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"],
+            ctx=ctx)
     finally:
         srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
     assert "colliding_work" in second
     hit = second["colliding_work"][0]
     assert hit["id"] == first["id"][:8]

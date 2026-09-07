@@ -8931,41 +8931,53 @@ async def open_thread(
     `prior_art`/`prior_art_flag` — a standing Decision/Practice/Thread that may already
     cover this ground, surfacing only, never a refusal.
 
-    `kind` is REQUIRED (thread b5ae6773, #203's no-regrow gate) — 'obligation' (a duty
-    minted by an action), 'question', 'task', or another value that genuinely fits;
-    omitting it refuses rather than minting a kindless thread. `owner`=whose move it is
-    ('operator', 'agent:<id>', a project name, or unowned = anyone). Unowned obligations
-    default to the caller's own seat; unowned general threads stay legitimately unowned.
-    `assignee` leases a single-assignee obligation to one build; a near-duplicate then
-    surfaces `leased_to` instead of deduping silently. `arc` sorts into the roadmap
-    taxonomy (osiris-scoped only). `resolves` closes a predecessor thread this one
-    supersedes — same UUID/canonical/short-id-only strictness as record_decision's
-    `resolves`. `branch`/`files_touched` mark held work; `colliding_work` names any open collision.
-    `unlinked_because` mirrors record_decision's own hatch. `stale_after_days`
-    (no-regrow hygiene, practice 393be453) applies to `kind='obligation'` only — the
-    window (default 14) past which it surfaces on its owner's own next Stop as a named
-    ask; unrelated to obligation_hygiene.py's separate idle-since-touched cron.
-    consult_canon('open_thread') for more."""
+    THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773, #203's no-regrow gate, ruling
+    recorded 2026-09-07): `kind` is REQUIRED — 'obligation' (a duty minted by an
+    action), 'question', 'task', or another value that genuinely fits; omitting it
+    refuses rather than minting a kindless thread. `owner`/`assignee` must resolve to
+    an active Seat or the literal 'operator' (`resolve_owner_seat` — a seat id, a
+    seat's own handle, an `agent:<id>` whose lineage_head currently HOLDS a seat, or a
+    project name with a chartered coordinator); anything that doesn't resolve refuses,
+    naming what was tried. Unowned obligations default to the caller's own seat;
+    unowned general threads stay legitimately unowned. `kind='obligation'` additionally
+    refuses from an unmounted caller (no live agent/operator identity behind this
+    call) — a duty is a mind's own testimony, never an anonymous write's. Scoped to
+    THIS tool alone, never capture.open_thread itself — internal callers (settle(),
+    fleet_reconcile.py, the miner's own _emit_thread) keep their own, already-correct
+    conventions. `assignee` leases a single-assignee obligation to one build; a near-
+    duplicate then surfaces `leased_to` instead of deduping silently. `arc` sorts into
+    the roadmap taxonomy (osiris-scoped only). `resolves` closes a predecessor thread
+    this one supersedes — same UUID/canonical/short-id-only strictness as
+    record_decision's `resolves`. `branch`/`files_touched` mark held work;
+    `colliding_work` names any open collision. `unlinked_because` mirrors
+    record_decision's own hatch. `stale_after_days` (no-regrow hygiene, practice
+    393be453) applies to `kind='obligation'` only — the window (default 14) past which
+    it surfaces on its owner's own next Stop as a named ask; unrelated to
+    obligation_hygiene.py's separate idle-since-touched cron. consult_canon
+    ('open_thread') for more."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    # THE WRITE-TIME CLASSIFICATION LAWS, LAW 1 OF 3 (thread b5ae6773, #203's no-regrow
-    # gate, operator dispatch 2026-09-07 wave 3): a census before this wave found 242
-    # open threads, 94 kindless — no refusal anywhere let it accumulate. Scoped to THIS
-    # tool (the door an agent actually calls), never capture.open_thread itself —
-    # internal callers (settle(), fleet_reconcile.py, the miner's own _emit_thread) have
-    # their own, already-correct conventions and would break for no reason under a
-    # blanket refusal one layer down. LAWS 2 AND 3 (owner must resolve to a seat/
-    # 'operator'; a derived/unmounted write can't declare kind='obligation') are HELD —
-    # both broke a wide swath of this suite's own informal `agent:<name>` owner/assignee
-    # placeholders and unmounted test calls that were never meant to resolve against a
-    # real seat; flagged back to Thoth (msg pending) for the exact scope he intends
-    # rather than shipped as a guess. See b5ae6773's own notes for the two attempted-
-    # then-reverted implementations and why each broke.
+    # THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773, #203's no-regrow gate,
+    # operator dispatch 2026-09-07 wave 3, ruling on the held question recorded the
+    # same day): a census before this wave found 242 open threads, 94 kindless and 87
+    # owned by a bare handle in four casings — no refusal anywhere let it accumulate.
+    # Scoped to THIS tool (the door an agent actually calls), never capture.open_thread
+    # itself — internal callers (settle(), fleet_reconcile.py, the miner's own
+    # _emit_thread) have their own, already-correct conventions and would break for no
+    # reason under a blanket refusal one layer down.
     if not kind:
         return {"error": "kind is required — a missing kind is exactly the no-regrow "
                          "gate this refuses (thread b5ae6773); pass "
                          "'obligation'/'question'/'task', or another value that "
                          "genuinely fits"}
+    if kind == "obligation" and actor == "session":
+        # `actor` reads 'session' ONLY when nothing is mounted on this connection
+        # (_source_for's own back-compat fallback) — a genuinely unattributed call, the
+        # ruling's own "derived/anonymous write" shape. A real agent (mounted, or a
+        # registered subagent) always resolves to `agent:<id>` here instead.
+        return {"error": "an unmounted caller cannot declare kind='obligation' — a duty "
+                         "is a mind's own testimony (thread b5ae6773); mount first, or "
+                         "use kind='question'/'task' instead"}
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
     # while his successor mined transcripts with regex). The mounted identity already
@@ -8981,6 +8993,22 @@ async def open_thread(
     lineage_attempted = _repo_default["lineage_attempted"]
     lineage_candidates = _repo_default["lineage_candidates"]
     lineage_projects = _repo_default["lineage_projects"]
+    if owner or assignee:
+        from src.orchestrator.owner_normalization import resolve_owner_seat
+
+        _owner_to_check = assignee if assignee is not None else owner
+        assert _owner_to_check is not None  # the `if` above guarantees one is truthy
+        resolved_owner = await resolve_owner_seat(pool, _owner_to_check, project=repo)
+        if resolved_owner is None:
+            return {"error": f"owner {_owner_to_check!r} does not resolve to any active "
+                             "seat, agent, or 'operator' (thread b5ae6773's owner law) "
+                             "— pass a seat id, a seat's own handle, an agent id whose "
+                             "lineage currently holds a seat, a project name with a "
+                             "chartered coordinator seat, or 'operator'"}
+        if assignee is not None:
+            assignee = resolved_owner
+        else:
+            owner = resolved_owner
     dup = await capture.find_near_duplicate_open_thread(pool, summary, repo=repo)
     if dup is not None:
         out: dict[str, Any] = {"id": str(dup), "summary": summary, "status": "open",
@@ -9273,6 +9301,24 @@ async def _thread_action_impl(
     if action == "reclassify":
         assert isinstance(ref, str)
         assert kind is not None
+        # THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773) — same two checks
+        # open_thread runs, since reclassify is the OTHER live door onto a thread's
+        # kind/owner. Adopting a miner echo as an obligation (reclassify's own
+        # documented use) is still a MIND's act — refused only when nothing is mounted.
+        if kind == "obligation" and actor == "session":
+            return {"error": "an unmounted caller cannot declare kind='obligation' — a "
+                             "duty is a mind's own testimony (thread b5ae6773); mount "
+                             "first, or use kind='question'/'task' instead"}
+        if owner:
+            from src.orchestrator.owner_normalization import resolve_owner_seat
+
+            resolved_owner = await resolve_owner_seat(pool, owner)
+            if resolved_owner is None:
+                return {"error": f"owner {owner!r} does not resolve to any active seat, "
+                                 "agent, or 'operator' (thread b5ae6773's owner law) — "
+                                 "pass a seat id, a seat's own handle, an agent id whose "
+                                 "lineage currently holds a seat, or 'operator'"}
+            owner = resolved_owner
         t = await capture.reclassify_thread(
             Actions(pool), ref, kind=kind, because=because, owner=owner, arc=arc,
             source=actor)

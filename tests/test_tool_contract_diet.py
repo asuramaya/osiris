@@ -1347,7 +1347,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # the same dispatch were held (broke a wide swath of the suite's own informal
 # `agent:<name>` owner/assignee placeholders; flagged back rather than shipped as a
 # guess), so only this one law's prose landed. Measured exact (113,246), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 113246
+# 113,246 -> 113,926 (2026-09-07, Sekhmet, thread b5ae6773, Thoth's ruling on the held
+# question): open_thread()/thread(reclassify) finish the write-time classification
+# laws — owner/assignee must resolve to an active seat or 'operator' (an agent:<id>
+# owner requires lineage_head to resolve it to a currently HELD seat), and
+# kind='obligation' additionally refuses from an unmounted caller. No new tool, no new
+# schema param — one expanded docstring paragraph on open_thread naming both refusals.
+# Measured exact (113,926), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 113926
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
