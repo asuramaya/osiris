@@ -455,6 +455,28 @@ async def test_plan_pin_migration_reports_an_underivable_house_as_a_gap_not_a_gu
     assert any("house" in u for u in entry["unknown"])
 
 
+async def test_plan_pin_migration_skips_a_house_redundant_with_the_seat_own_project(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Ruling 860b0306: a house pin exists only when it names something DIFFERENT from the
+    project. A seat whose `house` stamp equals a repo it already charters proposes no `house`
+    key at all — not a gap either, since there is nothing wrong to report."""
+    await actions.create_or_find_object("SoftwareProject", "repo:planzeta", "test")
+    office = tmp_path / "seats" / "planzeta"
+    office.mkdir(parents=True)
+    await _seat_with_office(actions, tmp_path, seat_id="seat:plan0006", handle="Planzeta",
+                            house="planzeta", office_dir=str(office))
+    from src.orchestrator.charter import set_charter
+    charter_out = await set_charter(actions, "seat:plan0006", ["planzeta"], actor="test")
+    assert charter_out.get("rejected") is None, charter_out
+
+    out = await plan_pin_migration(actions.pool)
+    entry = next(e for e in out["plan"] if e["path"] == str(office))
+    assert "house" not in entry["proposed"]
+    assert not any("house" in u for u in entry["unknown"]), (
+        "redundant-with-project is not a gap — it must stay silent, not surface as one")
+
+
 async def test_plan_pin_migration_never_picks_a_seat_when_two_claim_the_same_path(
     actions: Actions, tmp_path: Path,
 ) -> None:
