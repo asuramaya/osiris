@@ -1631,6 +1631,134 @@ async def _flag_works_in_alongside_prior(
         src, now, _CONF, evidence_class=_EC)
 
 
+async def _succeeded_by_candidates(pool: asyncpg.Pool, canonical: str) -> list[str]:
+    """Every DISTINCT non-empty current `succeeded_by` VALUE asserted on `canonical`,
+    across EVERY source — not just the single row the old linear walk's own `ORDER BY
+    ... LIMIT 1` picked. `current_assertions` holds one current row per (object, name,
+    SOURCE), so a node with more than one source ever asserting `succeeded_by` on it
+    carries more than one simultaneously-current value: a genuine FORK, not noise (the
+    a418b017 specimen — six sources on one node of Thoth's own lineage). Grouped by
+    VALUE (the best-ranked row per value, same rank key the old query used:
+    confidence, then observed_at, then assertion id — done in Python, not SQL, since the
+    grouping itself is the point), then the distinct values are returned ordered by that
+    same key descending — index 0 is exactly what the OLD single-path query would have
+    picked alone, so a non-forked node (0 or 1 distinct values) behaves identically."""
+    all_rows = await pool.fetch(
+        "SELECT a.value #>> '{}' AS v, a.confidence, a.observed_at, a.id "
+        "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND o.type='Agent' AND a.name='succeeded_by'", canonical)
+    best: dict[str, Any] = {}
+
+    def _rank(r: Any) -> tuple[float, Any, int]:
+        return (r["confidence"], r["observed_at"], r["id"])
+
+    for r in all_rows:
+        v = r["v"]
+        if not v:
+            continue
+        if v not in best or _rank(r) > _rank(best[v]):
+            best[v] = r
+    ordered = sorted(best.values(), key=_rank, reverse=True)
+    return [r["v"] for r in ordered]
+
+
+async def _lineage_head_walk(
+    pool: asyncpg.Pool, canonical: str, *, seen: set[str], budget: list[int],
+) -> tuple[str | None, bool, int]:
+    """Returns `(head, live, depth)` for the BEST branch reachable from `canonical`.
+    `head` is the last node on that branch judged active + not false_mint (the same two
+    checks `lineage_head`'s own `head` variable always required) — never a dead/husk/
+    merged terminal — or `None` when NOTHING valid was found anywhere in this subtree (a
+    branch that dead-ends on a husk/merged node with no further succeeded_by at all).
+    `None` is a first-class outcome, not a fallback string: a fully-dead branch must
+    never out-compete a branch that found a real head purely by racking up more hops on
+    the way to nothing (the true version of this bug — an earlier draft compared raw
+    depth without this distinction and let a 1-hop dead end beat a 0-hop REAL head).
+    `live` is whether that head is EXACTLY live right now (`agent_liveness_exact`, never
+    the lineage-BASE-widened `agent_liveness` — an unrelated live generation sharing the
+    same base prefix must never make a stale fork branch read as live; that widening is
+    exactly why a specific-generation caller has its own exact twin). `depth` is real
+    hops travelled along the WINNING branch since this call (0 when a real head sits
+    right here) — the TENURE signal, a longer-continuing branch over a shorter one,
+    compared ONLY among branches that both found a real head. `budget[0]` is a SHARED,
+    MUTABLE total-hop ceiling across the WHOLE fork exploration (never per-branch) —
+    decremented once per edge taken anywhere in the recursion, so a wide fork can never
+    cost more than the old single-path walk's own 64-hop bound already allowed.
+
+    LIVENESS ONLY DECIDES A GENUINE FORK, NEVER AN ORDINARY HOP (caught live building
+    this: `living_head`'s own invariant test broke on the first draft, which let a live-
+    but-UNSUCCEEDED base outrank its own unambiguous, single declared successor purely
+    for not being currently mounted — exactly backwards for a function whose whole job is
+    to follow the DECLARED chain forward regardless of who is home). With EXACTLY ONE
+    candidate, this always continues into it unconditionally — `self_head` never enters
+    a comparison at all, matching the old algorithm's own unconditional advance node for
+    node. Liveness/tenure only arbitrate when there are TWO OR MORE distinct candidates
+    (a real fork) — there, and only there, does stopping here (`self_head`) join the
+    contest against the candidate branches."""
+    from src.orchestrator.mounts import agent_liveness_exact
+
+    row = await pool.fetchrow(
+        "SELECT o.status='active' AS active, "
+        " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id=o.id "
+        "   AND ca.name='false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
+        "   LIMIT 1) = 'true' AS false_mint "
+        "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", canonical)
+    self_head = canonical if (row and row["active"] and not row["false_mint"]) else None
+
+    candidates: list[str] = []
+    if budget[0] > 0:
+        candidates = [c for c in await _succeeded_by_candidates(pool, canonical)
+                     if c not in seen]
+
+    if not candidates:
+        if self_head is None:
+            return None, False, 0
+        live = (await agent_liveness_exact(pool, self_head)).get("live", False)
+        return self_head, live, 0
+
+    if len(candidates) == 1:
+        # NOT a fork — the old algorithm's own unconditional advance, self_head is
+        # irrelevant to a choice that was never there to make.
+        nxt = candidates[0]
+        seen.add(nxt)
+        budget[0] -= 1
+        head, live, depth = await _lineage_head_walk(pool, nxt, seen=seen, budget=budget)
+        if head is not None:
+            return head, live, depth + 1
+        # the rest of the chain dead-ends with nothing valid at all — exactly the old
+        # loop's own `if not nxt or nxt in seen: return head` shape, falling back to
+        # whatever this hop's own self_head was (possibly still None, propagating on).
+        if self_head is None:
+            return None, False, 0
+        live = (await agent_liveness_exact(pool, self_head)).get("live", False)
+        return self_head, live, 0
+
+    # a GENUINE fork (2+ distinct candidates): explore every branch, THEN self_head joins.
+    branches: list[tuple[str, bool, int]] = []
+    for nxt in candidates:
+        seen.add(nxt)
+        budget[0] -= 1
+        head, live, depth = await _lineage_head_walk(pool, nxt, seen=seen, budget=budget)
+        if head is not None:                # a fully-dead branch never enters the contest
+            branches.append((head, live, depth + 1))
+        if budget[0] <= 0:
+            break
+    if self_head is not None:
+        self_live = (await agent_liveness_exact(pool, self_head)).get("live", False)
+        branches.append((self_head, self_live, 0))
+
+    if not branches:
+        return None, False, 0           # nothing valid anywhere in this whole subtree
+
+    # live wins first, then depth (tenure — the longer-continuing branch); ties keep
+    # `branches`' own insertion order (Python sort is stable, and reverse=True never
+    # reorders equal keys), which is candidate-rank order (the OLD single-path
+    # tie-break) for the candidate-derived entries, self_head (depth 0) appended last —
+    # so a real continuing branch only loses to "stop here" when strictly worse on both.
+    branches.sort(key=lambda b: (b[1], b[2]), reverse=True)
+    return branches[0]
+
+
 async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     """Follow winning `succeeded_by` pointers to the newest ACTIVE generation. A session-keyed
     resolve always lands on the BASE id (the transcript knows nothing of minting); the lineage
@@ -1653,7 +1781,30 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
     own real succeeded_by continuing the chain, so the walk already reached the true tail by
     just not stopping) — this closes the latent edge case where a husk IS the current tail
     (no real successor minted yet). Walk CONTINUATION is unchanged: `cur` still steps through
-    a husk exactly as before, only the returned `head` now also requires false_mint absent."""
+    a husk exactly as before, only the returned `head` now also requires false_mint absent.
+
+    THE TRUE-TIE BUG (thread 20af2c95's dry-run, msg 5046, live specimen: Thoth's own -v ->
+    -vi hop): a phantom-fold heal's retraction (succeeded_by="") and the REAL succeeded_by
+    re-assertion can land at the IDENTICAL confidence AND observed_at — both stamped by the
+    same healing transaction's shared `now`. A retraction never legitimately outranks a
+    same-instant real pointer, and since `_succeeded_by_candidates` drops every empty value
+    outright, a retraction never even reaches the tie-break contest at all now.
+
+    STALLING AT A FORK (thread a418b017, migration 0059's own live specimen): a node can
+    carry MORE THAN ONE simultaneously-current `succeeded_by` value — one per SOURCE,
+    since `current_assertions` holds one current row per (object, name, source), and a
+    messy multi-generation history (parallel compaction seams, healing events) can leave
+    several sources each asserting a different successor. The OLD walk picked exactly one
+    by rank order and continued blindly — if that pick dead-ended, the walk stopped at a
+    stale, long-retired generation even though ANOTHER candidate at that same fork led on
+    to today's live head. Live specimen: three different generations of Thoth's own
+    lineage all independently walked to the SAME six-way fork and stalled there instead of
+    reaching the live head. Now `_lineage_head_walk` explores every distinct candidate at
+    a fork (bounded by a shared 64-edge budget across the WHOLE exploration, matching the
+    old per-path bound exactly) and the branch reaching a currently-live head wins,
+    tie-broken by which branch travelled further (tenure), tie-broken again by the old
+    rank order. A node with 0 or 1 candidates at every hop — the overwhelmingly common
+    case — walks node-for-node identically to the old algorithm."""
     cur = canonical
     for _ in range(10):
         winner = await pool.fetchval(
@@ -1663,39 +1814,9 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
             break
         cur = str(winner)
     canonical = cur
-    seen = {canonical}
-    head = canonical
-    for _ in range(64):
-        # THE TRUE-TIE BUG (thread 20af2c95's dry-run, msg 5046, live specimen: Thoth's own
-        # -v -> -vi hop): a phantom-fold heal's retraction (succeeded_by="") and the REAL
-        # succeeded_by re-assertion can land at the IDENTICAL confidence AND observed_at —
-        # both stamped by the same healing transaction's shared `now`, the same shared-
-        # timestamp class as f6f11d78/5b217d13's works_in duplicate, here on succeeded_by
-        # instead. `ORDER BY confidence DESC, observed_at DESC` alone has NO tiebreaker for
-        # that tie — which of two current_assertions rows wins is Postgres's own arbitrary
-        # plan-dependent choice, not a decided fact — so the walk could non-deterministically
-        # pick the EMPTY retraction and stop dead at the OLDER generation. A retraction never
-        # legitimately outranks a same-instant real pointer (its own job is invalidating an
-        # OLDER wrong belief, not this one) — non-empty wins a tie; `a.id DESC` is the final,
-        # fully deterministic tiebreaker (assertions.id is a bigserial, insertion order).
-        nxt = await pool.fetchval(
-            "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-            "WHERE o.canonical=$1 AND o.type='Agent' AND a.name='succeeded_by' "
-            "ORDER BY a.confidence DESC, a.observed_at DESC, "
-            "(a.value #>> '{}') <> '' DESC, a.id DESC LIMIT 1", cur)
-        if not nxt or nxt in seen:
-            return head
-        seen.add(nxt)
-        cur = str(nxt)
-        row = await pool.fetchrow(
-            "SELECT o.status='active' AS active, "
-            " (SELECT ca.value #>> '{}' FROM current_assertions ca WHERE ca.object_id=o.id "
-            "   AND ca.name='false_mint' ORDER BY ca.confidence DESC, ca.observed_at DESC "
-            "   LIMIT 1) = 'true' AS false_mint "
-            "FROM objects o WHERE o.canonical=$1 AND o.type='Agent'", cur)
-        if row and row["active"] and not row["false_mint"]:
-            head = cur
-    return head
+    head, _live, _depth = await _lineage_head_walk(
+        pool, canonical, seen={canonical}, budget=[64])
+    return head if head is not None else canonical
 
 
 async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
