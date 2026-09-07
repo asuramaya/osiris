@@ -398,6 +398,80 @@ async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | Non
     return max(same, key=lambda c: _generation(c)[1], default=base)
 
 
+async def mechanical_seat_mount(
+    actions: Actions, *, cwd: str, project: str | None, agent_id: str, actor: str,
+) -> dict[str, Any] | None:
+    """MECHANICAL SEAT MOUNT (thread dae06a32, operator 2026-09-07: "if project can be
+    auto mounted then maybe the seat can also be auto mounted mechanically" — chowder's
+    own mount row read seat_id None, dj had no seat at all, both in the same project's
+    tree). A DIFFERENT SHAPE than every other door above: those each answer "whose prior
+    life is this session" (rebind ident.agent_id to an EXISTING agent); this one answers
+    "does this cwd DECLARE a seat" and, if so, makes THIS fresh session's own agent_id the
+    seat's holder from birth — the same declared-identity exception class the spawned_by
+    child already is (a project tree explicitly naming its own seat, or an already-bound
+    tree_cwd, IS a declaration before this session's first breath, never a stranger's
+    greeting), never a rebind of who this session IS.
+
+    `tree_seat_hint` finds the declared HANDLE (an established tree_cwd binding first, the
+    `.osiris` pin's `seat = "<handle>"` line otherwise). An undeclared handle MINTS fresh
+    under the project's own coordinator seat (`mint_seat`'s own ceremony, its own guards —
+    never a second copy); a mint refusal (no coordinator, a Person-handle collision, a
+    near-miss) degrades to None rather than blocking the ordinary project-only mount —
+    fail-open, same law every other best-effort write in this module holds to. Binds
+    `agent_id` as the seat's holder and stamps `tree_cwd=cwd` (idempotent — a return visit
+    to an already-bound tree changes nothing). None means: no declaration at all, or the
+    declaration could not be honored — the caller's ordinary mount proceeds unchanged."""
+    from src.orchestrator.seats import (
+        bind_holder,
+        bind_seat_tree,
+        project_coordinator_seat,
+        seat_by_handle,
+        tree_seat_hint,
+    )
+
+    handle = await tree_seat_hint(actions.pool, cwd=cwd)
+    if handle is None:
+        return None
+    existing = await seat_by_handle(actions.pool, handle)
+    minted = False
+    if existing is None:
+        if not project:
+            return None
+        coordinator = await project_coordinator_seat(actions.pool, project)
+        if coordinator is None:
+            return None
+        from src.orchestrator.mintseat import mint_seat
+
+        receipt = await mint_seat(actions, manager=coordinator, handle=handle,
+                                  project=project, actor=actor)
+        if receipt.get("error"):
+            return None
+        existing = await seat_by_handle(actions.pool, handle)
+        if existing is None:
+            return None
+        minted = True
+    try:
+        await bind_holder(actions, seat_id=existing["seat_id"], agent_id=agent_id,
+                          source=actor)
+    except Exception:  # noqa: BLE001 - fail-open: the whisper must land regardless
+        return None
+    try:
+        # bind_seat_tree is OPERATOR-OR-MANAGER GATED (a wrong/hostile rebind is a
+        # code-execution vector at the seat's next launch, seats.py's own ruling) — the
+        # automount hook's own `actor` is neither, so this passes the "console" sentinel
+        # explicitly: a mechanical consequence of the .osiris pin's own declaration, never
+        # a live agent's discretionary act, the same authority class establish_office's
+        # own mechanical writes already use. Best-effort: the holder binding above is the
+        # identity that matters; a failed tree stamp never undoes it.
+        await bind_seat_tree(actions, seat_id=existing["seat_id"], tree_cwd=cwd,
+                             actor="console", because="mechanical seat mount (dae06a32): "
+                             "the .osiris pin declared this seat for this tree")
+    except Exception:  # noqa: BLE001 - best-effort, see above
+        pass
+    return {"seat_id": existing["seat_id"], "handle": existing["handle"],
+           "house": existing["house"], "minted": minted}
+
+
 async def record_bridge_anchor(
     actions: Actions, *, agent_id: str, bridge_session_id: str, actor: str,
 ) -> bool:
@@ -811,7 +885,16 @@ async def automount(
                           "stands, unparented")
         if spawn_child:
             ident.agent_id = spawn_child
-    if lived or viewed is not None or (seat_id and attach_token):
+    # THE MECHANICAL SEAT MOUNT (thread dae06a32): a third declared-identity exception,
+    # same class as the two above — a project tree naming its own seat (or an already-
+    # bound tree_cwd) declared this session's role before its first breath. Tried only
+    # when nothing else has already claimed this session (a spawned child's own
+    # declaration wins if both somehow apply at once — never overwritten here).
+    mechanical_mount = None
+    if not lived and viewed is None and not (seat_id and attach_token) and spawn_child is None:
+        mechanical_mount = await mechanical_seat_mount(
+            actions, cwd=cwd, project=ident.project, agent_id=ident.agent_id, actor=actor)
+    if lived or viewed is not None or (seat_id and attach_token) or mechanical_mount:
         await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                              mint_reason=mint_reason)
     # IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed) — SAME LAW,
@@ -1228,6 +1311,12 @@ async def automount(
                           "own, the seat and its succession are your parent's"}
            if spawn_child else
            {"child_of": spawned_by, "child_note": spawn_error} if spawn_error else {}),
+        # THE MECHANICAL SEAT MOUNT's own birth receipt (thread dae06a32): a project-tree
+        # cwd declared its own seat (tree_cwd or the .osiris pin's `seat = "..."` line) and
+        # this session became its holder before its first token — the whisper says only
+        # the bare minimum (render_whisper's own short-circuit), never the full glance a
+        # deliberately passive body has no business reading.
+        **({"mechanical_seat_mount": mechanical_mount} if mechanical_mount else {}),
     }
 
 
