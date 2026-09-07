@@ -2284,7 +2284,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # coordinator. `resolve_owner_seat` is the SAME function migration 0060 uses to
     # backfill the existing stock, so a row this check clears is a row the migration
     # would also have accepted.
-    from src.orchestrator.seats import resolve_owner_seat
+    from src.orchestrator.owner_normalization import resolve_owner_seat
 
     owned = await pool.fetch(
         "SELECT o.canonical, "
