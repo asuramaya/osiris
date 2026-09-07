@@ -50,6 +50,32 @@ async def test_the_mcp_tool_wrapper_delegates_to_describe_table(actions: Actions
     assert {"name": "key", "type": "text", "nullable": False, "default": None} in out["columns"]
 
 
+async def test_describe_seat_lists_every_manual_verb(actions: Actions) -> None:
+    """THE SEAT MANUAL MOVE (dispatch e6585927): commands/seat.md shrank from 12.9 KB to
+    a bare subcommand list — describe('seat') is where the verb list now lives."""
+    from src import mcp_server as srv
+
+    out = await srv.describe("seat")
+    assert "hint" in out
+    for verb in ("new", "walk-in", "mint", "launch", "resume", "stop", "roster"):
+        assert verb in out["verbs"]
+
+
+async def test_describe_seat_colon_verb_returns_the_full_text(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    out = await srv.describe("seat:launch")
+    assert out["verb"] == "launch"
+    assert "TWO BACKENDS" in out["text"]
+
+
+async def test_describe_seat_colon_unknown_verb_says_so_honestly(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    out = await srv.describe("seat:not-a-real-verb")
+    assert out == {"exists": False, "verb": "not-a-real-verb"}
+
+
 async def test_get_schema_reads_the_live_catalog_not_the_static_seed(actions: Actions) -> None:
     """Task #97 workstream 2: get_schema must read the graph-backed Type catalog, not
     schema.py's static seed manifest — a type minted through accretion (or ensure_type

@@ -1417,6 +1417,13 @@ async def describe(table: str) -> dict[str, Any]:
         code = table.split(":", 1)[1]
         text = _NAG_CATALOG.get(code)
         return {"code": code, "text": text} if text else {"exists": False, "code": code}
+    if table == "seat":
+        return {"verbs": sorted(_SEAT_MANUAL),
+                "hint": "describe('seat:<verb>') for one verb's full text"}
+    if table.startswith("seat:"):
+        verb = table.split(":", 1)[1]
+        text = _SEAT_MANUAL.get(verb)
+        return {"verb": verb, "text": text} if text else {"exists": False, "verb": verb}
     return await describe_table(await _pool_get(), table)
 
 
@@ -7694,6 +7701,187 @@ _NAG_CATALOG: dict[str, str] = {
         "describing THIS turn, say so; a citation alone doesn't clear this (it still "
         "fires on a cited claim if the citation itself wasn't re-checked for what it "
         "actually proves)"),
+}
+
+# THE SEAT MANUAL, MOVED HERE FROM THE SLASH FILE (dispatch e6585927, msg 7882 item 3):
+# commands/seat.md carried the full per-verb prose directly in the prompt on EVERY /seat
+# invocation — 12.9 KB paid regardless of which one verb was actually being run. Same
+# move _NAG_CATALOG above already made for advisory nags: describe('seat') now lists the
+# verbs, describe('seat:<verb>') holds one verb's full text, and the slash file shrinks
+# to a bare subcommand list with a pointer here. Forward-referenced by four other
+# dispatcher docstrings' own "describe('<name>') for the full per-action shape" — this is
+# the first of those to actually back the reference with real data.
+_SEAT_MANUAL: dict[str, str] = {
+    "new": (
+        "new <handle> [path] [--project P] — found a SELF-MANAGED seat: a fresh code "
+        "workspace + identity, no manager, ever. `found_seat` has no MCP door, so this "
+        "shells out to `osiris new` verbatim (same seam as `launch` — do not "
+        "reimplement it here). REFUSE-DON'T-GUESS: `osiris new` itself still defaults "
+        "`project` to `handle` when `--project` is omitted, and fixing that default is "
+        "not this command's job (Khnum's lane). So: if `--project` is missing, ask the "
+        "caller to confirm it explicitly before running anything — especially when "
+        "`handle` reads like a person's name or nickname rather than a project "
+        "(jesus/chad/marquee were exactly this shape: a seat named after its occupant "
+        "silently became its project AND its workspace path). Never invent a "
+        "plausible-looking project name yourself. `osiris new` already confesses "
+        "loudly to stderr when it's about to default the WORKSPACE path away from the "
+        "caller's actual cwd — surface that confession verbatim, don't paraphrase it "
+        "away. Not the same operation as `walk-in`, even though both 'found' a "
+        "self-managed seat in English — do not substitute one for the other."),
+    "walk-in": (
+        "walk-in <handle> [--wants-office] — give the CALLING agent itself a durable "
+        "identity; no new workspace, ever (for 'a mind with nothing but this server'). "
+        "Composes the `walk_in` MCP tool directly. Only meaningful for an agent "
+        "invoking this on its own behalf — if a human runs this with no mounted "
+        "session behind it, say so and point at `new` instead."),
+    "mint": (
+        "mint <handle> --manager <seat> [--project] [--house] [--model] — found a "
+        "MANAGED worker seat under an existing one. Composes the `mint_seat` MCP tool "
+        "(`handle`, `project`, `model`, `house` — no `manager` param on the tool "
+        "itself: an agent caller lets it infer the manager from its own held seat; an "
+        "operator caller supplies `--manager` explicitly or, if omitted, infers it the "
+        "same way `osiris mint-seat` does — the sole seat in the target house — and "
+        "refuses rather than guesses among several)."),
+    "launch": (
+        "launch <handle> [--model] — give a seat a body, ALWAYS a fresh mint, never a "
+        "resume (ruling 60c78788/41a41437 — the verb is the property, not a flag). TWO "
+        "BACKENDS, DELIBERATE, not a bug: the `launch` MCP tool's own docstring says "
+        "outright 'THE OPERATOR NEVER CALLS THIS, ON PURPOSE' and requires a mounted "
+        "agent identity with a downward `managed_by` edge to the target — an agent "
+        "caller composes the `launch` MCP tool directly; a human/operator caller "
+        "shells out to `osiris launch <handle>` verbatim instead. This split is "
+        "PERMANENT (task #199 lane 3C closed that question): the CLI door spawns via "
+        "`_spawn_claude_bg` directly under operator trust, the MCP tool gates on "
+        "`managed_by` under agent-to-agent trust — genuinely different authorization "
+        "models, never collapsible into one shared function without losing one of "
+        "them. CAN REFUSE ON A FABRICATED PROJECT (task #204, decision "
+        "68fba2e4/803dd9bf): before spawning, launch resolves the project it would "
+        "boot into via `project_of()` (pin -> charter -> lineage_works_in, never "
+        "house). When the seat's charter names EXACTLY ONE real repo and that "
+        "resolution disagrees with it, launch refuses outright rather than booting a "
+        "body into the wrong home. THE REMEDY IS `transition`, NOT `move`: run "
+        "`/seat transition <handle>` first (dry-run shows the plan), confirm it, then "
+        "`--apply` — only once the seat is genuinely dual-bound (mounted at the real "
+        "repo, not just chartered for it) does `launch` stop refusing. Never suggest "
+        "`move`/`heal-anchor` for this refusal shape; they fix a different kind of "
+        "disagreement (anchor_cwd corruption, not a fabricated project label)."),
+    "resume": (
+        "resume <handle> [--model] — continue a seat's own DORMANT session, never "
+        "falls through to a fresh mint (launch's own sibling verb, same ruling). Same "
+        "two-backend shape as `launch`: an agent caller composes the `resume` MCP tool "
+        "directly; a human/operator caller shells out to `osiris resume <handle>` "
+        "verbatim. Refuses loudly (`refused-nothing-to-resume`) rather than guessing "
+        "when nothing is resumable — use `launch` for that, a deliberate, separate act."),
+    "stop": (
+        "stop <handle> [--reason] — end a live body. Both callers already reach the "
+        "identical `stop_seat` function today (the `stop` MCP tool — a hidden "
+        "deprecated alias of `seat(action='stop')` — or `osiris stop <handle>`) — "
+        "prefer the MCP tool when mounted, shell out otherwise. No seam here."),
+    "move": (
+        "move <handle> <new_cwd> — relocate a seat's whole FOOTPRINT (mount rows, "
+        "harness metadata, the `.osiris` pin). Composes the `rebind_seat` MCP tool. "
+        "THE ANCHOR INVARIANT (ruling 23771416): `anchor_cwd` is identity, always "
+        "`<office_root>/<handle>` — `rebind_seat` no longer writes it for a `new_cwd` "
+        "outside the office root (the receipt says `anchor_cwd_skipped` and names "
+        "why). So `move` genuinely relocates identity only when `new_cwd` IS under the "
+        "office root (a real office migration, rare); anywhere else it's a "
+        "footprint/tree move and the seat's `anchor_cwd` stays exactly where it was — "
+        "say so plainly if the caller seems to expect otherwise (root-caused live: "
+        "Chad and Jesus each broke their own anchor this exact way, by rebinding "
+        "themselves to their own code repo's cwd)."),
+    "bind-tree": (
+        "bind-tree <handle> <tree_cwd> --because — bind a seat's own isolated code "
+        "checkout, deliberately distinct from its office (never collapse the two). "
+        "Composes `bind_seat_tree`."),
+    "heal-anchor": (
+        "heal-anchor <handle> --because [--apply] — repair a seat whose `anchor_cwd` "
+        "is corrupted (more than one current value, or one that never got asserted at "
+        "all — henry/Chad/Jesus/Marquee's own shape, ruling 23771416). Composes the "
+        "`heal_seat_anchor` MCP tool (pass `seat_id=<handle>` for a third-party seat; "
+        "the old `heal_seat_anchor_third_party` name is a hidden deprecated alias of "
+        "it), or `osiris heal-seat-anchor <handle> --because <reason> [--apply]` as "
+        "the CLI twin — same function either way. Asserts the invariant office path "
+        "(`<office_root>/<handle>`) as the sole current anchor, collapsing every stray "
+        "value in one call — refuses rather than guesses if the seat has no handle or "
+        "its office directory doesn't exist on disk yet (that's `new`/`walk-in`'s job, "
+        "never this verb's). `dry_run` defaults true; the caller must confirm before "
+        "passing `--apply`/`dry_run=False`. Run `roster` first if unsure which seats "
+        "need this."),
+    "correct-agent-house": (
+        "correct-agent-house <agent> [--project] [--seat-generation] — heal an "
+        "already-polluted agent's own project/seat_generation stamps, THIRD-PARTY "
+        "(unlike `correct-house`, which is self-scoped and has no console door for "
+        "that reason). Composes `correct_agent_house` (hidden from `list_tools()` "
+        "since retirement wave 1, zero traffic at the time — still fully callable as "
+        "a deprecated alias). No CLI door yet (#204, declared-not-built). `<agent>` "
+        "accepts a claimed handle or a raw agent id."),
+    "retire-agent": (
+        "retire-agent <agent> --because [--override-live] — third-party AGENT "
+        "retirement, distinct from `retire` (which ends a SEAT's role — this ends one "
+        "specific agent identity, any target, `actor` is attribution not authority). "
+        "Composes the `retire_agent` MCP tool. No CLI door yet (#204, "
+        "declared-not-built). ALWAYS releases the target's held seat and mount rows "
+        "on success; refuses loudly on a target seen live within 15 min unless "
+        "`--override-live`."),
+    "heal-seat-transcript": (
+        "heal-seat-transcript <handle> <source_paths...> --because [--apply] — splice "
+        "a seat's session, fragmented across multiple project slugs by a mid-session "
+        "cwd move, back into ONE file at its own office slug. Composes the "
+        "`heal_seat_transcript` MCP tool. No CLI door yet (#204: THE ORIGINAL specimen "
+        "the #199 lane exists to prevent recurring). `source_paths` are the original "
+        "fragments, IN CHAIN ORDER (oldest first). `dry_run` defaults true (`--apply` "
+        "to write). Never touches a Seat row, anchor_cwd, or any source transcript — "
+        "that's `heal-anchor`'s job, a different door. (`reconcile-merge` and "
+        "`fleet-reconcile`, the other two #204 doors, are deliberately NOT composed "
+        "under /seat: the first belongs to a merge/unmerge context this file doesn't "
+        "own, the second acts fleet-wide, not one seat.)"),
+    "transition": (
+        "transition <handle> [--fabricated-project P] [--real-project P] [--repos R] "
+        "--because [--apply] — move a seat's project binding from a fabricated "
+        "handle-project to the real repo it already works in, one composed act (the "
+        "Jesus/Chad specimen's own hand-run sequence, msg 6901). Composes the "
+        "`transition_seat_project` MCP tool for a self-caller, or `osiris "
+        "transition-seat-project <handle> ...` for a third-party/operator caller — "
+        "same function either way. `--fabricated-project` defaults to the seat's own "
+        "handle; `--real-project` disambiguates only when the seat carries more than "
+        "one other live works_in edge, auto-picked otherwise. PRECONDITION: the seat "
+        "must already be mounted at the real repo's cwd (a live, second works_in edge "
+        "already present) — this verb transitions an already-dual binding, it does "
+        "not create the first edge itself. Deliberately never calls `move`/"
+        "`rebind_seat`: THE ANCHOR INVARIANT (ruling 23771416) already pins "
+        "`anchor_cwd` to the office path permanently — that call is exactly what "
+        "broke Jesus's and Chad's own anchors, not repeated here. `dry_run` defaults "
+        "true; show the plan (`invalidate_works_in`/`correct_pin_value`/`set_charter`, "
+        "each `null` when already correct) before passing `--apply`."),
+    "retire": (
+        "retire <handle> --reason — end a seat's role for good. TWO STEPS, IN ORDER, "
+        "never skip the first: (1) `retire_seat` (the graph act — marks the Seat "
+        "permanently closed; refuses loudly on an active holder or an active peer_of "
+        "edge, resolve those first). (2) `sweep_seat_disk(handle, dry_run=True, "
+        "because=<reason>)` (composes both office and workspace cleanup under one "
+        "call with its own containment/ambiguity/live-body guards). "
+        "`sweep_seat_disk` itself REQUIRES the seat to already be retired (or have no "
+        "Seat row at all) before it will touch disk. ALWAYS dry-run `sweep_seat_disk` "
+        "first and show both halves' receipts (`office`/`workspace`) separately "
+        "before asking whether to pass `dry_run=False` — they can legitimately "
+        "disagree, never collapse them into one verdict. `--reason` maps to both "
+        "`retire_seat`'s `reason` and `sweep_seat_disk`'s `because`."),
+    "roster": (
+        "roster [--repo] — see who's alive, and whether any binding disagrees with "
+        "itself. Composes the `roster` MCP tool. Render, per seat: occupancy, "
+        "chartered_repos, pin — AND `pin_charter_agreement` whenever it reads "
+        "'disagree', flagged plainly ('seat X: pin says P, charter says C — these "
+        "disagree, not resolved automatically; `/seat move` or `/charter set` fixes "
+        "it'). NEVER read a near-empty `~/code/<handle>` directory as evidence that a "
+        "seat is abandoned scaffolding — jesus and chad were both real, mid-arc seats "
+        "misread exactly that way. When a seat's status is worth a second look, "
+        "compose `dossier(<seat>)` too and show its charter's real activity before "
+        "calling anything dead. STANDING LAW ACROSS EVERY VERB (#102): never pick a "
+        "winner on a disagreement — `pin_charter_agreement=='disagree'`, roster's own "
+        "`conflict`/`near_misses`, or a near-miss handle refusal all get surfaced "
+        "with the repair verb named, never silently resolved. "
+        "`pin_charter_agreement=='n/a'` (unset pin, or no charter at all) is a valid, "
+        "ordinary state, never rendered as a problem."),
 }
 
 
