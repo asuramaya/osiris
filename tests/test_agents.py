@@ -4501,6 +4501,117 @@ async def test_lineage_head_breaks_a_true_tie_toward_the_real_pointer_not_the_re
         "a same-instant retraction must never outrank a same-instant real pointer")
 
 
+# ═══ STALLING AT A FORK (thread a418b017): a node can carry more than one simultaneously-
+# current succeeded_by VALUE (one per source) — the OLD walk picked exactly one by rank
+# order and continued blindly, stopping dead if that pick was a dead end even while ANOTHER
+# candidate at the same fork led on to the live head. ════════════════════════════════════
+
+async def test_lineage_head_crosses_a_fork_to_reach_the_live_branch(
+    actions: Actions,
+) -> None:
+    """A two-way fork: one branch dead-ends (no further succeeded_by, never live), the
+    other continues to a node that IS live right now. The live branch wins regardless of
+    which candidate the OLD single-path rank order would have picked."""
+    from src.orchestrator.agents import lineage_head
+    from src.orchestrator.mounts import save_mount
+
+    now = datetime.now(UTC)
+    fork = await actions.create_or_find_object("Agent", "agent:66fork-i", "test")
+    await actions.create_or_find_object("Agent", "agent:66fork-dead", "test")
+    await actions.create_or_find_object("Agent", "agent:66fork-live", "test")
+    # the DEAD branch is asserted with HIGHER confidence and a LATER timestamp — the old
+    # single-path query would pick it every time — from a source with no reason to lose.
+    await actions.assert_property(fork, "succeeded_by", "agent:66fork-dead",
+                                  "source-a", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(fork, "succeeded_by", "agent:66fork-live",
+                                  "source-b", now - timedelta(seconds=5), 0.6,
+                                  evidence_class="direct_observation")
+    await save_mount(actions.pool, job_dir="/jobs/66fork-live", agent_id="agent:66fork-live",
+                     project="demo", cwd="/w/x", model=None, session_key=None)
+
+    assert await lineage_head(actions.pool, "agent:66fork-i") == "agent:66fork-live"
+
+
+async def test_lineage_head_at_a_fork_with_no_live_branch_prefers_tenure(
+    actions: Actions,
+) -> None:
+    """A fork where NEITHER branch is live: the branch that travelled FURTHER (more real
+    generations since the fork) wins over a shorter dead end — the tenure tie-break."""
+    from src.orchestrator.agents import lineage_head
+
+    now = datetime.now(UTC)
+    fork = await actions.create_or_find_object("Agent", "agent:77fork-i", "test")
+    await actions.create_or_find_object("Agent", "agent:77fork-short", "test")
+    deep1 = await actions.create_or_find_object("Agent", "agent:77fork-deep-i", "test")
+    await actions.create_or_find_object("Agent", "agent:77fork-deep-ii", "test")
+    await actions.assert_property(fork, "succeeded_by", "agent:77fork-short",
+                                  "source-a", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(fork, "succeeded_by", "agent:77fork-deep-i",
+                                  "source-b", now, 0.5, evidence_class="direct_observation")
+    await actions.assert_property(deep1, "succeeded_by", "agent:77fork-deep-ii",
+                                  "source-c", now, 0.9, evidence_class="self_declared")
+
+    assert await lineage_head(actions.pool, "agent:77fork-i") == "agent:77fork-deep-ii"
+
+
+async def test_lineage_head_reaches_a_live_terminal_at_the_worst_ranked_fork_position(
+    actions: Actions,
+) -> None:
+    """Reproduces the live shape (thread a418b017): several current succeeded_by
+    candidates on one node, only ONE of which continues on to a live terminal — placed
+    at the WORST rank position (lowest confidence, oldest timestamp, lowest id) among
+    four candidates, so this only passes if every distinct candidate is genuinely
+    explored, not merely the top-ranked one."""
+    from src.orchestrator.agents import lineage_head
+    from src.orchestrator.mounts import save_mount
+
+    now = datetime.now(UTC)
+    fork = await actions.create_or_find_object("Agent", "agent:88fork-i", "test")
+    for leaf in ("a", "b", "c"):
+        await actions.create_or_find_object("Agent", f"agent:88fork-dead-{leaf}", "test")
+    await actions.create_or_find_object("Agent", "agent:88fork-live", "test")
+    # three dead branches, each ranked ABOVE the live one (higher confidence or, at equal
+    # confidence, a later timestamp) — inserted first so their assertion ids are lower,
+    # not that it matters here since confidence/observed_at alone already outrank it.
+    await actions.assert_property(fork, "succeeded_by", "agent:88fork-dead-a",
+                                  "source-a", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(fork, "succeeded_by", "agent:88fork-dead-b",
+                                  "source-b", now, 0.9, evidence_class="self_declared")
+    await actions.assert_property(fork, "succeeded_by", "agent:88fork-dead-c",
+                                  "source-c", now - timedelta(seconds=1), 0.7,
+                                  evidence_class="direct_observation")
+    # the LIVE branch: lowest confidence, oldest timestamp — last place by the old
+    # single-path rank order.
+    await actions.assert_property(fork, "succeeded_by", "agent:88fork-live",
+                                  "source-d", now - timedelta(days=1), 0.35,
+                                  evidence_class="co_occurrence")
+    await save_mount(actions.pool, job_dir="/jobs/88fork-live", agent_id="agent:88fork-live",
+                     project="demo", cwd="/w/x", model=None, session_key=None)
+
+    assert await lineage_head(actions.pool, "agent:88fork-i") == "agent:88fork-live"
+
+
+async def test_succeeded_by_candidates_collapses_two_sources_agreeing_on_one_value(
+    actions: Actions,
+) -> None:
+    """TWO DIFFERENT sources agreeing on the SAME succeeded_by value is corroboration,
+    never a fork — `_succeeded_by_candidates` groups by VALUE, not by assertion row, so
+    this is exactly one candidate, not two."""
+    from src.orchestrator.agents import _succeeded_by_candidates
+
+    now = datetime.now(UTC)
+    fork = await actions.create_or_find_object("Agent", "agent:99fork-i", "test")
+    await actions.create_or_find_object("Agent", "agent:99fork-ii", "test")
+    await actions.assert_property(fork, "succeeded_by", "agent:99fork-ii",
+                                  "source-a", now - timedelta(seconds=10), 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(fork, "succeeded_by", "agent:99fork-ii",
+                                  "source-b", now, 0.6, evidence_class="direct_observation")
+
+    assert await _succeeded_by_candidates(actions.pool, "agent:99fork-i") == [
+        "agent:99fork-ii"]
+
+
 async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
     """THE PARALLEL-LIVES STAMP (thread 4bcd6541): rows are hot state, so the pulse
     evidence at mint time is captured AT the mint — predecessor_last_seen always, and
