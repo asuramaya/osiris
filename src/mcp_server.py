@@ -5655,8 +5655,12 @@ async def inbox(project: str | None = None, peek: bool = False,
 
     `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
     Your own mailbox renders one line per ASK message, FYI folded to a single trailing
-    count line (`textrender.render_mail_text`); the operator desk (whose shape is bands,
-    not a flat list) falls back to the generic line-per-field renderer."""
+    count line (`textrender.render_mail_text`). The operator desk renders the backlog
+    band first (all-projects obligation pressure), then owed/letters, then
+    needs_decision/needs_hands/fyi/dimmed/miner_guesses each as ONE COUNT LINE (never
+    itemized -- settling by id needs the ids this collapsed glance deliberately drops;
+    re-call without `render` for the full structured bands first), then `your_queue`
+    itemized one line per thread (`textrender.render_desk_text`)."""
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)
     if proj is None:
@@ -5696,8 +5700,12 @@ async def inbox(project: str | None = None, peek: bool = False,
         desk = await read_desk(pool)
         out = {"project": OPERATOR_ADDR, **desk, **ack_keys}
         if render == "text":
-            from src.orchestrator.textrender import render_status_text
-            return {"text": render_status_text(out)}
+            from src.orchestrator import digest as _digest
+            from src.orchestrator.textrender import render_backlog_text, render_desk_text
+            backlog_rows = await _digest._obligation_pressure(Actions(pool))
+            backlog_text = render_backlog_text(sorted(
+                backlog_rows, key=lambda r: (0 if r["past_window"] else 1, -r["open"])))
+            return {"text": render_desk_text(out, backlog_text=backlog_text)}
         return out
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)

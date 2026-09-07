@@ -1323,7 +1323,11 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # 110,537 -> 111,502 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): team ships as
 # a new tool (its own docstring + inputSchema for render). Measured exact (111,502), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 111502  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
+# 111,502 -> 111,826 (2026-09-07, Seshat, thread 68f1bafa/3703a3a9, wave 2): inbox's own
+# render='text' docstring paragraph grows to name the operator desk's own collapsed-band
+# shape (desk.md's own rewrite). No new param, no new tool. Measured exact (111,826), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 111826  # THE ONLY ASSIGNMENT; history is comments above (c655c757).
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

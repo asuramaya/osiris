@@ -117,6 +117,40 @@ def _render_mail_row(m: dict[str, Any]) -> str:
     return f"{m.get('id')} ask from:{m.get('from')} thread:{thread} — {snippet}"
 
 
+def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -> str:
+    """The operator desk (thread 68f1bafa's own "/desk with the backlog band first and
+    briefs collapsed to one count line"): the backlog view first (all-projects debt
+    pressure, when given), then owed/letters headline, then needs_decision/needs_hands/
+    fyi/dimmed/miner_guesses each folded to ONE COUNT LINE (never itemized -- a card's
+    real text is only in the structured receipt, since settling by id needs the ids the
+    collapsed view deliberately drops), then `your_queue` itemized one line per thread
+    (the canonical debt list, not a "brief" -- kept legible, not collapsed)."""
+    lines: list[str] = []
+    if backlog_text:
+        lines.append(backlog_text)
+        lines.append("")
+    lines.append(f"owed: {desk.get('owed', 0)}  letters: {desk.get('letters', 0)}")
+    for key, label in (("needs_decision", "needs decision"), ("needs_hands", "needs hands"),
+                       ("fyi", "fyi")):
+        n = len(desk.get(key) or [])
+        if n:
+            lines.append(f"{label}: {n}")
+    dimmed = desk.get("dimmed") or []
+    if dimmed:
+        lines.append(f"dimmed: {len(dimmed)}")
+    guesses = (desk.get("miner_guesses") or {}).get("threads") or []
+    if guesses:
+        lines.append(f"miner_guesses: {len(guesses)} (not counted in owed)")
+    queue = (desk.get("your_queue") or {}).get("threads") or []
+    if queue:
+        lines.append("your_queue:")
+        for t in queue:
+            lines.append(f"  {t.get('id')} — {t.get('summary')}")
+    if len(lines) == 1:  # only the owed/letters headline, nothing else at all
+        lines.append("desk clear")
+    return "\n".join(lines)
+
+
 def render_team_text(rows: list[dict[str, Any]]) -> str:
     """One line per managed seat: live glyph, owe (stale flagged separately when nonzero),
     envelope (unread asks for that seat's current holder). No cap: a manager's own team is
