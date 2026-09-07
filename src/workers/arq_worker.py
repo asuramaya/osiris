@@ -811,6 +811,35 @@ async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE STALE-WINDOW SWEEP, INSTALLED ON THE FRESH-INSTALL PATH (thread 28fa9e22,
+    operator dispatch wave 3/4, #203's own "ships mechanically, never a coordinator's
+    hand pass" mandate): migration 0060 ran ONCE, by hand, at deploy time — but new
+    derived threads keep aging past their own 30-day window every day after, and a
+    stranger's install has no coordinator to re-run a migration script by hand. This
+    cron re-applies the SAME three laws (owner/kind/expiry) on the same 900s cadence as
+    its no-regrow siblings, so a fresh `osiris migrate` + boot alone keeps the graph's
+    own classification current, forever, with zero hand on it.
+
+    The acting logic (`apply_migration_0060`) lives in migration_0060.py — Khnum's own
+    helper, called here verbatim, never a second copy of the closure/owner/kind rules.
+    Idempotent by construction (that module's own docstring): a clean re-run over
+    already-compliant rows costs nothing. A DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.migration_0060 import apply_migration_0060
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await apply_migration_0060(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("classification laws heartbeat failed: %r", exc)
+        return 0
+    acted = int(report.get("owners_resolved", 0)) + int(report.get("kinds_assigned", 0)) \
+        + int(report.get("kinds_reclassified", 0)) + int(report.get("expired", 0))
+    if acted:
+        _log.info("classification laws heartbeat: %s", report)
+    return acted
+
+
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
     """The landing audit's scheduled leg (Thoth DM 5544): task #168 built and tested
     deploy_guard.landing_audit/stale_unmerged_branches — measured live, the mechanism was
@@ -1121,6 +1150,13 @@ class WorkerSettings:
         # none contend for CPU at the same wall-clock second.
         cron(watched(obligation_hygiene_heartbeat, every=900), minute={5, 20, 35, 50},
              second={40}, timeout=600, run_at_startup=True),
+        # thread 28fa9e22: migration 0060's own three classification laws (owner/kind/
+        # expiry), re-applied on a fresh install with no coordinator's hand — same
+        # 15-min cadence class, offset from all eight siblings above so none contend for
+        # CPU at the same wall-clock second. run_at_startup=True so a stranger's very
+        # first boot already carries current classification, not just after 15 minutes.
+        cron(watched(classification_laws_heartbeat, every=900), minute={6, 21, 36, 51},
+             second={45}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
