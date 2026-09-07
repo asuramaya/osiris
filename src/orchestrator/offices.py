@@ -135,7 +135,10 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
       seat  — the row's own handle. Skipped entirely for a seat with no handle on record.
       house — `derive_house`'s own answer. None IS the honest "I don't know" (already built
               into that function's cycle/hop-limit handling, ruling ff6148b0) — reported as a
-              gap, never defaulted to anything.
+              gap, never defaulted to anything. Skipped entirely, and silently (no `unknown`
+              entry either), when the answer equals a repo the claiming seat's own charter
+              already governs — ruling 860b0306: a house pin exists only when it names
+              something DIFFERENT from the project, never a same-value default.
       kind  — "office" for `anchor_cwd`; `_infer_tree_kind`'s path-shape read for `tree_cwd`.
 
     A path CLAIMED BY MORE THAN ONE SEAT (two rows naming the same anchor_cwd or tree_cwd —
@@ -169,6 +172,7 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     claims: dict[str, list[tuple[str, str]]] = {}       # path -> [(seat_id, handle), ...]
     kind_of: dict[str, str | None] = {}                  # path -> proposed kind
     house_of_path: dict[str, list[str | None]] = {}      # path -> every claimant's house answer
+    projects_of_path: dict[str, set[str]] = {}            # path -> every claimant's own repos
 
     for row in data["seats"]:
         handle = row["handle"]
@@ -184,6 +188,7 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
             claims.setdefault(path, []).append((seat_id, handle))
             kind_of[path] = "office" if is_office else _infer_tree_kind(path)
             house_of_path.setdefault(path, []).append(house)
+            projects_of_path.setdefault(path, set()).update(row["chartered_repos"])
 
     plan: list[dict[str, Any]] = []
     for path, claimants in sorted(claims.items()):
@@ -199,7 +204,12 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
             proposed["seat"] = next(iter(distinct_handles))
         houses = {h for h in house_of_path[path] if h}
         if len(houses) == 1:
-            proposed["house"] = next(iter(houses))
+            only_house = next(iter(houses))
+            if only_house in projects_of_path.get(path, set()):
+                pass  # ruling 860b0306: redundant with the project this seat governs —
+                      # not a gap, nothing to propose, silently correct
+            else:
+                proposed["house"] = only_house
         elif len(houses) > 1:
             unknown.append(f"house: claimants disagree ({sorted(houses)}) — writing nothing")
         else:
