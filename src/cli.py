@@ -2974,6 +2974,295 @@ async def cmd_amend_decision(
     return 0
 
 
+# --- send / decide / thread (THE WRITE TRIANGLE, dispatch a354ba28, msg 7882 item 2) ------------
+#
+# THE READ TRIANGLE'S OWN COUNTERPART (commit 841fad0 built get_status(render='text') +
+# commands/status.md as "wave 1" of reading the fleet from a bare terminal); these three
+# close the matching gap on the WRITE side — mail, a decision, and closing a thread were
+# each reachable only through an MCP client before this, so an operator (or a script) at a
+# plain shell had no way to post to the fleet's own memory without one. Each calls the SAME
+# orchestrator function its MCP twin wraps (mailbox.send_message / capture.record_decision /
+# capture.resolve_thread(_bulk)), same "no duplicated guard" law annotate-thread/amend-
+# decision above already keep. Named for Khnum's parity gate (5bf6447c): each command's own
+# param set matches its MCP counterpart's exactly (tests/test_cli_mcp_parity.py), via
+# CLI_TO_MCP_NAME for `decide`->`record_decision` and `thread`->`thread:resolve`; `send`
+# needs no override, its name already matches.
+
+async def cmd_send(
+    body: str, *, to: str | None = None, to_agent: str | None = None,
+    reply_to: int | None = None, desk: str | None = None, grade: str | None = None,
+    require_seat: bool = False, threads: list[str] | None = None,
+    want_prior_art: bool = False, want_listener: bool = False,
+    from_project: str | None = None, actor: str = _CONSOLE_ACTOR,
+    as_json: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris send <body> [--to PROJECT | --to-agent AGENT] ... — the console-script door
+    onto mailbox.send_message, the SAME function the send MCP tool wraps (no duplicated
+    guard: `to`'s unknown-project refusal, the send-door addressing guard on a mismatched
+    room, and every seat-resolution refusal below are exactly send_message's own).
+
+    `--from-project` is CLI-ONLY (CLI_ONLY_PARAMS, test_cli_mcp_parity.py): the MCP tool
+    derives it from the caller's own mount (`ident.project`) — a bare console caller has
+    no mount to derive it from, so this names the gap with an explicit flag instead of
+    guessing or leaving broadcasts from a console unrouteable.
+
+    A NAMED RESIDUAL (not every MCP-side receipt field is reproduced): `dispatch` (the
+    immediate wake/poke leg) and `listener` (when `--want-listener`) ARE included, same
+    as the MCP receipt; the "crossed-mail" peer-thread warning and the ephemeral-spawn
+    warning are not — a real, bounded gap, not a silent omission, left for whoever next
+    finds a console caller actually needs them."""
+    from src.orchestrator.mailbox import send_message
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4,
+                                     application_name="osiris-cli:send")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris send: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        prior: list[dict[str, Any]] = []
+        if want_prior_art and (grade == "ask" or to_agent):
+            from src.mcp_server import _surface_prior_art
+            prior = await _surface_prior_art(pool, body, repo=from_project, actor=actor)
+        try:
+            res = await send_message(
+                pool, from_agent=actor, from_project=from_project, to_project=to,
+                to_agent=to_agent, body=body, reply_to=reply_to, desk_kind=desk,
+                grade=grade, require_seat=require_seat, threads=threads)
+        except ValueError as e:
+            print(f"osiris send: refused — {e}", file=sys.stderr)
+            return 1
+        out: dict[str, Any] = {"sent": res["id"], "from": actor}
+        if res["thread_id"] is not None:
+            out["thread"] = res["thread_id"]
+        if res.get("dedup"):
+            out["dedup"] = "identical recent message already queued — not re-posted"
+        if res.get("threads_stamped"):
+            out["threads_stamped"] = res["threads_stamped"]
+        if res.get("addressee_resolved"):
+            out["addressee_resolved"] = res["addressee_resolved"]
+        if want_prior_art and prior:
+            out["prior_art"] = [{"id": p["id"], "type": p.get("type"),
+                                 "summary": p.get("summary", "")} for p in prior]
+        if res["to_agent"]:
+            out["dm_to"] = res["to_agent"]
+            out["seat"] = res.get("seat")
+            out["lineage_head"] = res.get("lineage_head")
+            if want_listener:
+                from src.orchestrator import mounts
+                out["listener"] = await mounts.agent_liveness(
+                    pool, res.get("lineage_head") or res["to_agent"])
+            if res.get("redirect"):
+                out["redirect"] = res["redirect"]
+            if not res["dedup"]:
+                try:
+                    from src.orchestrator.trigger import dispatch_dm
+                    out["dispatch"] = await dispatch_dm(
+                        pool, addressee=res["to_agent"], msg_id=res["id"], sender=actor)
+                except Exception as exc:  # noqa: BLE001 - the send already committed; confess
+                    out["dispatch"] = {"mode": "deferred",
+                                       "detail": f"immediate dispatch failed ({exc}) — "
+                                                "the worker sweep is the backstop"}
+        else:
+            from src.orchestrator import mounts
+            dest = res["to"]
+            out["to"] = dest
+            if want_listener:
+                from datetime import UTC, datetime, timedelta
+
+                last_seen = await mounts.project_last_seen(pool, dest)
+                out["listener"] = {
+                    "live": bool(last_seen and datetime.now(UTC) - datetime.fromisoformat(
+                        last_seen) < timedelta(minutes=15)),
+                    "last_seen": last_seen}
+            if not res["dedup"]:
+                try:
+                    from src.orchestrator.trigger import dispatch_broadcast
+                    out["dispatch"] = await dispatch_broadcast(
+                        pool, project=dest, msg_id=res["id"], sender=actor)
+                except Exception as exc:  # noqa: BLE001 - the send already committed; confess
+                    out["dispatch"] = {"mode": "deferred",
+                                       "detail": f"immediate dispatch failed ({exc}) — "
+                                                "the worker sweep is the backstop"}
+            from src.config.settings import get_settings
+            from src.orchestrator.mailbox import project_deliverable_count
+            out["backlog"] = await project_deliverable_count(
+                pool, dest, lease_secs=get_settings().osiris_mail_lease_secs)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="send")
+    return 0
+
+
+async def cmd_decide(
+    summary: str, *, kind: str = "ruling", rationale: str | None = None,
+    repo: str | None = None, grounds: list[str] | None = None,
+    protocol: str | None = None, supersedes: str | None = None,
+    resolves: list[str] | None = None, obsoletes: list[str] | None = None,
+    confirms: list[str] | None = None, refutes: str | None = None,
+    implements: str | None = None, rediscovers: list[str] | None = None,
+    bears_on: list[str] | None = None, narrows: list[str] | None = None,
+    cites: list[str] | None = None, ack_prior_art: bool = False,
+    unlinked_because: str | None = None, actor: str = _CONSOLE_ACTOR,
+    as_json: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris decide <summary> [--kind K] [--rationale R] ... — the console-script door
+    onto capture.record_decision, the SAME function the record_decision MCP tool wraps
+    (no duplicated guard: idempotent-retry-reuses-the-same-decision, the declare-or-
+    refuse link-kind gate, and `supersedes`/`resolves`'s own free-text resolution
+    — `_find_decision`/`_find_thread` — are exactly record_decision's own, untouched
+    here; those two are the only link params it resolves internally).
+
+    A NAMED, BOUNDED GAP for the rest: `grounds`/`confirms`/`rediscovers`/`bears_on`/
+    `narrows`/`cites`/`implements`/`refutes` are typed as PRE-RESOLVED UUIDs by
+    record_decision itself (the MCP wrapper does the free-text/short-id resolution
+    BEFORE calling it, via the same `_find_decision`/`_find_thread`/`_find_practice`
+    helpers) — reproducing that whole resolution ladder here would be the exact
+    duplicated-guard risk this door's own law forbids, so this console door accepts
+    only an EXACT uuid for each (never a canonical string or short-id prefix), and
+    `--ack-prior-art` is accepted for CLI/MCP name parity but has no effect — no
+    prior-art search runs from a bare terminal, so there is nothing to acknowledge.
+
+    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule amend-decision/
+    annotate-thread above keep — but this hand-builds a LEANER receipt than the MCP
+    wrapper's own (no `content_landed`/`prior_art`/`resolved_thread` echo): a named,
+    bounded gap, not a silent one."""
+    import uuid as uuid_mod
+
+    from src.actions.core import Actions
+    from src.orchestrator.capture import record_decision
+
+    def _uuids(vals: list[str] | None, flag: str) -> list[uuid_mod.UUID] | None:
+        if not vals:
+            return None
+        try:
+            return [uuid_mod.UUID(v) for v in vals]
+        except ValueError as e:
+            raise SystemExit(
+                f"osiris decide: {flag} takes an exact uuid only (no short-id/prose "
+                f"resolution from the console) — {e}") from e
+
+    def _uuid1(val: str | None, flag: str) -> uuid_mod.UUID | None:
+        if val is None:
+            return None
+        try:
+            return uuid_mod.UUID(val)
+        except ValueError as e:
+            raise SystemExit(
+                f"osiris decide: {flag} takes an exact uuid only (no short-id/prose "
+                f"resolution from the console) — {e}") from e
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4,
+                                     application_name="osiris-cli:decide")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris decide: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        try:
+            did = await record_decision(
+                Actions(pool), summary, kind=kind, rationale=rationale, repo=repo,
+                source=actor, grounds=_uuids(grounds, "--grounds"), protocol=protocol,
+                supersedes=supersedes, resolves=resolves, obsoletes=obsoletes,
+                confirms=_uuids(confirms, "--confirms"),
+                implements=_uuid1(implements, "--implements"),
+                rediscovers=_uuids(rediscovers, "--rediscovers"),
+                bears_on=_uuids(bears_on, "--bears-on"),
+                narrows=_uuids(narrows, "--narrows"), cites=_uuids(cites, "--cites"),
+                refute_id=_uuid1(refutes, "--refutes"),
+                unlinked_because=unlinked_because)
+        except ValueError as e:
+            print(f"osiris decide: refused — {e}", file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    out = {"id": str(did), "kind": kind, "summary": summary.strip()}
+    if ack_prior_art:
+        out["note"] = "--ack-prior-art has no effect from the console — no prior-art " \
+                       "search runs here (see this command's own docstring)"
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="decide")
+    return 0
+
+
+async def cmd_thread(
+    ref: list[str], *, because: str | None = None, artifact: str | None = None,
+    dry_run: bool = True, actor: str = _CONSOLE_ACTOR, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris thread <ref>... [--because W] [--artifact A] [--dry-run/--no-dry-run] —
+    the console-script door onto the `thread` MCP tool's own `action='resolve'` branch
+    (the terminal-native reading of a bare "thread" verb: closing one). A DELIBERATE
+    NARROWING (same shape as `desk`/`show`'s own declared narrowings, NO_MCP_EQUIVALENT's
+    reasoning in test_cli_mcp_parity.py): `thread`'s other three actions (annotate/
+    correct_summary/reclassify) have no console door here — annotate already has its own
+    (`annotate-thread`); the other two are a real, left-open gap, not silently dropped.
+
+    ONE ref resolves through capture.resolve_thread directly (no dry_run — the single-ref
+    primitive has never had one); MORE THAN ONE routes through resolve_threads_bulk,
+    where --dry-run (default True, matching the MCP tool's own default) actually applies
+    — this mirrors `_thread_action_impl`'s own resolve branch exactly, not a
+    reimplementation of it."""
+    from src.actions.core import Actions
+    from src.orchestrator.capture import resolve_thread, resolve_threads_bulk
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=4,
+                                     application_name="osiris-cli:thread")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris thread: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        if len(ref) == 1:
+            tid = await resolve_thread(
+                Actions(pool), ref[0], because=because, artifact=artifact, source=actor)
+            if tid is None:
+                print(f"osiris thread: refused — no thread matches {ref[0]!r}",
+                      file=sys.stderr)
+                return 1
+            out: dict[str, Any] = {"id": str(tid), "status": "resolved"}
+        else:
+            out = await resolve_threads_bulk(
+                Actions(pool), ref, because=because or "", artifact=artifact,
+                dry_run=dry_run, source=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="thread")
+    return 0
+
+
 # --- rebind-seat / correct-pin-value (thread 6437, #199's parity lane) --------------------------
 #
 # THE JESUS/CHAD PATH, FROM A TERMINAL: a seat self-reconciling ran exactly
@@ -3856,10 +4145,11 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   end one               stop
   see the fleet         fleet, roster, boot-status, smoke
   read the record       desk, show
-  write to the record   annotate-thread, amend-decision, charter-for, amend-practice,
-                        merge, unmerge, fold-project, rebind-seat, correct-pin-value,
-                        heal-seat-anchor, transition-seat-project, correct-agent-house,
-                        reconcile-merge, retire-agent, heal-seat-transcript
+  write to the record   send, decide, thread, annotate-thread, amend-decision,
+                        charter-for, amend-practice, merge, unmerge, fold-project,
+                        rebind-seat, correct-pin-value, heal-seat-anchor,
+                        transition-seat-project, correct-agent-house, reconcile-merge,
+                        retire-agent, heal-seat-transcript
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile
 
@@ -4172,6 +4462,104 @@ def _build_parser() -> argparse.ArgumentParser:
     p_amend_decision.add_argument("--actor", default=_CONSOLE_ACTOR,
                                   help=f"who is making this addendum — defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
+
+    p_send = sub.add_parser("send", description=_d(
+        "message the fleet — the same send the MCP tool wraps, exposed as a bare-"
+        "terminal door. `--to`=<project> is a BROADCAST; `--to-agent`=<agent> is a "
+        "private DM. Refuses a project nobody has mounted under, or a broadcast whose "
+        "body names a real seat mounted in a different room, exactly as the MCP tool "
+        "does"),
+        epilog="example, a broadcast: osiris send 'deploy landing' --to osiris\n"
+               "example, a DM: osiris send 'ship it' --to-agent agent:abc123")
+    p_send.add_argument("body", help="the message text")
+    p_send.add_argument("--to", default=None, help="broadcast to this project's room")
+    p_send.add_argument("--to-agent", default=None, help="DM this agent id or live handle")
+    p_send.add_argument("--reply-to", type=int, default=None,
+                        help="the message id this answers")
+    p_send.add_argument("--desk", default=None, choices=["decision", "hands", "fyi"],
+                        help="the operator-desk band this belongs to")
+    p_send.add_argument("--grade", default=None, choices=["ask", "fyi"],
+                        help="'ask' (named in the recipient's unread count) or 'fyi'")
+    p_send.add_argument("--require-seat", action="store_true",
+                        help="refuse rather than DM an unclaimed target")
+    p_send.add_argument("--threads", nargs="*", default=None,
+                        help="existing Thread ref(s) to transfer ownership of to a DM's "
+                             "addressee")
+    p_send.add_argument("--want-prior-art", action="store_true",
+                        help="run the same prior-art search record_decision does")
+    p_send.add_argument("--want-listener", action="store_true",
+                        help="include liveness in the receipt")
+    p_send.add_argument("--from-project", default=None,
+                        help="CLI-only (see CLI_ONLY_PARAMS): an agent's from_project "
+                             "comes from its own mount; a console caller has none, so "
+                             "name it explicitly for broadcast-reply routing")
+    p_send.add_argument("--actor", default=_CONSOLE_ACTOR,
+                        help=f"who this is from — defaults to {_CONSOLE_ACTOR!r}")
+    p_send.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: one compact JSON line")
+
+    p_decide = sub.add_parser("decide", description=_d(
+        "record a decision (ruling|reset|override|rejection|choice) — the same "
+        "record_decision the MCP tool wraps, exposed as a bare-terminal door. An exact "
+        "repeat re-uses the existing decision rather than minting a twin"),
+        epilog="example: osiris decide 'freeze non-critical merges after Thursday' "
+               "--rationale 'mobile team cutting a release branch' --repo osiris")
+    p_decide.add_argument("summary", help="the decision, one clear sentence")
+    p_decide.add_argument("--kind", default="ruling",
+                          help="ruling|reset|override|rejection|choice (default: ruling)")
+    p_decide.add_argument("--rationale", default=None, help="the WHY behind the summary")
+    p_decide.add_argument("--repo", default=None, help="the project this decision governs")
+    p_decide.add_argument("--grounds", nargs="*", default=None,
+                          help="refs this decision rests on")
+    p_decide.add_argument("--protocol", default=None,
+                          help="the exact invocation to rerun this decision's own act")
+    p_decide.add_argument("--supersedes", default=None, help="bury an earlier decision")
+    p_decide.add_argument("--resolves", nargs="*", default=None,
+                          help="close the Thread(s) this settles")
+    p_decide.add_argument("--obsoletes", nargs="*", default=None,
+                          help="kill a named Superstition")
+    p_decide.add_argument("--confirms", nargs="*", default=None, help="witness a Practice")
+    p_decide.add_argument("--refutes", default=None, help="disprove a Practice")
+    p_decide.add_argument("--implements", default=None,
+                          help="execute a standing Decision (parent stays alive)")
+    p_decide.add_argument("--rediscovers", nargs="*", default=None,
+                          help="independent re-arrival at an earlier decision")
+    p_decide.add_argument("--bears-on", nargs="*", default=None,
+                          help="speak to an open Thread without closing it")
+    p_decide.add_argument("--narrows", nargs="*", default=None,
+                          help="scope-bound an earlier decision")
+    p_decide.add_argument("--cites", nargs="*", default=None,
+                          help="add a facet to an earlier decision")
+    p_decide.add_argument("--ack-prior-art", action="store_true",
+                          help="record a dismissed prior_art_flag instead of a silent shrug")
+    p_decide.add_argument("--unlinked-because", default=None,
+                          help="a real reason through declare-or-refuse's link-kind gate")
+    p_decide.add_argument("--actor", default=_CONSOLE_ACTOR,
+                          help=f"who is deciding — defaults to {_CONSOLE_ACTOR!r}")
+    p_decide.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line")
+
+    p_thread = sub.add_parser("thread", description=_d(
+        "resolve (close) a Thread — the same `thread` MCP tool's own action='resolve' "
+        "branch, exposed as a bare-terminal door. A DELIBERATE NARROWING: the other "
+        "three actions (annotate/correct_summary/reclassify) have no door here — "
+        "annotate already has its own (osiris annotate-thread)"),
+        epilog="example: osiris thread a1b2c3d4 --because 'shipped in e74efd6'\n"
+               "example, closing several at once: osiris thread a1b2 c3d4 e5f6 "
+               "--because 'superseded by the census' --no-dry-run")
+    p_thread.add_argument("ref", nargs="+",
+                          help="one or more target Thread uuid/canonical/short-id/"
+                               "summary-substring refs")
+    p_thread.add_argument("--because", default=None, help="a short WHY, not an essay")
+    p_thread.add_argument("--artifact", default=None,
+                          help="a file:line/commit/decision proving the close")
+    p_thread.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
+                          help="preview only — ONLY takes effect with more than one ref "
+                               "(the single-ref primitive never previews); default true")
+    p_thread.add_argument("--actor", default=_CONSOLE_ACTOR,
+                          help=f"who is closing this — defaults to {_CONSOLE_ACTOR!r}")
+    p_thread.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line")
 
     p_rebind_seat = sub.add_parser(
         "rebind-seat", description=_d(
@@ -4527,6 +4915,27 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_annotate_thread(args.ref, args.note, actor=args.actor))
     if args.command == "amend-decision":
         return asyncio.run(cmd_amend_decision(args.ref, args.addendum, actor=args.actor))
+    if args.command == "send":
+        return asyncio.run(cmd_send(
+            args.body, to=args.to, to_agent=args.to_agent, reply_to=args.reply_to,
+            desk=args.desk, grade=args.grade, require_seat=args.require_seat,
+            threads=args.threads, want_prior_art=args.want_prior_art,
+            want_listener=args.want_listener, from_project=args.from_project,
+            actor=args.actor, as_json=args.as_json))
+    if args.command == "decide":
+        return asyncio.run(cmd_decide(
+            args.summary, kind=args.kind, rationale=args.rationale, repo=args.repo,
+            grounds=args.grounds, protocol=args.protocol, supersedes=args.supersedes,
+            resolves=args.resolves, obsoletes=args.obsoletes, confirms=args.confirms,
+            refutes=args.refutes, implements=args.implements,
+            rediscovers=args.rediscovers, bears_on=args.bears_on, narrows=args.narrows,
+            cites=args.cites, ack_prior_art=args.ack_prior_art,
+            unlinked_because=args.unlinked_because, actor=args.actor,
+            as_json=args.as_json))
+    if args.command == "thread":
+        return asyncio.run(cmd_thread(
+            args.ref, because=args.because, artifact=args.artifact,
+            dry_run=args.dry_run, actor=args.actor, as_json=args.as_json))
     if args.command == "rebind-seat":
         return asyncio.run(cmd_rebind_seat(args.seat, args.new_cwd, actor=args.actor,
                                            extract=args.extract, because=args.because,

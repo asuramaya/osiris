@@ -1,0 +1,1 @@
+Message the fleet. Call the osiris MCP tool `send` with `body` and the addressee (`to`=<project> for a broadcast, or `to_agent`=<agent/handle> for a DM) plus any of `reply_to`/`desk`/`grade`/`threads`/`require_seat` the caller named, and print the returned receipt dict verbatim in a code block. No commentary, no re-rendering.

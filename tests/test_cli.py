@@ -34,6 +34,7 @@ from src.cli import (
     cmd_charter_for,
     cmd_correct_agent_house,
     cmd_correct_pin_value,
+    cmd_decide,
     cmd_deploy,
     cmd_desk,
     cmd_fleet_reconcile,
@@ -52,8 +53,10 @@ from src.cli import (
     cmd_retention,
     cmd_retire_agent,
     cmd_seed,
+    cmd_send,
     cmd_show,
     cmd_smoke_chaos,
+    cmd_thread,
     cmd_unmerge,
     commit_deployed_notes,
     composition_drift_notes,
@@ -3459,6 +3462,166 @@ async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
     assert args.ref == "decision:abc12345"
     assert args.addendum == "reaffirmed"
     assert args.actor == "operator"
+
+
+# --- send / decide / thread: THE WRITE TRIANGLE (dispatch a354ba28, msg 7882 item 2) —
+# each calls the SAME orchestrator function its MCP twin wraps, guard untouched ------------------
+
+async def test_cmd_send_broadcasts_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator import mounts
+    from src.orchestrator.mailbox import read_inbox
+
+    await mounts.save_mount(actions.pool, job_dir="/j/clisend01", agent_id="agent:clisend01",
+                            project="clisendhouse", cwd="/x", model=None, session_key=None)
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_send("deploy landing shortly", to="clisendhouse",
+                             actor="agent:clisender", pool=actions.pool)
+    assert out == 0
+    assert '"sent"' in buf.getvalue() or "sent" in buf.getvalue()
+
+    msgs = await read_inbox(actions.pool, "clisendhouse", reader_agent="agent:someoneelse")
+    assert [m["body"] for m in msgs] == ["deploy landing shortly"]
+
+
+async def test_cmd_send_refuses_an_unknown_project(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_send("hello", to="no-such-project-ever", actor="agent:clisender2",
+                             pool=actions.pool)
+    assert out == 1
+    assert "refused" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_send(actions: Actions) -> None:
+    """argparse wiring: body positional, --to/--to-agent/--from-project optional."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["send", "ship it", "--to-agent", "agent:abc123", "--grade", "ask",
+         "--from-project", "osiris"])
+    assert args.command == "send"
+    assert args.body == "ship it"
+    assert args.to_agent == "agent:abc123"
+    assert args.grade == "ask"
+    assert args.from_project == "osiris"
+    assert args.to is None
+
+
+async def test_cmd_decide_records_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import _canon, _decision_snapshot
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_decide("the console needs its own write door", kind="ruling",
+                               rationale="an operator at a bare shell had none",
+                               actor="agent:clidecider1", pool=actions.pool)
+    assert out == 0
+    text = buf.getvalue()
+    assert "ruling" in text
+
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE type='Decision' AND canonical=$1",
+        _canon("decision", "the console needs its own write door"))
+    assert row is not None
+    snap = await _decision_snapshot(actions.pool, row["id"])
+    assert snap is not None and snap["rationale"] == "an operator at a bare shell had none"
+
+
+async def test_cmd_decide_rejects_a_non_uuid_grounds_ref(actions: Actions) -> None:
+    with pytest.raises(SystemExit):
+        await cmd_decide("a decision citing a bad ref", grounds=["not-a-uuid"],
+                         actor="agent:clidecider2", pool=actions.pool)
+
+
+async def test_cli_parser_accepts_decide(actions: Actions) -> None:
+    """argparse wiring: summary positional, --kind/--rationale/--grounds/... optional."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["decide", "freeze non-critical merges after Thursday", "--rationale",
+         "release cut", "--repo", "osiris", "--grounds", "11111111-1111-1111-1111-111111111111",
+         "--ack-prior-art"])
+    assert args.command == "decide"
+    assert args.summary == "freeze non-critical merges after Thursday"
+    assert args.rationale == "release cut"
+    assert args.repo == "osiris"
+    assert args.grounds == ["11111111-1111-1111-1111-111111111111"]
+    assert args.ack_prior_art is True
+
+
+async def test_cmd_thread_resolves_a_single_ref_and_reports(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import _thread_resolved_in, open_thread
+
+    tid = await open_thread(actions, "the write triangle needs its own thread door")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_thread([str(tid)], because="shipped via osiris thread",
+                               actor="agent:clithreader1", pool=actions.pool)
+    assert out == 0
+    assert "resolved" in buf.getvalue()
+    assert await _thread_resolved_in(actions.pool, tid) is not None
+
+
+async def test_cmd_thread_bulk_dry_run_previews_only(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    from src.orchestrator.capture import _thread_resolved_in, open_thread
+
+    t1 = await open_thread(actions, "bulk thread one for the console door")
+    t2 = await open_thread(actions, "bulk thread two for the console door")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_thread([str(t1), str(t2)], because="closing a batch",
+                               dry_run=True, actor="agent:clithreader2", pool=actions.pool)
+    assert out == 0
+    # a dry run must not have actually resolved either thread
+    assert await _thread_resolved_in(actions.pool, t1) is None
+    assert await _thread_resolved_in(actions.pool, t2) is None
+
+
+async def test_cmd_thread_refuses_no_match(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_thread(["no such thread anywhere"], actor="agent:clithreader3",
+                               pool=actions.pool)
+    assert out == 1
+    assert "no thread matches" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_thread(actions: Actions) -> None:
+    """argparse wiring: ref nargs='+', --because/--artifact/--dry-run."""
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["thread", "abc12345", "def67890", "--because", "superseded",
+         "--no-dry-run"])
+    assert args.command == "thread"
+    assert args.ref == ["abc12345", "def67890"]
+    assert args.because == "superseded"
+    assert args.dry_run is False
+
+    bare = _build_parser().parse_args(["thread", "abc12345"])
+    assert bare.dry_run is True
 
 
 # --- rebind-seat / correct-pin-value: the jesus/chad path from a terminal (thread 6437,

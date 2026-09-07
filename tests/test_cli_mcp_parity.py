@@ -125,6 +125,17 @@ NO_MCP_EQUIVALENT = {
 
 # (cli_command, param) -> reason: a CLI-only param beyond the blanket "actor" exemption.
 CLI_ONLY_PARAMS = {
+    ("send", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's own "
+        "entry below.",
+    ("decide", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
+    ("thread", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
+    ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
+        "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
+        "bare console caller has no mount to derive it from, so this names the gap with "
+        "an explicit flag rather than guessing or leaving broadcast-reply routing "
+        "unreachable from a terminal.",
     ("launch", "debug"): "the PTY-broker fallback lane is an operational/incident choice; "
         "the MCP tool only ever spawns the harness-native default substrate",
     ("mint-seat", "manager"): "MCP infers the manager from the caller's own held seat by "
@@ -232,6 +243,16 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # fleet-reconcile's own entry above. record_practice has no CLI door at all
     # (nothing to reconcile there).
     "amend-practice": "practice:amend",
+    # THE WRITE TRIANGLE (dispatch a354ba28, msg 7882 item 2): `decide` is the terminal-
+    # native word for record_decision, same naming-freedom `desk`/`show` already took for
+    # inbox/recall (NO_MCP_EQUIVALENT above) — but this one DOES match a real tool 1:1,
+    # so it belongs here, not there. `thread` is a DELIBERATE NARROWING to the dispatcher's
+    # own `action='resolve'` branch (closing a thread is what a bare "thread" verb means
+    # at a terminal) — the other three actions (annotate/correct_summary/reclassify) have
+    # no CLI door under this name; annotate already has its own (`annotate-thread`).
+    # `send` needs no entry here: its name already matches the MCP tool's own 1:1.
+    "decide": "record_decision",
+    "thread": "thread:resolve",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.

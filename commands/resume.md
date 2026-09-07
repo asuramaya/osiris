@@ -1,0 +1,1 @@
+Resume a stopped seat. Call the osiris MCP tool `resume` with `target`=<handle> (and `message`/`model` if given) and print the returned receipt dict verbatim in a code block. No commentary, no re-rendering.
