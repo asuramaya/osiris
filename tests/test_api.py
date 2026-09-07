@@ -208,6 +208,37 @@ async def test_projects_index_object_count_excludes_archived_and_retired(
     assert "Decision" not in mine["object_counts_by_type"]
 
 
+async def test_projects_index_unnamed_project_strips_repo_prefix(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Console honesty fix (2026-09-07): a SoftwareProject minted with no `name`/`title`/
+    etc. property resolves through resolve_label's canonical tier — `/projects` must say
+    so (`unnamed: true`), and `name` must not leak the internal `repo:` scheme prefix, only
+    the bare id, per the operator's own ruling that `repo:` never reaches the UI."""
+    await actions.create_or_find_object("SoftwareProject", "repo:bareidtest", "test")
+    r = await client.get("/projects")
+    mine = next(row for row in r.json() if row["canonical"] == "repo:bareidtest")
+    assert mine["unnamed"] is True
+    assert mine["name"] == "bareidtest"
+
+
+async def test_projects_index_named_project_is_not_unnamed(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The converse of the fix above: a project with a real `name` assertion (link_repo
+    always stamps one on a fresh mint) resolves through the `chain` tier, never `canonical`
+    — `unnamed` must read False and `name` must be the real chosen name, not a bare id."""
+    from src.orchestrator.capture import link_repo
+
+    now = datetime.now(UTC)
+    d = await actions.create_or_find_object("Decision", "decision:namedprojtest", "test")
+    await link_repo(actions, d, "namedprojtest", now)
+    r = await client.get("/projects")
+    mine = next(row for row in r.json() if row["canonical"] == "repo:namedprojtest")
+    assert mine["unnamed"] is False
+    assert mine["name"] == "namedprojtest"
+
+
 async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = await _seed(actions)
     # an object in a *different* case must not appear when scoping to this one

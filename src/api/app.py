@@ -402,12 +402,22 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 bucket_by_canonical[row["canonical"]] = row
         items = []
         for r in rows:
-            name = resolve_label(
-                "SoftwareProject", label_props.get(r["id"], {}), r["canonical"]).label
+            resolved = resolve_label(
+                "SoftwareProject", label_props.get(r["id"], {}), r["canonical"])
+            # UNNAMED, HONESTLY (console thread, 2026-09-07): `.source == "canonical"` is
+            # already resolve_label's own exact signal for "nothing better was found" —
+            # never re-derived here. A project falling to that tier showed its RAW
+            # canonical, `repo:` prefix and all, as if it were a chosen name; strip the
+            # scheme so at least the bare id shows (`operator`, not `repo:operator`), and
+            # carry `unnamed` so the frontend can mark it distinct rather than pass off a
+            # stripped id as a real name with no visual difference at all.
+            unnamed = resolved.source == "canonical"
+            name = resolved.label.removeprefix("repo:") if unnamed else resolved.label
             b = bucket_by_canonical.get(r["canonical"], {})
             by_type = counts_by_project.get(r["id"], {})
             items.append({
                 "id": str(r["id"]), "canonical": r["canonical"], "name": name,
+                "unnamed": unnamed,
                 "status": r["status"],
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
                 "object_count": sum(by_type.values()),

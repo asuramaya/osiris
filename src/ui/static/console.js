@@ -439,10 +439,17 @@ function projectRow(r) {
   // real, a genuine disk-census-found repo simply never worked yet; the actual phantom
   // (liveness-fix) carried ONE link, not zero. So this flag surfaces "worth a glance"
   // ONLY — it must never read as "suspect", which the wording used to imply.
-  var flag = '';
-  if (r.bucket === 'orphan') flag = '<span class="proj-flag" title="zero live links — often just a repo nobody has worked yet, not necessarily a problem (link-count alone is not a phantom test)">no links</span>';
-  else if (r.bucket === 'contradicted') flag = '<span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
-  return '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + esc(r.name) + flag + '</td>' +
+  // BADGES, NEVER GLUED (console thread, 2026-09-07): concatenating flag onto the name
+  // inside one text node reads as one word on copy/paste and to a screen reader
+  // ("handlingtheloopcontradicted") even though `.proj-flag` already renders as a
+  // visually distinct pill — the CSS chrome never fixed the underlying text-node glue.
+  // A leading space plus each badge's own text keeps them two tokens, however copied.
+  var flags = '';
+  if (r.unnamed) flags += ' <span class="proj-flag" title="no name property resolved — showing the bare canonical id, not a chosen name">unnamed</span>';
+  if (r.bucket === 'orphan') flags += ' <span class="proj-flag" title="zero live links — often just a repo nobody has worked yet, not necessarily a problem (link-count alone is not a phantom test)">no links</span>';
+  else if (r.bucket === 'contradicted') flags += ' <span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
+  var nameCell = r.unnamed ? '<em>' + esc(r.name) + '</em>' : esc(r.name);
+  return '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + nameCell + flags + '</td>' +
     '<td><span class="card-tag-status status-' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
     '<td style="text-align:right">' + (r.object_count || 0).toLocaleString() + '</td>' +
     '<td>' + esc(lastTouch) + '</td></tr>';
