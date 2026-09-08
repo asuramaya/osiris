@@ -352,6 +352,15 @@ _TOOL_STATS_BLIND_SPOTS = (
     "of these is not evidence of disuse, it can be AFFIRMATIVELY MISLEADING: unmerge "
     "reads 0 here while its CLI door is real, live traffic — the exact live proof that "
     "cost a consolidation lane its first wrong deletion candidate",
+    "FOUR MORE SEAT-DISPATCHER ALIASES, SAME CLI-BYPASS SHAPE (alias-decay second read, "
+    "2026-09-08, decision 23b6dbc1): heal_seat_transcript, reconcile_seat_identity, "
+    "rename_seat, set_seat_attended each have their own cmd_* door in src/cli.py "
+    "(cmd_heal_seat_transcript/cmd_reconcile_seat_identity/cmd_rename_seat/"
+    "cmd_set_seat_attended) calling the orchestrator function directly — none of these "
+    "four were in this list before this read, so retired_alias_traffic's "
+    "eligible_for_removal=true on any of them (all four read it today) is NOT proof of "
+    "disuse until confirmed otherwise; check src/cli.py before ever acting on a zero "
+    "reading for these names, same discipline unmerge's own incident already demands",
 )
 
 
@@ -9466,10 +9475,13 @@ async def thread(
 
     ACTION TABLE — action: what it does (required params beyond action):
       resolve: close it (ref, because is a short WHY, not a completion essay). `artifact`
-        points at what actually closed it (a commit hash, decision id, file:line) — kept
-        as `resolved_artifact`; when it names a graph object a `resolved_by` edge mints
-        too. Re-resolving is allowed (latest closure witness wins, earlier reasoning
-        stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79):
+        points at what actually closed it (a commit hash, decision id, file:line, or
+        `repo:<name>@<hash>` to disambiguate a short hash that collides across two or more
+        ingested repos' commits — a bare hash otherwise already resolves against EVERY
+        ingested repo's Commits, unscoped, so a fix in one project can close a thread in
+        another) — kept as `resolved_artifact`; when it names a graph object a
+        `resolved_by` edge mints too. Re-resolving is allowed (latest closure witness wins,
+        earlier reasoning stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79):
         `because` becomes mandatory, `dry_run` DEFAULTS TRUE and previews without
         writing — pass `dry_run=False` explicitly to actually close the batch — and the
         whole batch refuses if any ref does not resolve to exactly one thread.

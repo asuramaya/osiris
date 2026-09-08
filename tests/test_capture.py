@@ -1606,6 +1606,110 @@ async def test_resolve_thread_artifact_refuses_an_unrecognized_prefix(
         "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) is not None
 
 
+async def test_resolve_thread_bare_hash_closes_a_thread_in_a_different_project(
+    actions: Actions,
+) -> None:
+    """THE CORE CLAIM of thread 10765a698644 (nebbercracker mail 8071): a commit that
+    landed in one project (osiris) should be able to close a Thread that lives under a
+    DIFFERENT project (nebbercracker/monsterhouse) via a bare hash, minting a real
+    resolved_by edge. Verified here that this already worked with ZERO changes — neither
+    `_find_artifact`'s bare-hash branch nor `_resolve_commit` ever join or filter on
+    SoftwareProject/in_repo at all, so nothing in this resolver was ever project-scoped.
+    The thread's own claim ("commit lookup is scoped to the resolving project's own repo")
+    does not match this code as read; this test pins the correct, already-working
+    behavior down as a regression guard."""
+    osiris = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
+    other_proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:nebbercracker", "session")
+    c = await actions.create_or_find_object("Commit", "commit:7ceec86aa1b2", "git")
+    now = datetime.now(UTC)
+    await actions.create_link(c, osiris, "in_repo", "git", now, 0.9)
+    t = await open_thread(actions, "a monsterhouse thread fixed by an osiris commit")
+    await actions.create_link(t, other_proj, "in_repo", "session", now, 0.9)
+    await resolve_thread(actions, str(t), artifact="7ceec86", source="agent:cross-project")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t) == c
+
+
+async def test_resolve_thread_artifact_repo_at_hash_resolves_when_unique(
+    actions: Actions,
+) -> None:
+    """`repo:<name>@<hash>` (thread 10765a698644's own proposed new shape): resolves to
+    the Commit in the NAMED repo, joining `in_repo` — the same edge gitlog.py mints and
+    `_fn_project` (compositions.py) already scopes Commits by."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
+    other_proj = await actions.create_or_find_object("SoftwareProject", "repo:decoy", "session")
+    now = datetime.now(UTC)
+    c = await actions.create_or_find_object("Commit", "commit:7ceec86aa1b2", "git")
+    await actions.create_link(c, proj, "in_repo", "git", now, 0.9)
+    decoy = await actions.create_or_find_object("Commit", "commit:7ceec860ffff", "git")
+    await actions.create_link(decoy, other_proj, "in_repo", "git", now, 0.9)
+    t = await open_thread(actions, "closed via an explicit repo-scoped commit pointer")
+    await resolve_thread(actions, str(t), artifact="repo:osiris@7ceec86",
+                         source="agent:repo-scoped")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t) == c
+
+
+async def test_resolve_thread_artifact_repo_at_hash_refuses_when_repo_has_no_match(
+    actions: Actions,
+) -> None:
+    """The named repo resolves but has no Commit matching the hash — clean refusal (None),
+    never a guess at some other repo's commit."""
+    await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
+    t = await open_thread(actions, "closed via a repo-scoped pointer naming no real commit")
+    await resolve_thread(actions, str(t), artifact="repo:osiris@deadbee",
+                         source="agent:repo-scoped-miss")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t) is None
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) is not None
+
+
+async def test_resolve_thread_artifact_repo_at_hash_refuses_when_repo_unknown(
+    actions: Actions,
+) -> None:
+    """The repo name itself doesn't resolve to any SoftwareProject — clean refusal, no
+    guessing across the whole Commit table."""
+    c = await actions.create_or_find_object("Commit", "commit:7ceec86aa1b2", "git")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
+    await actions.create_link(c, proj, "in_repo", "git", datetime.now(UTC), 0.9)
+    t = await open_thread(actions, "closed via a repo-scoped pointer naming an unknown repo")
+    await resolve_thread(actions, str(t), artifact="repo:no-such-project@7ceec86",
+                         source="agent:repo-unknown")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t) is None
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='closed_by'", t) is not None
+
+
+async def test_resolve_thread_bare_hash_ambiguous_across_repos_still_refuses(
+    actions: Actions,
+) -> None:
+    """A bare hash whose short prefix collides across TWO different repos' Commits must
+    still refuse (unchanged, deliberate safe default — `_find_artifact`'s existing
+    `len(rows) == 1` ambiguity guard) — the caller's way out is the new `repo:<name>@<hash>`
+    disambiguator, exercised separately above and again here on the SAME collision."""
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:proj-a", "session")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:proj-b", "session")
+    now = datetime.now(UTC)
+    c1 = await actions.create_or_find_object("Commit", "commit:deadbeef0001", "git")
+    await actions.create_link(c1, proj_a, "in_repo", "git", now, 0.9)
+    c2 = await actions.create_or_find_object("Commit", "commit:deadbeef0002", "git")
+    await actions.create_link(c2, proj_b, "in_repo", "git", now, 0.9)
+
+    t1 = await open_thread(actions, "closed with an ambiguous bare hash")
+    await resolve_thread(actions, str(t1), artifact="deadbeef", source="agent:ambiguous")
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='resolved_by'", t1) is None
+
+    t2 = await open_thread(actions, "closed with the same collision, disambiguated")
+    await resolve_thread(actions, str(t2), artifact="repo:proj-a@deadbeef",
+                         source="agent:disambiguated")
+    assert await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t2) == c1
+
+
 async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
     actions: Actions,
 ) -> None:

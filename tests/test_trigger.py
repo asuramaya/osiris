@@ -1048,7 +1048,12 @@ async def test_dispatch_dm_refusal_names_the_ceiling_when_a_real_session_is_too_
                           settings=_settings(enabled=True, sense=str(sense), ceiling=32),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom)
     assert d["mode"] == "resume-refused-ceiling"
-    assert "over the context ceiling" in d["detail"]
+    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen): `ceiling_bytes` no
+    # longer names the primary resumability ceiling — a tiny ceiling=32 now trips the
+    # catastrophic-corruption sanity bound in `_verdict_from_diagnostics`, not the (now
+    # occupancy-based, and unreached here since the corruption bound fires first) real
+    # ceiling. The refusal still classifies as the "ceiling" gate (`_gate_name`).
+    assert "catastrophic-corruption sanity bound" in d["detail"]
 
 
 # --- wake_gate_preflight (#156.4): the same four gates, answerable before an attempt ------
@@ -1077,7 +1082,10 @@ async def test_wake_gate_preflight_names_the_ceiling_before_any_attempt(
         settings=_settings(enabled=True, sense=str(sense), ceiling=32))
     assert d["mode"] == "resume-refused-ceiling"
     assert d["status"] == "refused-ceiling"
-    assert "over the context ceiling" in d["detail"]
+    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen) — see the sibling
+    # dispatch_dm ceiling test's own comment: ceiling=32 now trips the catastrophic-
+    # corruption sanity bound, not the (occupancy-based) real ceiling.
+    assert "catastrophic-corruption sanity bound" in d["detail"]
 
 
 async def test_wake_gate_preflight_reports_fresh_heir_available_past_the_seam(
@@ -3807,8 +3815,19 @@ def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
     assert gate_name("found a candidate, but its tail after the last compaction boundary "
                      "is only 12 byte(s) (1 line(s)) — it closed at or near the seam "
                      "itself, with nothing real to resume into") == "compaction"
-    assert gate_name("found a candidate, but its resumable content is over the context "
-                     "ceiling") == "ceiling"
+    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen): the ceiling refusal's
+    # own prose changed — occupancy-shaped (the primary ceiling now) or
+    # catastrophic-corruption-shaped (`_verdict_from_diagnostics`'s narrowed ceiling check),
+    # never the old "over the context ceiling" wording. Both still classify as "ceiling".
+    assert gate_name("found a candidate, but its last recorded context occupancy "
+                     "(1,050,000 tokens, 105% of the 1000k window) is at or over the "
+                     "window — a resume would have no room left to even receive the "
+                     "resumed state before needing to compact again") == "ceiling"
+    assert gate_name("found a candidate, but its tail after the last compaction boundary "
+                     "is 70.0MB — over the 64MB catastrophic-corruption sanity bound, a "
+                     "shape that suggests something is actually broken rather than merely "
+                     "large; refused regardless of what its last recorded context "
+                     "occupancy reads") == "ceiling"
     assert gate_name("no anchored transcript at all") == "no-anchor"
     assert gate_name("retired — a deliberate close, never reanimated") == "retired"
     assert gate_name("something nobody wrote yet") == "unknown"

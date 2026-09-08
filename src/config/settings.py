@@ -225,7 +225,23 @@ class Settings(BaseSettings):
     # transcripts) that a resume only hydrates the content since the last Claude Code
     # auto-compaction, 2-3% of the total file. `resumable_tail_bytes`
     # (src/ingest/sessions.py) now checks that tail, not cumulative lifetime size.
-    osiris_resume_ceiling_bytes: int = 8_000_000
+    #
+    # CEILING CORRECTED AGAIN 2026-09-08 (operator dispatch, the anubis specimen: `osiris
+    # resume anubis` refused with "29.52 MB tail over the 8 MB ceiling" though anubis's own
+    # last recorded context occupancy was under its window — raw JSONL bytes are not
+    # context tokens, and a tail can be dominated by huge tool-output blobs fed to the model
+    # once and never rehydrated by a resume; the harness's own compaction/resume mechanism
+    # restores only the conversational state and compacts again on resume if genuinely too
+    # large). This field's job NARROWED: `resume_verdict`/`_verdict_from_diagnostics`
+    # (src/ingest/sessions.py) no longer treat it as the primary resumability ceiling — the
+    # real ceiling is now the last recorded assistant usage OCCUPANCY against the harness's
+    # own context window (`context_lens.last_usage`/`occupancy`/`window_for`). This field
+    # keeps exactly one job: a CATASTROPHIC-CORRUPTION sanity bound — a tail whose raw size
+    # is so implausibly large that its shape alone suggests something is actually broken,
+    # refused regardless of what the occupancy read says. Raised from 8,000,000 (a tight
+    # resumability ceiling) to 64,000,000 (a loose corruption bound, several times any
+    # verified-live legitimate specimen's tail) to reflect the narrower job.
+    osiris_resume_ceiling_bytes: int = 64_000_000
     # THE MINIMUM-TAIL FLOOR, REPLACING THE OLD COMPACTION-COUNT GATE (#156's rebuild,
     # 2026-08-09 — the operator's own correction, verbatim: "osiris launch should do the
     # equivalent of `claude --resume [latest transcript] as is` continuity with when it

@@ -1373,7 +1373,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # service verb, seat(action='refresh_project') — a new SEAT_INPUT_SCHEMA branch (no
 # params beyond action) plus a one-line ACTION TABLE entry. No new tool, load-bearing
 # growth per this file's own escape valve. Measured exact (114,808), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 114808
+# 114,808 -> 115,087 (2026-09-08, Imhotep, wave 10, dispatch 8174/fbd22aef):
+# `thread(action='resolve')`'s own ACTION TABLE line gains one clause documenting the
+# new `repo:<name>@<hash>` artifact disambiguator (`_find_artifact`, capture.py) and the
+# already-true finding that a bare commit hash was never project-scoped — a caller
+# reading the tool's own contract needs to know the new shape exists, not just the code.
+# No new tool, no new schema param, load-bearing growth per this file's own escape
+# valve. Measured exact (115,087), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 115087
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
