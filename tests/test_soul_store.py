@@ -82,6 +82,37 @@ async def test_ingest_is_idempotent(store: SoulStore, tmp_path: Path) -> None:
     assert rows[0]["n"] == 3
 
 
+async def test_a_checkpoint_failure_rolls_back_its_own_batchs_soul_lines_too(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE CHECKPOINT RACE FIX (thread ce3ddbb6): before this, a batch's soul_lines
+    INSERT and the soul_sessions upsert (`_checkpoint`) ran as two SEPARATE
+    transactions on two separate connections — a process death between them left
+    orphaned soul_lines rows with no soul_sessions row at all, so the store read the
+    session as never-ingested despite holding its content (confirmed live:
+    a39e60d9e4fbd5292 sat with 89 orphaned rows for hours). Now they share one
+    transaction: forcing the checkpoint to fail must roll back that batch's soul_lines
+    rows too — the atomicity guarantee this fix actually buys, proven by making the
+    SECOND write fail and confirming the FIRST didn't survive it either."""
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+
+    async def _boom(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("simulated checkpoint failure")
+
+    monkeypatch.setattr(SoulStore, "_checkpoint", _boom)
+    with pytest.raises(RuntimeError, match="simulated checkpoint failure"):
+        await store.ingest_path(str(p), "raceboom01")
+
+    lines = await store.pool.fetch(
+        "SELECT 1 FROM soul_lines WHERE harness='claude-code' AND anchor_sid=$1",
+        "raceboom01")
+    assert lines == []  # the batch's own soul_lines rows rolled back with the checkpoint
+    session = await store.pool.fetchrow(
+        "SELECT 1 FROM soul_sessions WHERE harness='claude-code' AND anchor_sid=$1",
+        "raceboom01")
+    assert session is None
+
+
 async def test_ingest_resumes_the_chain_incrementally(store: SoulStore, tmp_path: Path) -> None:
     """Appending to the source and re-ingesting continues the chain from last_hash,
     never re-hashing already-stored lines."""

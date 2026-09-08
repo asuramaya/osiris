@@ -433,13 +433,23 @@ class SoulStore:
 
     async def _checkpoint(
         self, harness: str, anchor_sid: str, source_path: str, idx: int,
-        prev_hash: str | None,
+        prev_hash: str | None, *, conn: Any = None,
     ) -> None:
         """One batch's worth of progress, committed — the same upsert `ingest_path`
         always ran once at the end, now run once per batch so an interrupted 300MB+
         ingest (msg 6583/ba329ccb: "the first run backfills 2,070 files and will be
-        interrupted") resumes from its last committed BATCH, not from scratch."""
-        await self.pool.execute(
+        interrupted") resumes from its last committed BATCH, not from scratch.
+
+        `conn` (thread ce3ddbb6, the checkpoint race): pass the SAME connection
+        `ingest_path` just inserted this batch's soul_lines rows on, still inside its
+        own open transaction — this upsert then commits ATOMICALLY with those rows,
+        never as a second, separate write a process death between the two could split.
+        Defaults to `self.pool` (a fresh connection, its own implicit transaction) for
+        every other caller that doesn't need that guarantee (there is currently only
+        one: none — `splice_sources` already does both writes in one transaction of
+        its own, unrelated to this method)."""
+        executor = conn if conn is not None else self.pool
+        await executor.execute(
             "INSERT INTO soul_sessions "
             "   (harness, anchor_sid, source_path, last_line_idx, last_hash) "
             "VALUES ($1, $2, $3, $4, $5) "
@@ -503,7 +513,16 @@ class SoulStore:
                         "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
                         rows,
                     )
-            await self._checkpoint(harness, anchor_sid, source_path, idx, prev_hash)
+                    # THE CHECKPOINT RACE (thread ce3ddbb6): same connection, still
+                    # inside the SAME transaction as the soul_lines insert above — a
+                    # process death between the two used to leave soul_lines rows
+                    # committed with no soul_sessions row at all, so _progress/
+                    # _last_ingested_at both read the session as never-ingested
+                    # (confirmed live, a39e60d9e4fbd5292: 89 orphaned soul_lines rows,
+                    # zero soul_sessions rows, for hours). Now both commit together or
+                    # neither does.
+                    await self._checkpoint(
+                        harness, anchor_sid, source_path, idx, prev_hash, conn=conn)
             total_new += len(rows)
         if total_new == 0 and since > 0 and seen == since:
             # THE STORE'S CLOCK IS "LAST SYNCED", NOT "LAST GREW" (operator, 2026-09-03 —
