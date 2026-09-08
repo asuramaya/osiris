@@ -2257,18 +2257,44 @@ async def _report_half_healed_phantom(
     seat-addressed message since. Surfaced for a human's own judgment via the standard
     obligation door, idempotent on the summary so a repeat sighting (this walk runs at
     every mint) converges on one Thread rather than paging every caller who passes
-    through here."""
+    through here.
+
+    NEVER RE-OPENS A RESOLVED THREAD (thread 672972a2, the widened status-regression's own
+    first live finding): `open_thread` is idempotent on the summary hash — it finds the
+    SAME Thread object whatever its current status and unconditionally re-asserts
+    status='open', so a human's own resolve was being overridden by this detector's very
+    next sweep, every 15 minutes, forever (status-regression's never-flipped check, 3f36e69,
+    caught it live: resolved seconds before, reopened seconds after). The condition being
+    STILL PRESENT is real and worth saying — but re-opening a thread a human already closed
+    is not this detector's call. If the thread already exists and currently reads
+    status='resolved', this ANNOTATES it with the still-present sighting instead of calling
+    open_thread at all; otherwise (never seen before, or still open from an earlier sweep)
+    behaves exactly as before."""
     logger.warning(
         "half-healed phantom detected: %s (ancestor %s's succeeded_by never restored)",
         phantom, grandancestor)
-    from src.orchestrator.capture import open_thread
-    await open_thread(
-        actions,
+    from src.orchestrator.capture import _thread_canon, annotate_thread, open_thread
+
+    summary = (
         f"HALF-HEALED PHANTOM: {phantom} was flagged false_mint but its ancestor "
         f"{grandancestor}'s succeeded_by was never unwound — an interrupted heal "
         f"(decision ee012ebc). Do not auto-complete: a real successor may already be "
-        f"live past {phantom}. A human must judge whether/how to reconcile.",
-        kind="obligation", owner="operator", source=_HALF_HEAL_SRC)
+        f"live past {phantom}. A human must judge whether/how to reconcile.")
+    canon = _thread_canon(summary, None)
+    current_status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+    if current_status == "resolved":
+        await annotate_thread(
+            actions, canon,
+            f"still present at {datetime.now(UTC).isoformat()}: {grandancestor}'s "
+            f"succeeded_by remains unwound past {phantom}. Resolved once already — "
+            "re-opening it is a human's call, not this detector's.",
+            source=_HALF_HEAL_SRC)
+        return
+    await open_thread(actions, summary, kind="obligation", owner="operator",
+                      source=_HALF_HEAL_SRC)
 
 
 _HALF_HEAL_BATCH_SRC = "half-heal-batch-repair"
