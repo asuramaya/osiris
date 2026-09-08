@@ -465,6 +465,15 @@ class Settings(BaseSettings):
     # run, not merely be built. Measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB,
     # neither ever pruned before this.
     osiris_retention_heartbeat_enabled: bool = True
+    # THE SOUL STORE'S COLD TIER SWITCH (wave 12 item 2, thread 78efd46d, operator ruling
+    # via decision 64ec1905: "memory gets tiers not deletion"): a daily tick folds up to
+    # a bounded batch of sessions untouched (soul_sessions.last_ingested_at) for 30+ days
+    # into one compressed soul_lines_cold row each, deleting their per-line soul_lines
+    # rows — rematerialize/resume/verify_round_trip_sample read through both tiers
+    # transparently. TRUE BY DEFAULT — same named exception as osiris_obligation_
+    # hygiene_enabled above, per the operator's own explicit dispatch asking for this to
+    # run, not merely be built.
+    osiris_soul_cold_tier_enabled: bool = True
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a

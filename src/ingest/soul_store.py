@@ -25,12 +25,13 @@ consumers (session mining, JSON parsing) never need to know the storage layer ch
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -248,6 +249,46 @@ def _hash_rows(
         prev_hash = line_hash
         idx += 1
     return rows, idx, prev_hash
+
+
+def _cold_content_bytes(harness: str, anchor_sid: str, lines: list[bytes]) -> bytes:
+    """The EXACT byte shape a cold-tier row's `content_gzip` stores once decompressed —
+    every line plus its trailing newline, concatenated (`_stream_verified_write`'s own
+    on-disk shape, sha256'd the same way) — so a fold never has to choose between "what
+    the DB held" and "what a rematerialize would have written"; they are the same bytes
+    by construction."""
+    return b"".join(line + b"\n" for line in lines)
+
+
+def _split_cold_content(content: bytes) -> list[bytes]:
+    """The exact inverse of `_cold_content_bytes` — undo the trailing-\\n-per-line join
+    so a cold session's decompressed content round-trips back to the SAME raw_line list
+    soul_lines held before the fold, not an approximation. Empty content (should never
+    happen — a cold row is only ever folded from a non-empty session) splits to []."""
+    if not content:
+        return []
+    lines = content.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines = lines[:-1]
+    return lines
+
+
+def _accumulate_resume_diagnostics(
+    lines: list[bytes], total: int, count: int, lines_total: int,
+    last_boundary_bytes: int | None, last_boundary_lines: int | None,
+) -> tuple[int, int, int, int | None, int | None]:
+    """The core of `resume_diagnostics`'s own per-page loop, extracted so a cold read (one
+    page: every line at once) and a hot read (many pages, one DB fetch each) share the
+    identical accounting instead of two copies of the same boundary-counting logic
+    drifting apart."""
+    for raw in lines:
+        if all(marker in raw for marker in _COMPACT_BOUNDARY_MARKERS):
+            count += 1
+            last_boundary_bytes = total
+            last_boundary_lines = lines_total
+        total += len(raw) + 1  # +1: the newline `soul_lines` doesn't store itself
+        lines_total += 1
+    return total, count, lines_total, last_boundary_bytes, last_boundary_lines
 
 
 def _addressable_entries(lines: list[bytes]) -> list[tuple[int, str, str | None]]:
@@ -695,7 +736,23 @@ class SoulStore:
 
         `harness` (Thoth dispatch 6715, the fourth `_HARNESS` occurrence — worse than its
         five siblings in soul_store.py: this one took no override at all): defaults to
-        'claude-code' for backward compatibility, same as `verify_chain`'s own note."""
+        'claude-code' for backward compatibility, same as `verify_chain`'s own note.
+
+        READS THROUGH THE COLD TIER (wave 12 item 2, thread 78efd46d): a session folded
+        into `soul_lines_cold` has no `soul_lines` rows left to page through — its whole
+        decompressed content is measured in one pass instead (`_accumulate_resume_
+        diagnostics`, the SAME accounting the hot loop below uses per page, so a folded
+        session's diagnostics are identical to what they were the day before the fold)."""
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            lines = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+            if not lines:
+                return None
+            total, count, lines_total, lb, ll = _accumulate_resume_diagnostics(
+                lines, 0, 0, 0, None, None)
+            tail_bytes = total - lb if lb is not None else total
+            tail_lines = lines_total - ll if ll is not None else lines_total
+            return count, tail_bytes, tail_lines
         total = 0
         count = 0
         lines_total = 0
@@ -711,21 +768,45 @@ class SoulStore:
             if not rows:
                 break
             seen_any = True
-            for row in rows:
-                raw = bytes(row["raw_line"])
-                if all(marker in raw for marker in _COMPACT_BOUNDARY_MARKERS):
-                    count += 1
-                    last_boundary_bytes = total
-                    last_boundary_lines = lines_total
-                total += len(raw) + 1  # +1: the newline `soul_lines` doesn't store itself
-                lines_total += 1
-                i += 1
+            raws = [bytes(row["raw_line"]) for row in rows]
+            total, count, lines_total, last_boundary_bytes, last_boundary_lines = (
+                _accumulate_resume_diagnostics(
+                    raws, total, count, lines_total, last_boundary_bytes, last_boundary_lines))
+            i += len(rows)
         if not seen_any:
             return None
         tail_bytes = total - last_boundary_bytes if last_boundary_bytes is not None else total
         tail_lines = (lines_total - last_boundary_lines if last_boundary_lines is not None
                       else lines_total)
         return count, tail_bytes, tail_lines
+
+    async def _cold_row(self, harness: str, anchor_sid: str) -> asyncpg.Record | None:
+        """The one place every read-through consumer below checks the cold tier — a
+        session either has this row (folded, `soul_lines` rows gone) or it doesn't (hot,
+        read `soul_lines` directly); never both, by construction of `fold_to_cold_tier`'s
+        own single transaction."""
+        return await self.pool.fetchrow(
+            "SELECT content_gzip, last_hash, line_count FROM soul_lines_cold "
+            "WHERE harness=$1 AND anchor_sid=$2", harness, anchor_sid)
+
+    async def _all_raw_lines(self, harness: str, anchor_sid: str) -> list[bytes] | None:
+        """Every raw line for `anchor_sid`, in order, hot or cold — the ONE read-through
+        primitive `re_materialize`/`raw_lines`/`mining_view` share, so "read through both
+        tiers without knowing which you hit" (wave 12 item 2's own acceptance) is true by
+        construction rather than three separate copies of the same if-cold-else-hot branch
+        agreeing by convention. None when neither tier holds anything for this session —
+        matches every one of those three callers' own "not ingested" contract; a cold row
+        is never empty by construction (`fold_to_cold_tier` refuses an empty session), so
+        this never returns `[]` either, same as the hot path already promised."""
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            return _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+        rows = await self.pool.fetch(
+            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+            "ORDER BY line_idx ASC", harness, anchor_sid)
+        if not rows:
+            return None
+        return [bytes(r["raw_line"]) for r in rows]
 
     async def _last_ingested_at(self, harness: str, anchor_sid: str) -> datetime | None:
         """One indexed row lookup — the cheap half of the spend gate, same shape
@@ -808,7 +889,20 @@ class SoulStore:
         PAGED (msg 6583, the 307MB question): reads `soul_lines` `_REMATERIALIZE_PAGE_LINES`
         rows at a time by `line_idx` range (the same index `soul_lines`' own PK already
         gives this query for free) rather than one `fetch()` of every row — a 300MB-class
-        session's raw content never sits in memory all at once just to answer a yes/no."""
+        session's raw content never sits in memory all at once just to answer a yes/no.
+
+        THE COLD TIER'S OWN VERSION OF THIS LAW (wave 12 item 2): a folded session has no
+        per-line hashes left to re-walk — `last_hash` (the chain's own final link,
+        captured before the fold) is the one thing left to check the RECOMPUTED chain
+        against. Same "never trust a stored hash in isolation" discipline, collapsed to a
+        single comparison since there is only one hash left to compare."""
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            lines = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+            if not lines:
+                return True  # vacuous, same as the hot path's zero-rows case
+            _, _, final_hash = _hash_rows(harness, anchor_sid, lines, 0, None)
+            return bool(final_hash == cold["last_hash"])
         expected_prev: str | None = None
         i = 0
         while True:
@@ -839,13 +933,11 @@ class SoulStore:
         matters for a genuinely non-UTF-8 source, never for the NUL-byte class this
         module exists to survive (NUL is valid UTF-8). `harness` (thread 6483/6587):
         defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
-        note."""
-        rows = await self.pool.fetch(
-            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", harness, anchor_sid)
-        if not rows:
+        note. READS THROUGH THE COLD TIER (wave 12 item 2) via `_all_raw_lines`."""
+        lines = await self._all_raw_lines(harness, anchor_sid)
+        if lines is None:
             return None
-        return "\n".join(bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows)
+        return "\n".join(line.decode("utf-8", errors="replace") for line in lines)
 
     async def raw_lines(self, anchor_sid: str, harness: str = _HARNESS) -> list[str] | None:
         """The stored lines as a plain list, in order — the SAME shape
@@ -857,13 +949,11 @@ class SoulStore:
         writes a session that had at least one line). Decodes the stored raw bytes (0052)
         to `str` at this boundary, same as `re_materialize`. `harness` (thread 6483/6587):
         defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
-        note."""
-        rows = await self.pool.fetch(
-            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", harness, anchor_sid)
-        if not rows:
+        note. READS THROUGH THE COLD TIER (wave 12 item 2) via `_all_raw_lines`."""
+        lines = await self._all_raw_lines(harness, anchor_sid)
+        if lines is None:
             return None
-        return [bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in rows]
+        return [line.decode("utf-8", errors="replace") for line in lines]
 
     async def mining_view(
         self, anchor_sid: str, harness: str = _HARNESS,
@@ -881,16 +971,14 @@ class SoulStore:
         the raw string content (user); `tool_calls` is `[{"name", "input"}, ...]` for
         every tool_use block on that turn, `[]` when none. `harness` (thread 6483/6587):
         defaults to 'claude-code' for backward compatibility — see `verify_chain`'s own
-        note."""
-        rows = await self.pool.fetch(
-            "SELECT line_idx, raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", harness, anchor_sid)
-        if not rows:
+        note. READS THROUGH THE COLD TIER (wave 12 item 2) via `_all_raw_lines`."""
+        lines = await self._all_raw_lines(harness, anchor_sid)
+        if lines is None:
             return None
         out: list[dict[str, Any]] = []
-        for r in rows:
+        for line_idx, raw_line in enumerate(lines):
             try:
-                d = json.loads(r["raw_line"])
+                d = json.loads(raw_line)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             if not isinstance(d, dict) or d.get("isSidechain") or d.get("isMeta"):
@@ -915,7 +1003,7 @@ class SoulStore:
                         tool_calls.append({"name": block.get("name"),
                                            "input": block.get("input")})
             out.append({
-                "session": anchor_sid, "turn_index": r["line_idx"], "role": role,
+                "session": anchor_sid, "turn_index": line_idx, "role": role,
                 "text": "\n".join(text_parts), "tool_calls": tool_calls,
             })
         return out
@@ -941,7 +1029,26 @@ class SoulStore:
         never reaches this — it uses the streamed writer, at full 307MB-scale memory
         savings. Only an explicit seek (Marquee's own repair, a controlled, human-
         supervised operation, never the hot resume path) pays the whole-file cost this
-        function still carries."""
+        function still carries.
+
+        READS THROUGH THE COLD TIER (wave 12 item 2): a folded session's chain is
+        recomputed from its decompressed content and checked against `last_hash` (the
+        cold tier's own single-comparison version of `verify_chain`'s law) — a mismatch
+        is the SAME break-receipt shape a hot gap/tamper would produce, so `upto`'s own
+        seek callers never need to know which tier answered them."""
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            lines_cold = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+            if not lines_cold:
+                return None, None
+            _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
+            if final_hash != cold["last_hash"]:
+                return None, {
+                    "error": "cold tier chain broken — the recomputed hash does not "
+                             "match the hash recorded at fold time (corrupted or "
+                             "tampered)",
+                    "verified_through": -1}
+            return lines_cold, None
         rows = await self.pool.fetch(
             "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
             "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
@@ -982,7 +1089,31 @@ class SoulStore:
         temp file is discarded, never renamed, on the first gap/mismatch or on zero rows
         ever ingested. Only a fully clean pass gets the atomic rename onto `target`.
         `harness` (thread 6483/6587, the same parity fix `verify_chain` carries):
-        defaults to 'claude-code' for backward compatibility."""
+        defaults to 'claude-code' for backward compatibility.
+
+        READS THROUGH THE COLD TIER (wave 12 item 2) — the caller (`rematerialize_to_
+        disk`, and through it `verify_round_trip_sample`/every real resume) never knows
+        which tier answered it. A folded session's chain is recomputed once from its
+        decompressed content and checked against `last_hash`; only a clean match gets
+        the SAME atomic temp-file-then-rename write the hot path uses, so a corrupted
+        cold blob leaves `target` untouched, exactly like a hot gap/tamper would."""
+        cold = await self._cold_row(harness, anchor_sid)
+        if cold is not None:
+            content = gzip.decompress(bytes(cold["content_gzip"]))
+            lines_cold = _split_cold_content(content)
+            if not lines_cold:
+                return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing "
+                                 "to materialize"}
+            _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
+            if final_hash != cold["last_hash"]:
+                return {"error": "cold tier chain broken — the recomputed hash does not "
+                                 "match the hash recorded at fold time (corrupted or "
+                                 "tampered)", "verified_through": -1}
+            cold_f, cold_tmp = _open_tmp_writer(target)
+            cold_f.write(content)
+            _finalize_tmp(cold_f, cold_tmp, target)
+            return {"written": str(target), "lines": len(lines_cold),
+                    "sha256": hashlib.sha256(content).hexdigest()}
         f = None
         tmp: Path | None = None
         hasher = hashlib.sha256()
@@ -1153,6 +1284,116 @@ class SoulStore:
             "seek": upto, "withheld_entries": withheld,
         }
 
+    async def fold_to_cold_tier(
+        self, anchor_sid: str, harness: str = _HARNESS,
+    ) -> dict[str, Any]:
+        """FOLD ONE SESSION INTO THE COLD TIER (wave 12 item 2, thread 78efd46d, operator
+        ruling via decision 64ec1905: "memory gets tiers not deletion"): compress every
+        `soul_lines` row for this session into one `soul_lines_cold` row — same content
+        (byte-identical to what `_stream_verified_write` would have written), a fraction
+        of the storage — then delete the per-line rows.
+
+        REFUSES a broken chain (a paged re-walk, the exact discipline `verify_chain`/
+        `_stream_verified_write` already hold) rather than folding content that cannot
+        be trusted — nothing is deleted on a refusal, the same "NOTHING lands/nothing is
+        destroyed on the first gap/mismatch" law those two already keep.
+
+        ATOMIC: the insert into `soul_lines_cold` and the delete from `soul_lines`
+        happen in ONE transaction (`_checkpoint`'s own "a process death between two
+        writes must never orphan one" law, extended here) — a crash mid-fold leaves the
+        session exactly as it was before: hot, never half-migrated, never visible as
+        cold with its hot rows still present either.
+
+        A session already cold, or never ingested at all, is a named no-op, never an
+        error — `fold_cold_tier_batch`'s own per-session loop treats both the same as a
+        clean fold: nothing left to do here."""
+        already = await self._cold_row(harness, anchor_sid)
+        if already is not None:
+            return {"anchor_sid": anchor_sid, "folded": False, "note": "already cold"}
+        expected_prev: str | None = None
+        i = 0
+        total_bytes = 0
+        parts: list[bytes] = []
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
+                "WHERE harness=$1 AND anchor_sid=$2 AND line_idx >= $3 AND line_idx < $4 "
+                "ORDER BY line_idx ASC",
+                harness, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                break
+            for row in rows:
+                if (row["line_idx"] != i or row["prev_hash"] != expected_prev
+                        or _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]):
+                    return {"anchor_sid": anchor_sid, "folded": False,
+                            "error": f"chain broken at line {i} — refusing to fold "
+                                     "content that cannot be verified",
+                            "verified_through": i - 1}
+                raw = bytes(row["raw_line"])
+                parts.append(raw + b"\n")
+                total_bytes += len(raw) + 1
+                expected_prev = row["line_hash"]
+                i += 1
+        if i == 0:
+            return {"anchor_sid": anchor_sid, "folded": False, "note": "nothing ingested"}
+        content = b"".join(parts)
+        compressed = gzip.compress(content)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "INSERT INTO soul_lines_cold "
+                    "  (harness, anchor_sid, line_count, total_bytes, last_hash, "
+                    "   content_gzip) "
+                    "VALUES ($1, $2, $3, $4, $5, $6)",
+                    harness, anchor_sid, i, total_bytes, expected_prev, compressed)
+                await conn.execute(
+                    "DELETE FROM soul_lines WHERE harness=$1 AND anchor_sid=$2",
+                    harness, anchor_sid)
+        return {"anchor_sid": anchor_sid, "folded": True, "line_count": i,
+                "total_bytes": total_bytes, "compressed_bytes": len(compressed)}
+
+    async def cold_eligible_sessions(
+        self, *, idle_days: int = 30, limit: int = 20, harness: str = _HARNESS,
+    ) -> list[str]:
+        """anchor_sids ready to fold: `soul_sessions.last_ingested_at` older than
+        `idle_days` — the "unread for 30 days" signal, since a live session's own
+        ingest keeps moving `last_ingested_at` forward every time it's appended to, the
+        same freshness proxy `backfill`'s own spend gate already trusts (never touched
+        in N days IS unread for N days, for a store whose only writer is ingestion
+        itself) — and not already cold. Bounded by `limit` so one heartbeat tick folds a
+        handful, never a whole backlog in one pass."""
+        cutoff = datetime.now(UTC) - timedelta(days=idle_days)
+        rows = await self.pool.fetch(
+            "SELECT s.anchor_sid FROM soul_sessions s "
+            "WHERE s.harness=$1 AND s.last_ingested_at < $2 "
+            "AND NOT EXISTS (SELECT 1 FROM soul_lines_cold c "
+            "                WHERE c.harness=s.harness AND c.anchor_sid=s.anchor_sid) "
+            "ORDER BY s.last_ingested_at ASC LIMIT $3",
+            harness, cutoff, limit)
+        return [r["anchor_sid"] for r in rows]
+
+    async def fold_cold_tier_batch(
+        self, *, idle_days: int = 30, limit: int = 20, harness: str = _HARNESS,
+    ) -> dict[str, Any]:
+        """The heartbeat's own entrypoint: fold up to `limit` eligible sessions in one
+        tick. One bad session must not abort the batch (`backfill`'s own per-session
+        try/except law) — its own error rides in the receipt, the batch continues."""
+        candidates = await self.cold_eligible_sessions(
+            idle_days=idle_days, limit=limit, harness=harness)
+        folded: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for anchor_sid in candidates:
+            try:
+                result = await self.fold_to_cold_tier(anchor_sid, harness=harness)
+            except Exception as exc:  # noqa: BLE001 — one bad session must not abort the batch
+                errors.append({"anchor_sid": anchor_sid, "error": repr(exc)})
+                continue
+            if result.get("folded"):
+                folded.append(result)
+            elif "error" in result:
+                errors.append(result)
+        return {"candidates": len(candidates), "folded": folded, "errors": errors}
+
     async def verify_round_trip_sample(
         self, *, n: int = 20, harness: str = _HARNESS,
     ) -> RoundTripReport:
@@ -1185,13 +1426,30 @@ class SoulStore:
         uses to refuse overwriting a live transcript, applied here to avoid comparing
         a frozen store snapshot against a moving target). `RoundTripReport.skipped_live`
         names the count explicitly — a caller must report it as "skipped live: N",
-        never fold it silently into a clean pass."""
+        never fold it silently into a clean pass.
+
+        SAMPLES BOTH TIERS (wave 12 item 2's own acceptance): up to half the sample
+        comes from `soul_lines_cold` (a folded session), the rest from `soul_lines`
+        directly (hot) — `rematerialize_to_disk` already reads through whichever tier
+        answers, so this proves the cold tier's own reconstruction is byte-identical to
+        the file on disk, not just that it exists. Gracefully all-hot before any
+        session has ever been folded (a fresh install, or one younger than `idle_days`)
+        — a cold pool of zero is not a failure, just nothing to draw from yet."""
         import asyncio
         import tempfile
 
-        rows = await self.pool.fetch(
-            "SELECT anchor_sid, source_path, last_ingested_at FROM soul_sessions "
-            "WHERE harness=$1 ORDER BY random() LIMIT $2", harness, n)
+        half = max(1, n // 2)
+        cold_rows = await self.pool.fetch(
+            "SELECT s.anchor_sid, s.source_path, s.last_ingested_at FROM soul_sessions s "
+            "JOIN soul_lines_cold c ON c.harness=s.harness AND c.anchor_sid=s.anchor_sid "
+            "WHERE s.harness=$1 ORDER BY random() LIMIT $2", harness, half)
+        hot_rows = await self.pool.fetch(
+            "SELECT s.anchor_sid, s.source_path, s.last_ingested_at FROM soul_sessions s "
+            "WHERE s.harness=$1 AND NOT EXISTS ("
+            "  SELECT 1 FROM soul_lines_cold c "
+            "  WHERE c.harness=s.harness AND c.anchor_sid=s.anchor_sid) "
+            "ORDER BY random() LIMIT $2", harness, n - len(cold_rows))
+        rows = list(cold_rows) + list(hot_rows)
         failures: list[dict[str, str]] = []
         skipped_live = 0
         for row in rows:
