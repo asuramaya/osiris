@@ -14,9 +14,11 @@ this test's own surviving/deleted rows from the seed's."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import pytest
 from src.actions.core import Actions
-from src.orchestrator.retention import audit_log_retention, outbox_retention
+from src.orchestrator.retention import _apply, _dry_run, audit_log_retention, outbox_retention
 
 NOW = datetime.now(UTC)
 OLD = NOW - timedelta(days=100)
@@ -118,3 +120,96 @@ async def test_audit_log_retention_respects_a_custom_window(actions: Actions) ->
         "interval '5 days'", _MARKER)
     assert marked_eligible_5 == 1  # the same row, outside a 5-day window
     assert out2["eligible"] >= marked_eligible_5
+
+
+# ═══ THE GRAPH IS NEVER A RETENTION TARGET (wave 12 item 1's own acceptance test) ══════════
+# `table` is f-string-interpolated straight into the DELETE inside _dry_run/_apply — this
+# proves the one guard standing between this module and a graph-eating prune actually
+# refuses every graph table by name, never just outbox/audit_log's own two callers by
+# convention. pool=None is safe: the guard raises before either function ever touches it.
+
+_GRAPH_TABLES = (
+    "objects", "assertions", "current_assertions", "links", "soul_lines",
+    "harness_turns", "fleet_messages",
+)
+
+
+@pytest.mark.parametrize("table", _GRAPH_TABLES)
+async def test_dry_run_refuses_every_graph_table(table: str) -> None:
+    with pytest.raises(ValueError, match="unlisted table"):
+        await _dry_run(None, table, "1=1", 90)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("table", _GRAPH_TABLES)
+async def test_apply_refuses_every_graph_table(table: str) -> None:
+    with pytest.raises(ValueError, match="unlisted table"):
+        await _apply(None, table, "1=1", 90, 100)  # type: ignore[arg-type]
+
+
+# ═══ the daily cron shim (wave 12 item 1, Thoth DM 8378) ═══════════════════════════════════
+
+async def test_retention_heartbeat_is_a_no_op_when_the_flag_is_off(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import src.config.settings as settings_mod
+    from src.config.settings import Settings
+    from src.workers.arq_worker import retention_heartbeat
+
+    await _outbox_row(actions, created_at=OLD, published=True)
+    monkeypatch.setattr(
+        settings_mod, "get_settings",
+        lambda: Settings(osiris_retention_heartbeat_enabled=False))
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    assert await retention_heartbeat(ctx) == 0
+    assert await _marked_outbox_count(actions) == 1  # untouched
+
+
+async def test_retention_heartbeat_deletes_from_both_tables_and_briefs_the_desk(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import src.orchestrator.mailbox as mailbox
+    from src.workers.arq_worker import retention_heartbeat
+
+    await _outbox_row(actions, created_at=OLD, published=True)
+    await _audit_row(actions, created_at=OLD)
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"sent": 1}
+
+    monkeypatch.setattr(mailbox, "send_message", _fake_send)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    deleted = await retention_heartbeat(ctx)
+
+    assert deleted >= 2
+    assert await _marked_outbox_count(actions) == 0
+    assert await _marked_audit_count(actions) == 0
+    assert captured["to_project"] == "operator"
+    assert captured["desk_kind"] == "fyi"
+    assert "outbox" in captured["body"] and "audit_log" in captured["body"]
+
+
+async def test_retention_heartbeat_survives_the_desk_being_unreachable(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import src.orchestrator.mailbox as mailbox
+    from src.workers.arq_worker import retention_heartbeat
+
+    await _outbox_row(actions, created_at=OLD, published=True)
+
+    async def _boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("mailbox down")
+
+    monkeypatch.setattr(mailbox, "send_message", _boom)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    deleted = await retention_heartbeat(ctx)  # the delete must still land
+    assert deleted >= 1
+    assert await _marked_outbox_count(actions) == 0

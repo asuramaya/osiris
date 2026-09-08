@@ -33,8 +33,24 @@ _OUTBOX_ELIGIBLE = "published_at IS NOT NULL AND created_at < $1"
 # audit_log has no publish/consume state — pure age-based retention.
 _AUDIT_ELIGIBLE = "created_at < $1"
 
+# THE GRAPH IS NEVER A RETENTION TARGET (wave 12 item 1's own acceptance test): `table` is
+# f-string-interpolated straight into the DELETE below, so the one thing standing between
+# this module and a graph-eating prune is this allowlist — never trust a caller (present or
+# future) to only ever pass "outbox"/"audit_log" by convention.
+_ALLOWED_TABLES = frozenset({"outbox", "audit_log"})
+
+
+def _guard_table(table: str) -> None:
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(
+            f"retention refuses an unlisted table {table!r} — only "
+            f"{sorted(_ALLOWED_TABLES)} are eligible for this module's DELETE; "
+            "the graph (objects/assertions/current_assertions/links/soul_lines/"
+            "harness_turns/fleet_messages, or any other object-store table) is never one")
+
 
 async def _dry_run(pool: asyncpg.Pool, table: str, where: str, days: int) -> dict[str, Any]:
+    _guard_table(table)
     cutoff = datetime.now(UTC) - timedelta(days=days)
     count = await pool.fetchval(f"SELECT count(*) FROM {table} WHERE {where}", cutoff)
     return {"table": table, "days": days, "cutoff": cutoff.isoformat(),
@@ -44,6 +60,7 @@ async def _dry_run(pool: asyncpg.Pool, table: str, where: str, days: int) -> dic
 async def _apply(
     pool: asyncpg.Pool, table: str, where: str, days: int, batch_size: int,
 ) -> dict[str, Any]:
+    _guard_table(table)
     cutoff = datetime.now(UTC) - timedelta(days=days)
     deleted = 0
     while True:
