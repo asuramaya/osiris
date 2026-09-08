@@ -1,0 +1,18 @@
+# Weekly retention-ladder apply — ACTUALLY DELETES the files osiris-prune-manifest's own
+# brief listed the day before, but ONLY if find_clear_manifest finds that brief at least
+# 20h old and not dimmed (thread 9fac4e0d part 1 — "apply next day unless dimmed").
+# Refuses loudly and deletes nothing when the gate isn't clear (no manifest sent, too
+# young, or dimmed) — see osiris_prune_ladder.py's own find_clear_manifest docstring.
+# Ships as plumbing, like osiris-manager.service beside it — installing/enabling this is
+# a separate, deliberate act, never automatic:
+#   cp deploy/osiris-prune-manifest.service deploy/osiris-prune-manifest.timer ~/.config/systemd/user/
+#   cp deploy/osiris-prune-apply.service deploy/osiris-prune-apply.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now osiris-prune-manifest.timer osiris-prune-apply.timer
+[Unit]
+Description=Osiris weekly prune-ladder apply, gated on an undimmed manifest
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+ExecStart=%h/code/osiris/.venv/bin/python scripts/osiris_prune_ladder.py --apply-if-clear --backups %h/code/osiris/backups --vault %h/osiris-vault

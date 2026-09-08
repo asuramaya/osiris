@@ -183,26 +183,149 @@ def _scan_transcript_chains(directory: Path) -> list[TranscriptChain]:
     return chains
 
 
-def _report_chains(label: str, plan: dict[str, list[TranscriptChain]]) -> None:
+def _report_chains_text(label: str, plan: dict[str, list[TranscriptChain]]) -> str:
     removed_bytes = sum(c.size_bytes for c in plan["remove"])
-    print(f"\n{label} transcript chains: {len(plan['keep'])} kept, "
-          f"{len(plan['remove'])} whole chains would be removed "
-          f"({removed_bytes / (1024**3):.2f} GB)")
+    lines = [f"\n{label} transcript chains: {len(plan['keep'])} kept, "
+             f"{len(plan['remove'])} whole chains would be removed "
+             f"({removed_bytes / (1024**3):.2f} GB)"]
     for c in plan["remove"]:
-        print(f"  REMOVE CHAIN {c.week_key}  ({len(c.files)} files, "
-              f"{c.size_bytes / (1024**2):.1f} MB)")
+        lines.append(f"  REMOVE CHAIN {c.week_key}  ({len(c.files)} files, "
+                     f"{c.size_bytes / (1024**2):.1f} MB)")
+    return "\n".join(lines)
+
+
+def _report_text(label: str, plan: dict[str, list[DumpFile]]) -> str:
+    removed_bytes = sum(f.size_bytes for f in plan["remove"])
+    lines = [f"\n{label}: {len(plan['keep'])} kept, {len(plan['remove'])} would be removed "
+             f"({removed_bytes / (1024**3):.2f} GB)"]
+    for f in plan["remove"]:
+        lines.append(f"  REMOVE  {f.path}  ({f.when.isoformat()}, "
+                     f"{f.size_bytes / (1024**2):.1f} MB)")
+    return "\n".join(lines)
+
+
+def _report_chains(label: str, plan: dict[str, list[TranscriptChain]]) -> None:
+    print(_report_chains_text(label, plan))
 
 
 def _report(label: str, plan: dict[str, list[DumpFile]]) -> None:
-    removed_bytes = sum(f.size_bytes for f in plan["remove"])
-    print(f"\n{label}: {len(plan['keep'])} kept, {len(plan['remove'])} would be removed "
-          f"({removed_bytes / (1024**3):.2f} GB)")
-    for f in plan["remove"]:
-        print(f"  REMOVE  {f.path}  ({f.when.isoformat()}, "
-              f"{f.size_bytes / (1024**2):.1f} MB)")
+    print(_report_text(label, plan))
+
+
+def build_manifest_body(
+    plans: dict[str, dict[str, list[DumpFile]]],
+    chain_plan: dict[str, list[TranscriptChain]],
+) -> str:
+    """Pure: the exact text mailed to the operator's desk (thread 9fac4e0d part 1) —
+    the SAME wording the dry-run CLI prints, so a human reading the mail sees exactly
+    what a human running the command by hand would have seen."""
+    total_remove = sum(len(p["remove"]) for p in plans.values())
+    total_chains_remove = len(chain_plan["remove"])
+    parts = [f"PRUNE LADDER MANIFEST — {total_remove} dump file(s) and "
+             f"{total_chains_remove} transcript chain(s) are planned for removal "
+             "tomorrow unless this brief is dimmed before then (thread 9fac4e0d)."]
+    parts.extend(_report_text(label, plan) for label, plan in plans.items())
+    parts.append(_report_chains_text("vault", chain_plan))
+    parts.append("\nRun scripts/osiris_prune_ladder.py (no flags) yourself for the "
+                 "identical dry-run at any time. To stop tomorrow's apply, dim this "
+                 "brief.")
+    return "\n".join(parts)
+
+
+def _compute_plans(
+    backups: Path, vault: Path,
+) -> tuple[dict[str, dict[str, list[DumpFile]]], dict[str, list[TranscriptChain]]]:
+    """The scan-and-plan step, shared by the dry-run CLI, --apply, --manifest, and
+    --apply-if-clear — one computation, never four copies to drift apart."""
+    now = datetime.now(UTC)
+    plans = {
+        "backups/": plan_prune(_scan(backups), now=now),
+        "vault": plan_prune(_scan(vault), now=now),
+        "vault/basebackups": plan_prune(_scan(vault / "basebackups"), now=now),
+    }
+    chain_plan = plan_prune_transcript_chains(_scan_transcript_chains(vault))
+    return plans, chain_plan
+
+
+DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
+_MANIFEST_FROM_AGENT = "system:prune-ladder"
+MANIFEST_MIN_AGE = timedelta(hours=20)
+
+
+async def mail_manifest(
+    plans: dict[str, dict[str, list[DumpFile]]],
+    chain_plan: dict[str, list[TranscriptChain]],
+) -> int:
+    """Send the dry-run plan to the operator's desk as a decision-band brief (thread
+    9fac4e0d part 1) — uses src.db.pool.create_pool, NOT bare asyncpg.create_pool
+    (thread 8542ee89's own lesson: the jsonb codec it registers is what makes
+    send_message's own graph-edge write actually land). Returns the sent message id,
+    the SAME id --apply-if-clear looks up the next day."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mailbox import send_message
+
+    body = build_manifest_body(plans, chain_plan)
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:prune-ladder-manifest")
+    try:
+        result = await send_message(
+            pool, from_agent=_MANIFEST_FROM_AGENT, from_project="osiris",
+            to_project="operator", desk_kind="decision", body=body)
+        return int(result["id"])
+    finally:
+        await pool.close()
+
+
+async def find_clear_manifest(
+    *, min_age: timedelta = MANIFEST_MIN_AGE,
+) -> tuple[int | None, str]:
+    """The apply-side gate (thread 9fac4e0d part 1: "apply next day unless dimmed").
+    Looks up the NEWEST manifest this script itself sent to the operator's desk and
+    returns (message_id, reason) — message_id is None whenever applying would be
+    wrong: no manifest was ever sent, the newest one is younger than `min_age` (today
+    is not genuinely "the day after" yet), or it was DIMMED (`fleet_messages.moot_at`
+    set — `dim_brief`'s own mechanism, mailbox.py: an agent annotating a brief moot,
+    NEVER the operator's own settle, which stays a human act; a dim here means
+    something judged the plan no longer current). A found, non-dimmed, old-enough
+    manifest returns its id and a `reason` describing why applying is clear."""
+    import asyncpg
+
+    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
+    try:
+        row = await pool.fetchrow(
+            "SELECT id, created_at, moot_at FROM fleet_messages "
+            "WHERE from_agent=$1 AND to_project='operator' "
+            "ORDER BY created_at DESC LIMIT 1", _MANIFEST_FROM_AGENT)
+    finally:
+        await pool.close()
+    if row is None:
+        return None, "no manifest has ever been sent — run --manifest first"
+    if row["moot_at"] is not None:
+        return None, (f"manifest {row['id']} was dimmed at "
+                      f"{row['moot_at'].isoformat()} — not applying")
+    age = datetime.now(UTC) - row["created_at"]
+    if age < min_age:
+        return None, (f"manifest {row['id']} is only {age} old (need "
+                      f"{min_age}) — today is not yet 'the day after'")
+    return int(row["id"]), f"manifest {row['id']}, sent {age} ago, not dimmed — clear"
+
+
+def _apply(
+    plans: dict[str, dict[str, list[DumpFile]]],
+    chain_plan: dict[str, list[TranscriptChain]],
+) -> None:
+    for plan in plans.values():
+        for f in plan["remove"]:
+            Path(f.path).unlink(missing_ok=True)
+    for c in chain_plan["remove"]:
+        for path in c.files:
+            Path(path).unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
+    import asyncio
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backups", type=Path, default=Path("backups"))
     parser.add_argument("--vault", type=Path,
@@ -211,19 +334,41 @@ def main(argv: list[str] | None = None) -> int:
                         help="ACTUALLY DELETE the files the dry-run lists — never run "
                              "this without the operator's own word on the printed list "
                              "first (ruling 39384a87/c53a5fc0).")
+    parser.add_argument("--manifest", action="store_true",
+                        help="Mail the dry-run plan to the operator's desk as a "
+                             "decision brief (thread 9fac4e0d part 1) instead of "
+                             "printing it. Deletes nothing.")
+    parser.add_argument("--apply-if-clear", action="store_true",
+                        help="Apply ONLY if the newest --manifest brief this script "
+                             "sent is at least 20h old and has not been dimmed — "
+                             "refuses with a named reason otherwise. Deletes nothing "
+                             "when refusing.")
     args = parser.parse_args(argv)
 
-    now = datetime.now(UTC)
-    plans = {
-        "backups/": plan_prune(_scan(args.backups), now=now),
-        "vault": plan_prune(_scan(args.vault), now=now),
-        "vault/basebackups": plan_prune(_scan(args.vault / "basebackups"), now=now),
-    }
+    if args.manifest:
+        plans, chain_plan = _compute_plans(args.backups, args.vault)
+        mid = asyncio.run(mail_manifest(plans, chain_plan))
+        print(f"manifest mailed to the operator's desk — message {mid}")
+        return 0
+
+    if args.apply_if_clear:
+        mid, reason = asyncio.run(find_clear_manifest())
+        if mid is None:
+            print(f"REFUSING — {reason}", file=sys.stderr)
+            return 1
+        plans, chain_plan = _compute_plans(args.backups, args.vault)
+        total_remove = sum(len(p["remove"]) for p in plans.values())
+        total_chains_remove = len(chain_plan["remove"])
+        print(f"{reason} — applying {total_remove} dump file(s) and "
+              f"{total_chains_remove} transcript chain(s) now.")
+        _apply(plans, chain_plan)
+        return 0
+
+    plans, chain_plan = _compute_plans(args.backups, args.vault)
     for label, plan in plans.items():
         _report(label, plan)
     # transcript CHAINS live only in the vault (osiris_backup.sh never writes them to
     # backups/) — a distinct population, reported and pruned as whole chains
-    chain_plan = plan_prune_transcript_chains(_scan_transcript_chains(args.vault))
     _report_chains("vault", chain_plan)
 
     total_remove = sum(len(p["remove"]) for p in plans.values())
@@ -235,12 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(f"\n--apply given — deleting {total_remove} dump file(s) and "
           f"{total_chains_remove} transcript chain(s) now.")
-    for plan in plans.values():
-        for f in plan["remove"]:
-            Path(f.path).unlink(missing_ok=True)
-    for c in chain_plan["remove"]:
-        for path in c.files:
-            Path(path).unlink(missing_ok=True)
+    _apply(plans, chain_plan)
     return 0
 
 

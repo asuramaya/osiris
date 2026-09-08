@@ -1,0 +1,9 @@
+[Unit]
+Description=Osiris weekly prune-ladder apply (weekly, one day after the manifest)
+
+[Timer]
+OnCalendar=Sun 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
