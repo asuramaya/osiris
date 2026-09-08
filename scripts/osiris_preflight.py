@@ -211,6 +211,22 @@ def find_missing_sessions(disk_anchors: set[str], stored_anchors: set[str]) -> s
     return disk_anchors - stored_anchors
 
 
+def _format_round_trip_failure(failures: list[dict[str, str]] | None) -> str | None:
+    """Pure message formatting for the soul store's own round-trip proof (thread
+    78efd46d item 2) — shared by `evaluate()` (so a test can construct `m` directly,
+    same convention as every other drill-shaped field here) and `main()`'s own
+    --drill-gated call to `collect_soul_round_trip_sample` (which, like `drill_pitr`,
+    runs AFTER `evaluate(m)`'s single pass, so `m` never actually carries this key at
+    evaluate-time in the real flow — this function is what makes both call sites agree
+    on the exact wording without a copy-pasted f-string)."""
+    if not failures:
+        return None
+    anchors = ", ".join(f["anchor_sid"] for f in failures[:5])
+    return (f"SOUL STORE ROUND-TRIP FAILURE: {len(failures)} sampled session(s) do not "
+            f"reconstruct byte-identical to disk (thread 78efd46d item 2) — {anchors} "
+            "— a backup that's never been restored is a hope, not a backup")
+
+
 async def collect_soul_store_coverage(root: Path | None = None) -> int | None:
     """THE SOUL STORE'S OWN COVERAGE GUARANTEE (thread 78efd46d, "let osiris eat every
     agent history": "a session on disk and not in the store is a preflight failure,
@@ -294,6 +310,9 @@ def evaluate(m: dict) -> list[str]:
                      "backfill_transcripts's cron hasn't caught them "
                      "(SoulStore(pool).ingest_path directly, per-session, is the fastest "
                      "way to see the real error instead of the sweep's own swallowed one)")
+    roundtrip_fail = _format_round_trip_failure(m.get("soul_round_trip_failures"))
+    if roundtrip_fail:
+        fails.append(roundtrip_fail)
     # THE MINER IS SUMMONED, NOT SCHEDULED (ceae1604). It used to walk every transcript every ten
     # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
     # crawl is gone: the adversary now runs ONCE, at a session's death rite, so a quiet hour means
@@ -374,6 +393,26 @@ def drill_pitr() -> str | None:
     return run_drill(Path(newest.path), None, marker)
 
 
+async def collect_soul_round_trip_sample() -> list[dict[str, str]]:
+    """THE SOUL STORE'S OWN ROUND-TRIP PROOF (thread 78efd46d item 2): "a backup that's
+    never been restored is a hope, not a backup" — the same law this file's own plain-
+    dump `drill()` already holds, extended to the soul store. Reuses
+    SoulStore.verify_round_trip_sample (a random sample, not a full sweep — see its own
+    docstring for why a sample is the right cadence here) so this collector and the
+    store's own acceptance test can never disagree on what "verified" means. Read-only
+    (soul_lines/soul_sessions carry no jsonb columns) — a bare pool is correct here,
+    unlike the mailbox writes thread 8542ee89 found broken."""
+    from src.ingest.soul_store import SoulStore
+
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:preflight-soul-roundtrip"})
+    try:
+        return await SoulStore(pool).verify_round_trip_sample()
+    finally:
+        await pool.close()
+
+
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe).
 
@@ -437,6 +476,15 @@ def main() -> int:
         p = drill_pitr()
         if p:
             fails.append(p)
+    if "--drill" in sys.argv:
+        roundtrip, roundtrip_broken = _run_check(
+            "collect_soul_round_trip_sample", collect_soul_round_trip_sample())
+        m["soul_round_trip_failures"] = roundtrip
+        f = _format_round_trip_failure(roundtrip)
+        if f:
+            fails.append(f)
+        if roundtrip_broken:
+            fails.append(roundtrip_broken)
     if not fails:
         print("preflight: all green"
               f" (backup {m['backup_age_h']:.1f}h, vault {m['vault_age_d']:.1f}d,"

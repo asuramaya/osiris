@@ -56,6 +56,12 @@ def _default_adapters() -> list[HarnessAdapter]:
     return _DEFAULT_ADAPTERS
 
 
+def _path_is_file(path: Path) -> bool:
+    """Kept in a sync helper for the blocking-call lint (ASYNC240), same as
+    `_read_source` just below — `verify_round_trip_sample`'s own existence check."""
+    return path.is_file()
+
+
 def _read_source(source_path: str) -> bytes:
     """Kept in a sync helper for the blocking-call lint, same as transcript_store.py's
     own `_stat` — the read is still blocking either way, this only satisfies ASYNC240's
@@ -1126,3 +1132,68 @@ class SoulStore:
             "sha256": hashlib.sha256(content).hexdigest(),
             "seek": upto, "withheld_entries": withheld,
         }
+
+    async def verify_round_trip_sample(
+        self, *, n: int = 20, harness: str = _HARNESS,
+    ) -> list[dict[str, str]]:
+        """THE ROUND-TRIP PROOF (thread 78efd46d item 2, operator ruling: "a backup
+        that's never been restored is a hope, not a backup" — the same law osiris_
+        preflight.py's own plain-dump `drill()` holds, extended to the soul store).
+        Picks up to `n` RANDOM sessions still ingested, reconstructs each from
+        soul_lines alone via `rematerialize_to_disk` (reusing `_stream_verified_write`'s
+        own proven streaming writer and its sha256 — no second hashing implementation),
+        and compares that hash against the SAME file's own hash, streamed too, never
+        loaded whole (`_hash_file_streamed`, `asyncio.to_thread` off the event loop —
+        the same 307MB-question discipline this whole module already holds).
+
+        A SAMPLE, not a full sweep: thousands of sessions makes verifying every one on
+        every weekly preflight tick expensive for no proportional gain — a mismatch
+        anywhere in the hash chain is exactly as loud from a sample as from the whole
+        population, and the chain itself (`verify_chain`) already re-derives every
+        line's own hash from its neighbors, so a corruption two sessions away from the
+        sample was never going to be silent regardless.
+
+        A session whose on-disk file no longer exists (pruned, moved, archived into
+        the vault's own transcript tarballs) is SKIPPED, never a failure of this
+        check — that absence is item 4's own concern (cache with a budget), not
+        proof the store's own content is wrong. Returns failures only; [] = every
+        sampled session verified byte-identical."""
+        import asyncio
+        import tempfile
+
+        rows = await self.pool.fetch(
+            "SELECT anchor_sid, source_path FROM soul_sessions WHERE harness=$1 "
+            "ORDER BY random() LIMIT $2", harness, n)
+        failures: list[dict[str, str]] = []
+        for row in rows:
+            anchor_sid, source_path = row["anchor_sid"], row["source_path"]
+            src = Path(source_path)
+            if not _path_is_file(src):
+                continue
+            with tempfile.TemporaryDirectory() as tmpdir:
+                scratch = Path(tmpdir) / f"{anchor_sid}.roundtrip"
+                result = await self.rematerialize_to_disk(
+                    anchor_sid, dest=str(scratch), force=True, harness=harness)
+                if "error" in result:
+                    failures.append({"anchor_sid": anchor_sid, "error": result["error"]})
+                    continue
+                src_hash = await asyncio.to_thread(_hash_file_streamed, src)
+                if src_hash != result["sha256"]:
+                    failures.append({
+                        "anchor_sid": anchor_sid,
+                        "error": f"byte mismatch — soul_lines reconstructs to "
+                                 f"{result['sha256'][:12]}…, the file on disk hashes to "
+                                 f"{src_hash[:12]}…",
+                    })
+        return failures
+
+
+def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:
+    """sha256 of `path`, read in bounded chunks — never the whole file in memory at
+    once, the same discipline `_stream_verified_write`'s own reconstruction already
+    holds on the soul_lines side of this comparison."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest()
