@@ -548,10 +548,32 @@ async def send_message(
     lineage: str | None = None
     holder: str | None = None
     redirect: dict[str, Any] | None = None
+    # THE SEAT'S OWN PLACEHOLDER IS NOT A MIND (thread 24f52959, nebbercracker's live
+    # specimen 8106/8172/8201): launch_seat's no-ancestor mint (trigger.py's `agent:seat-
+    # <seatid>` heir) stamps a REAL Agent object at a seat's very first launch — but
+    # succession afterward moves the seat's own `holds` edge forward without requiring the
+    # new heir's succeeded_from chain to trace back through it (mint_heir's own documented
+    # gap). Left unresolved here, that id is an ordinary dead-end canonical to lineage_head
+    # (no succeeded_by ever asserted on it) — a DM addressed to it echoed a "cold-mounted-
+    # before... queues and reads at its own next natural turn" receipt while the live
+    # holder never saw it, because the wake path's own liveness check ran on the
+    # PLACEHOLDER's `agent_mounts` history (real, from mint time), never on the seat's
+    # actual live occupant. roster() hands this id out meaning "whoever holds the seat" —
+    # so it is rewritten to the equivalent `seat:` address BEFORE any resolution runs,
+    # reusing that address's own proven holder lookup rather than a second copy of it.
+    seat_placeholder_redirect = False
+    if to_a and re.fullmatch(r"agent:seat-[0-9a-f]+", to_a):
+        seat_placeholder_redirect = True
+        to_a = "seat:" + to_a.removeprefix("agent:seat-")
     if to_a and to_a.startswith("seat:"):
         # a SEAT address: the receipt names the seat's handle and its CURRENT holder (whose
         # lineage head is the live truth a dispatcher wants); a vacant seat is not a grave —
         # the mail waits for the next holder, and the receipt says holder=None honestly.
+        # EXCEPT via the placeholder redirect above: a caller who typed `agent:seat-<id>`
+        # believed they were naming a specific mind, not a role that might sit empty — a
+        # vacant seat there must refuse loudly (never a queued-forever receipt) regardless
+        # of `require_seat`, the same law a caller who explicitly names a real `seat:<id>`
+        # does NOT get, on purpose (they know they're addressing a role).
         from src.orchestrator.agents import lineage_head
         from src.orchestrator.seats import seat_receipt
         sr = await seat_receipt(pool, to_a)
@@ -561,6 +583,12 @@ async def send_message(
         if require_seat and sr is None:
             raise ValueError(f"require_seat: '{requested or to_a}' is not a living Seat — "
                              "refusing to dispatch blind.")
+        if seat_placeholder_redirect and holder is None:
+            raise ValueError(
+                f"undeliverable: '{requested}' is a seat's own placeholder identity "
+                f"(seat {to_a!r}{f', handle {seat!r}' if seat else ''}), and the seat is "
+                "currently vacant — refusing to queue a DM with nobody to read it. "
+                "Address the seat directly if you mean to wait for its next holder.")
     elif to_a:
         from src.orchestrator.agents import agent_seat, lineage_head
         lineage = await lineage_head(pool, to_a)
@@ -683,6 +711,8 @@ async def send_message(
                 **({"redirect": redirect} if redirect else {}),
                 **({"folded_from": folded_from} if folded_from else {}),
                 **({"redirected_from": redirected_from} if redirected_from else {}),
+                **({"seat_placeholder_redirect": requested} if seat_placeholder_redirect
+                   else {}),
                 **({"threads_stamped": stamped} if stamped else {}),
                 **({"addressee_resolved": addressee_resolved} if addressee_resolved else {})}
     mid = await pool.fetchval(
@@ -777,6 +807,8 @@ async def send_message(
             **({"redirect": redirect} if redirect else {}),
             **({"folded_from": folded_from} if folded_from else {}),
             **({"redirected_from": redirected_from} if redirected_from else {}),
+            **({"seat_placeholder_redirect": requested} if seat_placeholder_redirect
+               else {}),
             **({"threads_stamped": stamped} if stamped else {}),
             **({"addressee_resolved": addressee_resolved} if addressee_resolved else {})}
 

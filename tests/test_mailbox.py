@@ -901,6 +901,59 @@ async def test_send_to_a_raw_seat_id_is_unaffected_by_the_new_check(
     assert dm["seat"] == "DirectSeat"
 
 
+async def test_a_dm_to_the_seats_own_placeholder_resolves_through_the_seat_to_its_holder(
+    actions: Actions,
+) -> None:
+    """Thread 24f52959, nebbercracker's live specimen (8106/8172/8201): launch_seat's own
+    no-ancestor mint stamps a real `agent:seat-<seatid>` Agent object as a seat's very
+    first holder — succession afterward can move the seat's `holds` edge to an heir with
+    no succeeded_from chain back through it, leaving the placeholder a dead end to
+    lineage_head. roster() hands this id out meaning "whoever holds the seat" — a DM to
+    it must resolve through the seat's CURRENT holder, exactly like an explicit
+    seat:<id> address, never queue against the placeholder's own (irrelevant) mount
+    history."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="PlaceholderSeat", source="test")
+    seat_hex = seat["seat_id"].removeprefix("seat:")
+    placeholder = f"agent:seat-{seat_hex}"
+    await actions.create_or_find_object("Agent", placeholder, placeholder)  # the dead mint
+    real_holder = "agent:realholder01"
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=real_holder)
+
+    dm = await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                            to_agent=placeholder, body="ship it")
+
+    assert dm["to_agent"] == seat["seat_id"]
+    assert dm["seat"] == "PlaceholderSeat"
+    assert dm["lineage_head"] == real_holder
+    assert dm["seat_placeholder_redirect"] == placeholder
+    assert await actions.pool.fetchval(
+        "SELECT to_agent FROM fleet_messages WHERE id=$1", dm["id"]) == seat["seat_id"]
+
+
+async def test_a_dm_to_the_seats_own_placeholder_refuses_loudly_when_vacant(
+    actions: Actions,
+) -> None:
+    """The vacancy exception (24f52959): a caller who typed `agent:seat-<id>` believed
+    they were naming a specific mind, not a role — unlike an explicit `seat:<id>`
+    address (which honestly waits for the next holder), a vacant seat here must refuse
+    rather than produce a queued-forever receipt nobody will ever read."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="VacantPlaceholderSeat",
+                             source="test")
+    seat_hex = seat["seat_id"].removeprefix("seat:")
+    placeholder = f"agent:seat-{seat_hex}"
+    await actions.create_or_find_object("Agent", placeholder, placeholder)
+
+    with pytest.raises(ValueError, match="currently vacant"):
+        await send_message(actions.pool, from_agent="agent:boss", from_project="osiris",
+                           to_agent=placeholder, body="into the void")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE to_agent=$1", seat["seat_id"]) == 0
+
+
 async def test_send_still_refuses_a_genuinely_unknown_name(actions: Actions) -> None:
     """No seat, no agent, nothing — seat_holder_ineligible must stand aside (None) and the
     ORIGINAL "no agent named" refusal must still fire, unchanged wording."""
