@@ -1467,9 +1467,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
     lint that healed would be a loop pathology; findings are testimony for a mind to judge).
     Seven checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners
-    on one NON-lifecycle fact — surfaced, never resolved), STATUS-REGRESSION (an 'open'
-    newer than another source's 'resolved' — a deliberate close overridden by recency; the
-    lifecycle property's one real failure mode, its normal transitions never flagged),
+    on one NON-lifecycle fact — surfaced, never resolved), STATUS-REGRESSION (error: three
+    genuine open-vs-resolved disagreement shapes, ruling aaf050e4 — an 'open' newer than
+    another source's 'resolved'; a never-flipped current 'open' with resolve evidence dated
+    after it and no later reopen; an exact-timestamp tie between the two values — normal
+    transitions stay silent throughout),
     LAUNDERING (an agent carrying a fact above its origin grade — via credence_props, the
     mandated read path for grade-is-the-message), LINEAGE (succeeded_by cycles / dangling
     heir pointers / heirs without ancestry / retired-yet-live agents / healed false mints),
@@ -1648,10 +1650,25 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
         for r in con])
 
-    # STATUS-REGRESSION — the lifecycle property's ONE real failure mode: an 'open' NEWER
-    # than a different source's 'resolved' at comparable confidence means a deliberate close
-    # is being overridden by recency (the miner-re-opens-what-a-session-resolved class). A
-    # normal transition (resolved newer than open) is never flagged.
+    # STATUS-REGRESSION — the lifecycle property's real failure modes, widened per ruling
+    # aaf050e4 (operator, on top of 64adf08a): a normal open->resolved transition is STILL
+    # never flagged — only a genuine open-vs-resolved disagreement is. Three distinct
+    # shapes, unioned into one check:
+    #   (1) THE ORIGINAL — an 'open' NEWER than a different source's 'resolved' at
+    #       comparable confidence: a deliberate close overridden by recency (the
+    #       miner-re-opens-what-a-session-resolved class).
+    #   (2) THE NEVER-FLIPPED (ruling 1335332e's own 713 specimens): a current status='open'
+    #       assertion whose thread ALSO carries resolved_because/resolved_in evidence dated
+    #       AFTER it — a close happened and the flag never flipped (the supersession-leak
+    #       shape assert_singular_property now prevents going forward, but historical rows
+    #       still carry it, and any write path assert_singular_property doesn't cover could
+    #       still produce a fresh one). Silent when a LATER status assertion (any source) or
+    #       a LATER annotate note exists past the resolve — either is a legitimate, on-the-
+    #       record reopen, not a leak.
+    #   (3) THE EXACT TIE: two different sources asserting 'open' and 'resolved' at the
+    #       identical observed_at — the winner-picker's own confidence/recency tiebreak has
+    #       nothing left to break the tie on, so this is reported rather than silently
+    #       coin-flipped.
     reg = await pool.fetch(
         "WITH s AS (SELECT ca.object_id, ca.value #>> '{}' AS v, ca.source_id, "
         "  ca.confidence, ca.observed_at "
@@ -1666,12 +1683,70 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "WHERE op.v='open' AND re.v='resolved' AND op.observed_at > re.observed_at "
         "  AND op.source_id <> re.source_id AND op.confidence >= re.confidence - $1 "
         "ORDER BY op.observed_at", eps)
-    land("status-regression", "error", [
+    findings_reg = [
         {"subject": r["canonical"],
          "detail": f"re-opened by {r['reopener']} AFTER {r['resolver']} resolved it "
                    f"({str(r['reopened_at'])[:19]}) — a deliberate close is being overridden "
                    f"by recency: {_cell(r['summary'])}"}
-        for r in reg])
+        for r in reg]
+    seen_regression = {r["canonical"] for r in reg}
+
+    # THE WINNER, not merely "an open row exists" (double-resolution's own corroboration
+    # shape — an old open superseded in spirit by two later, genuine resolves from
+    # different sources — must stay silent; only when 'open' actually WINS the standard
+    # confidence-then-recency ranking among ALL current status rows is there a live leak).
+    never_flipped = await pool.fetch(
+        "WITH winner AS (SELECT DISTINCT ON (ca.object_id) ca.object_id, "
+        "  ca.value #>> '{}' AS status, ca.observed_at AS win_at "
+        "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
+        "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active' "
+        "  ORDER BY ca.object_id, ca.confidence DESC, ca.observed_at DESC), "
+        "resolve_evidence AS (SELECT object_id, max(observed_at) AS resolved_at "
+        "  FROM current_assertions WHERE name IN ('resolved_because', 'resolved_in') "
+        "  GROUP BY object_id) "
+        "SELECT o.canonical, w.win_at AS open_at, re.resolved_at "
+        "FROM winner w JOIN resolve_evidence re ON re.object_id = w.object_id "
+        "JOIN objects o ON o.id = w.object_id "
+        "WHERE w.status = 'open' AND re.resolved_at > w.win_at "
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions later "
+        "    WHERE later.object_id = w.object_id AND later.name = 'status' "
+        "      AND later.observed_at > re.resolved_at) "
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions note "
+        "    WHERE note.object_id = w.object_id AND note.name LIKE 'note:%' "
+        "      AND note.observed_at > re.resolved_at)")
+    for r in never_flipped:
+        if r["canonical"] in seen_regression:
+            continue
+        seen_regression.add(r["canonical"])
+        findings_reg.append({
+            "subject": r["canonical"],
+            "detail": f"status reads 'open' ({str(r['open_at'])[:19]}) but resolved_because/"
+                      f"resolved_in evidence dated {str(r['resolved_at'])[:19]} shows a close "
+                      "happened and the flag never flipped — never reopened since"})
+
+    exact_tie = await pool.fetch(
+        "SELECT o.canonical, a.observed_at, a.v AS a_val, a.source_id AS a_source, "
+        "  b.v AS b_val, b.source_id AS b_source "
+        "FROM (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
+        "  FROM current_assertions WHERE name='status') a "
+        "JOIN (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
+        "  FROM current_assertions WHERE name='status') b "
+        "  ON a.object_id=b.object_id AND a.observed_at=b.observed_at "
+        "  AND a.source_id < b.source_id "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='Thread' AND o.status='active' "
+        "  AND ((a.v='open' AND b.v='resolved') OR (a.v='resolved' AND b.v='open'))")
+    for r in exact_tie:
+        if r["canonical"] in seen_regression:
+            continue
+        seen_regression.add(r["canonical"])
+        findings_reg.append({
+            "subject": r["canonical"],
+            "detail": f"{r['a_source']} says '{r['a_val']}' and {r['b_source']} says "
+                      f"'{r['b_val']}' at the IDENTICAL timestamp "
+                      f"({str(r['observed_at'])[:19]}) — the winner-picker's own "
+                      "confidence/recency tiebreak has nothing left to break the tie on"})
+    land("status-regression", "error", findings_reg)
 
     # LAUNDERING — through credence_props, the module whose own invariant demands every
     # grade-is-the-message read path route through it. Candidates: only co-asserted objects

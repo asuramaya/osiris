@@ -432,6 +432,92 @@ async def test_lint_double_resolution_is_corroboration(actions: Actions) -> None
     assert len(con) == 1 and con[0]["field"] == "owner"
 
 
+async def test_lint_status_regression_catches_the_never_flipped_shape(
+    actions: Actions,
+) -> None:
+    """Ruling aaf050e4, off ruling 1335332e's own 713 specimens: a thread's WINNING status
+    (confidence-then-recency ranked, same discipline as the contradiction check) is 'open',
+    but resolved_because evidence dated AFTER it shows a close actually happened — the flag
+    just never flipped. Never a coin-flip-eps case (64adf08a's own flood): this fires
+    regardless of confidence distance, because it isn't measuring closeness, it's measuring
+    a leak."""
+    t = "agent:teller"
+    th = await actions.create_or_find_object("Thread", "thread:leaked", t)
+    await actions.assert_property(th, "summary", "the flag that never flipped", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
+                                  evidence_class=_SD)
+    # the write-path bug's own shape: resolved_because landed, the status='resolved'
+    # sibling write did not (or landed and was lost) — 'open' is still the only, and
+    # therefore winning, status row.
+    await actions.assert_property(th, "resolved_because", "closed in commit deadbeef",
+                                  "agent:closer", NOW + timedelta(hours=1), 0.9,
+                                  evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    reg = _by_check(out, "status-regression")
+    assert len(reg) == 1 and reg[0]["subject"] == "thread:leaked"
+    assert "never flipped" in reg[0]["detail"]
+
+
+async def test_lint_status_regression_never_flipped_stays_silent_on_a_real_reopen(
+    actions: Actions,
+) -> None:
+    """A status assertion AFTER the resolve evidence is a legitimate, on-the-record reopen
+    — never the leak the never-flipped check exists to catch."""
+    t = "agent:teller"
+    th = await actions.create_or_find_object("Thread", "thread:really-reopened", t)
+    await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "resolved_because", "closed in commit deadbeef",
+                                  "agent:closer", NOW + timedelta(hours=1), 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "status", "open", "agent:necromancer",
+                                  NOW + timedelta(hours=2), 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert all(f["subject"] != "thread:really-reopened"
+               for f in _by_check(out, "status-regression"))
+
+
+async def test_lint_status_regression_never_flipped_stays_silent_on_an_explanatory_note(
+    actions: Actions,
+) -> None:
+    """A note added after the resolve evidence (annotate_thread's own append-only shape,
+    stamped under a unique note:<hex> property name) is also a legitimate on-the-record
+    account of the reopen — silenced the same as a fresh status assertion would be."""
+    t = "agent:teller"
+    th = await actions.create_or_find_object("Thread", "thread:noted-reopen", t)
+    await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "resolved_because", "closed in commit deadbeef",
+                                  "agent:closer", NOW + timedelta(hours=1), 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "note:abc123def456", "reopened by hand, see msg 42",
+                                  "agent:necromancer", NOW + timedelta(hours=2), 0.9,
+                                  evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    assert all(f["subject"] != "thread:noted-reopen"
+               for f in _by_check(out, "status-regression"))
+
+
+async def test_lint_status_regression_catches_an_exact_timestamp_tie(
+    actions: Actions,
+) -> None:
+    """Two different sources asserting 'open' and 'resolved' at the IDENTICAL observed_at
+    — the winner-picker's own confidence/recency tiebreak has nothing left to break the tie
+    on, so this is reported rather than silently coin-flipped."""
+    t = "agent:teller"
+    th = await actions.create_or_find_object("Thread", "thread:exact-tie", t)
+    tie_at = NOW + timedelta(hours=3)
+    await actions.assert_property(th, "status", "open", "agent:one", tie_at, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(th, "status", "resolved", "agent:two", tie_at, 0.9,
+                                  evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    reg = _by_check(out, "status-regression")
+    assert len(reg) == 1 and reg[0]["subject"] == "thread:exact-tie"
+    assert "IDENTICAL timestamp" in reg[0]["detail"]
+
+
 async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> None:
     t = "agent:teller"
     # a live link into a retired corpse
