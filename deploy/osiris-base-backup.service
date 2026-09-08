@@ -1,0 +1,13 @@
+# Weekly pg_basebackup — the physical starting point WAL replay needs for point-in-time
+# recovery (vault lane, operator ruling 39384a87/c53a5fc0, item 3). Paired with
+# osiris-base-backup.timer (weekly). Ships as plumbing, like osiris-manager.service
+# beside it — installing/enabling this is a separate, deliberate act, never automatic:
+#   cp deploy/osiris-base-backup.service deploy/osiris-base-backup.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now osiris-base-backup.timer
+[Unit]
+Description=Osiris weekly pg_basebackup into the vault
+
+[Service]
+Type=oneshot
+ExecStart=%h/code/osiris/scripts/osiris_base_backup.sh

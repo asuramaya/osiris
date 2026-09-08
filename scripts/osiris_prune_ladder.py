@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """THE RETENTION LADDER (the vault lane, operator ruling 39384a87/c53a5fc0, item 2): a
 classic GFS (grandfather-father-son) thinning schedule over the DB dump population in
-BOTH `backups/` and the vault -- every dump inside the last 48h survives whole (nothing
-thinned there at all); 48h-30d thins to one-per-CALENDAR-DAY; 30d-1y thins to one-per-
-CALENDAR-WEEK; beyond 1y thins to one-per-CALENDAR-MONTH, forever. Within any bucket the
-NEWEST survives (the operator's own reasoning: "the graph is append-only so a newer full
-contains every older one" -- every survivor here IS a full pg_dump by construction, no
-special-casing needed).
+BOTH `backups/` and the vault, AND over `<vault>/basebackups/` (item 3's own weekly
+pg_basebackup, osiris_base_backup.sh -- a base backup is, like a DB dump, complete and
+independently restorable on its own, so the identical ladder applies unmodified) --
+every survivor inside the last 48h stays whole (nothing thinned there at all); 48h-30d
+thins to one-per-CALENDAR-DAY; 30d-1y thins to one-per-CALENDAR-WEEK; beyond 1y thins to
+one-per-CALENDAR-MONTH, forever. Within any bucket the NEWEST survives (the operator's
+own reasoning: "the graph is append-only so a newer full contains every older one" --
+every survivor here IS a full snapshot by construction, no special-casing needed).
 
 SCOPED TO DB DUMPS ONLY for `plan_prune`/`--apply`'s main pass (osiris-*.dump / the
 pre-.dump-switch osiris-*.sql still on disk during the transition) -- an individual
@@ -36,6 +38,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 _NAME_RE = re.compile(r"^osiris-(\d{8})-(\d{6})\.(?:dump|sql)$")
+_BASEBACKUP_RE = re.compile(r"^osiris-basebackup-(\d{8})-(\d{6})\.tar\.gz$")
 
 
 @dataclass(frozen=True)
@@ -93,19 +96,24 @@ def plan_prune(
     }
 
 
-def _scan(directory: Path) -> list[DumpFile]:
-    """Every `osiris-<timestamp>.dump`/`.sql` in `directory` (non-recursive — both
-    `backups/` and the vault are flat). Timestamp parsed from the filename itself (the
-    identity osiris_backup.sh already stamps into it), falling back to the file's own
-    mtime only for a name this pattern doesn't recognize — never silently skipped, so a
-    stray file still gets a real answer instead of vanishing from the ladder's view."""
+def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
+    """Every file matching `glob` in `directory` (non-recursive — `backups/`, the vault,
+    and `<vault>/basebackups/` are each flat). Timestamp parsed from the filename itself
+    (the identity osiris_backup.sh/osiris_base_backup.sh already stamp into it — either
+    `_NAME_RE` for a DB dump or `_BASEBACKUP_RE` for a base backup, tried in that order),
+    falling back to the file's own mtime only for a name neither pattern recognizes —
+    never silently skipped, so a stray file still gets a real answer instead of vanishing
+    from the ladder's view. A base backup is, like a DB dump, a complete and
+    independently-restorable unit on its own (`pg_basebackup`'s whole point) — the SAME
+    `plan_prune` ladder applies to both, unlike the transcript tarballs' own chain-scoped
+    sibling."""
     out: list[DumpFile] = []
     if not directory.is_dir():
         return out
-    for p in sorted(directory.glob("osiris-*")):
+    for p in sorted(directory.glob(glob)):
         if not p.is_file():
             continue
-        m = _NAME_RE.match(p.name)
+        m = _NAME_RE.match(p.name) or _BASEBACKUP_RE.match(p.name)
         if m:
             when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=UTC)
         else:
@@ -209,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     plans = {
         "backups/": plan_prune(_scan(args.backups), now=now),
         "vault": plan_prune(_scan(args.vault), now=now),
+        "vault/basebackups": plan_prune(_scan(args.vault / "basebackups"), now=now),
     }
     for label, plan in plans.items():
         _report(label, plan)
