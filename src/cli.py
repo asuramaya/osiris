@@ -897,7 +897,8 @@ async def _cmd_launch_pty(
         return 0
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
-    argv = ["claude", *(["--model", resolved_model] if resolved_model else [])]
+    from src.orchestrator.harness_process import claude_pty_argv
+    argv = claude_pty_argv(resolved_model)
     from src.orchestrator.trigger import _governed_project_name, _window_name
     name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
         pool, facts["seat_id"], cwd=facts["anchor_cwd"]))

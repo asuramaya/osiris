@@ -751,6 +751,9 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     async def _boom_agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return []  # only ever asked once, for the pre-resume already-live check
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     import io
     from contextlib import redirect_stdout
 
@@ -759,7 +762,7 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
         out = await _cmd_resume_harness(
             "cliresume", model="claude-sonnet-5", pool=actions.pool, wake_default=None,
             agents_json=_boom_agents_json, resume_spawn=_resume_spawn,
-            settings=_resume_settings(sense))
+            settings=_resume_settings(sense), clear_stale_record=_clear_stale_record)
 
     assert out == 0
     assert len(resumed) == 1
@@ -846,10 +849,13 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return []
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     out = await _cmd_resume_harness(
         "clizerohop", model=None, pool=actions.pool, wake_default=None,
         agents_json=_agents_json, resume_spawn=_resume_spawn,
-        settings=_resume_settings(sense))
+        settings=_resume_settings(sense), clear_stale_record=_clear_stale_record)
 
     assert out == 0
     assert len(resumed) == 1
