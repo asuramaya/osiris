@@ -829,7 +829,13 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     ALSO CARRIES THE PROJECT HYGIENE SWEEP (thread 14fae7d3, wave 6 dispatch msg 8063,
     since project_hygiene.py): the same "unclaimed junk expires" reasoning, aimed at
     SoftwareProject stubs instead of Thread rows. Same cadence, same failure discipline —
-    a hiccup in either half logs and returns 0 for that half, never sinks the other."""
+    a hiccup in either half logs and returns 0 for that half, never sinks the other.
+
+    AND THE GHOST HOUSE-STAMP SWEEP (thread a732e331 clause 3, wave 7 dispatch msg 8079,
+    since house_hygiene.py): a Seat's own pre-house-optional ghost stamp, same "unclaimed
+    leftover expires mechanically" reasoning a third time — a receipt naming each retired
+    seat, same failure discipline as its two siblings above."""
+    from src.orchestrator.house_hygiene import apply_ghost_house_sweep
     from src.orchestrator.migration_0060 import apply_migration_0060
     from src.orchestrator.project_hygiene import apply_project_hygiene_sweep
 
@@ -852,7 +858,16 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     retired = len(hygiene.get("retired", []))
     if retired or hygiene.get("refused"):
         _log.info("project hygiene sweep: %s", hygiene)
-    return acted + retired
+
+    try:
+        ghosts = await apply_ghost_house_sweep(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("ghost house-stamp sweep failed: %r", exc)
+        ghosts = {}
+    ghosts_retired = len(ghosts.get("retired", []))
+    if ghosts_retired or ghosts.get("refused"):
+        _log.info("ghost house-stamp sweep: %s", ghosts)
+    return acted + retired + ghosts_retired
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
