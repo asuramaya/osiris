@@ -4871,11 +4871,15 @@ async def test_launch_harness_lane_resumes_a_stale_but_resumable_holder(
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     d = await trigger_module.resume_seat(
         actions, caller="agent:hm-resume", target=worker_seat,
         message="pick up where you left off",
         settings=_settings(enabled=True, sense=str(sense)),
-        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -4941,11 +4945,15 @@ async def test_launch_harness_lane_resumes_a_zero_hop_candidate_with_no_signed_t
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     d = await trigger_module.resume_seat(
         actions, caller="agent:hm-ferry", target=worker_seat,
         message="pick it back up",
         settings=_settings(enabled=True, sense=str(sense)),
-        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -5026,11 +5034,14 @@ async def test_launch_harness_lane_walks_past_a_zero_turn_generation(
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     d = await trigger_module.resume_seat(
         actions, caller="agent:hm-zt", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense)),
         resume_spawn=_resume_spawn,
-        agents_json=_fake_agents_json([[]]))
+        agents_json=_fake_agents_json([[]]), clear_stale_record=_clear_stale_record)
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -5113,10 +5124,14 @@ async def test_launch_harness_lane_resumes_zero_hop_unsigned_via_the_graph_door_
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append({"repo": repo, "prompt": prompt, **kw})
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     d = await trigger_module.resume_seat(
         actions, caller="agent:hm-unk", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense)),
-        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
 
     assert d["status"] == "launched" and d["mode"] == "resumed"
     assert d["session"] == FULL_SID
@@ -5354,10 +5369,14 @@ async def test_resume_seat_resumes_a_compacted_transcript_with_real_tail_work(
     async def _resume_spawn(repo: str, prompt: str, **kw: Any) -> None:
         resumed.append(kw)
 
+    async def _clear_stale_record(job_dir_key: str) -> bool:
+        return False
+
     d = await trigger_module.resume_seat(
         actions, caller="agent:hm-compact-2", target=worker_seat,
         settings=_settings(enabled=True, sense=str(sense), min_tail_bytes=1),
-        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]))
+        resume_spawn=_resume_spawn, agents_json=_fake_agents_json([[]]),
+        clear_stale_record=_clear_stale_record)
 
     assert d["status"] == "launched" and d.get("mode") == "resumed"
     assert resumed and resumed[0].get("resume_session") == FULL_SID
@@ -6168,6 +6187,29 @@ async def test_real_kill_pid_falls_back_to_sigterm_when_claude_stop_fails(
     assert killed == [(4242, signal.SIGTERM)]
 
 
+async def test_real_kill_pid_falls_back_to_sigterm_when_the_binary_is_missing(
+    monkeypatch: Any,
+) -> None:
+    """Thread e7f173a6, the same graceful-degrade fix as _clear_stale_stopped_record's own
+    OSError guard: a harness that genuinely isn't installed is exactly the "claude stop
+    itself refused" case this fallback already exists for — not a crash."""
+    async def _fake_exec(*argv: str, **kw: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "claude")
+
+    killed: list[tuple[int, int]] = []
+
+    def _fake_os_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr("os.kill", _fake_os_kill)
+
+    await trigger_module._real_kill_pid(4242, "wgjobkey5")
+
+    import signal
+    assert killed == [(4242, signal.SIGTERM)]
+
+
 async def test_real_kill_pid_uses_sigterm_directly_with_no_harness_id(
     monkeypatch: Any,
 ) -> None:
@@ -6234,6 +6276,23 @@ async def test_clear_stale_stopped_record_reports_false_on_nothing_to_clear(
     cleared = await trigger_module._clear_stale_stopped_record("no-such-id")
 
     assert cleared is False
+
+
+async def test_clear_stale_stopped_record_tolerates_a_missing_binary(
+    monkeypatch: Any,
+) -> None:
+    """Thread e7f173a6, found live by the stranger_test proof: retire_agent's own "best-
+    effort, never blocks" claim was false on a box with no `claude` installed at all —
+    create_subprocess_exec's own FileNotFoundError crashed every caller uncaught. Now
+    degrades to the same False every other no-op path already returns."""
+    async def _fake_exec(*argv: str, **kw: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "claude")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+
+    cleared = await trigger_module._clear_stale_stopped_record("some-id")
+
+    assert cleared is False  # never raises
 
 
 async def test_resume_seat_clears_a_stale_stopped_record_before_spawning(

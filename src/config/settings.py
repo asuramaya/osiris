@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # OCRs a scanned page → text before extraction (county notices are scans).
     osiris_extract_provider: str = "auto"
     osiris_claude_binary: str = "claude"
+    # THE HARNESS PROCESS ADAPTER (thread e7f173a6, operator ruling 2026-09-08: "it has to be
+    # abstract, dsh, crush, cursor are all options that degrade gracefully until we build
+    # parity on all features") — which harness src/orchestrator/harness_process.py's
+    # ProcessAdapter selects for spawn/resume/reply/list_sessions/stop. Same 'auto' pin-or-
+    # environment shape as osiris_extract_provider above: pydantic-settings already reads
+    # the OSIRIS_HARNESS_ADAPTER env var into this field by name (the operator's own "pin"),
+    # so a caller need only read `settings.osiris_harness_adapter` — 'auto' (default) picks
+    # the first available() adapter in [claude, dsh, crush, cursor] order; naming one forces
+    # it even when unavailable (every door then refuses by name, never silently falls
+    # through to a different adapter than the one named).
+    osiris_harness_adapter: str = "auto"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
     # Semantic search (the max-level ruling a0cfcca1). The Claude CLI has no embeddings
     # endpoint and keyless is a feature, so the embedder is a LOCAL static model

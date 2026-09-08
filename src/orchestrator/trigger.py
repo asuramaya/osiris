@@ -3407,9 +3407,8 @@ async def launch_seat(
                         "body_exists": True, "can_receive": True, "attach": attach,
                         "detail": f"a live body already holds {handle} — not minting a twin"}
 
-        argv = ["claude"]
-        if argv_model:
-            argv += ["--model", argv_model]
+        from src.orchestrator.harness_process import claude_pty_argv
+        argv = claude_pty_argv(argv_model)
         # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
         # collision class, 2294e95d), plus the body's own stable anchor so it matches the
         # window's own job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN
@@ -3824,14 +3823,21 @@ async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
     broker fallback lane (`osiris_launch_substrate="pty"`), which the harness's own daemon
     never sees and so cannot auto-heal; a graceful ask there, not SIGKILL, exactly as
     before. Also falls back if `claude stop` itself exits non-zero (an unknown id, a dark
-    daemon) — better an ordinary SIGTERM than silence.
+    daemon), OR if the binary isn't even installed (thread e7f173a6 — the same graceful-
+    degrade fix as `_clear_stale_stopped_record`'s own OSError guard: a harness that
+    genuinely isn't there is exactly the "no harness-tracked id reachable" case this
+    fallback already exists for) — better an ordinary SIGTERM than an uncaught crash.
 
     Injectable so no test ever touches a real process or spawns a real subprocess."""
     if job_dir_key:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "stop", job_dir_key,
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        if await proc.wait() == 0:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "stop", job_dir_key,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            stopped = await proc.wait() == 0
+        except OSError:
+            stopped = False
+        if stopped:
             # THEN REMOVE THE STOPPED RECORD (measured live, 2026-09-03, harness 2.1.259):
             # `claude stop` leaves a "stopped" background record, and `claude --bg
             # --resume <id>` against a session that still has ANY record "starts a copy
@@ -3862,10 +3868,21 @@ async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
     clear) leaves exactly the pre-fix state, and `_adopt_resumed_body`'s own post-spawn
     copy detection still catches anything this pre-emptive clear missed.
 
-    Injectable so no test ever spawns a real subprocess."""
-    proc = await asyncio.create_subprocess_exec(
-        "claude", "rm", job_dir_key,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    Injectable so no test ever spawns a real subprocess.
+
+    TOLERATES A MISSING BINARY (thread e7f173a6, found live by the stranger_test proof:
+    retire_agent's own "best-effort, never blocks the retirement itself" claim was FALSE
+    on a box with no `claude` at all — create_subprocess_exec's own FileNotFoundError
+    propagated uncaught through every caller, crashing an otherwise-harmless third-party
+    agent retirement). A harness that genuinely isn't installed has no stopped-record to
+    clear by construction — this degrades to the same "nothing was there" False every
+    other no-op path already returns, never a raised exception."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "rm", job_dir_key,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    except OSError:
+        return False
     return await proc.wait() == 0
 
 
