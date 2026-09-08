@@ -858,7 +858,16 @@ async def roster(
     match: `{"repo": <as actually stored>, "seat", "via", "differs_by": "case"|"separator"}`.
     Live-reproduced: the operator renamed a repo `RAMstein` -> `ramstein` family-wide; two
     seats' charter/pin still carried the old spelling, so `roster(repo='ramstein')` returned
-    a bare, uninformative `no-match` until this existed."""
+    a bare, uninformative `no-match` until this existed.
+
+    `manager` (operator ruling, thread d575e68c) is each row's own `manager_of_seat` resolved
+    to the manager's `handle` (same handle-by-canonical read `seat_facts` already makes,
+    reused rather than a second lookup), or `None` when the seat is unmanaged. Closes the gap
+    the ruling named directly: "the three now sit under nebbercracker" is a promotion this
+    function already had every fact to confirm — `seat(action='promote')` mints the
+    `managed_by` edge, `manager_of_seat` already reads it (`governed`/`shared-house` above
+    both call it) — but no per-seat row ever surfaced it, so a reader checking a promotion by
+    roster alone would call it failed with the edge sitting right there in the graph."""
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
     from src.orchestrator.offices import _default_office_root
@@ -877,6 +886,10 @@ async def roster(
         facts = await seat_facts(pool, seat_id)
         occ = await seat_occupancy(pool, seat_id, live_secs=live_secs)
         chartered = await charter_of(pool, seat_id)
+        manager_seat_id = await manager_of_seat(pool, seat_id)
+        manager_handle = (
+            (await seat_facts(pool, manager_seat_id))["handle"]
+            if manager_seat_id is not None else None)
         anchor = facts["anchor_cwd"]
         # THE THIRD DEFECT (Alfred's live review, thread 3806, msg 4066): `anchor is None`
         # used to mean "no-office" — a confident claim about the WORLD derived from a null
@@ -943,6 +956,7 @@ async def roster(
             pin_charter_agreement = "disagree"
         rows.append({
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
+            "manager": manager_handle,
             "occupancy": occ["state"], "holder": occ["holder"],
             "anchor_cwd": anchor, "tree_cwd": facts["tree_cwd"], "live_cwd": live_cwd,
             "probed_anchor_cwd": probed_anchor,

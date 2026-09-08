@@ -166,8 +166,9 @@ watching its own graph context beside its own terminal is a mirror, not a cycle.
 
 ### 0.4 Four small fixes (all field-witnessed)
 
-- **Statusline false-down** (`scripts/osiris_statusline.py`): 1.0s connect timeout flaps under
-  load — distinguish slow from down.
+- **Statusline false-down** (`scripts/osiris_hook.py`, the statusline's current home —
+  `scripts/osiris_statusline.py` was retired at the hook migration): 1.0s connect timeout
+  flaps under load — distinguish slow from down.
 - **Null-seam gate** (`src/orchestrator/agents.py`/`forks.py`): a null prior-model is the
   absence of an observation; never date a seam against it.
 - **`open_thread` dedup across lineage restarts**: near-summary check before minting (Aegis,

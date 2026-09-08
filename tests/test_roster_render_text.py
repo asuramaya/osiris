@@ -55,3 +55,33 @@ async def test_roster_render_text_with_repo_uses_the_generic_fallback(
 
     assert set(out.keys()) == {"text"}
     assert "agreement: no-match" in out["text"]
+
+
+async def test_roster_render_text_shows_manager_suffix_when_managed(
+    actions: Actions,
+) -> None:
+    """Operator ruling, thread d575e68c: a managed seat's line carries a `-> <manager>`
+    suffix; an unmanaged seat's line carries none."""
+    from datetime import UTC, datetime
+
+    from src import mcp_server as srv
+
+    manager = await ensure_seat(actions, house="rrthouse2", handle="Rrtmgr", source="test")
+    worker = await ensure_seat(actions, house="rrthouse2", handle="Rrtworker", source="test")
+    await ensure_seat(actions, house="rrthouse2", handle="Rrtlone", source="test")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    await actions.create_link(worker_oid, manager_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.roster(render="text")
+    finally:
+        srv._pool = saved
+
+    text = out["text"]
+    assert "Rrtworker -> Rrtmgr" in text
+    lone_line = next(line for line in text.splitlines() if "Rrtlone" in line)
+    assert "->" not in lone_line

@@ -2,10 +2,11 @@
 values every dev-facing systemd USER unit already inlines by hand (deploy/osiris-manager.
 service, deploy/user/osiris-console.service, deploy/user/osiris-pulse.service: DATABASE_URL=
 ...:5601/osiris, REDIS_URL=...:6396/0) and half a dozen scripts re-hardcode ad hoc (scripts/
-osiris_fleet_glance.py, osiris_statusline.py, osiris_stophook.py, backfill_thread_arc.py,
-backfill_generations.py, backfill_seat_bindings.py all carry the identical literal
-independently — flagged as its own duplication debt, not fixed here, since none of them are
-this build's territory).
+osiris_fleet_glance.py, osiris_stophook.py, backfill_thread_arc.py, backfill_generations.py,
+backfill_seat_bindings.py all carry the identical literal independently — flagged as its own
+duplication debt, not fixed here, since none of them are this build's territory; the retired
+scripts/osiris_statusline.py used to carry it too, dropped from this list at the hook
+migration).
 
 The bug this closes (3e96c10e's cousin, found diagnosing task #69): Settings.database_url's
 class default is postgresql://...@127.0.0.1:5432/osiris — the PROD shape (real deploys set

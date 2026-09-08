@@ -1,7 +1,7 @@
 """`/heartbeat` — the statusline's server half (thread #180, 2026-08-18). Every rendering
 tab used to fork a fresh `asyncpg.connect()` per render (Thoth's measurement: 138 tx/s, 23
-backends against an idle fleet of 16). This route runs the SAME logic
-`scripts/osiris_statusline.py::_counts` has always run — see
+backends against an idle fleet of 16). This route runs the SAME logic the retired
+`scripts/osiris_statusline.py::_counts` used to run — see
 `src.orchestrator.heartbeat.compute_heartbeat`'s own module docstring — against the MCP
 server's already-warm shared pool instead. `_FakeRequest` mirrors test_sweep_ledger.py's own
 pattern for exercising a `@mcp.custom_route` handler directly, no ASGI stack needed.
