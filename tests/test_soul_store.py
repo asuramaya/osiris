@@ -245,6 +245,50 @@ async def test_rematerialize_to_disk_is_byte_identical_across_a_compaction_bound
     assert receipt["sha256"] == hashlib.sha256(dest.read_text().encode()).hexdigest()
 
 
+# --- thread 78efd46d item 2: the round-trip proof -----------------------------------
+
+async def test_verify_round_trip_sample_is_clean_on_a_healthy_ingest(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "roundtrip1.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "r0undtr1p")
+    assert await store.verify_round_trip_sample() == []
+
+
+async def test_verify_round_trip_sample_skips_a_session_whose_file_is_gone(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """Pruned/moved/archived since ingest is item 4's own concern (cache with a
+    budget), never proof the store's own content is wrong — the round-trip proof only
+    ever speaks to sessions it can actually compare against something."""
+    p = _write_transcript(tmp_path / "gone.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "va n1shed0")
+    p.unlink()
+    assert await store.verify_round_trip_sample() == []
+
+
+async def test_verify_round_trip_sample_catches_a_tampered_session(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "tampered.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "tamper3d1")
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea "
+        "WHERE harness='claude-code' AND anchor_sid='tamper3d1' AND line_idx=1")
+    failures = await store.verify_round_trip_sample()
+    assert len(failures) == 1
+    assert failures[0]["anchor_sid"] == "tamper3d1"
+    assert "error" in failures[0]
+
+
+async def test_hash_file_streamed_matches_a_plain_whole_file_hash(tmp_path: Path) -> None:
+    from src.ingest.soul_store import _hash_file_streamed
+
+    p = tmp_path / "x.bin"
+    p.write_bytes(b"some content spanning more than one chunk" * 100)
+    assert _hash_file_streamed(p, chunk_size=16) == hashlib.sha256(p.read_bytes()).hexdigest()
+
+
 async def test_ingest_survives_an_embedded_nul_byte(store: SoulStore, tmp_path: Path) -> None:
     """THE ACCEPTANCE TEST FOR 0052 (thread 173cbf11, Thoth DM 5350): a real transcript
     line carrying a literal NUL byte — Postgres `text` cannot hold 0x00 at all, confirmed

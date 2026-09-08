@@ -275,6 +275,35 @@ def test_find_missing_sessions_is_a_pure_set_difference() -> None:
     assert find_missing_sessions(disk, stored) == {"ccc"}
 
 
+# --- thread 78efd46d item 2: the soul store's own round-trip proof --------------------
+
+def test_no_round_trip_failures_key_is_quiet() -> None:
+    assert evaluate(_green()) == []
+
+
+def test_empty_round_trip_failures_list_is_quiet() -> None:
+    m = _green()
+    m["soul_round_trip_failures"] = []
+    assert evaluate(m) == []
+
+
+def test_a_real_round_trip_failure_is_named_loudly() -> None:
+    m = _green()
+    m["soul_round_trip_failures"] = [{"anchor_sid": "deadbeef01", "error": "chain broken"}]
+    fails = "\n".join(evaluate(m))
+    assert ("SOUL STORE ROUND-TRIP FAILURE: 1 sampled session" in fails
+            and "deadbeef01" in fails and "78efd46d" in fails)
+
+
+def test_format_round_trip_failure_is_pure() -> None:
+    from scripts.osiris_preflight import _format_round_trip_failure
+
+    assert _format_round_trip_failure(None) is None
+    assert _format_round_trip_failure([]) is None
+    msg = _format_round_trip_failure([{"anchor_sid": "abc123", "error": "mismatch"}])
+    assert msg is not None and "abc123" in msg
+
+
 def test_find_missing_sessions_is_empty_when_store_has_everything() -> None:
     from scripts.osiris_preflight import find_missing_sessions
 
