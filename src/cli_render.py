@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from typing import Any, TextIO
@@ -384,21 +385,99 @@ def render(data: Any, paint: Paint, cols: int, *, title: str | None = None,
     return lines
 
 
+# --- painting the server's OWN text (thread bad45d61, wave 10) ---------------------------
+#
+# Khnum's fleet render (824de38) re-derives its whole display from the raw `registered`
+# rows client-side -- correct for a genuinely structural regrouping, but the live specimen
+# (msg 8160) shows the cost: a caller that reads from a capped/sampled field instead of the
+# full row set silently under-counts (3 sections where the server tree has 36). The read
+# triangle's own text renders (textrender.py: backlog/threads/roster/team) already carry
+# their own hand-designed grouping and caps with an explicit remainder count -- there is
+# nothing left to re-derive. PAINT INSTEAD: take the server's own already-complete text
+# verbatim and add color only, never re-parse it into a different shape. A caller that
+# wants machine data still gets the full structured `--json` response, unchanged.
+
+_GLYPH_PAINT = {"●": "good", "○": "dim", "·": "dim"}
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z_-]*")
+
+
+def _paint_words(text: str, paint: Paint) -> str:
+    """Wrap every whole-word match against the SAME verdict vocabulary fmt_value uses
+    (_GOOD/_BAD/_WARN), so a status word reads the same color whether it arrived as a
+    bare scalar or embedded in the server's own prose line. Matched case-sensitively
+    against the lowered word — the word itself is never altered, only wrapped."""
+    def _sub(m: re.Match[str]) -> str:
+        word = m.group(0)
+        low = word.lower()
+        if low in _GOOD:
+            return paint.good(word)
+        if low in _BAD:
+            return paint.bad(word)
+        if low in _WARN:
+            return paint.warn(word)
+        return word
+    return _WORD_RE.sub(_sub, text)
+
+
+def paint_text(text: str, paint: Paint) -> str:
+    """Colorize the server's own pre-rendered text (a read-triangle verb's `render='text'`
+    response) line by line, WITHOUT re-parsing it into rows or re-deriving any grouping —
+    the exact discipline this thread exists to name. Three universal shapes, recognized
+    across every read-triangle text render:
+      - a leading occupancy/liveness glyph (●/○/·) -- colored, never counted or moved
+      - a bare 'label:' header line (nothing after the colon) -- bolded, e.g. roster's
+        house names
+      - everything else -- verdict words painted in place via `_paint_words`
+    A line this recognizes none of still prints, verbatim, unstyled — the same "never
+    guess" discipline `fmt_value` already holds itself to."""
+    if not paint.enabled:
+        return text
+    out: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            continue
+        indent = line[:len(line) - len(line.lstrip())]
+        rest = line[len(indent):]
+        if rest[0] in _GLYPH_PAINT and (len(rest) == 1 or rest[1] == " "):
+            glyph, tail = rest[0], rest[1:]
+            glyph_method = getattr(paint, _GLYPH_PAINT[glyph])
+            out.append(f"{indent}{glyph_method(glyph)}{_paint_words(tail, paint)}")
+            continue
+        if stripped.endswith(":") and stripped != ":":
+            out.append(f"{indent}{paint.title(stripped)}")
+            continue
+        out.append(f"{indent}{_paint_words(rest, paint)}")
+    return "\n".join(out)
+
+
 # --- the one choke point -------------------------------------------------------------------
 
 def emit(data: Any, *, as_json: bool, title: str | None = None,
-         stream: TextIO | None = None) -> None:
+         stream: TextIO | None = None, text: str | None = None) -> None:
     """EVERY read verb's output goes through here, so the human/machine split is made in
     exactly one place and cannot drift command to command.
 
     `as_json=True` prints COMPACT json — one line, no indent. That is deliberate and it is
     the agent-facing win: it is strictly fewer tokens than the indent=2 dump this replaces,
-    while staying byte-exact data. Human mode never claims to be parseable."""
+    while staying byte-exact data. Human mode never claims to be parseable.
+
+    `text` (thread bad45d61, wave 10): when given AND `as_json` is False, this is a read-
+    triangle verb's own SERVER-RENDERED text (`render='text'`) — `paint_text` colorizes it
+    IN PLACE, never re-derived from `data` via the generic `render()` reconstruction below.
+    This is the fleet-fix's own rule, generalized: a caller that already has a complete,
+    hand-designed text shape from the server must paint that, not re-parse `data` (which
+    may be capped/sampled for a different purpose) into a second, possibly-inconsistent
+    shape. Ignored when `as_json=True` — machine mode is always `data`, byte-exact."""
     stream = stream or sys.stdout
     if as_json:
         print(json.dumps(data, default=str, separators=(",", ":")), file=stream)
         return
     paint = Paint(supports_color(stream))
+    if text is not None:
+        print(paint_text(text, paint), file=stream)
+        return
     cols = width(stream)
     for line in render(data, paint, cols, title=title):
         print(line, file=stream)

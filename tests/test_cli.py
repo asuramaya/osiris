@@ -29,6 +29,7 @@ from src.cli import (
     cmd_amend_practice,
     cmd_annotate_thread,
     cmd_attach,
+    cmd_backlog,
     cmd_boot_status,
     cmd_bootstrap,
     cmd_charter_for,
@@ -53,12 +54,14 @@ from src.cli import (
     cmd_resume,
     cmd_retention,
     cmd_retire_agent,
+    cmd_roster,
     cmd_seed,
     cmd_send,
     cmd_show,
     cmd_smoke_chaos,
     cmd_team,
     cmd_thread,
+    cmd_threads,
     cmd_unmerge,
     commit_deployed_notes,
     composition_drift_notes,
@@ -450,6 +453,107 @@ async def test_cmd_team_seat_is_honest_when_the_manager_manages_nobody(
     await ensure_seat(actions, house="cliteamlonehouse", handle="Cliteamlone",
                       source="test", anchor_cwd="/test/cliteamlone")
     assert await cmd_team(seat="Cliteamlone", pool=actions.pool) == 1
+
+
+# --- backlog/threads/roster/team paint parity (thread bad45d61, wave 10): human mode asks
+# the server for render='text' and paints that VERBATIM; --json keeps the old wire contract
+# unchanged. Proven here by asserting the ARGUMENTS each mode sends, never by asserting on
+# color codes (that's cli_render's own test file's job). ------------------------------------
+
+async def test_cmd_backlog_human_mode_asks_the_server_for_render_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "osiris: 3 open — oldest: Thoth"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_backlog(all_projects=False, as_json=False) == 0
+    assert calls == [("backlog", {"all_projects": False, "render": "text"})]
+    assert "osiris: 3 open" in capsys.readouterr().out
+
+
+async def test_cmd_backlog_json_mode_never_asks_for_render_text(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"backlog": [], "total": 0}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_backlog(all_projects=True, as_json=True) == 0
+    assert calls == [("backlog", {"all_projects": True})]  # no render= at all
+
+
+async def test_cmd_threads_human_mode_paints_the_servers_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "5f234a1c [task] fix the thing"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_threads(project="osiris", as_json=False) == 0
+    assert calls == [("threads", {"project": "osiris", "render": "text"})]
+    assert "fix the thing" in capsys.readouterr().out
+
+
+async def test_cmd_roster_human_mode_paints_the_servers_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "osiris:\n  ● Thoth"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_roster(repo=None, as_json=False) == 0
+    assert calls == [("roster", {"repo": None, "want_caveats": False, "render": "text"})]
+    assert "Thoth" in capsys.readouterr().out
+
+
+async def test_cmd_team_no_seat_human_mode_paints_the_servers_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "● Worker: owe 2, envelope 0"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_team(as_json=False) == 0
+    assert calls == [("team", {"render": "text"})]
+    assert "Worker" in capsys.readouterr().out
+
+
+async def test_cmd_team_seat_human_mode_paints_render_team_text_not_generic_render(
+    actions: Actions, capsys: Any,
+) -> None:
+    """The --seat direct-DB lane has no MCP round trip to ask render='text' of — it reuses
+    render_team_text (the SAME function mcp_server.py's own team() calls) directly, never
+    the generic render() reconstruction, for the same paint parity."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    manager = await ensure_seat(actions, house="paintteamhouse", handle="Paintteammgr",
+                                source="test", anchor_cwd="/test/paintteammgr")
+    worker = await ensure_seat(actions, house="paintteamhouse", handle="Paintteamwk",
+                               source="test", anchor_cwd="/test/paintteamwk")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    await actions.create_link(worker_oid, manager_oid, "managed_by", "test",
+                              _dt.now(_UTC), 0.9, evidence_class="self_declared")
+
+    assert await cmd_team(seat="Paintteammgr", pool=actions.pool, as_json=False) == 0
+    out = capsys.readouterr().out
+    assert "Paintteamwk" in out
+    assert "owe" in out  # render_team_text's own shape, not the generic kv-block dump
 
 
 async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
