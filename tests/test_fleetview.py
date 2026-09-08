@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from src.cli_render import Paint
-from src.orchestrator.fleetview import paint_fleet_text, render_fleet_tree
+from src.cli_render import Paint, paint_fleet_text
+from src.orchestrator.fleetview import render_fleet_tree
 
 T0 = datetime(2026, 7, 7, 12, 0, tzinfo=UTC)
 T1 = datetime(2026, 7, 7, 13, 0, tzinfo=UTC)
@@ -331,3 +331,46 @@ def test_paint_fleet_text_dims_the_unfiled_line_and_colors_the_ghost_note() -> N
     assert "\x1b[33m" in colored  # the ghost note, warn/amber
     assert "\x1b[31m1 false-live\x1b[0m" in colored  # the breakdown, bad/red
     assert colored.splitlines()[1] == "\x1b[2m▸ unfiled: 3 sessions in 2 dirs\x1b[0m"
+
+
+# ── the seam reading (thread dd937122, wave 11): context_pct additive/optional on
+# render_fleet_tree, colored amber/red past the whisper/self-compact thresholds ────────────
+
+def test_render_fleet_tree_appends_context_pct_only_for_a_live_node_given_one() -> None:
+    nodes = {
+        "agent:live1": _n(live=True, ts=T1),
+        "agent:live2": _n(live=True, ts=T1),
+        "agent:old1": _n(ts=T0),  # not live -- folds into a swarm summary, no id line at all
+    }
+    tree = render_fleet_tree(nodes, context_pct={"agent:live1": 52, "agent:old1": 90})
+    lines = {line.split("agent:")[1].split(" ")[0]: line for line in tree.splitlines()
+             if "agent:" in line}
+    assert "52%ctx" in lines["live1"]
+    assert "%ctx" not in lines["live2"]  # live, but no reading supplied
+    assert "90%ctx" not in tree  # old1's reading is never shown -- it isn't a live node
+
+
+def test_render_fleet_tree_with_no_context_pct_never_appends_anything() -> None:
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    tree = render_fleet_tree(nodes)
+    assert "%ctx" not in tree
+
+
+def test_paint_fleet_text_colors_a_seam_pct_below_whisper_unstyled() -> None:
+    text = "  ● agent:live1  fable-5  30%ctx"
+    colored = paint_fleet_text(text, Paint(enabled=True))
+    assert "30%ctx" in colored
+    assert "\x1b[33m30%ctx" not in colored
+    assert "\x1b[31m30%ctx" not in colored
+
+
+def test_paint_fleet_text_colors_a_seam_pct_past_whisper_amber() -> None:
+    text = "  ● agent:live1  fable-5  52%ctx"
+    colored = paint_fleet_text(text, Paint(enabled=True))
+    assert "\x1b[33m52%ctx\x1b[0m" in colored  # warn/amber, past the 45% whisper
+
+
+def test_paint_fleet_text_colors_a_seam_pct_past_self_compact_red() -> None:
+    text = "  ● agent:live1  fable-5  74%ctx"
+    colored = paint_fleet_text(text, Paint(enabled=True))
+    assert "\x1b[31m74%ctx\x1b[0m" in colored  # bad/red, past the 70% self-compact threshold

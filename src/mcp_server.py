@@ -5118,6 +5118,24 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             nodes[c]["adoption"] = adopt_entry
     except Exception:  # noqa: BLE001 — best-effort, same fail-open law as every probe here
         pass
+    # THE SEAM READING (thread dd937122, wave 11): each LIVE node's own context_pct, the
+    # SAME batched-by-canonical query _co_agents already runs for the mount/orient briefing
+    # (winning_props's own confidence DESC, observed_at DESC per agent) — never a second
+    # copy of that shape. Best-effort, same fail-open law as every other probe on this door.
+    context_pct: dict[str, int] = {}
+    try:
+        live_canonicals = [c for c, n in nodes.items() if n["live"]]
+        if live_canonicals:
+            pct_rows = await pool.fetch(
+                "SELECT DISTINCT ON (o.canonical) o.canonical AS agent_id, "
+                "a.value #>> '{}' AS pct "
+                "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+                "WHERE o.canonical = ANY($1::text[]) AND a.name = 'context_pct' "
+                "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC",
+                live_canonicals)
+            context_pct = {r["agent_id"]: int(r["pct"]) for r in pct_rows if r["pct"] is not None}
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -5135,7 +5153,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         # (Ptah's shape: an office scaffolded, never sat in) never appears in it at all.
         "seats": [{"seat": s["seat_id"], "handle": s["handle"], "house": s["house"],
                    "state": s["state"], "holder": s["holder"]} for s in seats],
-        "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies, ghost_gap=ghost_gap),
+        "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies, ghost_gap=ghost_gap,
+                                  context_pct=context_pct or None),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"], "retired": n["retired"],
