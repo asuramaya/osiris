@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.cli_render import Paint
-from src.orchestrator.fleetview import render_fleet_tree
+from src.orchestrator.fleetview import paint_fleet_text, render_fleet_tree
 
 T0 = datetime(2026, 7, 7, 12, 0, tzinfo=UTC)
 T1 = datetime(2026, 7, 7, 13, 0, tzinfo=UTC)
@@ -297,16 +297,37 @@ def test_ordering_is_live_first_then_freshest_never_alphabetical() -> None:
     assert order == ["zzz-quiet", "aaa-fresher", "bbb-staler"]
 
 
-def test_color_paints_project_names_and_live_marks_only_when_enabled() -> None:
-    """Requirement 3: an enabled Paint puts ANSI codes in the tree; a disabled one (and the
-    `paint=None` default fleet() itself uses) renders byte-identical plain text."""
+def test_render_fleet_tree_never_takes_a_paint_parameter() -> None:
+    """Requirement 3, split after a live regression (Thoth msg 8159): render_fleet_tree has
+    exactly one job (build the tree from `nodes`) and always returns plain text — color is
+    `paint_fleet_text`'s own separate, purely textual pass over that output, never a second
+    tree computation. A `paint=` kwarg here is a TypeError, not a code path."""
+    import inspect
+
+    assert "paint" not in inspect.signature(render_fleet_tree).parameters
+
+
+def test_paint_fleet_text_recolors_project_names_and_live_marks_only_when_enabled() -> None:
+    """An enabled Paint puts ANSI codes in the ALREADY-RENDERED text; a disabled one (the
+    `Paint(enabled=False)` a caller with no terminal color passes) returns it unchanged."""
     nodes = {"agent:live1": _n(live=True, ts=T1)}
     plain = render_fleet_tree(nodes)
-    disabled = render_fleet_tree(nodes, paint=Paint(enabled=False))
-    colored = render_fleet_tree(nodes, paint=Paint(enabled=True))
+    disabled = paint_fleet_text(plain, Paint(enabled=False))
+    colored = paint_fleet_text(plain, Paint(enabled=True))
     assert plain == disabled
     assert "\x1b" not in plain
     assert "\x1b" in colored
     # the live mark is painted green (32) and the project name bold (1)
     assert "\x1b[32m●\x1b[0m" in colored
     assert "\x1b[1mosiris\x1b[0m" in colored
+
+
+def test_paint_fleet_text_dims_the_unfiled_line_and_colors_the_ghost_note() -> None:
+    text = ("▸ osiris — 1 live · 1 sessions · ⚠ 2 ghosts "
+            "(1 false-live, 1 unclaimed body)\n"
+            "▸ unfiled: 3 sessions in 2 dirs")
+    colored = paint_fleet_text(text, Paint(enabled=True))
+    assert "\x1b[1mosiris\x1b[0m" in colored
+    assert "\x1b[33m" in colored  # the ghost note, warn/amber
+    assert "\x1b[31m1 false-live\x1b[0m" in colored  # the breakdown, bad/red
+    assert colored.splitlines()[1] == "\x1b[2m▸ unfiled: 3 sessions in 2 dirs\x1b[0m"
