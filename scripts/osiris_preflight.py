@@ -308,6 +308,28 @@ def drill(newest_dump: str) -> str | None:
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=30)
 
 
+def drill_pitr() -> str | None:
+    """The vault lane's own last piece of item 3: a base backup plus WAL archiving is a
+    hope, not a backup, until a real restore has proven a point in time — this reuses
+    osiris_pitr_drill.py's own run_drill against the newest base backup in the vault
+    and an auto-picked live marker (pick_and_ensure_marker — no operator-authored
+    marker needed for an unattended weekly run). Quiet (None) when no base backup
+    exists yet in this environment — item 3 not activated here is not a failure of
+    this check; a real failed restore against an EXISTING base backup is."""
+    from scripts.osiris_prune_ladder import _scan
+
+    backups = _scan(VAULT_DIR / "basebackups")
+    if not backups:
+        return None
+    from scripts.osiris_pitr_drill import pick_and_ensure_marker, run_drill
+
+    newest = max(backups, key=lambda f: f.when)
+    marker = pick_and_ensure_marker()
+    if marker is None:
+        return None
+    return run_drill(Path(newest.path), None, marker)
+
+
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe)."""
     import asyncpg
@@ -356,6 +378,10 @@ def main() -> int:
         d = drill(m["newest_dump"])
         if d:
             fails.append(d)
+    if "--drill" in sys.argv:
+        p = drill_pitr()
+        if p:
+            fails.append(p)
     if not fails:
         print("preflight: all green"
               f" (backup {m['backup_age_h']:.1f}h, vault {m['vault_age_d']:.1f}d,"
