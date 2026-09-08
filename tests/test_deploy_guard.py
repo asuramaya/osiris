@@ -7,6 +7,7 @@ either guard exists to catch.
 from __future__ import annotations
 
 import subprocess
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1894,6 +1895,40 @@ async def test_landing_audit_mints_one_obligation_and_is_idempotent(
     second = await landing_audit(actions, main_repo)
     assert len(second["obligations"]) == 1
     assert second["obligations"] == first["obligations"]  # same Thread, not a duplicate
+
+
+async def test_landing_audit_never_reopens_a_stale_branch_thread_a_human_resolved(
+    actions: Actions, main_repo: Path,
+) -> None:
+    """Thread 672972a2's own live finding, generalized (Thoth msg 8175): `open_thread` is
+    idempotent on the summary hash — a repeated `landing_audit` run against the SAME
+    still-stale branch used to unconditionally re-assert status='open' on the identical
+    Thread, silently overriding a human's own resolve every subsequent run. A resolved
+    specimen must stay resolved, picking up an annotation instead."""
+    from src.orchestrator.capture import resolve_thread
+
+    _git(main_repo, "checkout", "-q", "-b", "seshat-resolved-lane")
+    _commit_dated(main_repo, "old, unclaimed", "2020-01-01T00:00:00")
+    _git(main_repo, "checkout", "-q", "main")
+
+    first = await landing_audit(actions, main_repo)
+    assert len(first["obligations"]) == 1
+    tid = first["obligations"][0]
+    await resolve_thread(actions, tid, because="acceptable, leaving as-is",
+                         source="agent:human-reviewer")
+
+    second = await landing_audit(actions, main_repo)
+    assert second["obligations"] == [tid]  # same thread, not a duplicate
+
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", uuid.UUID(tid))
+    assert status == "resolved", "a human's resolve must never be silently overridden"
+    note = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name LIKE 'note:%' LIMIT 1", uuid.UUID(tid))
+    assert note is not None and "still present" in note
 
 
 async def test_landing_audit_skips_a_branch_an_open_held_work_thread_already_claims(
