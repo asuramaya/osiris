@@ -1313,50 +1313,60 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
 
 # --- roster ------------------------------------------------------------------------------------
 
-async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: bool = False) -> int:
+async def _call_and_emit_text(
+    url: str, tool: str, params: dict[str, Any], *, as_json: bool, title: str,
+    error_prefix: str,
+) -> int:
+    """Shared body for the read triangle's human-paint commands (thread bad45d61, wave 10:
+    backlog/threads/roster/team). `--json` gets the full structured response, unchanged.
+    Human mode asks the server for its OWN `render='text'` shape and paints that verbatim
+    (cli_render.emit's own `text=` door) — never re-derives grouping from the structured
+    rows client-side, the exact fleet-render regression (msg 8160: 3 sections where the
+    server tree has 36, from re-deriving off a capped field) this thread names by way of
+    the rule it exists to generalize."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
-    url = await _mcp_url()
-    result = await call_mcp_tool(url, "roster", {"repo": repo, "want_caveats": want_caveats})
+    call_params = dict(params) if as_json else {**params, "render": "text"}
+    result = await call_mcp_tool(url, tool, call_params)
     if isinstance(result, str):
-        print(f"osiris roster: {result} — is osiris-mcp running? "
+        print(f"{error_prefix}: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    render.emit(result, as_json=as_json, title=f"roster · {repo}" if repo else "roster")
+    if as_json:
+        render.emit(result, as_json=True)
+        return 0
+    text = result.get("text") if isinstance(result, dict) else None
+    if text is None:  # an old/odd server shape — fall back to the generic reconstruction
+        render.emit(result, as_json=False, title=title)
+        return 0
+    render.emit(result, as_json=False, title=title, text=text)
     return 0
+
+
+async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: bool = False) -> int:
+    url = await _mcp_url()
+    return await _call_and_emit_text(
+        url, "roster", {"repo": repo, "want_caveats": want_caveats}, as_json=as_json,
+        title=f"roster · {repo}" if repo else "roster", error_prefix="osiris roster")
 
 
 # --- backlog (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
 
 async def cmd_backlog(*, all_projects: bool, as_json: bool = False) -> int:
-    from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
-
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "backlog", {"all_projects": all_projects})
-    if isinstance(result, str):
-        print(f"osiris backlog: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
-        return 1
-    render.emit(result, as_json=as_json, title="backlog")
-    return 0
+    return await _call_and_emit_text(
+        url, "backlog", {"all_projects": all_projects}, as_json=as_json, title="backlog",
+        error_prefix="osiris backlog")
 
 
 # --- threads (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
 
 async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
-    from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
-
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "threads", {"project": project})
-    if isinstance(result, str):
-        print(f"osiris threads: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
-        return 1
-    render.emit(result, as_json=as_json, title=f"threads · {project}" if project else "threads")
-    return 0
+    return await _call_and_emit_text(
+        url, "threads", {"project": project}, as_json=as_json,
+        title=f"threads · {project}" if project else "threads", error_prefix="osiris threads")
 
 
 # --- team (thread 68f1bafa/3703a3a9, the read triangle's own new verb) -----------------------
@@ -1374,16 +1384,9 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False,
     from src import cli_render as render
 
     if seat is None:
-        from src.orchestrator.mcp_client import call_mcp_tool
-
         url = await _mcp_url()
-        result = await call_mcp_tool(url, "team", {})
-        if isinstance(result, str):
-            print(f"osiris team: {result} — is osiris-mcp running? "
-                  "(systemctl --user status osiris-mcp)", file=sys.stderr)
-            return 1
-        render.emit(result, as_json=as_json, title="team")
-        return 0
+        return await _call_and_emit_text(
+            url, "team", {}, as_json=as_json, title="team", error_prefix="osiris team")
 
     from src.orchestrator.seats import seat_by_handle, team_roster
 
@@ -1416,8 +1419,14 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False,
     if not rows:
         print(f"osiris team: {mgr['handle']} manages no seats", file=sys.stderr)
         return 1
+    # SAME TEXT SHAPE THE MCP DOOR RENDERS (thread bad45d61): render_team_text is the one
+    # hand-designed shape for this row set, called from mcp_server.py's own team() — reused
+    # here verbatim rather than re-derived, exactly the discipline this thread names.
+    from src.orchestrator.textrender import render_team_text
+
     render.emit({"manager": mgr["handle"], "team": rows}, as_json=as_json,
-               title=f"team · {mgr['handle']}")
+               title=f"team · {mgr['handle']}",
+               text=None if as_json else render_team_text(rows))
     return 0
 
 

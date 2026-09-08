@@ -191,3 +191,83 @@ def test_already_live_reads_as_a_state_not_a_refusal() -> None:
     # the diagnostic goes to stderr so a pipe carries only the verdict
     idx = src.index("already-live")
     assert "stderr" in src[idx:idx + 400], "the how-we-know line must not pollute stdout"
+
+
+# --- paint_text: colorizing the SERVER's own text, never re-deriving it (thread bad45d61) --
+
+def test_paint_text_is_a_noop_when_color_is_disabled() -> None:
+    text = "osiris:\n  ● Thoth (agent:x) — governs: osiris"
+    assert r.paint_text(text, r.Paint(False)) == text
+
+
+def test_paint_text_never_changes_line_count_or_content_order() -> None:
+    """The one rule this thread exists to enforce: painting adds color, never re-parses.
+    Stripping every ANSI escape must reproduce the original text byte-for-byte."""
+    import re as _re
+
+    text = ("osiris:\n"
+            "  ● Thoth (agent:x) — governs: osiris\n"
+            "  ○ Seshat -> Thoth\n"
+            "\n"
+            "(no house):\n"
+            "  · Loner\n"
+            "+3 more thread(s)")
+    painted = r.paint_text(text, r.Paint(True))
+    stripped = _re.sub(r"\x1b\[[0-9;]*m", "", painted)
+    assert stripped == text
+
+
+def test_paint_text_colors_occupancy_glyphs() -> None:
+    text = "  ● Thoth\n  ○ Seshat\n  · Loner"
+    painted = r.paint_text(text, r.Paint(True))
+    lines = painted.split("\n")
+    assert "\x1b[32m●\x1b[0m" in lines[0]  # good (live/occupied)
+    assert "\x1b[2m○\x1b[0m" in lines[1]   # dim (cold)
+    assert "\x1b[2m·\x1b[0m" in lines[2]   # dim (vacant)
+
+
+def test_paint_text_bolds_a_bare_header_line_but_not_a_data_line() -> None:
+    text = "osiris:\nosiris: 5 open — oldest: Thoth"
+    painted = r.paint_text(text, r.Paint(True))
+    lines = painted.split("\n")
+    assert lines[0] == "\x1b[1m\x1b[35mosiris:\x1b[0m"
+    assert "\x1b[1m" not in lines[1]  # a data row ending mid-sentence, never bolded whole
+
+
+def test_paint_text_colors_verdict_words_in_place() -> None:
+    text = "● Seshat: owe 3 (1 stale), envelope 2"
+    painted = r.paint_text(text, r.Paint(True))
+    assert "\x1b[31mstale\x1b[0m" in painted  # bad
+    assert "Seshat" in painted and "\x1b[31mSeshat\x1b[0m" not in painted  # not a verdict word
+
+
+def test_paint_text_preserves_an_empty_state_line_content() -> None:
+    """Not literally unstyled — 'active' is a real verdict word (_GOOD) and gets colored
+    like anywhere else, correctly — but the sentence itself survives intact underneath."""
+    import re as _re
+
+    text = "roster: no active seats"
+    painted = r.paint_text(text, r.Paint(True))
+    assert _re.sub(r"\x1b\[[0-9;]*m", "", painted) == text
+
+
+def test_emit_with_text_paints_instead_of_reconstructing_from_data(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The one choke point's new door (thread bad45d61): when `text` is given and
+    `as_json` is False, `emit` prints the painted text VERBATIM — it must never fall
+    through to the generic `render()` reconstruction of `data`, even though `data` is
+    still passed (json mode needs it)."""
+    data = {"rows": [{"a": 1, "b": 2}] * 50}  # would render very differently via render()
+    r.emit(data, as_json=False, text="hand-rendered line one\nhand-rendered line two")
+    out = capsys.readouterr().out
+    assert "hand-rendered line one" in out
+    assert "hand-rendered line two" in out
+    assert "rows" not in out  # never reconstructed from `data`
+
+
+def test_emit_with_text_is_ignored_in_json_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    r.emit({"a": 1}, as_json=True, text="should never appear")
+    out = capsys.readouterr().out
+    assert "should never appear" not in out
+    assert '"a":1' in out
