@@ -6662,3 +6662,28 @@ async def test_open_thread_tool_no_collision_key_when_nothing_overlaps(
     finally:
         srv._pool = saved_pool
     assert "colliding_work" not in out
+
+
+async def test_annotate_thread_renews_a_stale_obligation_window(actions: Actions) -> None:
+    """Imhotep 2026-09-08 (mail 8102): the stop hook's stale gate offers "annotate" as a
+    remedy but only reads `stale_after`, so an honest note never cleared the block.
+    Annotating an obligation that carries a window re-stamps the window from now; a thread
+    with no window is untouched."""
+    from datetime import UTC, datetime, timedelta
+
+    t = await open_thread(actions, "carry this duty forward", kind="obligation",
+                          stale_after_days=1, source="session-miner")
+    # push the window into the past by hand, the way time would
+    past = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    await actions.assert_property(t, "stale_after", past, "session-miner",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    before = await _props(actions.pool, t)
+    assert datetime.fromisoformat(before["stale_after"]) < datetime.now(UTC)
+    await annotate_thread(actions, str(t), "still mine: plan dated, next step named")
+    after = await _props(actions.pool, t)
+    assert datetime.fromisoformat(after["stale_after"]) > datetime.now(UTC)
+    assert after["status"] == "open" and after["kind"] == "obligation"
+
+    plain = await open_thread(actions, "a question with no window", kind="question")
+    await annotate_thread(actions, str(plain), "a note")
+    assert "stale_after" not in await _props(actions.pool, plain)

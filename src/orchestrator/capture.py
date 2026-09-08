@@ -3738,6 +3738,20 @@ async def annotate_thread(
     observed = datetime.now(UTC)
     await actions.assert_property(tid, _append_property_name("note"), note, source, observed,
                                   _CONF, evidence_class=_EC)
+    # A TOUCH RENEWS THE WINDOW (Imhotep 2026-09-08, mail 8102): the stop hook's stale-
+    # obligation gate names "annotate, resolve, or reclassify" as the three touches that
+    # carry a stale duty, but only ever read `stale_after` — an honest dated note left the
+    # row exactly as stale, and the block recurred every session until the owner
+    # reclassified 25 obligations wholesale just to silence it. Annotating an obligation
+    # that carries a window now re-stamps `stale_after` = now + the default window, so a
+    # touch is a touch on every surface. Nothing else changes: status, kind, summary stay.
+    has_window = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='stale_after' "
+        "AND is_current LIMIT 1", tid)
+    if has_window:
+        renewed = observed + timedelta(days=DEFAULT_STALE_AFTER_DAYS)
+        await actions.assert_property(tid, "stale_after", renewed.isoformat(), source,
+                                      observed, _CONF, evidence_class=_EC)
     return tid
 
 
