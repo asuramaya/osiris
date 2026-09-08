@@ -1373,7 +1373,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # service verb, seat(action='refresh_project') — a new SEAT_INPUT_SCHEMA branch (no
 # params beyond action) plus a one-line ACTION TABLE entry. No new tool, load-bearing
 # growth per this file's own escape valve. Measured exact (114,808), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 115058
+TOOL_CONTRACT_CEILING_CHARS = 114808
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
