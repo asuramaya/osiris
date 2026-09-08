@@ -2772,6 +2772,36 @@ _ARTIFACT_TYPE_PREFIXES = tuple(
     f"{t.lower()}:" for t in ("decision", "commit", "thread", "tension", "practice"))
 
 
+def _split_repo_hash_artifact(a: str) -> tuple[str, str] | None:
+    """Split a `repo:<name>@<hash>` artifact pointer into (repo name, lowercased hash), or
+    None if `a` isn't shaped like one — in which case `_find_artifact` falls through to its
+    other branches unchanged. Thread 10765a698644 (nebbercracker mail 8071, Wave 10
+    reassignment to Imhotep): a BARE hash already resolves against every ingested repo's
+    Commit objects with no project scoping at all (verified reading `_find_artifact`'s SQL
+    below and `_resolve_commit` one function up — neither ever joins or filters on
+    SoftwareProject), so a fix landed in osiris closing a thread in a different project via
+    a bare hash was never actually blocked by this resolver. What WAS missing is this
+    explicit disambiguating shape: when a short hash collides across two or more repos'
+    Commits, a bare hash still correctly refuses (ambiguity → property-only, unchanged,
+    deliberately — see `_find_artifact`'s own note on that), and until now a caller had no
+    way to say "no, THIS repo's commit" short of pasting the full 40-char sha. `repo:<name>`
+    reuses `_resolve_repo` (the same canonical-or-name resolver `link_repo`/census_trees/
+    every other repo-scoping call site in this module already uses — no second resolver);
+    the Commit search then joins `in_repo` (Commit --in_repo--> SoftwareProject, the same
+    edge shape gitlog.py mints and `_fn_project` in compositions.py already scopes Commits
+    by) to that one project. Case-insensitive on the `repo:` literal only, matching this
+    module's own `repo.removeprefix('repo:')` convention elsewhere; the hash half is
+    lowercased since every stored Commit canonical is lowercase hex."""
+    if not a.lower().startswith("repo:") or "@" not in a:
+        return None
+    repo_part, _, hash_part = a[len("repo:"):].partition("@")
+    repo_part = repo_part.strip()
+    hash_part = hash_part.strip().lower()
+    if repo_part and re.fullmatch(r"[0-9a-f]{7,40}", hash_part):
+        return repo_part, hash_part
+    return None
+
+
 def _strip_recognized_artifact_prefix(lowered: str) -> str:
     """Strip a "type:" prefix from an already-lowercased artifact pointer, but ONLY when
     it names one of _find_artifact's own closer types (decision 20644a3e, thread 0ae050d8:
@@ -2800,9 +2830,15 @@ async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     Thread per Thoth DM 2975 (a fold/merge into a SIBLING THREAD is a legitimate closure
     this resolver used to have no shape for at all), and Tension/Practice per Thoth DM 3052
     (the closure-backfill characterization of the 77 unresolvable rows found 2 real
-    citations of exactly these types that this allowlist was simply missing), or a bare
-    git hash (prefix-matched on commit:, Commit only — a thread reference never looks like
-    a hash, so that branch is unchanged). Deliberately NOT widened to Agent (Thoth DM
+    citations of exactly these types that this allowlist was simply missing), a bare
+    git hash (prefix-matched on commit:, Commit only, searched across EVERY ingested repo's
+    Commits with no project scoping at all — a thread reference never looks like a hash, so
+    that branch is unchanged), or `repo:<name>@<hash>` (thread 10765a698644, nebbercracker
+    mail 8071, Wave 10 reassignment: the explicit disambiguator for when a bare hash's short
+    prefix collides across two or more repos' Commits — see `_split_repo_hash_artifact`'s
+    own docstring for the full story, including the finding that a bare hash closing a
+    thread in a DIFFERENT project than the one the commit landed in already worked before
+    this format existed). Deliberately NOT widened to Agent (Thoth DM
     3052): an Agent's short code is never a prefix of its own `id` — `id` is an unrelated
     random UUID, the short code lives only in `canonical` — so adding Agent here would
     match nothing, ever; and even if it matched, an Agent is not what CLOSED a thread
@@ -2822,6 +2858,17 @@ async def _find_artifact(pool: asyncpg.Pool, artifact: str) -> uuid.UUID | None:
     oid = await pool.fetchval("SELECT id FROM objects WHERE canonical=$1", a)
     if oid is not None:
         return uuid.UUID(str(oid))  # exact canonical — any precisely-named type may close
+    split = _split_repo_hash_artifact(a)
+    if split is not None:
+        repo_name, hash_part = split
+        proj_id = await _resolve_repo(pool, repo_name)
+        if proj_id is None:  # named repo doesn't resolve — clean refusal, no guessing
+            return None
+        rows = await pool.fetch(
+            "SELECT c.id FROM objects c JOIN links l ON l.from_id=c.id AND l.type='in_repo' "
+            "AND l.to_id=$2 WHERE c.type='Commit' AND c.canonical LIKE 'commit:' || $1 || '%' "
+            "LIMIT 2", hash_part, proj_id)
+        return uuid.UUID(str(rows[0]["id"])) if len(rows) == 1 else None
     hex_part = _strip_recognized_artifact_prefix(a.lower())
     if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f-]{4,28})?", hex_part):
         rows = await pool.fetch(
@@ -2853,10 +2900,15 @@ async def resolve_thread(
 
     `artifact` (thread 022bd24a, Ferryman II: `because` was being abused as a completion
     essay because there was nowhere to put "here is what actually got built") is a POINTER
-    to the thing that closed the thread — a commit hash, a decision id, a file:line. It is
-    always kept as the resolved_artifact property, and when it names a graph object
-    (Decision, Commit, or any exact canonical) a resolved_by edge is minted too — the
-    strong closure witness the closure-miner almost never finds (e27f7c3).
+    to the thing that closed the thread — a commit hash, a decision id, a file:line, or
+    `repo:<name>@<hash>` when a bare hash would collide across two or more repos' Commits
+    (thread 10765a698644). It is always kept as the resolved_artifact property, and when it
+    names a graph object (Decision, Commit, or any exact canonical) a resolved_by edge is
+    minted too — the strong closure witness the closure-miner almost never finds (e27f7c3).
+    See `_find_artifact`'s own docstring for the full set of recognized shapes, including
+    the finding that a bare commit hash was NEVER project-scoped — a fix landed in one
+    project could already close a thread in another via a plain hash with no ambiguity;
+    `repo:<name>@<hash>` only exists for the ambiguous case.
 
     Phase 1a (decision cb38d922: 78% of closures left no traversable trace, because
     resolved_by only fires when `artifact` names a graph object): every closure now mints
