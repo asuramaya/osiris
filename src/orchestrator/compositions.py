@@ -1508,7 +1508,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     this is the standing audit for anything that slipped past it), UNRESOLVABLE-OWNER
     (warn: an open Thread's `owner` that resolves to neither an active Seat nor
     'operator' via `resolve_owner_seat` — the same function migration 0060 backfills the
-    existing stock with).
+    existing stock with), ZERO-RECIPIENT-DM (warn: a DM — fleet_messages.to_agent IS NOT
+    NULL — with no message_recipients row at all, thread 9d1d41c8, Thoth's follow-up on
+    24f52959 — nobody was ever registered to read it; a project broadcast is excluded,
+    since every agent in the project is its own implicit recipient).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -2392,6 +2395,30 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                          "or a project with no chartered coordinator seat",
             })
     land("unresolvable-owner", "warn", bad_owner)
+
+    # ZERO-RECIPIENT-DM (thread 9d1d41c8, folded into wave 8's fleet-hygiene work —
+    # Thoth's own follow-up on 24f52959: "add a read-only graph_lint audit for 'DMs
+    # with zero recipient rows'"): a DM (fleet_messages.to_agent IS NOT NULL) with NO
+    # message_recipients row at all — nobody was ever registered to read it, the exact
+    # silent-loss shape 24f52959 fixed ONE cause of (a seat's own agent:seat-<hex>
+    # placeholder resolving to a dead lineage instead of the seat). A project BROADCAST
+    # (to_agent IS NULL) is excluded — every agent in the project is its own implicit
+    # recipient, so a broadcast legitimately mints no message_recipients row until
+    # someone actually reads it; only a DM's own to_agent promises a specific reader.
+    # Read-only census, never a repair — resending is a mind's own act, same doctrine
+    # every other check in this function holds to.
+    zero_recip = await pool.fetch(
+        "SELECT fm.id, fm.from_agent, fm.to_agent, fm.created_at FROM fleet_messages fm "
+        "WHERE fm.to_agent IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.message_id=fm.id) "
+        "ORDER BY fm.created_at DESC")
+    land("zero-recipient-dm", "warn", [
+        {"subject": r["to_agent"],
+         "detail": f"DM #{r['id']} from {r['from_agent']} to {r['to_agent']} "
+                   f"({r['created_at'].isoformat()}) has NO message_recipients row — "
+                   "nobody was ever registered to read it; resend by handle if it "
+                   "still matters"}
+        for r in zero_recip])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
