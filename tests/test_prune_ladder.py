@@ -220,3 +220,39 @@ def test_cli_reports_transcript_chains_separately_from_dump_files(tmp_path, caps
     out = capsys.readouterr().out
     assert "transcript chains" in out
     assert "REMOVE CHAIN" in out
+
+
+# ── base backups (item 3, osiris_base_backup.sh): same ladder as DB dumps, a distinct
+# scanned population under <vault>/basebackups/ ─────────────────────────────────────────
+
+def test_scan_parses_the_basebackup_filenames_own_timestamp(tmp_path) -> None:
+    from scripts.osiris_prune_ladder import _scan
+
+    (tmp_path / "osiris-basebackup-20240115-093000.tar.gz").write_bytes(b"x" * 42)
+    [found] = _scan(tmp_path)
+    assert found.when == datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+    assert found.size_bytes == 42
+
+
+def test_cli_reports_and_prunes_basebackups_as_their_own_population(
+    tmp_path, capsys,
+) -> None:
+    from scripts.osiris_prune_ladder import main
+
+    backups = tmp_path / "backups"
+    vault = tmp_path / "vault"
+    basebackups = vault / "basebackups"
+    backups.mkdir()
+    vault.mkdir()
+    basebackups.mkdir()
+    # two ancient same-month basebackups — the elder should be removable
+    (basebackups / "osiris-basebackup-20240108-000000.tar.gz").write_bytes(b"x" * 10)
+    (basebackups / "osiris-basebackup-20240115-000000.tar.gz").write_bytes(b"x" * 10)
+
+    rc = main(["--backups", str(backups), "--vault", str(vault)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "vault/basebackups" in out
+    assert "osiris-basebackup-20240108-000000.tar.gz" in out  # the elder, listed to remove
+    assert "osiris-basebackup-20240115-000000.tar.gz" not in out  # the survivor, not listed

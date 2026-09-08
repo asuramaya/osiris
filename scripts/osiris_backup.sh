@@ -85,3 +85,31 @@ else
   # artifact that would let a human see what tar produced before it died
   echo "osiris_backup: transcript archive failed (tar exit $tar_rc), leaving $TRANSCRIPTS.new for inspection" >&2
 fi
+
+# WAL PULL (vault lane item 3): osiris_archive_wal.sh (deployed to
+# /var/lib/postgresql/data/osiris_archive_wal.sh, INSIDE the pgdata VOLUME so it survives
+# a real container recreate) stages each completed WAL segment there — this container
+# carries no bind mount for the vault (checked: `docker inspect osiris-pg` shows exactly
+# one mount, the pgdata volume), so getting segments OUT is this script's own job, same
+# division of labor as everything else in this file (the container does the Postgres-
+# side work, the host does the vault-side work). Copies whatever's staged into the vault,
+# then prunes the in-container staging copy once it's safely out — bounds pgdata volume
+# growth while the vault becomes the durable, off-container copy. Silent no-op (never a
+# hard failure) when archiving isn't enabled yet or the container isn't reachable —
+# WAL archiving is opt-in infrastructure, not assumed here.
+WAL_VAULT="$VAULT/wal_archive"
+mkdir -p "$WAL_VAULT"
+if docker exec osiris-pg test -d /var/lib/postgresql/data/wal_archive 2>/dev/null; then
+  while IFS= read -r seg; do
+    [ -n "$seg" ] || continue
+    if [ ! -e "$WAL_VAULT/$seg" ]; then
+      docker exec osiris-pg cat "/var/lib/postgresql/data/wal_archive/$seg" \
+        > "$WAL_VAULT/$seg.tmp" 2>/dev/null \
+        && mv "$WAL_VAULT/$seg.tmp" "$WAL_VAULT/$seg" \
+        || rm -f "$WAL_VAULT/$seg.tmp"
+    fi
+    # pulled (or already had a copy) — safe to prune the in-container staging file
+    [ -e "$WAL_VAULT/$seg" ] \
+      && docker exec osiris-pg rm -f "/var/lib/postgresql/data/wal_archive/$seg" 2>/dev/null || true
+  done < <(docker exec osiris-pg ls -1 /var/lib/postgresql/data/wal_archive 2>/dev/null)
+fi
