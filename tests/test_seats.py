@@ -3237,6 +3237,93 @@ async def test_promote_mcp_dispatcher_refuses_before_mount(actions: Actions) -> 
     assert "mount first" in out["error"]
 
 
+async def test_attach_mcp_dispatcher_reissues_both_the_worker_and_the_new_managers_office(
+    actions: Actions,
+) -> None:
+    """Thread 613cda0a: attach_seat mints the SAME managed_by edge promote does, but
+    before this it refreshed no office at all — a manager's own team listing and the
+    worker's own manager-of-record line both went stale the moment attach ran outside
+    promote. `seat(action='attach')` must reissue both sides, same best-effort shape
+    promote's own dispatcher test already proves (no real CLAUDE.md on disk here, so
+    each verdict reports its own per-seat error rather than raising)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    manager = (await ensure_seat(actions, house=None, handle="AttDoorMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="AttDoorWkr",
+                                source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=worker, agent_id="agent:attdoor-holder",
+                      source="test")
+
+    ident = AgentIdentity(agent_id="agent:attdoor-holder", session="attdoor",
+                          project="p", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv._seat_impl(
+            "attach", target=worker, manager=manager, because="door test",
+            session_anchor=None, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["attached"] == worker
+    assert out["now_managed_by"] == manager
+    assert set(out["office_refresh"]) == {worker, manager}
+    for verdict in out["office_refresh"].values():
+        assert "error" in verdict  # no CLAUDE.md/anchor exists for either seat in this test
+
+
+async def test_detach_mcp_dispatcher_reissues_both_the_worker_and_the_old_managers_office(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.seats import attach_seat
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    manager = (await ensure_seat(actions, house=None, handle="DetDoorMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="DetDoorWkr",
+                                source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=worker, agent_id="agent:detdoor-holder",
+                      source="test")
+    await attach_seat(actions, worker, manager, evidence="setup", actor="agent:test")
+
+    ident = AgentIdentity(agent_id="agent:detdoor-holder", session="detdoor",
+                          project="p", model="claude-sonnet-5", cwd=None,
+                          model_method="job_dir", model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv._seat_impl(
+            "detach", target=worker, because="door test", session_anchor=None, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["detached"] == worker
+    assert out["was_managed_by"] == manager
+    assert set(out["office_refresh"]) == {worker, manager}
+    for verdict in out["office_refresh"].values():
+        assert "error" in verdict
+
+
 async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
     actions: Actions,
 ) -> None:

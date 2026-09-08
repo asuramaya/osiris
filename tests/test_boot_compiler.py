@@ -256,6 +256,51 @@ async def test_compile_managed_body_worker_has_gates_coordinator_does_not(
     assert "The desk pattern" in coord_body
 
 
+# ═══ "## Your team" (thread 613cda0a): promote writes the bond down, this writes it up ═══
+
+
+async def test_compile_managed_body_coordinator_names_its_team_by_handle_and_project(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import attach_seat
+
+    coordinator = (await ensure_seat(actions, house="teamhouse", handle="TeamBoss",
+                                     source="test"))["seat_id"]
+    worker_a = (await ensure_seat(actions, house="teamhouse", handle="TeamWorkerA",
+                                  source="test"))["seat_id"]
+    worker_b = (await ensure_seat(actions, house="teamhouse", handle="TeamWorkerB",
+                                  source="test"))["seat_id"]
+    await actions.create_or_find_object(
+        "SoftwareProject", "repo:team-proj-a", "test")
+    await set_charter(actions, worker_a, ["team-proj-a"], actor="agent:test")
+    await attach_seat(actions, worker_a, coordinator, evidence="test", actor="agent:test")
+    await attach_seat(actions, worker_b, coordinator, evidence="test", actor="agent:test")
+
+    body = await compile_managed_body(
+        actions, seat_id=coordinator, handle="TeamBoss", house="teamhouse",
+        office="/tmp/teamboss", seat_line=" — durable identity `x`.",
+        charter_block="You govern: none.", peer_block="\n", role="coordinator")
+
+    assert "## Your team" in body
+    assert f"**TeamWorkerA** ({worker_a}) — governs `team-proj-a`" in body
+    assert f"**TeamWorkerB** ({worker_b}) — governs no charter yet" in body
+
+
+async def test_compile_managed_body_coordinator_with_no_team_has_no_team_section(
+    actions: Actions,
+) -> None:
+    coordinator = (await ensure_seat(actions, house="noteamhouse", handle="NoTeamBoss",
+                                     source="test"))["seat_id"]
+
+    body = await compile_managed_body(
+        actions, seat_id=coordinator, handle="NoTeamBoss", house="noteamhouse",
+        office="/tmp/noteamboss", seat_line=" — durable identity `x`.",
+        charter_block="You govern: none.", peer_block="\n", role="coordinator")
+
+    assert "## Your team" not in body
+
+
 # ═══════════ reissue_office: the three acceptance tests ═══════════
 
 
@@ -369,6 +414,92 @@ async def test_reissue_adopt_appends_a_managed_section_to_a_legacy_office(
                                  actor="agent:test", adopt=True)
     assert "error" in again
     assert "already carries managed-section" in again["error"]
+
+
+async def test_reissue_adopt_replaces_a_pre_existing_office_header_never_duplicates_it(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 49169c2f, nebbercracker's own live specimen (116 lines, two headers) and
+    jenny's (137): the OLD office already begins with the compiler's own header line
+    (hand-written before the marker convention existed, or a prior adopt whose markers
+    were later stripped by hand) — adopt must REPLACE that old, unmarked section, never
+    append a fresh one below it. One header, ever."""
+    worker = await ensure_seat(actions, house="oldofficehouse", handle="OldOfficeSeat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "oldoffice" / "oldofficeseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    old_office_text = (
+        "# OldOfficeSeat — seat office\n\n"
+        "## Your charter\n"
+        "Your charter was never formally declared — it lives only in prose. First "
+        "act: `charter(repos=[...])`.\n")
+    (office / "CLAUDE.md").write_text(old_office_text)
+
+    out = await reissue_office(actions, seat_id=seat_id, because="adopting old office",
+                               actor="agent:test", adopt=True)
+
+    assert out["changed"] is True
+    after = (office / "CLAUDE.md").read_text()
+    assert after.count("# OldOfficeSeat — seat office") == 1
+    assert "<!-- osiris:compiled:begin v=" in after
+
+
+async def test_reissue_adopt_self_heals_an_already_duplicated_office(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The office is ALREADY in the exact broken state (two headers, no markers, the
+    live nebbercracker/jenny shape) — adopt must collapse it to one header, not three."""
+    worker = await ensure_seat(actions, house="dupofficehouse", handle="DupOfficeSeat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "dupoffice" / "dupofficeseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    already_broken = (
+        "# DupOfficeSeat — seat office\n\nFirst copy, hand-written long ago.\n\n"
+        "# DupOfficeSeat — seat office\n\nSecond copy, a prior appending reissue.\n")
+    (office / "CLAUDE.md").write_text(already_broken)
+
+    out = await reissue_office(actions, seat_id=seat_id, because="self-heal",
+                               actor="agent:test", adopt=True)
+
+    assert out["changed"] is True
+    after = (office / "CLAUDE.md").read_text()
+    assert after.count("# DupOfficeSeat — seat office") == 1
+
+
+async def test_reissue_adopt_still_appends_when_no_office_shaped_header_exists(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Genuinely foreign hand-written content (no line shaped like this compiler's own
+    header, at all) must still be preserved and appended below — nothing here resembles
+    a managed section, so nothing is safe to replace. Same behavior the pre-existing
+    `test_reissue_adopt_appends_a_managed_section_to_a_legacy_office` already proves;
+    this specimen just names the boundary explicitly against the new header check."""
+    worker = await ensure_seat(actions, house="foreignofficehouse", handle="ForeignSeat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "foreignoffice" / "foreignseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    foreign_text = "Some completely unrelated hand-written prose, no header at all.\n"
+    (office / "CLAUDE.md").write_text(foreign_text)
+
+    out = await reissue_office(actions, seat_id=seat_id, because="adopt foreign",
+                               actor="agent:test", adopt=True)
+
+    assert out["changed"] is True
+    after = (office / "CLAUDE.md").read_text()
+    assert after.startswith(foreign_text)
+    assert "<!-- osiris:compiled:begin v=" in after
 
 
 async def test_reissue_requires_because_and_refuses_an_unknown_seat(
