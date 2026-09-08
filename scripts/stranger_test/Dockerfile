@@ -35,4 +35,11 @@ ENV PATH="/root/.local/bin:${PATH}"
 COPY run.sh /usr/local/bin/stranger-run.sh
 RUN chmod +x /usr/local/bin/stranger-run.sh
 
+# The two proof-verification scripts (wave 6, dispatch 2c63770d) are harness plumbing, same
+# class as run.sh itself — NOT part of the cloned `main` this harness replays (they assert
+# against code already on `main`, they are not code under test), so they are baked into the
+# image exactly the way run.sh already is, rather than expected to appear inside the clone.
+COPY verify_manifest.py verify_read_alias.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/verify_manifest.py /usr/local/bin/verify_read_alias.py
+
 ENTRYPOINT ["/usr/local/bin/stranger-run.sh"]
