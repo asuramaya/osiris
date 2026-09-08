@@ -22,6 +22,7 @@ from src.orchestrator.boot_compiler import (
     locate_managed_section,
     migrate_identity_to_charter,
     reissue_office,
+    sweep_stacked_office_headers,
     template_version,
     wrap_managed,
 )
@@ -517,6 +518,73 @@ async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
     assert after.lower().count("# nebtestseat — seat office") == 1
     assert after.count("<!-- osiris:compiled:begin") == 1
     assert after.count("<!-- osiris:compiled:end") == 1
+
+
+# ═══════════ sweep_stacked_office_headers (thread 658c2152 / 07ca68ca) ═══════════
+
+
+async def test_stacked_header_sweep_heals_a_stacked_office_through_the_door(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The mechanical sub-sweep finds the SAME shape reissue_office(adopt=True) already
+    self-heals by hand (thread 658c2152's own population), heals it through that exact
+    door, and reports the seat in `healed` — never a second copy of the healing logic."""
+    worker = await ensure_seat(actions, house="stackedhouse", handle="stackedseat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "stacked" / "stackedseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    stacked_shape = (
+        "# Stackedseat — seat office\n\n"
+        "This is your OFFICE, not a code repo.\n\n"
+        "<!-- osiris:compiled:begin v=fca376fa250e -->\n"
+        "# stackedseat — seat office\n\n"
+        "This is your OFFICE, not a code repo.\n\n"
+        "## Your charter\n"
+        "Your charter was never formally declared.\n"
+        "<!-- osiris:compiled:end -->\n")
+    (office / "CLAUDE.md").write_text(stacked_shape)
+
+    out = await sweep_stacked_office_headers(actions, actor="agent:test")
+
+    healed_handles = {h["seat"] for h in out["healed"]}
+    assert "stackedseat" in healed_handles
+    after = (office / "CLAUDE.md").read_text()
+    assert after.lower().count("# stackedseat — seat office") == 1
+
+
+async def test_stacked_header_sweep_leaves_a_clean_office_untouched(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat whose office was compiled cleanly (no leading duplicate header) is counted
+    `clean`, not `healed` — the sweep must never touch what isn't broken."""
+    worker = await ensure_seat(actions, house="cleanhouse", handle="cleanseat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "clean" / "cleanseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    clean_shape = (
+        "<!-- osiris:compiled:begin v=fca376fa250e -->\n"
+        "# cleanseat — seat office\n\n"
+        "This is your OFFICE, not a code repo.\n\n"
+        "## Your charter\n"
+        "Your charter was never formally declared.\n"
+        "<!-- osiris:compiled:end -->\n")
+    (office / "CLAUDE.md").write_text(clean_shape)
+    before = (office / "CLAUDE.md").read_text()
+
+    out = await sweep_stacked_office_headers(actions, actor="agent:test")
+
+    healed_handles = {h["seat"] for h in out["healed"]}
+    assert "cleanseat" not in healed_handles
+    assert out["clean"] >= 1
+    assert (office / "CLAUDE.md").read_text() == before
 
 
 async def test_reissue_adopt_still_appends_when_no_office_shaped_header_exists(

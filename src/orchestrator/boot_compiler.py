@@ -674,3 +674,75 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     return [f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) has no "
             f"compiled section — {fixes[g['reason']]}"
             for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"]))]
+
+
+async def sweep_stacked_office_headers(
+    actions: Actions, *, actor: str,
+    because: str = "classification_laws_heartbeat: stacked-header office self-heal "
+                   "sub-sweep (thread 658c2152, folded into wave 8's 07ca68ca)",
+) -> dict[str, Any]:
+    """THE STACKED-HEADER SUB-SWEEP (thread 658c2152 — 21 of 30 offices found with a
+    leading duplicate header before their own compiled marker span; nebbercracker/jenny
+    were healed by hand through the fixed `reissue_office(adopt=True)` door, thread
+    07ca68ca folds the REMAINDER into this heartbeat so a stranger's install, or any
+    seat that develops the same shape later, heals mechanically). Every active seat's
+    own office is checked for EXACTLY the condition `reissue_office`'s own self-heal
+    already recognizes (its docstring, msg 8113's ruling): a match of that seat's own
+    `_office_header_re` sitting BEFORE the marker span located by `locate_managed_
+    section`. A match sends the seat through `reissue_office(adopt=True)` — the same
+    sanctioned door, never a second copy of its healing logic.
+
+    Read-only for every seat that ISN'T stacked: no markers at all, a header only inside
+    or after the marker span (the compiled section's own legitimate header), or markers
+    too malformed for `locate_managed_section` to even answer (left for a human via
+    `boot_rollout_gaps`, never guessed at here) all pass through untouched, counted but
+    not written. One seat's own I/O or reissue failure is caught and reported inline —
+    the same "one bad row must not sink a correct batch" discipline `fleet_reconcile.
+    reconcile_execute` already proves — never aborting the sweep for its siblings."""
+    from src.orchestrator.seats import seat_facts
+
+    rows = await actions.pool.fetch(
+        "SELECT o.canonical AS seat_id FROM objects o WHERE o.type='Seat' "
+        "AND o.status='active' ORDER BY o.canonical")
+    healed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    clean = 0
+    for row in rows:
+        seat_id = row["seat_id"]
+        facts = await seat_facts(actions.pool, seat_id)
+        handle, anchor = facts.get("handle"), facts.get("anchor_cwd")
+        if not handle or not anchor:
+            continue
+        orders_path = Path(anchor) / "CLAUDE.md"
+        if not orders_path.exists():
+            continue
+        try:
+            text = orders_path.read_text()
+        except OSError as exc:
+            skipped.append({"seat": handle, "seat_id": seat_id,
+                            "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if not _has_any_markers(text):
+            continue
+        header_match = _office_header_re(handle).search(text)
+        if header_match is None:
+            clean += 1
+            continue
+        try:
+            b_start, _b_end, _e_start, _e_end, _v = locate_managed_section(text)
+        except MarkerError as exc:
+            skipped.append({"seat": handle, "seat_id": seat_id,
+                            "error": f"malformed markers, not auto-healed: {exc}"})
+            continue
+        if header_match.start() >= b_start:
+            clean += 1
+            continue
+        result = await reissue_office(
+            actions, seat_id=seat_id, because=because, actor=actor, adopt=True)
+        healed.append({"seat": handle, "seat_id": seat_id, "result": result})
+    return {
+        "healed": healed, "skipped": skipped, "clean": clean, "seats_scanned": len(rows),
+        "note": "STACKED-HEADER OFFICE SUB-SWEEP — every active seat's CLAUDE.md checked "
+                "for a leading duplicate header before its own compiled marker span; each "
+                "match healed through reissue_office(adopt=True).",
+    }

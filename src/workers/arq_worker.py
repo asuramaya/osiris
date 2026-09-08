@@ -834,7 +834,20 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     AND THE GHOST HOUSE-STAMP SWEEP (thread a732e331 clause 3, wave 7 dispatch msg 8079,
     since house_hygiene.py): a Seat's own pre-house-optional ghost stamp, same "unclaimed
     leftover expires mechanically" reasoning a third time — a receipt naming each retired
-    seat, same failure discipline as its two siblings above."""
+    seat, same failure discipline as its two siblings above.
+
+    AND THE MECHANICAL FLEET PRUNE (thread 07ca68ca, wave 8, since fleet_prune.py):
+    `dead_transcript` (a mount row whose own job_dir anchor directory is gone) and
+    `unclaimed_body` (a verified live OS body with no agent_mounts row, bound when
+    tree_seat_hint resolves its cwd to a living seat+holder) — deliberately narrower than
+    fleet_reconcile's own identity-folding buckets, which stay behind their own
+    fleet_reconcile_heartbeat/osiris_fleet_reconcile_enabled kill switch (see fleet_prune.
+    py's module docstring for why). PLUS the stacked-header office sub-sweep (thread
+    658c2152, folded into 07ca68ca): every active seat's CLAUDE.md checked for a leading
+    duplicate header before its compiled marker span, healed through reissue_office
+    (adopt=True) — same failure discipline as its three siblings above."""
+    from src.orchestrator.boot_compiler import sweep_stacked_office_headers
+    from src.orchestrator.fleet_prune import prune_execute
     from src.orchestrator.house_hygiene import apply_ghost_house_sweep
     from src.orchestrator.migration_0060 import apply_migration_0060
     from src.orchestrator.project_hygiene import apply_project_hygiene_sweep
@@ -867,7 +880,29 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     ghosts_retired = len(ghosts.get("retired", []))
     if ghosts_retired or ghosts.get("refused"):
         _log.info("ghost house-stamp sweep: %s", ghosts)
-    return acted + retired + ghosts_retired
+
+    try:
+        pruned = await prune_execute(
+            actions, actor="cron:classification_laws_heartbeat", execute=True)
+    except Exception as exc:  # a DB/census hiccup must not kill the cron
+        _log.warning("fleet prune sweep failed: %r", exc)
+        pruned = {}
+    dropped = len([d for d in pruned.get("dropped_transcripts", []) if "error" not in d])
+    bound = len([b for b in pruned.get("bound", []) if b.get("bound")])
+    if pruned.get("dropped_transcripts") or pruned.get("bound"):
+        _log.info("fleet prune sweep: %s", pruned)
+
+    try:
+        headers = await sweep_stacked_office_headers(
+            actions, actor="cron:classification_laws_heartbeat")
+    except Exception as exc:  # a DB/disk hiccup must not kill the cron
+        _log.warning("stacked-header office sub-sweep failed: %r", exc)
+        headers = {}
+    healed_offices = len(headers.get("healed", []))
+    if healed_offices or headers.get("skipped"):
+        _log.info("stacked-header office sub-sweep: %s", headers)
+
+    return acted + retired + ghosts_retired + dropped + bound + healed_offices
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:

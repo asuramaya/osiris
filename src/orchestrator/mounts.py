@@ -14,6 +14,7 @@ lookup key: a reconnecting client gets a fresh session id, so it can't be one.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -312,9 +313,35 @@ async def drop_dead_project_mount(
 
 _MOUNT_DROP_ACTIONS = frozenset({
     "drop_dead_project_mount", "sweep_ghost_doors", "sweep_stale_doors",
+    "drop_dead_transcript_mount",
 })  # every action that snapshots a row via `_mount_snapshot` before deleting it — same
     # payload shape regardless of which one wrote it, so one inverse undoes all three
     # (Thoth DM 2835: "do not invent a second shape for the same problem")
+
+
+async def drop_dead_transcript_mount(
+    actions: Actions, *, job_dir: str, actor: str,
+) -> dict[str, Any]:
+    """Release ONE mount row whose own anchor directory (`job_dir`) no longer exists on
+    disk (thread 07ca68ca, wave 8's "dead transcript" class) — the same reversible,
+    audited, row-scoped shape `drop_dead_project_mount` already proves, keyed on
+    `job_dir` alone rather than (job_dir, project) since a gone directory has no project
+    to re-check. Re-checks existence at delete time under the row lock, same discipline
+    as `drop_dead_project_mount`'s own re-check of `project` — a directory recreated
+    between a sweep's report and this call (a rare but real race: a job_dir reused, or a
+    slow NFS mount) is left untouched, and nothing is written, audit row included."""
+    async with actions.pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
+            "WHERE job_dir=$1 FOR UPDATE", job_dir)
+        if row is None or await asyncio.to_thread(Path(job_dir).exists):
+            return {"dropped": 0, "audit_id": None}
+        snapshot = _mount_snapshot(row)
+        audit_id = await conn.fetchval(
+            "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3) "
+            "RETURNING id", "drop_dead_transcript_mount", actor, snapshot)
+        await conn.execute("DELETE FROM agent_mounts WHERE job_dir=$1", job_dir)
+        return {"dropped": 1, "audit_id": audit_id}
 
 
 async def undrop_dead_project_mount(

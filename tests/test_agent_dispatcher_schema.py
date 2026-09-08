@@ -27,7 +27,7 @@ async def test_agent_is_live_and_its_aliases_are_not() -> None:
     assert "agent" in live_names
     for hidden in (
         "claim_name", "correct_agent_house", "retire_agent", "fleet_reconcile",
-        "file_subagent", "file_subagents",
+        "fleet_prune", "file_subagent", "file_subagents",
     ):
         assert hidden not in live_names, f"{hidden} should be hidden, still live"
     # explicitly declined from this fold — stay live/named or already hidden elsewhere
@@ -46,6 +46,7 @@ AGENT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
                            "because": "half-heal batch repair"},
     "retire": {"agent_id": "agent:abc123", "because": "third-party retirement"},
     "fleet_reconcile": {},
+    "fleet_prune": {},
     "file_subagent": {"subagent_id": "agent:abc123.1"},
     "file_subagents": {"project": "widget"},
 }
@@ -56,7 +57,7 @@ async def test_agent_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 7, "one branch per agent action — update this count and " \
+    assert len(branches) == 8, "one branch per agent action — update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(AGENT_VALID_PAYLOADS), (

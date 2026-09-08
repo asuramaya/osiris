@@ -317,6 +317,9 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # matched the bare fleet_reconcile tool 1:1 before this fold — now it matches the
     # dispatcher action instead, same shape as seat's own entries above.
     "fleet-reconcile": "agent:fleet_reconcile",
+    # thread 07ca68ca (wave 8): fleet-prune's own CLI door matches the agent dispatcher's
+    # fleet_prune action, same shape as fleet-reconcile's own entry above.
+    "fleet-prune": "agent:fleet_prune",
     # #202 practice dispatcher (Thoth dispatch 7162, proposal decision 07395004):
     # amend-practice's own CLI door matched the bare amend_practice tool 1:1 before
     # this fold — now it matches the dispatcher action instead, same shape as
