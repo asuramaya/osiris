@@ -48,8 +48,15 @@ def _office_header_re(handle: str) -> re.Pattern[str]:
     the MARKER convention but was already written IN this shape — by a hand-copy, an
     older compiler revision, or a prior `adopt` call whose markers were later stripped
     by hand. Anchored on the exact handle so an unrelated line elsewhere in a hand-
-    written office (a different seat quoted in prose) can never false-match."""
-    return re.compile(rf"^# {re.escape(handle)} — seat office\s*$", re.MULTILINE)
+    written office (a different seat quoted in prose) can never false-match.
+
+    CASE-INSENSITIVE (Thoth's own catch, msg 8113): the live specimens' own hand-
+    written header capitalizes the handle ("# Nebbercracker — seat office") while the
+    compiled one below it uses the seat's own lowercase handle property — the same
+    string, cosmetically different, and a case-sensitive match would miss the very
+    header this exists to find."""
+    return re.compile(rf"^# {re.escape(handle)} — seat office\s*$",
+                      re.MULTILINE | re.IGNORECASE)
 
 _ROLE_SURFACES = {"worker", "coordinator"}
 _PRACTICE_LIMIT = 5
@@ -322,11 +329,12 @@ async def reissue_office(
     only holds if a hand-edit that damages the markers THEMSELVES is never silently
     repaired, re-wrapped, or ignored.
 
-    `adopt=True` is the one-time on-ramp for an office that predates the compiler (zero
-    markers on disk). Without it, a file with zero markers refuses too (a missing
-    section is never silently assumed to mean 'append one'); WITH it, a file that
-    already carries any marker-shaped text — well-formed or not — also refuses, naming
-    the seat, since adopt is for a first compile, not a second.
+    `adopt=True` is the on-ramp for an office that predates the compiler (zero markers
+    on disk). Without it, a file with zero markers refuses too (a missing section is
+    never silently assumed to mean 'append one'); WITH it, a file that already carries
+    marker-shaped text refuses UNLESS a leading duplicate header sits before the
+    marker span (the self-heal case below) — naming the seat either way, since adopt
+    is never a guess.
 
     ONE HEADER, EVER (thread 49169c2f, nebbercracker 116 lines / jenny 137, both with a
     duplicated "# handle — seat office" header): a naive adopt that always APPENDS
@@ -334,14 +342,24 @@ async def reissue_office(
     shaped like an office — house_law.md's own line 1 IS that header, so any
     hand-written or previously-adopted-then-demarkered office already carries one.
     Before touching anything, adopt now searches `text` for that exact header line
-    (`_office_header_re`, anchored on `handle` so it can never false-match unrelated
-    prose). Found: everything from that header to end-of-file IS the old, unmarked
-    managed section — it is REPLACED by the fresh `wrapped` body, not appended after
-    (leading text ahead of the header, if any, is preserved untouched, same as
-    outside-the-markers text always is). Not found (genuinely foreign content, no
-    office-shaped header anywhere): the old append behavior stands — nothing here
-    resembles a managed section, so nothing is safe to replace, and the whole file is
-    preserved with the fresh section appended at the end."""
+    (`_office_header_re`, anchored on `handle`, case-insensitive — Thoth's own catch,
+    msg 8113: the live specimens' hand-written header capitalizes the handle where the
+    compiled one below it doesn't). Found BEFORE any existing marker span (or no
+    markers exist at all yet): everything from that header to end-of-file — the old
+    unmarked managed section, and any already-duplicated markers it wraps — IS
+    REPLACED by the fresh `wrapped` body, not appended after (leading text ahead of
+    the header, if any, is preserved untouched, same as outside-the-markers text
+    always is). SELF-HEALS AN ALREADY-DUPLICATED OFFICE IN ONE CALL (nebbercracker's
+    own live shape: a hand header, then a prior adopt's own compiled section already
+    sitting behind real markers) — the leading duplicate is what adopt=True is FOR
+    here, not a second refusal reason, precisely because it is provably redundant
+    with what the (possibly already-marked) section below it already contains.
+    Marker-shaped text exists with NO leading duplicate found before it: refuses as
+    always — nothing here is provably safe to replace, so adopt does not guess.
+    Genuinely foreign content, no office-shaped header anywhere, no markers at all:
+    the old append behavior stands — nothing resembles a managed section, so nothing
+    is safe to replace, and the whole file is preserved with the fresh section
+    appended at the end."""
     if not because.strip():
         return {"error": "because is required — a reissue is testimony, same as a rename"}
     from src.orchestrator.charter import charter_of
@@ -369,10 +387,28 @@ async def reissue_office(
     text = orders_path.read_text()
 
     if adopt and _has_any_markers(text):
-        return {"error": f"{handle} ({seat_id}) already carries managed-section "
-                         "marker text — adopt=True is only for a first-time compile "
-                         "on an office that predates the compiler; omit it to reissue "
-                         "normally, or fix the marker by hand first if it's malformed"}
+        # SELF-HEAL EXCEPTION (thread 49169c2f, Thoth's ruling msg 8113): markers
+        # already existing is normally adopt's own refusal reason — except when a
+        # leading duplicate of this office's own header sits BEFORE the marker span,
+        # which is exactly the nebbercracker/jenny shape (a hand header, then a prior
+        # adopt's own compiled section, already marked). That duplicate is provably
+        # redundant with what the marked section already contains, so it is safe to
+        # absorb rather than refuse. A header found only INSIDE/AFTER the marker span
+        # (the compiled section's own legitimate header) never counts.
+        header_match = _office_header_re(handle).search(text)
+        leading_duplicate = False
+        if header_match is not None:
+            try:
+                b_start, _b_end, _e_start, _e_end, _v = locate_managed_section(text)
+                leading_duplicate = header_match.start() < b_start
+            except MarkerError:
+                leading_duplicate = False  # mangled markers -- never guess, refuse below
+        if not leading_duplicate:
+            return {"error": f"{handle} ({seat_id}) already carries managed-section "
+                             "marker text and no leading duplicate header sits before "
+                             "it — adopt=True is only for a first-time compile or a "
+                             "self-heal of a leading duplicate; omit it to reissue "
+                             "normally, or fix the marker by hand first if it's malformed"}
     if not adopt:
         try:
             locate_managed_section(text)
