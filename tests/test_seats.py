@@ -3346,6 +3346,169 @@ async def test_detach_mcp_dispatcher_reissues_both_the_worker_and_the_old_manage
         assert "error" in verdict
 
 
+# ═══ MOUNT-CACHE HEAL GENERALIZATION (wave 6, dispatch 7dfc38a5): `_heal_mount_cache_for_
+# seats`, extracted from promote's own inline heal above, wired into charter/charter_for/
+# attach/detach too — a live holder's cached identity must reflect a house-moving write
+# immediately, not wait ~30 minutes for staleness to clear on its own. ═══════════════════
+
+async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
+    actions: Actions,
+) -> None:
+    """THE INTERESTING CASE (charter_for is third-party — someone ELSE's seat had its
+    charter declared FOR it): a real Seat + holds binding, so `held_seat` actually
+    resolves the target's live holder, and a stale `_agents` cache entry bound to that
+    holder heals via the new seat-bound path — not the generation-prefix match rebind/
+    correct_house/transition_project/invalidate_works_in use (this holder is NOT the
+    caller)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    await _repo(actions, "chfor-repo")
+    seat = (await ensure_seat(actions, house="chforhouse", handle="ChforWorker",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:chfor-holder")
+
+    class _CtxCaller:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    class _CtxHolder:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    caller_ctx = _CtxCaller()
+    holder_ctx = _CtxHolder()
+    caller_ident = AgentIdentity(agent_id="operator", session="chfor-caller", project="p",
+                                 model=None, cwd=None)
+    # the TARGET's own live holder, cached with an already-stale project — proving the
+    # heal is a fresh graph read, not a copy of the caller's own state.
+    holder_ident = AgentIdentity(agent_id="agent:chfor-holder", session="chfor-holder",
+                                 project="stale-before-charter", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(caller_ctx)] = caller_ident
+    srv._agents[srv._conn_key(holder_ctx)] = holder_ident
+    try:
+        out = await srv._seat_impl(
+            "charter_for", target=seat, repos=["chfor-repo"], because="onboarding",
+            ctx=caller_ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(caller_ctx), None)
+        srv._agents.pop(srv._conn_key(holder_ctx), None)
+    assert out["charter"] == ["chfor-repo"]
+    # the seat-bound heal ran: the holder's cache moved from the stale value to the
+    # seat's own resolved project — its single, just-declared charter (`_seated_house`'s
+    # own "exactly one charter" branch), the very thing this charter_for call just
+    # changed — via a fresh `_resolve_project_seat_first` call, never a string-match
+    # (the stale value never matched anything by construction).
+    assert holder_ident.project == "chfor-repo"
+
+
+async def test_attach_seat_mcp_dispatcher_heals_the_workers_live_holders_cache(
+    actions: Actions,
+) -> None:
+    """attach/detach change the worker's managed_by chain, which its derived house depends
+    on — the worker's own live holder must see that reflected immediately."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    manager = (await ensure_seat(actions, house="managerhouse", handle="AttHealMgr",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house=None, handle="AttHealWkr",
+                                source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=worker, agent_id="agent:atthealholder")
+
+    class _CtxCaller:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    class _CtxHolder:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    caller_ctx = _CtxCaller()
+    holder_ctx = _CtxHolder()
+    caller_ident = AgentIdentity(agent_id="operator", session="atthealcaller", project="p",
+                                 model=None, cwd=None)
+    holder_ident = AgentIdentity(agent_id="agent:atthealholder", session="atthealholder",
+                                 project="stale-before-attach", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(caller_ctx)] = caller_ident
+    srv._agents[srv._conn_key(holder_ctx)] = holder_ident
+    try:
+        out = await srv._seat_impl(
+            "attach", target=worker, manager=manager, because="org chart", ctx=caller_ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(caller_ctx), None)
+        srv._agents.pop(srv._conn_key(holder_ctx), None)
+    assert out["attached"] == worker and out["now_managed_by"] == manager
+    # worker now derives house through manager's chain — the holder's stale cache heals
+    # to that fresh answer, not left at its pre-attach stale value.
+    assert holder_ident.project == "managerhouse"
+
+
+async def test_refresh_project_mcp_dispatcher_forces_a_fresh_graph_read(
+    actions: Actions,
+) -> None:
+    """seat(action='refresh_project'): self-service, no target — a body that suspects its
+    own cached project string is stale can force a fresh check without a full re-mount.
+    Mutate the seat's own house DIRECTLY in the DB, bypassing every existing heal path, so
+    only refresh_project's own fresh `_resolve_project_seat_first` call could possibly
+    show the corrected value."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    seat = (await ensure_seat(actions, house="beforehouse", handle="RefreshSeat",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:refreshholder")
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    ident = AgentIdentity(agent_id="agent:refreshholder", session="refresh1",
+                          project="beforehouse", model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        # mutate the seat's OWN house directly, no heal path pushed to this cache entry
+        seat_oid = await actions.pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1", seat)
+        await actions.assert_property(seat_oid, "house", "afterhouse", "test",
+                                      datetime.now(UTC), 0.95)
+        assert ident.project == "beforehouse"          # still stale — nothing healed it yet
+
+        out = await srv._seat_impl("refresh_project", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out == {"agent": "agent:refreshholder", "project": "afterhouse",
+                   "was": "beforehouse"}
+    assert ident.project == "afterhouse"               # mutated in place, same cache entry
+
+
+async def test_refresh_project_mcp_dispatcher_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv._seat_impl("refresh_project", ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
 async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
     actions: Actions,
 ) -> None:

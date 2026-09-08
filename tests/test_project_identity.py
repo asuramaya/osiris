@@ -1243,6 +1243,68 @@ async def test_mcp_rename_project_heals_every_stale_mount_cache_entry(
         _agents.pop(_conn_key(ctx_other), None)
 
 
+async def test_mcp_rename_project_also_heals_a_genuinely_seated_cache_entry_via_seat_bound_path(
+    actions: Actions, tmp_path,
+) -> None:
+    """Mount-cache heal generalization, wave 6, dispatch 7dfc38a5: the string-match heal
+    above only catches a cached entry whose `.project` happens to equal the old bare name
+    — a governing seat's own live holder whose cache is ALREADY wrong for some unrelated
+    reason would never string-match and so would never heal by that path alone. Set up a
+    real governing seat via the cascade's own charter tier (same fixture shape as
+    test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat above), bind a
+    fake `_agents` cache entry to that seat's holder agent_id, and give it a DELIBERATELY
+    DIFFERENT stale project string than old_bare — proving it's the NEW seat-bound heal
+    doing the work, not the string-match one (which would have nothing to match)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import rename_project as rename_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "seatboundold"\n')
+    seat = await ensure_seat(actions, house="seatboundold", handle="Seatboundseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:seatbound1")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:seatbound1")
+    proj = await _mk_project(actions, "seatboundold")
+    # a SECOND, unrelated governs edge — `_seated_house` only reads charter_of as this
+    # seat's own project when it declares EXACTLY ONE, and a charter's own CANONICAL-
+    # derived label never moves on a rename by design (see the sibling cascade test's own
+    # comment above): with two, this falls through to the seat's DERIVED HOUSE instead,
+    # which the rename cascade's own house tier DOES move — the thing this test means to
+    # prove the seat-bound heal picks up.
+    other_proj = await _mk_project(actions, "seatboundsibling")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    await actions.create_link(seat_oid, other_proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    # deliberately NOT old_bare ("seatboundold") — a stale value the string-match heal
+    # could never touch, so only the seat-bound path (held_seat -> in the manifest's own
+    # seat set -> _resolve_project_seat_first) can possibly fix this.
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:seatbound1", session="seatbound1", project="totally-unrelated",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await rename_tool(project="seatboundold", new_name="seatboundnew",
+                                because="operator ruling: rename", dry_run=False, ctx=ctx)
+        assert out["new_name"] == "seatboundnew"
+        assert seat["seat_id"] in out["manifest"]["seats"]
+        assert _agents[_conn_key(ctx)].project == "seatboundnew"
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_mcp_project_identity_evidence_and_fork_doors(
     actions: Actions, tmp_path,
 ) -> None:

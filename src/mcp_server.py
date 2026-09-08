@@ -1033,6 +1033,25 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
         ident.project = house
 
 
+async def _heal_mount_cache_for_seats(pool: asyncpg.Pool, affected_seats: set[str]) -> None:
+    """Generalized from promote's own inline heal (commit 250f81f, dispatch 2589353a's
+    own seam 9): walk every currently-mounted identity in this process's `_agents` cache
+    and re-resolve any bound to one of `affected_seats` via a fresh graph read
+    (`_resolve_project_seat_first`). SEAT-BOUND, not generation-prefix-matched — unlike
+    rebind/transition_project/invalidate_works_in/correct_house (which only ever affect
+    the CALLER'S OWN lineage), promote/charter/attach/detach's affected seats are usually
+    SOMEONE ELSE'S, so this asks `held_seat` per cached identity rather than assuming a
+    shared generation prefix. A no-op for an empty set (never walks the whole cache for
+    nothing to heal)."""
+    if not affected_seats:
+        return
+    from src.orchestrator.seats import held_seat as _held_seat
+    for cached in list(_agents.values()):
+        bound = await _held_seat(pool, cached.agent_id)
+        if bound and bound["seat_id"] in affected_seats:
+            await _resolve_project_seat_first(pool, cached)
+
+
 async def _reattach(
     pool: asyncpg.Pool, key: str | None, job: str | None
 ) -> AgentIdentity | None:
@@ -3086,6 +3105,9 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("promote"), "target": _s(), "workers": _list_s(),
             "because": _s(),
         }, ["action", "target", "workers", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("refresh_project"),
+        }, ["action"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["seat"] = SEAT_INPUT_SCHEMA
@@ -3133,6 +3155,7 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "wake": (["target", "message"], ["target", "message"]),
     "wake_preflight": (["target"], ["target"]),
     "promote": (["target", "workers", "because"], ["target", "workers", "because"]),
+    "refresh_project": ([], []),
 }
 
 # THE FOLD MAP (task #202/#204, Thoth msg 7039/7040/7059, piece 2/3 of the gate-half):
@@ -3337,6 +3360,15 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         return await _seat_edge_impl(action, target, manager=manager, because=because, ctx=ctx)
 
+    if action == "refresh_project":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — nothing to refresh", "why": _anchorless(ctx)}
+        pool = await _pool_get()
+        before = ident.project
+        await _resolve_project_seat_first(pool, ident)
+        return {"agent": ident.agent_id, "project": ident.project, "was": before}
+
     if action == "charter":
         ident = await _ident_for(ctx)
         if ident is None:
@@ -3353,7 +3385,16 @@ async def _seat_impl(
                              "if this is a fresh mint) binds you to one first."}
         seat_id_ = str(bound["seat_id"])
         if repos is not None:
-            return await set_charter(Actions(pool), seat_id_, repos, actor=ident.agent_id)
+            result = await set_charter(Actions(pool), seat_id_, repos, actor=ident.agent_id)
+            if not result.get("error"):
+                # self-service on the caller's own bound seat, so this heal is somewhat
+                # redundant with the caller's own already-fresh state — but a THIRD PARTY
+                # watching the same project (a co-agent bound to the same peer seat) may
+                # hold its own stale cache entry; call the shared heal for consistency
+                # with the other charter-change sites, not because self is the interesting
+                # case (mount-cache heal generalization, wave 6, dispatch 7dfc38a5).
+                await _heal_mount_cache_for_seats(pool, {seat_id_})
+            return result
         return {"agent": ident.agent_id, "seat": seat_id_,
                 "charter": await charter_of(pool, seat_id_)}
 
@@ -3365,8 +3406,16 @@ async def _seat_impl(
                              "mind's act, and the graph must know whose",
                     "why": _anchorless(ctx)}
         from src.orchestrator.charter import charter_for as _charter_for
-        return await _charter_for(Actions(await _pool_get()), target, repos, because=because,
-                                  actor=ident.agent_id)
+        pool = await _pool_get()
+        result = await _charter_for(Actions(pool), target, repos, because=because,
+                                    actor=ident.agent_id)
+        if not result.get("error"):
+            # THE INTERESTING CASE: someone else's seat had its charter declared FOR it —
+            # `result["seat"]` is set_charter's own RESOLVED canonical (never the caller's
+            # raw `target` spelling, which may be a bare handle), matching what
+            # `held_seat` will hand back for that seat's live holder.
+            await _heal_mount_cache_for_seats(pool, {str(result["seat"])})
+        return result
 
     if action == "heal_anchor":
         return await _heal_seat_anchor_impl(target, because, dry_run, ctx)
@@ -3623,7 +3672,6 @@ async def _seat_impl(
         if result.get("error"):
             return result
         from src.orchestrator.boot_compiler import reissue_office as _reissue_office
-        from src.orchestrator.seats import held_seat as _held_seat
 
         office_refresh: dict[str, Any] = {}
         for seat_id_affected in result.get("affected", []):
@@ -3636,13 +3684,10 @@ async def _seat_impl(
         # own live identity cache, healed the same way correct_house/transition_project/
         # rebind/invalidate_works_in already do after a house-moving write) — but those all
         # heal the CALLER'S OWN generation; promote's affected seats are usually SOMEONE
-        # ELSE'S, so this walks every cached identity and asks held_seat which seat it's
-        # actually bound to, rather than the cheaper generation-prefix match those four use.
-        affected_seats = set(result.get("affected", []))
-        for cached in list(_agents.values()):
-            bound = await _held_seat(pool, cached.agent_id)
-            if bound and bound["seat_id"] in affected_seats:
-                await _resolve_project_seat_first(pool, cached)
+        # ELSE'S, so this asks held_seat which seat each cached identity is actually bound
+        # to, rather than the cheaper generation-prefix match those four use (extracted into
+        # `_heal_mount_cache_for_seats`, shared with charter/charter_for/attach/detach/rename).
+        await _heal_mount_cache_for_seats(pool, set(result.get("affected", [])))
         return result
 
     return {"error": f"unhandled action {action!r} — this is a dispatcher bug, not a "
@@ -3709,6 +3754,7 @@ async def seat(
       wake: knock on your managed_by pair's other half (target, message) — ALSO named
       wake_preflight: check wake()'s gates before calling it (target) — ALSO named
       promote: mint target as manager over workers, self-managed only (target, workers, because)
+      refresh_project: force a fresh graph read of this mind's own cached project, no target
 
     DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
     transition_project, sweep_disk, resync_pin) — same convention as their standalone
@@ -6419,6 +6465,17 @@ async def _project_impl(
             for cached in _agents.values():
                 if cached.project == old_bare:
                     cached.project = new_name
+            # THE SEAT-BOUND HALF (mount-cache heal generalization, wave 6, dispatch
+            # 7dfc38a5): the string-match above catches any cached entry whose `.project`
+            # happened to equal the old bare name (including unbound test doubles, and any
+            # stale coincidental match) — but a governing seat's own live holder whose
+            # cached `.project` was ALREADY wrong for some unrelated reason would never
+            # string-match `old_bare` and so would never heal. Every seat this cascade
+            # actually touched (the manifest's own governing-seat keys) is healed too, via
+            # the same seat-bound path promote/charter/attach/detach use — belt AND
+            # suspenders, not a replacement for the broad string-match above.
+            manifest_seats = set(out.get("manifest", {}).get("seats", {}).keys())
+            await _heal_mount_cache_for_seats(pool, manifest_seats)
         # 7f90f394: this evidence attachment describes what governing seats think of
         # new_name — meaningless noise when the rename itself never happened (a refusal)
         # or hasn't happened YET (a dry-run preview), so it only runs on an actual,
@@ -6957,7 +7014,11 @@ async def _seat_edge_impl(
     manager and worker through its own caller (mcp_server.py's `seat(action='promote')`
     branch); attach/detach mint or cut the SAME `managed_by` edge but, before this,
     refreshed neither — a manager's own "## Your team" listing and a worker's own
-    manager-of-record line both went stale the moment either verb ran outside promote."""
+    manager-of-record line both went stale the moment either verb ran outside promote.
+    Also heals the WORKER's own mount cache (never the manager's — a manager's own
+    project is unaffected by gaining/losing a worker, only the worker's derived house
+    depends on the managed_by chain attach/detach changes; mount-cache heal
+    generalization, wave 6, dispatch 7dfc38a5)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": f"mount first — {action}ing a seat's manager is a deliberate "
@@ -6969,6 +7030,7 @@ async def _seat_edge_impl(
         if result.get("error"):
             return result
         affected = {result["detached"], result["was_managed_by"]}
+        worker_seat = result["detached"]
     elif action == "attach":
         assert manager is not None
         from src.orchestrator.seats import attach_seat as _attach
@@ -6977,6 +7039,7 @@ async def _seat_edge_impl(
         if result.get("error"):
             return result
         affected = {result["attached"], result["now_managed_by"]}
+        worker_seat = result["attached"]
     else:
         return {"error": f"unknown action {action!r} — one of attach/detach"}
 
@@ -6988,6 +7051,7 @@ async def _seat_edge_impl(
             Actions(pool), seat_id=seat_id_affected, because=f"{action}: {because}",
             actor=ident.agent_id)
     result["office_refresh"] = office_refresh
+    await _heal_mount_cache_for_seats(pool, {worker_seat})
     return result
 
 
