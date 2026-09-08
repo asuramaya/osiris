@@ -1515,29 +1515,43 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
     property on a non-head seat is legacy noise this never reads (Alfred's old bytebye,
     Vajra's twin house=vajra simply stop being consulted, not corrected).
 
-    THE HOUSE ANCHOR (ruling b4208fa3, thread 105f3425/bec2e4af — the cross-house adoption
-    bug that silently annexed Ferryman/halcyon into osiris and, escalated, leaked 50 of
-    Thoth's own messages into a hector-vector seat's mailbox): a managed_by edge the
-    OPERATOR'S OWN HAND asserted crosses a house boundary DELIBERATELY — mintseat's own
-    cross-house-mint guard already refuses that crossing for anyone else. The walk now
-    STOPS at any seat whose incoming picture shows the operator's hand on the crossing:
-    either the managed_by link TO its manager was itself asserted by an operator actor
-    (`_OPERATOR_ACTORS` — the live, empirically-verified signal: today's adoption event
-    stamps the LINK with source='operator' even when it never re-touches an ALREADY-
-    EXISTING seat's own `house` property, which is exactly what happened to halcyon — its
-    house property still carries the source from its original 2026-07-20 mint, an
-    unrelated agent id, so checking ONLY the property's own source would silently miss the
-    seat that actually caused the mail breach) OR the seat's own `house` property was
-    itself asserted by an operator actor (the literal text of the ruling, still checked,
-    still true for a seat like Ferryman whose house WAS freshly operator-stamped at mint).
-    Either signal makes this seat a house ANCHOR, treated as a head for house purposes even
-    while it remains managed — management and habitation are different facts; the org
-    chart may cross a boundary without annexing what it crosses.
+    THE HOUSE ANCHOR (ruling b4208fa3, amended by a418b017 — thread 105f3425/bec2e4af, the
+    cross-house adoption bug that silently annexed Ferryman/halcyon into osiris and,
+    escalated, leaked 50 of Thoth's own messages into a hector-vector seat's mailbox): a
+    managed_by edge the OPERATOR'S OWN HAND asserted crosses a house boundary DELIBERATELY
+    — mintseat's own cross-house-mint guard already refuses that crossing for anyone else.
+    The walk STOPS at a seat only when BOTH signals agree it is a genuine boundary
+    crossing, never either alone:
+      (1) a REAL crossing — this seat's own stamped `house` is non-empty AND differs from
+          what deriving one hop further (through its manager) would answer. Required
+          because the operator's hand alone is not enough: a418b017's own live specimen
+          is the promotion verb's own operator-tab call shape — a freshly-promoted worker
+          with NO stamped house of its own has nothing to cross, so an operator-sourced
+          managed_by edge onto it must still derive the new manager's house, not anchor at
+          nothing.
+      (2) the OPERATOR'S OWN HAND on the crossing — either the managed_by link TO its
+          manager was itself asserted by an operator actor (`_OPERATOR_ACTORS` — the live,
+          empirically-verified signal: today's adoption event stamps the LINK with
+          source='operator' even when it never re-touches an ALREADY-EXISTING seat's own
+          `house` property, which is exactly what happened to halcyon — its house property
+          still carries the source from its original 2026-07-20 mint, an unrelated agent
+          id, so checking ONLY the property's own source would silently miss the seat that
+          actually caused the mail breach) OR the seat's own `house` property was itself
+          asserted by an operator actor (Ferryman's own shape — freshly operator-stamped
+          at mint). Required because a real value difference alone is NOT enough either: a
+          seat can carry an old, unrelated, never-corrected house stamp (Alfred's own
+          bytebye, Vajra's twin house=vajra) that differs from its current manager's chain
+          for no deliberate reason at all — the operator's hand is what tells the two
+          apart from a genuine annexation.
+    Both signals present makes this seat a house ANCHOR, treated as a head for house
+    purposes even while it remains managed — management and habitation are different
+    facts; the org chart may cross a boundary without annexing what it crosses.
 
-    Ordinary derivation is UNCHANGED for every seat where neither the operator's own hand
-    touched the managed_by edge NOR the house property — an ordinary worker under an
-    ordinary manager still walks to its manager exactly as before this fix (decision
-    87953278 is the standing witness: Thoth/Khnum/Seshat all still derive 'osiris').
+    Ordinary derivation is UNCHANGED for every seat missing either signal — a stray old
+    stamp with no operator's hand on it still gets ignored exactly as always (decision
+    87953278 is the standing witness: Thoth/Khnum/Seshat all still derive 'osiris'), and an
+    operator-sourced edge onto a seat with no stamped house of its own still derives
+    through, never anchoring at emptiness.
 
     READ-TIME ONLY, same discipline as reachability(): computed fresh every call, nothing
     written back. LOUD on a managed_by CYCLE — a seat reappearing in its own chain is a
@@ -1556,10 +1570,13 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
         if manager is None:  # current is the HEAD — its own stamped house is authoritative
             house, _source = await _own_house_stamp(pool, current)
             return house
-        link_source = await _managed_by_source(pool, current)
         house, house_source = await _own_house_stamp(pool, current)
-        if link_source in _OPERATOR_ACTORS or house_source in _OPERATOR_ACTORS:
-            return house  # a house ANCHOR — managed, but the crossing was deliberate
+        if house:
+            link_source = await _managed_by_source(pool, current)
+            if link_source in _OPERATOR_ACTORS or house_source in _OPERATOR_ACTORS:
+                manager_house = await derive_house(pool, manager, max_hops=max_hops)
+                if house != manager_house:
+                    return house  # a house ANCHOR — a real crossing, operator's hand
         current = manager
     logger.warning("house derivation for %s exceeded %d hops without reaching a head",
                    seat_id, max_hops)

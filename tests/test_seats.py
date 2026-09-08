@@ -3471,6 +3471,26 @@ async def test_derive_house_anchor_chains_correctly_past_a_third_generation(
     assert await derive_house(actions.pool, "seat:ha4head0") == "osiris"
 
 
+async def test_derive_house_operator_sourced_edge_onto_a_houseless_worker_derives_through(
+    actions: Actions,
+) -> None:
+    """a418b017's own amendment (Thoth's ruling on Khnum's own flag from thread 3d5046dd):
+    BOTH signals are required, never either alone. The promote-from-operator-tab shape —
+    an operator-sourced managed_by edge onto a worker with NO stamped house of its own —
+    has the operator's hand but nothing to cross: the worker has never had a house, so
+    there is no boundary for the edge to violate. It must derive the manager's house, not
+    anchor at nothing (the bug this amendment exists to close)."""
+    from src.orchestrator.seats import derive_house
+
+    manager = await actions.create_or_find_object("Seat", "seat:ha5mgr00", "test")
+    await actions.assert_property(manager, "house", "monsterhouse", "test",
+                                  datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:ha5wrk00", "test")
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    assert await derive_house(actions.pool, "seat:ha5wrk00") == "monsterhouse"
+
+
 async def test_held_seat_reports_the_derived_house_not_the_stale_stamp(
     actions: Actions, tmp_path: Path,
 ) -> None:
