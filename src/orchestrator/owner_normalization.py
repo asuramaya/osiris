@@ -59,7 +59,13 @@ async def _coordinating_seat_for_project(
     """The durable SEAT that coordinates `project` -- roster()'s own agreement
     classification, stopped at the seat id (never descended to a live holder: this writes
     a permanent owner, not a DM target, so occupancy must never enter the choice).
-    (seat_id, None) on a clean resolution; (None, reason) otherwise, never guessed."""
+    (seat_id, None) on a clean resolution; (None, reason) otherwise, never guessed --
+    EXCEPT the operator ruling's own peer-pair-with-no-manager case, which resolves to
+    the literal `("operator", None)` (see the `agreement == "conflict"` branch below):
+    a project two PEER-BONDED seats jointly govern, with NEITHER carrying any manager
+    edge at all, ships mechanically to the operator's own queue rather than folding into
+    a "needs a human call" surfacing thread -- the operator already IS that human call,
+    named durably instead of via an extra hop through a thread."""
     from src.orchestrator.seats import manager_of_seat, peer_of_seat, roster
 
     out = await roster(pool, repo=project)
@@ -68,6 +74,23 @@ async def _coordinating_seat_for_project(
     if agreement == "conflict" and len(matches) == 2:
         seat_a, seat_b = matches[0]["seat"], matches[1]["seat"]
         if await peer_of_seat(pool, seat_a) == seat_b:
+            if (await manager_of_seat(pool, seat_a) is None
+                    and await manager_of_seat(pool, seat_b) is None):
+                # PEER-GOVERNED PROJECT OWNS TO THE OPERATOR (operator ruling, thread
+                # 614680c6): "when a project's governors are peers with no manager,
+                # resolve_owner_seat's project rung answers 'operator', never None and
+                # never a fold thread." "No manager" is read literally -- NEITHER peer
+                # carries an active managed_by edge to ANYONE (manager_of_seat's own
+                # None-means-genuinely-unmanaged contract), not merely "neither manages
+                # the other" -- that narrower question is exactly what the manager_seat
+                # branch immediately below already answers, for the (rarer) case where
+                # peer_of_seat itself doesn't hold and a real manager edge exists between
+                # the two contested seats. A peer pair where one of them happens to
+                # ALSO be managed by some third seat is deliberately NOT this case: that
+                # third seat is a real coordinator on record, so this still folds to
+                # a human call via the ambiguous branch below rather than short-
+                # circuiting to the operator.
+                return "operator", None
             return None, (f"peer pair for project {project!r} ({seat_a}, {seat_b}) -- "
                           "shared ownership, no single coordinator to pick")
         manager_seat = (
@@ -131,6 +154,10 @@ async def resolve_owner_seat(
         project` — the SAME agreement-classification (governed/shared-house/single-
         match/conflict/no-match) migration 0059's own owner-normalization already
         trusts, not a second, cheaper re-derivation via a bare governs-edge lookup.
+        This can itself answer the literal 'operator' (never a `seat:...` canonical) for
+        a peer-governed project with no manager on record (operator ruling, thread
+        614680c6) — already one of this function's own four accepted owner shapes, so
+        nothing downstream needs to special-case it.
     None when nothing above resolves — the caller's own job to refuse (the write-time
     gate) or fall back further (migration 0060's own project-coordinator default),
     never this function's job to guess past its four rules.

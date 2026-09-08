@@ -6,6 +6,7 @@ of unresolvable rows into one operator thread per project.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from src.actions.core import Actions
 from src.orchestrator.charter import set_charter
@@ -16,7 +17,7 @@ from src.orchestrator.owner_normalization import (
     plan_owner_normalization,
     resolve_owner_seat,
 )
-from src.orchestrator.seats import ensure_seat
+from src.orchestrator.seats import ensure_seat, peer_seats
 
 NOW = datetime.now(UTC)
 _SRC = "test-source"
@@ -144,6 +145,46 @@ async def test_a_project_name_with_no_charter_at_all_has_no_coordinator(
     assert out["new_owner"] is None
     assert out["project"] == "onown-orphan"
     assert "no seat's charter or pin names" in out["reason"]
+
+
+# ═══ peer-governed project owns to the operator (thread 614680c6) ══════════════════════
+
+async def test_peer_pair_with_no_manager_resolves_project_coordinator_to_operator(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The 'rotten-apple' scenario: two seats jointly claim a project (one via charter,
+    one via pin -- the exact `conflict` shape test_seats.py's own roster tests use) and
+    are peer-bonded to each other, with NEITHER carrying any managed_by edge at all. The
+    operator ruling (thread 614680c6): this resolves to the literal 'operator', never
+    None and never a fold thread."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.owner_normalization import _coordinating_seat_for_project
+
+    await _repo(actions, "onown-rottenapple")
+    seat_a = await _seat(actions, "OnownRa")
+    await set_charter(actions, seat_a, ["onown-rottenapple"], actor="test")
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "onown-rottenapple"\n')
+    ptah = await ensure_seat(actions, house="test", handle="OnownPtah", source="test",
+                             anchor_cwd=str(office))
+    seat_b = str(ptah["seat_id"])
+    await peer_seats(actions, seat_a, seat_b, because="rotten-apple peer bond", actor="test")
+
+    coord, reason = await _coordinating_seat_for_project(actions.pool, "onown-rottenapple")
+    assert coord == "operator"
+    assert reason is None
+
+    # raw="" short-circuits to None before ever reaching the project rung (resolve_
+    # owner_seat's own docstring: an empty string is refused immediately, never a valid
+    # entry to fall through on) -- classify_thread_owner's own empty-owner branch is what
+    # calls _coordinating_seat_for_project directly for that case. To exercise resolve_
+    # owner_seat's OWN project-rung fallthrough, use a raw string that resolves as
+    # neither a seat/agent id nor a bare handle, so it falls all the way to `project`.
+    resolved = await resolve_owner_seat(
+        actions.pool, "onown-rottenapple-nobody-answers-to-this",
+        project="onown-rottenapple")
+    assert resolved == "operator"
 
 
 # ═══ resolve_owner_seat: the shared resolver (migration 0061, census 583e2669) ══════════
