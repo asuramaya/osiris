@@ -3491,6 +3491,53 @@ async def test_derive_house_operator_sourced_edge_onto_a_houseless_worker_derive
     assert await derive_house(actions.pool, "seat:ha5wrk00") == "monsterhouse"
 
 
+async def test_derive_house_ghost_stamp_under_a_real_house_manager_derives_the_manager(
+    actions: Actions,
+) -> None:
+    """THE GHOST CLAUSE (operator ruling, thread a732e331): a seat's own stamped `house`
+    equal (case-insensitive) to its own governed project's name is a leftover from before
+    houses were optional — never a real declaration. Even with BOTH anchor signals present
+    (an operator-sourced link AND an operator-sourced property), a ghost never anchors: it
+    reads as empty before the comparison ever runs, so the seat derives its manager's real
+    house exactly as an ordinary houseless worker would."""
+    from src.orchestrator.seats import derive_house
+
+    manager = await actions.create_or_find_object("Seat", "seat:hg1mgr00", "test")
+    await actions.assert_property(manager, "house", "monsterhouse", "test",
+                                  datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:hg1wrk00", "test")
+    project = await actions.create_or_find_object("SoftwareProject", "repo:hg1wrk00", "test")
+    await actions.create_link(worker, project, "governs", "test", datetime.now(UTC), 0.9)
+    # the ghost: house stamp == the seat's own governed project name, case-differing on
+    # purpose (the comparison is explicitly case-insensitive)
+    await actions.assert_property(worker, "house", "Hg1wrk00", "operator",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    assert await derive_house(actions.pool, "seat:hg1wrk00") == "monsterhouse"
+
+
+async def test_derive_house_none_clause_a_houseless_manager_never_anchors_a_real_stamp(
+    actions: Actions,
+) -> None:
+    """THE NONE CLAUSE (same ruling): a boundary needs TWO REAL, DIFFERENT houses. A worker
+    carries a genuine (non-ghost) house stamp with the operator's hand on the crossing —
+    both anchor signals present — but its manager's OWN chain derives to None (houseless
+    all the way up). None on the manager's side never anchors, whoever asserted the edge:
+    the worker walks through to that None instead of anchoring at its own orphaned value."""
+    from src.orchestrator.seats import derive_house
+
+    head = await actions.create_or_find_object("Seat", "seat:hn1head0", "test")  # no house
+    manager = await actions.create_or_find_object("Seat", "seat:hn1mgr00", "test")  # no house
+    await _link_managed_by(actions, manager, head)
+    worker = await actions.create_or_find_object("Seat", "seat:hn1wrk00", "test")
+    await actions.assert_property(worker, "house", "hector-vector", "operator",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    assert await derive_house(actions.pool, "seat:hn1wrk00") is None
+
+
 async def test_held_seat_reports_the_derived_house_not_the_stale_stamp(
     actions: Actions, tmp_path: Path,
 ) -> None:
