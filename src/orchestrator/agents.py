@@ -467,6 +467,64 @@ async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = Non
     return None
 
 
+async def resolve_fleet_projects(
+    pool: asyncpg.Pool, nodes: dict[str, dict[str, Any]],
+) -> None:
+    """FLEET RENDER, BY THE GRAPH PROJECT (operator ruling f6b758fc): resolve each
+    session's REAL graph project — never the raw session-registry label a launch
+    directory's basename happened to carry — writing the answer into each node as
+    `resolved_project` (fleetview.py's own new grouping key; `None` when nothing active
+    claims it, the honest signal to collapse it into 'unfiled').
+
+    Resolution order is the ruling's own words, exactly:
+      1. the node's raw `project` label — already merge-normalized by fleet()'s own
+         `label_map` pass before this runs — names an ACTIVE SoftwareProject: `_resolve_repo`
+         (capture.py), the same name-or-canonical primitive census/link_repo already trust.
+      2. else `project_of(pool, agent_id, cwd=node's cwd)`. Its OWN documented resolution
+         order — the pin at cwd (transparent through a worktree's own gitlink already) ->
+         a WORKTREE's parent checkout's registered project -> the seat's declared charter,
+         when singular -> lineage `works_in` — IS "a Worktree's parent, or project_of on
+         the session cwd pin": this function does not re-walk the worktree case itself,
+         `project_of` already owns that rung, and duplicating it here would be a second
+         copy of logic this house's own standing practice on stale/duplicated maps warns
+         against.
+      3. else `None` — unfiled, honestly; never a guess.
+
+    A `?` node (no raw label at all) is NEVER special-cased into unfiled directly: it just
+    fails rung 1 for lack of a label to check and falls straight through to rung 2, so a
+    `?` session that DOES carry a resolvable cwd pin resolves exactly like a labelled one.
+
+    BATCHED, not per-row — fleet() can carry 500+ agent rows, the same performance
+    discipline as the `merged_into` label-normalization pass and the ghost_gap probes
+    beside it in mcp_server.py's own `fleet()`: rung 1 is one `_resolve_repo` call per
+    DISTINCT raw label; rung 2 is one `project_of` call per DISTINCT cwd, using one
+    representative agent per cwd as a documented simplification — `project_of`'s own pin
+    and worktree-parent rungs are cwd-only and agent-independent, only its charter/lineage
+    tail is agent-specific, and two different agents sharing the EXACT SAME cwd resolving
+    to two different charters is an edge case this function does not chase."""
+    from src.orchestrator.capture import _resolve_repo
+
+    label_is_active: dict[str, bool] = {}
+    for n in nodes.values():
+        label = n.get("project")
+        if label and label not in label_is_active:
+            label_is_active[label] = (await _resolve_repo(pool, label)) is not None
+
+    cwd_resolved: dict[str, str | None] = {}
+    for canon, n in nodes.items():
+        label = n.get("project")
+        if label and label_is_active.get(label):
+            n["resolved_project"] = label
+            continue
+        cwd = n.get("cwd")
+        if not cwd:
+            n["resolved_project"] = None
+            continue
+        if cwd not in cwd_resolved:
+            cwd_resolved[cwd] = await project_of(pool, canon, cwd=cwd)
+        n["resolved_project"] = cwd_resolved[cwd]
+
+
 async def correct_agent_house(
     actions: Actions, *, agent_id: str, project: str | None = None,
     seat_generation: int | None = None, actor: str,

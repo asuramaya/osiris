@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
+from src.cli_render import Paint
 from src.orchestrator.fleetview import render_fleet_tree
 
 T0 = datetime(2026, 7, 7, 12, 0, tzinfo=UTC)
 T1 = datetime(2026, 7, 7, 13, 0, tzinfo=UTC)
+T2 = datetime(2026, 7, 7, 14, 0, tzinfo=UTC)
 
 
 def _n(model: str | None = "claude-fable-5", project: str | None = "osiris",
        parent: str | None = None, live: bool = False, ts: datetime | None = None,
-       retired: bool = False, seat: str | None = None) -> dict:
-    return {"model": model, "project": project, "parent": parent, "live": live, "ts": ts,
+       retired: bool = False, seat: str | None = None, **extra: Any) -> dict:
+    node = {"model": model, "project": project, "parent": parent, "live": live, "ts": ts,
             "retired": retired, "seat": seat}
+    node.update(extra)
+    return node
 
 
 def test_groups_by_project_and_collapses_the_past() -> None:
@@ -204,3 +209,104 @@ def test_the_binding_renders_anchored_beside_the_claimed_name() -> None:
     assert "agent:b0nd0001 (Thoth XXXVIII ⚓seat:ab12cd34)" in tree
     assert "agent:b0nd0002 (⚓seat:ffee0011)" in tree
     assert "agent:b0nd0003 " in tree and "agent:b0nd0003 (" not in tree
+
+
+# --- ruling f6b758fc: grouped by the GRAPH project, ordered live-first-then-activity, ----
+# color through cli_render.Paint. ----------------------------------------------------------
+
+def test_resolved_project_groups_by_the_graph_project_not_the_raw_label() -> None:
+    """Requirement 1: a session launched from a junk directory ('prototype') still groups
+    under the REAL graph project once something resolved it there — the raw `project` label
+    never wins once a caller supplies `resolved_project`."""
+    nodes = {
+        "agent:a": _n(project="prototype", resolved_project="osiris", live=True, ts=T1),
+        "agent:b": _n(project="osiris", resolved_project="osiris", ts=T0),
+    }
+    tree = render_fleet_tree(nodes)
+    assert "▸ osiris — 1 live · 2 sessions" in tree
+    assert "prototype" not in tree
+
+
+def test_a_question_mark_session_resolves_through_the_pin_before_unfiled() -> None:
+    """A `?` session (no raw label AT ALL) must resolve through the SAME `resolved_project`
+    a labelled session does — never special-cased straight into unfiled."""
+    nodes = {
+        "agent:q": _n(project=None, resolved_project="pinnedproj", live=True, ts=T1),
+    }
+    tree = render_fleet_tree(nodes)
+    assert "▸ pinnedproj — 1 live · 1 sessions" in tree
+    assert "unfiled" not in tree
+
+
+def test_junk_labels_that_never_resolve_collapse_into_one_unfiled_line() -> None:
+    """Requirement 1: sessions resolving to NOTHING active collapse into one trailing
+    'unfiled: N sessions in M dirs' line — never their own per-label sections, never
+    silently dropped. M counts DISTINCT raw labels/cwds, not raw session count."""
+    nodes = {
+        "agent:j1": _n(project="nonexistent-probe", resolved_project=None, ts=T0),
+        "agent:j2": _n(project="tmp", resolved_project=None, ts=T1),
+        "agent:j3": _n(project="tmp", resolved_project=None, ts=T0),  # same dir as j2
+        "agent:live": _n(project="osiris", resolved_project="osiris", live=True, ts=T2),
+    }
+    tree = render_fleet_tree(nodes)
+    lines = tree.splitlines()
+    assert lines[-1] == "▸ unfiled: 3 sessions in 2 dirs"
+    assert "nonexistent-probe" not in tree
+    assert "▸ osiris — 1 live · 1 sessions" in tree
+
+
+def test_full_mode_expands_unfiled_into_its_own_raw_label_sections() -> None:
+    """'expanded only under --full': the SAME junk fixture, but full=True gets its old,
+    pre-ruling per-raw-label sections back instead of the one trailing summary line."""
+    nodes = {
+        "agent:j1": _n(project="nonexistent-probe", resolved_project=None, ts=T0),
+        "agent:j2": _n(project="tmp", resolved_project=None, ts=T1),
+    }
+    tree = render_fleet_tree(nodes, full=True)
+    assert "unfiled:" not in tree
+    assert any(line.startswith("▸ nonexistent-probe") for line in tree.splitlines())
+    assert any(line.startswith("▸ tmp") for line in tree.splitlines())
+
+
+def test_a_worktree_session_resolves_through_its_parent_project() -> None:
+    """A session launched from a Worktree resolves to its PARENT project's own name — proven
+    at the fleetview layer by whatever `resolved_project` the async resolver (agents.py's
+    `resolve_fleet_projects`, tested separately against a real worktree on disk) computed;
+    this only proves the render groups on it, not the raw worktree-basename label."""
+    nodes = {
+        "agent:wt": _n(project="khnum-fleet-render-by-project", resolved_project="osiris",
+                       live=True, ts=T1),
+    }
+    tree = render_fleet_tree(nodes)
+    assert "▸ osiris — 1 live · 1 sessions" in tree
+    assert "khnum-fleet-render-by-project" not in tree
+
+
+def test_ordering_is_live_first_then_freshest_never_alphabetical() -> None:
+    """Requirement 2: 'zzz-quiet' alphabetically precedes 'aaa-live', but a project with a
+    live body must render FIRST regardless — and among two quiet projects, the one with
+    fresher activity comes before the staler one."""
+    nodes = {
+        "agent:live": _n(project="zzz-quiet", resolved_project="zzz-quiet",
+                         live=True, ts=T0),
+        "agent:fresh": _n(project="aaa-live", resolved_project="aaa-fresher", ts=T2),
+        "agent:stale": _n(project="bbb-live", resolved_project="bbb-staler", ts=T0),
+    }
+    tree = render_fleet_tree(nodes)
+    order = [line.split(" ")[1] for line in tree.splitlines() if line.startswith("▸ ")]
+    assert order == ["zzz-quiet", "aaa-fresher", "bbb-staler"]
+
+
+def test_color_paints_project_names_and_live_marks_only_when_enabled() -> None:
+    """Requirement 3: an enabled Paint puts ANSI codes in the tree; a disabled one (and the
+    `paint=None` default fleet() itself uses) renders byte-identical plain text."""
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    plain = render_fleet_tree(nodes)
+    disabled = render_fleet_tree(nodes, paint=Paint(enabled=False))
+    colored = render_fleet_tree(nodes, paint=Paint(enabled=True))
+    assert plain == disabled
+    assert "\x1b" not in plain
+    assert "\x1b" in colored
+    # the live mark is painted green (32) and the project name bold (1)
+    assert "\x1b[32m●\x1b[0m" in colored
+    assert "\x1b[1mosiris\x1b[0m" in colored
