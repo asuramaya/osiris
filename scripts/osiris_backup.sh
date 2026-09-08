@@ -28,8 +28,8 @@ mkdir -p "$DIR" "$VAULT"
 # days runway at 44GB/day), caught by a human noticing rather than by any check in this
 # house. A refusal alarms the desk and skips ONLY this dump; it never prunes anything
 # itself (that stays osiris_prune_ladder.py's job, always dry-run until the operator's own
-# word) and never blocks the rest of this script's other duties (bundle/vault
-# mirror/transcript archive/WAL pull all still run below).
+# word) and never blocks the rest of this script's other duties (bundle/vault mirror/WAL
+# pull all still run below).
 if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$DIR"; then
   "$REPO/.venv/bin/python" "$REPO/scripts/osiris_alarm.py" --from backup \
     "DISK GUARD: refusing to write a new full pg_dump into $DIR — not enough free space for " \
@@ -52,57 +52,20 @@ git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
 rsync -a "$DIR"/osiris-*.dump "$VAULT/" 2>/dev/null || cp -n "$DIR"/osiris-*.dump "$VAULT/" || true
 ls -1t "$VAULT"/osiris-2*.dump 2>/dev/null | tail -n +57 | xargs -r rm --
 
-# THE TRANSCRIPT VAULT (Phase 0 triage, operator's word, 2026-07-21): the fleet's memory
-# lives on disk as transcripts before it's ever a graph row — ~/.claude/projects (every
-# Claude Code session) and each seat's .crush store (the Crush harness's own session db,
-# ~/.osiris/seats/<handle>/.crush/).
-#
-# INCREMENTAL, NEVER A FULL SNAPSHOT EVERY DAY (the vault lane, operator ruling
-# 39384a87/c53a5fc0, item 4, explicitly separate from item 2's "every kept DUMP is a
-# full" — a pg_dump is inherently a full graph snapshot by construction; this is not
-# that, and the operator's own words approved "incremental transcript archive" as its
-# own, different shape). GNU tar's `--listed-incremental` is the standard mechanism: the
-# snapshot file tracks every archived path's mtime/inode across every run within its own
-# CHAIN, so the chain's first day is a full baseline (level 0) and every day after
-# archives ONLY what changed — the same soul_lines/harness_turns bytes were being
-# re-tarred in FULL, unchanged, every single day before this (~/.claude/projects alone
-# dwarfing the DB dump itself).
-#
-# BOUNDED, WEEKLY CHAINS (Thoth msg 8211, off this same ruling): an UNBOUNDED single
-# chain forever is itself still unbounded growth, and RESTORE REQUIRES THE WHOLE CHAIN IN
-# ORDER (the level-0 base plus every incremental after it) — pruning any tarball out of
-# the middle of an open-ended chain silently breaks every later day's restorability. The
-# snapshot file and the tarball name are both keyed by ISO week (`%G-W%V`): a new week
-# has no snapshot file yet, so tar starts a fresh level-0 baseline automatically — no
-# extra logic needed beyond the naming. `osiris_prune_ladder.py`'s own
-# `plan_prune_transcript_chains` prunes whole weekly CHAINS at a time (never a tarball out
-# of the middle of one), keeping the last 4 weekly chains plus one per month — see that
-# module. The soul-store lane (queued behind this) retires this whole archive once its
-# own round-trip proof passes, so this shape only has to hold for weeks, not forever.
-#
-# TAR'S OWN CHANGED-FILE EXIT (31 daily tarballs stuck as `.tar.gz.new` since Aug 12):
-# exit 1 means "a file changed while being read" — normal and expected against LIVE
-# session files, not corruption; the archive tar actually wrote is still usable. Only
-# exit 2+ is a real failure. The old `&&`-chained rename silently dropped every exit-1
-# run's `.new` file forever, never once completing the atomic rename.
-WEEK="$(date +%G-W%V)"
-SNAPSHOT="$VAULT/.transcript-archive-$WEEK.snar"
-TRANSCRIPTS="$VAULT/claude-transcripts-$WEEK-$(date +%Y%m%d).tar.gz"
-tar_args=(-C "$HOME" .claude/projects)
-while IFS= read -r store; do
-  # -C "seats" "<handle>/.crush" (never a bare ".crush") — two seats' stores would
-  # otherwise collide on the SAME flattened archive path and overwrite each other
-  [ -n "$store" ] && tar_args+=(-C "$HOME/.osiris/seats" "$(basename "$(dirname "$store")")/.crush")
-done < <(find "$HOME/.osiris/seats" -maxdepth 2 -iname ".crush" -type d 2>/dev/null)
-tar_rc=0
-tar --listed-incremental="$SNAPSHOT" -czf "$TRANSCRIPTS.new" "${tar_args[@]}" 2>/dev/null || tar_rc=$?
-if [ "$tar_rc" -le 1 ]; then
-  mv "$TRANSCRIPTS.new" "$TRANSCRIPTS"
-else
-  # a real tar failure (2+) — actually LEAVE the .new file, never delete the one
-  # artifact that would let a human see what tar produced before it died
-  echo "osiris_backup: transcript archive failed (tar exit $tar_rc), leaving $TRANSCRIPTS.new for inspection" >&2
-fi
+# THE TRANSCRIPT VAULT IS RETIRED (thread 78efd46d item 3, operator ruling: "once (2)
+# [the round-trip proof] passes the transcript archive line leaves osiris_backup.sh; the
+# DB backups (WAL + the ladder) carry the histories"). This block used to tar
+# ~/.claude/projects + every seat's .crush store into weekly incremental chains — dead
+# weight now that the soul store (soul_lines) already holds every Claude Code session
+# byte-exact, INSIDE the pg_dump this same script already takes above, and the round-
+# trip proof (osiris_preflight.py --drill, weekly) keeps proving that's still true.
+# Already-existing tarball chains from before this retirement stay in the vault
+# untouched here — they thin over time under osiris_prune_ladder.py's own
+# plan_prune_transcript_chains (still live, still tested — pruning an ALREADY-CREATED
+# chain is a different concern from CREATING new ones, and this retirement only touches
+# the latter) once the operator's own word clears them via --apply. Crush's own .crush
+# stores lost their tar coverage here too, unrelated to soul_lines (piece 1's own scope
+# was claude-code only) — a real gap, tracked rather than silently reintroduced later.
 
 # WAL PULL (vault lane item 3): osiris_archive_wal.sh (deployed to
 # /var/lib/postgresql/data/osiris_archive_wal.sh, INSIDE the pgdata VOLUME so it survives
