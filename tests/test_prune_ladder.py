@@ -7,8 +7,10 @@ from datetime import UTC, datetime, timedelta
 from scripts.osiris_prune_ladder import (
     DumpFile,
     TranscriptChain,
+    WalSegment,
     plan_prune,
     plan_prune_transcript_chains,
+    plan_prune_wal,
 )
 
 NOW = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
@@ -256,3 +258,68 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     assert "vault/basebackups" in out
     assert "osiris-basebackup-20240108-000000.tar.gz" in out  # the elder, listed to remove
     assert "osiris-basebackup-20240115-000000.tar.gz" not in out  # the survivor, not listed
+
+
+# --- thread 9fac4e0d part 2: WAL retention -----------------------------------------------
+
+def _w(path: str, hours_ago: float) -> WalSegment:
+    return WalSegment(path, NOW - timedelta(hours=hours_ago))
+
+
+def test_wal_segments_older_than_the_oldest_kept_backup_are_removed() -> None:
+    old = _w("old", hours_ago=100)
+    kept = _w("kept", hours_ago=10)
+    plan = plan_prune_wal([old, kept], oldest_kept_backup_when=NOW - timedelta(hours=50))
+    assert plan["keep"] == [kept]
+    assert plan["remove"] == [old]
+
+
+def test_a_segment_exactly_at_the_anchor_is_kept_not_removed() -> None:
+    """>= the anchor, not only strictly after it — the base backup's own moment is
+    still needed for a restore starting exactly there."""
+    anchor = NOW - timedelta(hours=50)
+    at_anchor = _w("at_anchor", hours_ago=50)
+    plan = plan_prune_wal([at_anchor], oldest_kept_backup_when=anchor)
+    assert plan["keep"] == [at_anchor]
+    assert plan["remove"] == []
+
+
+def test_no_kept_backup_at_all_keeps_every_segment() -> None:
+    """Nothing to anchor a retention point to — refusing to guess is safer than
+    deleting WAL that might still be needed for the very next backup taken."""
+    segs = [_w("a", 100), _w("b", 5)]
+    plan = plan_prune_wal(segs, oldest_kept_backup_when=None)
+    assert plan["keep"] == segs
+    assert plan["remove"] == []
+
+
+def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa: ANN001
+    from scripts.osiris_prune_ladder import main
+
+    backups = tmp_path / "backups"
+    vault = tmp_path / "vault"
+    basebackups = vault / "basebackups"
+    wal_dir = vault / "wal_archive"
+    backups.mkdir()
+    vault.mkdir()
+    basebackups.mkdir()
+    wal_dir.mkdir()
+    # one recent base backup — its own timestamp becomes the WAL retention anchor
+    (basebackups / "osiris-basebackup-20260908-000000.tar.gz").write_bytes(b"x" * 10)
+    # a WAL segment older than the backup: removable
+    old_seg = wal_dir / "000000010000000000000001"
+    old_seg.write_bytes(b"x" * 10)
+    import os
+    import time
+    old_time = time.time() - 90 * 86400
+    os.utime(old_seg, (old_time, old_time))
+    # a WAL segment newer than the backup: kept
+    (wal_dir / "000000010000000000000002").write_bytes(b"x" * 10)
+
+    rc = main(["--backups", str(backups), "--vault", str(vault)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "vault/wal_archive" in out
+    assert "000000010000000000000001" in out
+    assert "000000010000000000000002" not in out
