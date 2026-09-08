@@ -375,13 +375,22 @@ def drill_pitr() -> str | None:
 
 
 async def brief_operator(fails: list[str]) -> None:
-    """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe)."""
-    import asyncpg
+    """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe).
+
+    Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool` (thread 8542ee89): the
+    former registers the jsonb codec (`json.dumps`/`json.loads`) every graph write through
+    `Actions.assert_property` depends on — without it, `ensure_type`'s own `kind="object"`
+    property assertion (the FIRST jsonb write `create_or_find_object` makes, upstream of
+    the message's own summary/grade/status) hits Postgres as the raw unquoted text
+    `object`, which fails as invalid JSON before ever reaching the actual message content.
+    A bare pool worked for the plain relational INSERT into `fleet_messages` and only broke
+    the graph-edge half — the exact "relational row already committed, graph edge write
+    failed" split this house's own send_message already confesses rather than swallows."""
+    from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
-    pool = await asyncpg.create_pool(
-        DSN, min_size=1, max_size=1,
-        server_settings={"application_name": "osiris-script:preflight-brief"})
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1, application_name="osiris-script:preflight-brief")
     try:
         body = ("PREFLIGHT REGRESSION — the survival matrix has holes:\n- "
                 + "\n- ".join(fails)

@@ -17,12 +17,17 @@ DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 
 
 async def send_alarm(body: str, *, from_agent: str) -> None:
-    import asyncpg
+    """Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool` (thread 8542ee89):
+    the former registers the jsonb codec every graph write through
+    `Actions.assert_property` depends on, which send_message's own graph-edge half
+    needs — a bare pool silently degrades every alarm this function sends to
+    'relational row committed, graph edge write failed', found live via
+    osiris_preflight.py's own --drill run."""
+    from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
-    pool = await asyncpg.create_pool(
-        DSN, min_size=1, max_size=1,
-        server_settings={"application_name": f"osiris-script:{from_agent}"})
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1, application_name=f"osiris-script:{from_agent}")
     try:
         await send_message(pool, from_agent=f"system:{from_agent}", from_project="osiris",
                            to_project="operator", body=body)
