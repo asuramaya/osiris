@@ -314,6 +314,124 @@ def locate_managed_section(text: str) -> tuple[int, int, int, int, str]:
     return b.start(), b.end(), e.start(), e.end(), b.group(1)
 
 
+# ═══════════ THE IDENTITY MIGRATION (task #141, Thoth's ruling on thread bee66b3f) ═══════════
+# THE BUG: for a TREE-BOUND seat (`tree_cwd` set and distinct from `anchor_cwd`), the
+# harness reads CLAUDE.md from the LAUNCH cwd — the tree, never the office — so the
+# office's own hand-written CLAUDE.md (everything above the compiled markers: the
+# founding "who you are" narrative) is never read by that seat's live sessions.
+# handshake.py's `identity_anchor` already points every boot at `charter_file`
+# (charter.md when it exists, else CLAUDE.md) — a POINTER only, by deliberate design
+# (74fad683's injection-ledger law). Since charter.md already exists for every tree-
+# bound seat (offices.py's `_CHARTER_TEMPLATE`, scaffolded at mint time), that pointer
+# already resolves — but charter.md never carried the founding identity prose, only the
+# live-state scratchpad. This is the other half: MOVE the hand-written span (not copy —
+# CLAUDE.md keeps a pointer note, never a stale duplicate) into charter.md, so the thing
+# `identity_anchor` already points at actually carries the identity.
+_IDENTITY_MIGRATION_MARKER = "<!-- osiris:identity-migrated:v1 -->"
+_IDENTITY_MIGRATION_HEADER = "## Identity (migrated from CLAUDE.md, task #141)"
+_IDENTITY_POINTER_NOTE = (
+    "Your identity content has moved to charter.md (task #141) — read it there; this "
+    "file's own compiled section below still governs role/gates/practices.\n")
+
+
+async def migrate_identity_to_charter(
+    actions: Actions, *, seat_id: str, because: str, actor: str, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Move a tree-bound seat's hand-written CLAUDE.md span (everything above the
+    compiled markers — `locate_managed_section`'s own boundary, never a second
+    hand-rolled regex) into charter.md, PREPENDED above whatever charter.md already
+    holds, wrapped with `_IDENTITY_MIGRATION_MARKER` for idempotency. CLAUDE.md's
+    hand-written span is then REPLACED (never left duplicated, never deleted silently)
+    with a short pointer note; the compiled section below is untouched by this call.
+
+    A TRUE NO-OP for anything that isn't the exact bug this fixes: a seat whose
+    `tree_cwd` is unset or equals `anchor_cwd` (not tree-bound — CLAUDE.md is read
+    directly, nothing is stranded), a seat with no compiled managed section yet
+    (nothing this call's boundary can trust — some OTHER path, adopt, handles that), a
+    hand-written span that's empty/whitespace-only (nothing worth moving), or a seat
+    already carrying the idempotency marker in charter.md — every one of these returns
+    `migrated: False` with a `reason`, never an `error` (they are not failures, they are
+    "there was nothing to do").
+
+    `dry_run=True` computes and returns the exact same preview (`prepended_to_charter`,
+    `claude_md_pointer`) WITHOUT writing to disk or the graph — required before this
+    ever runs against a real seat's live office files (task #141's own safety
+    condition)."""
+    if not because.strip():
+        return {"error": "because is required — a migration is testimony, same as a "
+                         "reissue"}
+    from src.orchestrator.seats import seat_facts
+
+    row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if row is None:
+        return {"error": f"no such seat: {seat_id!r}"}
+    facts = await seat_facts(actions.pool, seat_id)
+    handle = facts.get("handle")
+    anchor = facts.get("anchor_cwd")
+    tree = facts.get("tree_cwd")
+    if not handle or not anchor:
+        return {"error": f"{seat_id!r} has no handle or no office on record — "
+                         "migration only ever moves content out of an EXISTING office"}
+
+    tree_bound = bool(tree) and tree != anchor
+    if not tree_bound:
+        return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
+                "reason": "not tree-bound (tree_cwd unset or equal to anchor_cwd) — "
+                          "CLAUDE.md is already read directly, nothing to migrate"}
+
+    office = Path(anchor)
+    orders_path = office / "CLAUDE.md"
+    charter_path = office / "charter.md"
+    if not orders_path.exists():
+        return {"error": f"{handle} ({seat_id}) has no CLAUDE.md on disk at "
+                         f"{orders_path}", "migrated": False}
+    text = orders_path.read_text()
+    try:
+        b_start, _b_end, _e_start, e_end, _version = locate_managed_section(text)
+    except MarkerError:
+        return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
+                "reason": "no compiled managed section yet — nothing to migrate from "
+                          "(adopt=True first, some other path)"}
+
+    hand_written = text[:b_start]
+    if not hand_written.strip():
+        return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
+                "reason": "hand-written span is empty/whitespace-only — nothing worth "
+                          "migrating"}
+
+    charter_text = charter_path.read_text() if charter_path.exists() else ""
+    if _IDENTITY_MIGRATION_MARKER in charter_text:
+        return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
+                "reason": "already migrated — idempotency marker already present in "
+                          "charter.md"}
+
+    migrated_block = (f"{_IDENTITY_MIGRATION_MARKER}\n"
+                      f"{_IDENTITY_MIGRATION_HEADER}\n\n"
+                      f"{hand_written.strip()}\n\n")
+    new_charter_text = migrated_block + charter_text
+    new_orders_text = _IDENTITY_POINTER_NOTE + "\n" + text[b_start:]
+
+    result = {"seat": seat_id, "handle": handle, "migrated": True, "dry_run": dry_run,
+              "because": because, "charter_path": str(charter_path),
+              "orders_path": str(orders_path),
+              "prepended_to_charter": migrated_block,
+              "claude_md_pointer": _IDENTITY_POINTER_NOTE,
+              "note": ("would migrate identity content to charter.md (dry run — "
+                       "nothing written)" if dry_run else
+                       "identity content migrated to charter.md")}
+    if dry_run:
+        return result
+
+    charter_path.write_text(new_charter_text)
+    orders_path.write_text(new_orders_text)
+    await actions.assert_property(row["id"], "identity_migrated_to_charter",
+                                  _IDENTITY_MIGRATION_MARKER, actor, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return result
+
+
 async def reissue_office(
     actions: Actions, *, seat_id: str, because: str, actor: str, adopt: bool = False,
 ) -> dict[str, Any]:
@@ -384,6 +502,16 @@ async def reissue_office(
                          f"{orders_path} — establish_office/mint_seat scaffolds the "
                          "first one; reissue only recompiles an existing managed "
                          "section"}
+
+    # THE IDENTITY MIGRATION RIDES ALONG (task #141): fired here, BEFORE the compiled-
+    # section text is read below, so a migration that fires (tree-bound, unmigrated,
+    # real hand-written content) is picked up by the rest of THIS SAME call rather than
+    # needing a second reissue — its own write only ever touches the span ABOVE the
+    # compiled markers, so it can never race or conflict with the compiled-section
+    # rewrite that follows. A true no-op (non-tree-bound, already migrated, nothing to
+    # move) writes nothing and changes nothing about what follows.
+    identity_migration = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because=because, actor=actor, dry_run=False)
     text = orders_path.read_text()
 
     if adopt and _has_any_markers(text):
@@ -461,7 +589,8 @@ async def reissue_office(
     if new_text == text:
         return {"seat": seat_id, "handle": handle, "version": version,
                 "because": because, "changed": False,
-                "note": "no change — the compiled section already matches"}
+                "note": "no change — the compiled section already matches",
+                "identity_migration": identity_migration}
     orders_path.write_text(new_text)
     # TESTIMONY, DURABLE (a reissue is testimony, per this verb's own docstring): the
     # version + why land on the Seat object itself, not just in this call's receipt —
@@ -471,7 +600,8 @@ async def reissue_office(
     return {"seat": seat_id, "handle": handle, "version": version, "because": because,
             "changed": True,
             "note": "managed section added (adopt)" if adopt else
-                    "managed section recompiled"}
+                    "managed section recompiled",
+            "identity_migration": identity_migration}
 
 
 # ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) ═══════════
