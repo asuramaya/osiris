@@ -92,7 +92,21 @@ def run_drill(
 ) -> str | None:
     """Returns a failure string, or None on success. Cleans up the drill container and
     its scratch dirs in every case (`finally`), same discipline as
-    osiris_preflight.py's own `drill()`."""
+    osiris_preflight.py's own `drill()`.
+
+    NEVER THE LIVE CLUSTER (thread 9fac4e0d part 4, codified after the exact live
+    incident that named this obligation: an operator/agent's own manual pg_basebackup
+    restore into a DIFFERENTLY-NAMED database ("osiris_drill") on the SAME live
+    cluster still generated real WAL against production, backlogging the archiver —
+    a drill's own point is to generate ZERO WAL against the thing being drilled).
+    `drill_name` defaults to a name that is never `container`, but a caller COULD
+    override it to collide — this refuses outright rather than trusting the default
+    stays unbroken forever: `docker rm -f -v` on the live container name would be
+    catastrophic, not just a WAL-backlog nuisance."""
+    if drill_name == container:
+        return (f"REFUSING: drill_name {drill_name!r} equals the source container "
+                f"{container!r} — a drill must restore into its own separate scratch "
+                "container, never the one being drilled")
     scratch = scratch or Path(f"/var/tmp/osiris-scratch/pitr-drill-{int(time.time())}")
     pgdata = scratch / "pgdata"
     wal_dir = scratch / "wal"

@@ -5,7 +5,29 @@ by an actual run against real production data (base backup osiris-basebackup-202
 osiris_archive_wal.sh's own WAL-writing half was verified with."""
 from __future__ import annotations
 
-from scripts.osiris_pitr_drill import postgresql_auto_conf_pitr
+from pathlib import Path
+
+from scripts.osiris_pitr_drill import CONTAINER, DRILL_NAME, postgresql_auto_conf_pitr, run_drill
+
+# --- thread 9fac4e0d part 4: never the live cluster ---------------------------------
+
+def test_run_drill_refuses_when_drill_name_equals_the_source_container() -> None:
+    """The exact live incident this obligation was named for: a drill target that
+    collides with the container being drilled generates real WAL against the thing
+    it's supposed to leave untouched — this must refuse outright, before touching
+    docker at all."""
+    fail = run_drill(
+        Path("/nonexistent.tar.gz"), None, "message:1",
+        drill_name=CONTAINER)
+    assert fail is not None
+    assert "REFUSING" in fail
+    assert CONTAINER in fail
+
+
+def test_run_drill_default_drill_name_never_equals_the_default_container() -> None:
+    """The DEFAULT shape (no caller override) must already be safe — a regression
+    guard on the two module constants themselves, not just the runtime check."""
+    assert DRILL_NAME != CONTAINER
 
 
 def test_no_target_time_sets_no_recovery_target() -> None:
