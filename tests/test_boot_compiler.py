@@ -474,6 +474,50 @@ async def test_reissue_adopt_self_heals_an_already_duplicated_office(
     assert after.count("# DupOfficeSeat — seat office") == 1
 
 
+async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The REAL live shape (thread 49169c2f, Thoth's ruling msg 8113), not a simplified
+    stand-in: well-formed markers ALREADY exist (from a historical adopt, back when
+    adopt still blindly appended), and a duplicate hand-written header sits BEFORE
+    them, case-mismatched from the compiled one below it ("# Nebbercracker" vs
+    "# nebbercracker"). This is exactly why the header match must be case-insensitive
+    AND why adopt must be allowed to proceed even though markers already exist —
+    provided the duplicate it finds sits strictly before the marker span."""
+    worker = await ensure_seat(actions, house="realshapehouse", handle="nebtestseat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "realshape" / "nebtestseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    live_shape = (
+        "# Nebtestseat — seat office\n\n"
+        "This is your OFFICE, not a code repo.\n\n"
+        "## Who you are\n"
+        "- Seat: **Nebtestseat**, house **realshapehouse** — not yet seated.\n\n"
+        "<!-- osiris:compiled:begin v=fca376fa250e -->\n"
+        "# nebtestseat — seat office\n\n"
+        "This is your OFFICE, not a code repo.\n\n"
+        "## Who you are\n"
+        "- Seat: **nebtestseat**, house **realshapehouse** — durable identity "
+        f"`{seat_id}`.\n\n"
+        "## Your charter\n"
+        "Your charter was never formally declared.\n"
+        "<!-- osiris:compiled:end -->\n")
+    (office / "CLAUDE.md").write_text(live_shape)
+
+    out = await reissue_office(actions, seat_id=seat_id, because="self-heal, real shape",
+                               actor="agent:test", adopt=True)
+
+    assert out["changed"] is True
+    after = (office / "CLAUDE.md").read_text()
+    assert after.lower().count("# nebtestseat — seat office") == 1
+    assert after.count("<!-- osiris:compiled:begin") == 1
+    assert after.count("<!-- osiris:compiled:end") == 1
+
+
 async def test_reissue_adopt_still_appends_when_no_office_shaped_header_exists(
     actions: Actions, tmp_path: Path,
 ) -> None:
