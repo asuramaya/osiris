@@ -75,7 +75,16 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
     """One line per seat, grouped by house (a blank line between houses), an occupancy
     glyph (thread 68f1bafa's own ask: "roster (house-scoped)") -- ● occupied, ○ cold
     (held, nobody live this instant -- NOT vacant), · vacant (never held). No cap: a
-    fleet's seat count is bounded by the fleet itself, not an open-ended query."""
+    fleet's seat count is bounded by the fleet itself, not an open-ended query.
+
+    `manager` (operator ruling, thread d575e68c) prints as a trailing `-> <handle>` suffix
+    rather than restructuring this house-grouped flat list into a tree indented under each
+    manager's own line: this render is already a flat sorted-by-handle list within a house
+    block, and a manager can sit in a DIFFERENT house than its worker (a coordinator
+    governing across houses is the normal `governed` shape roster() itself documents), so
+    grouping by manager would either fight the existing house grouping or require a second
+    axis of nesting for a field that's usually absent. A suffix costs one line-format branch
+    and is silent (no extra line, no restructuring) when the seat is unmanaged."""
     if not rows:
         return "roster: no active seats"
     by_house: dict[str, list[dict[str, Any]]] = {}
@@ -89,7 +98,8 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
             holder = f" ({r['holder']})" if r.get("holder") else ""
             governs = ", ".join(r.get("chartered_repos") or [])
             tail = f" — governs: {governs}" if governs else ""
-            lines.append(f"  {glyph} {r['handle']}{holder}{tail}")
+            manager = f" -> {r['manager']}" if r.get("manager") else ""
+            lines.append(f"  {glyph} {r['handle']}{holder}{tail}{manager}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 

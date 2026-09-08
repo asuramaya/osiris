@@ -1896,6 +1896,28 @@ async def test_roster_live_cwd_only_populated_when_occupied(actions: Actions) ->
     assert rows[occupied["seat_id"]]["live_cwd"] == "/actual/live/cwd"
 
 
+async def test_roster_reports_the_manager_handle_and_none_when_unmanaged(
+    actions: Actions,
+) -> None:
+    """Operator ruling, thread d575e68c: roster's per-seat row must be able to confirm
+    a promotion (`seat(action='promote')` mints the `managed_by` edge) by itself — a row's
+    `manager` names the manager's own handle, resolved via `manager_of_seat`, or `None`
+    when the seat is unmanaged."""
+    from src.orchestrator.seats import roster
+
+    manager = await ensure_seat(actions, house="osiris", handle="Rmgr1", source="test")
+    worker = await ensure_seat(actions, house="osiris", handle="Rmgr1w", source="test")
+    unmanaged = await ensure_seat(actions, house="osiris", handle="Rmgr1u", source="test")
+    manager_oid = await actions.create_or_find_object("Seat", manager["seat_id"], "test")
+    worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
+    await actions.create_link(worker_oid, manager_oid, "managed_by", "test",
+                              datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    rows = {r["seat"]: r for r in (await roster(actions.pool))["seats"]}
+    assert rows[worker["seat_id"]]["manager"] == "Rmgr1"
+    assert rows[unmanaged["seat_id"]]["manager"] is None
+
+
 async def test_roster_repo_lookup_single_match_via_charter(actions: Actions) -> None:
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
