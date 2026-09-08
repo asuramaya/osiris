@@ -51,13 +51,18 @@ async def local_chrome_walk() -> dict[str, str]:
 
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe),
-    same pattern as scripts/osiris_preflight.py's own brief_operator."""
-    import asyncpg
+    same pattern as scripts/osiris_preflight.py's own brief_operator.
+
+    Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool` (thread 8542ee89) — see
+    osiris_preflight.py's own brief_operator for the full explanation: without the jsonb
+    codec that module registers, the graph-edge half of every send_message call fails
+    (ensure_type's own kind="object" property assertion, the first jsonb write, hits
+    Postgres as unquoted text)."""
+    from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
-    pool = await asyncpg.create_pool(
-        DSN, min_size=1, max_size=1,
-        server_settings={"application_name": "osiris-script:smoke"})
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1, application_name="osiris-script:smoke")
     try:
         body = ("SMOKE REGRESSION — a surface failed a live post-deploy check:\n- "
                 + "\n- ".join(fails)
