@@ -43,6 +43,7 @@ from src.cli import (
     cmd_fold_project,
     cmd_heal_seat_anchor,
     cmd_heal_seat_transcript,
+    cmd_inbox,
     cmd_launch,
     cmd_merge,
     cmd_migrate,
@@ -59,6 +60,7 @@ from src.cli import (
     cmd_send,
     cmd_show,
     cmd_smoke_chaos,
+    cmd_status,
     cmd_team,
     cmd_thread,
     cmd_threads,
@@ -515,6 +517,60 @@ async def test_cmd_roster_human_mode_paints_the_servers_text(
     assert await cmd_roster(repo=None, as_json=False) == 0
     assert calls == [("roster", {"repo": None, "want_caveats": False, "render": "text"})]
     assert "Thoth" in capsys.readouterr().out
+
+
+async def test_cmd_status_human_mode_asks_the_server_for_render_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "you: agent:abc\nmail: 3 unread"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_status(as_json=False) == 0
+    assert calls == [("get_status", {"render": "text"})]
+    assert "mail: 3 unread" in capsys.readouterr().out
+
+
+async def test_cmd_status_json_mode_never_asks_for_render_text(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"you": "agent:abc"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_status(as_json=True) == 0
+    assert calls == [("get_status", {})]  # no render= at all
+
+
+async def test_cmd_inbox_human_mode_asks_the_server_for_render_text(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "5 unread\nThoth: dispatch wave 11"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_inbox(project="osiris", as_json=False) == 0
+    assert calls == [("inbox", {"project": "osiris", "peek": True, "render": "text"})]
+    assert "dispatch wave 11" in capsys.readouterr().out
+
+
+async def test_cmd_inbox_json_mode_never_asks_for_render_text(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"messages": []}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_inbox(project="osiris", as_json=True) == 0
+    assert calls == [("inbox", {"project": "osiris", "peek": True})]  # no render= at all
 
 
 async def test_cmd_team_no_seat_human_mode_paints_the_servers_text(
