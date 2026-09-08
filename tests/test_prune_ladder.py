@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from scripts.osiris_prune_ladder import DumpFile, plan_prune
+from scripts.osiris_prune_ladder import (
+    DumpFile,
+    TranscriptChain,
+    plan_prune,
+    plan_prune_transcript_chains,
+)
 
 NOW = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
 
@@ -149,3 +154,69 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     assert not elder.exists(), "the planned removal must actually be gone under --apply"
     assert younger.exists(), "the surviving bucket member must never be touched"
     assert fresh.exists(), "a hot-window survivor must never be touched"
+
+
+# ── transcript CHAIN pruning (Thoth msg 8211): whole weekly chains, never a tarball out
+# of the middle of one ─────────────────────────────────────────────────────────────────
+
+def _chain(week_key: str, week_start: datetime, n_files: int = 3) -> TranscriptChain:
+    return TranscriptChain(week_key, week_start,
+                           [f"{week_key}-{i}.tar.gz" for i in range(n_files)])
+
+
+def test_the_four_most_recent_chains_survive_whole() -> None:
+    chains = [_chain(f"2026-W{30 + i:02d}", datetime(2026, 7, 20, tzinfo=UTC) + timedelta(weeks=i))
+             for i in range(6)]  # W30..W35, oldest first
+    plan = plan_prune_transcript_chains(chains, keep_recent=4)
+    kept_keys = {c.week_key for c in plan["keep"]}
+    # the 4 NEWEST (W32-W35) survive whole regardless of month bucketing
+    assert {"2026-W32", "2026-W33", "2026-W34", "2026-W35"} <= kept_keys
+
+
+def test_older_chains_thin_to_one_per_calendar_month() -> None:
+    # two chains from the SAME month, both well outside the 4-most-recent window
+    older_a = _chain("2024-W02", datetime(2024, 1, 8, tzinfo=UTC))
+    older_b = _chain("2024-W03", datetime(2024, 1, 15, tzinfo=UTC))
+    recent = [_chain(f"2026-W{30 + i:02d}", datetime(2026, 7, 20, tzinfo=UTC) + timedelta(weeks=i))
+             for i in range(4)]
+    plan = plan_prune_transcript_chains([older_a, older_b, *recent], keep_recent=4)
+    kept_keys = {c.week_key for c in plan["keep"]}
+    assert "2024-W03" in kept_keys  # the newer of the same-month pair survives
+    assert "2024-W02" not in kept_keys
+
+
+def test_a_removed_chain_carries_every_one_of_its_own_files() -> None:
+    """The whole-chain guarantee: removing a chain must never leave a partial one —
+    every file that chain owns comes back in the removal, together. A LONE old chain
+    survives forever (the one-per-month rule) — two chains in the SAME month are needed
+    for the elder to actually be thinned."""
+    old_elder = _chain("2024-W02", datetime(2024, 1, 8, tzinfo=UTC), n_files=5)
+    old_younger = _chain("2024-W03", datetime(2024, 1, 15, tzinfo=UTC))
+    recent = [_chain(f"2026-W{30 + i:02d}", datetime(2026, 7, 20, tzinfo=UTC) + timedelta(weeks=i))
+             for i in range(4)]
+    plan = plan_prune_transcript_chains([old_elder, old_younger, *recent], keep_recent=4)
+    removed = next(c for c in plan["remove"] if c.week_key == "2024-W02")
+    assert set(removed.files) == set(old_elder.files)
+
+
+def test_cli_reports_transcript_chains_separately_from_dump_files(tmp_path, capsys) -> None:
+    from scripts.osiris_prune_ladder import main
+
+    backups = tmp_path / "backups"
+    vault = tmp_path / "vault"
+    backups.mkdir()
+    vault.mkdir()
+    # 6 weekly chains, all in the same ancient month (Jan 2024) — every one of them falls
+    # outside the keep_recent=4 window, so the whole set thins to just its own newest
+    # survivor, guaranteeing at least one REMOVE CHAIN line.
+    for i in range(6):
+        week = datetime(2024, 1, 1, tzinfo=UTC) + timedelta(weeks=i)
+        key = f"{week.isocalendar()[0]}-W{week.isocalendar()[1]:02d}"
+        (vault / f"claude-transcripts-{key}-{week.strftime('%Y%m%d')}.tar.gz").write_bytes(b"x")
+
+    rc = main(["--backups", str(backups), "--vault", str(vault)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "transcript chains" in out
+    assert "REMOVE CHAIN" in out

@@ -44,26 +44,32 @@ ls -1t "$VAULT"/osiris-2*.dump 2>/dev/null | tail -n +57 | xargs -r rm --
 # full" — a pg_dump is inherently a full graph snapshot by construction; this is not
 # that, and the operator's own words approved "incremental transcript archive" as its
 # own, different shape). GNU tar's `--listed-incremental` is the standard mechanism: the
-# snapshot file (never pruned by this script) tracks every archived path's mtime/inode
-# across every run, so day 1 is a full baseline (level 0) and every day after archives
-# ONLY what changed — the same soul_lines/harness_turns bytes were being re-tarred in
-# FULL, unchanged, every single day before this (~/.claude/projects alone dwarfing the DB
-# dump itself). RESTORE REQUIRES THE WHOLE CHAIN IN ORDER (the snapshot file's own
-# level-0 base plus every incremental after it) — this is why the retention ladder (the
-# vault lane's next item, 2) must NOT prune transcript tarballs the same "keep newest N"
-# way the DB dumps use: deleting an old incremental out of the middle of the chain
-# silently breaks every later day's restorability. Flagged here, not solved here — this
-# script does not prune transcript tarballs at all now (the old blind "keep 3" line
-# is GONE, not merely relaxed) until the ladder work gives this chain its own real
-# retention shape.
+# snapshot file tracks every archived path's mtime/inode across every run within its own
+# CHAIN, so the chain's first day is a full baseline (level 0) and every day after
+# archives ONLY what changed — the same soul_lines/harness_turns bytes were being
+# re-tarred in FULL, unchanged, every single day before this (~/.claude/projects alone
+# dwarfing the DB dump itself).
+#
+# BOUNDED, WEEKLY CHAINS (Thoth msg 8211, off this same ruling): an UNBOUNDED single
+# chain forever is itself still unbounded growth, and RESTORE REQUIRES THE WHOLE CHAIN IN
+# ORDER (the level-0 base plus every incremental after it) — pruning any tarball out of
+# the middle of an open-ended chain silently breaks every later day's restorability. The
+# snapshot file and the tarball name are both keyed by ISO week (`%G-W%V`): a new week
+# has no snapshot file yet, so tar starts a fresh level-0 baseline automatically — no
+# extra logic needed beyond the naming. `osiris_prune_ladder.py`'s own
+# `plan_prune_transcript_chains` prunes whole weekly CHAINS at a time (never a tarball out
+# of the middle of one), keeping the last 4 weekly chains plus one per month — see that
+# module. The soul-store lane (queued behind this) retires this whole archive once its
+# own round-trip proof passes, so this shape only has to hold for weeks, not forever.
 #
 # TAR'S OWN CHANGED-FILE EXIT (31 daily tarballs stuck as `.tar.gz.new` since Aug 12):
 # exit 1 means "a file changed while being read" — normal and expected against LIVE
 # session files, not corruption; the archive tar actually wrote is still usable. Only
 # exit 2+ is a real failure. The old `&&`-chained rename silently dropped every exit-1
 # run's `.new` file forever, never once completing the atomic rename.
-SNAPSHOT="$VAULT/.transcript-archive.snar"
-TRANSCRIPTS="$VAULT/claude-transcripts-$(date +%Y%m%d).tar.gz"
+WEEK="$(date +%G-W%V)"
+SNAPSHOT="$VAULT/.transcript-archive-$WEEK.snar"
+TRANSCRIPTS="$VAULT/claude-transcripts-$WEEK-$(date +%Y%m%d).tar.gz"
 tar_args=(-C "$HOME" .claude/projects)
 while IFS= read -r store; do
   # -C "seats" "<handle>/.crush" (never a bare ".crush") — two seats' stores would
