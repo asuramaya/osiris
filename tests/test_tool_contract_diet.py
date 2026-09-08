@@ -1385,7 +1385,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # (execute only) plus a one-line ACTION TABLE entry, mirroring fleet_reconcile's own
 # shape. A genuinely new mechanical-hygiene verb, no new tool, load-bearing growth per
 # this file's own escape valve. Measured exact (115,179), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 115458
+# 115,087 -> 115,855 (2026-09-08, Imhotep, wave 11, window-tag-gets-an-owner, decision
+# 26f4f825's corollary): `project(action='set_tag')` — a genuinely new PROJECT_INPUT_
+# SCHEMA branch (project/tag/because) plus its own ACTION TABLE line, closing the gap
+# that left the window's `[TAG]` prefix a pure re-derivation with no persisted override
+# and no way to stop fighting an operator's own hand-rename forever. No new tool, load-
+# bearing growth per this file's own escape valve. Measured exact (115,855), not
+# estimated.
+TOOL_CONTRACT_CEILING_CHARS = 116226
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

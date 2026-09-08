@@ -219,6 +219,67 @@ async def assert_project_property(
     return {"project": row["canonical"], "name": name, "value": value}
 
 
+# --- set_project_window_tag (window-tag-gets-an-owner, decision 26f4f825's corollary) -----
+
+_WINDOW_TAG_RE = re.compile(r"[A-Z]{1,4}")
+
+
+async def set_project_window_tag(
+    actions: Actions, *, project: str, tag: str, actor: str, because: str,
+) -> dict[str, Any]:
+    """THE PERSISTED OVERRIDE for the window's `[TAG]` prefix (trigger.py's `_house_tag`/
+    `_window_name`, ~line 2732 pre-this-task): today that prefix is a PURE DERIVATION — the
+    first two letters of `house`, else of the governed project, else nothing — recomputed
+    fresh at every launch/resume with no way to declare a different one. `set_tag` closes
+    that gap: an explicit code (e.g. "MH" for monsterhouse instead of the derived "MO")
+    that `_house_tag` now checks FIRST, before ever deriving.
+
+    Anchored on the SoftwareProject `project` resolves to, via `_resolve_project_ref` — the
+    same ambiguity-refusing resolver `assert_project_property`/`rename_project` already
+    share (there is no House object type; the project is the only thing an assertion can
+    hang off). Written as `_project_impl`'s own house discipline: a single-property write,
+    same shape as `assert_project_property`, but with a NAMED, non-bypassable shape check
+    that verb deliberately does not carry (assert_property accepts any value under any
+    name; a tag is not "any value" — it renders literally in front of the operator).
+
+    WRITTEN AS `window_tag`, NEVER `tag`: `tag` already names a totally different,
+    additive/multi-valued property on arbitrary objects (frontier.py's/dossier.py's
+    case-subject marking, stored as `{"tag": "subject"}`) — reusing that name here would
+    silently collide two unrelated meanings under one property name. `_house_tag` (trigger.
+    py) reads `window_tag` specifically, never the bare `tag` property, for exactly this
+    reason.
+
+    STRICT SHAPE, NEVER SILENTLY COERCED (refuse-don't-guess): 1-4 uppercase letters
+    (A-Z), exactly as given. "mh", "MHouse", "M-H", or a blank string all refuse by name
+    rather than being quietly lowercased/truncated/uppercased into something the caller
+    never asked for — the same discipline `_validate_repo_name` holds for a project name
+    shaped like a path."""
+    project = (project or "").strip()
+    tag = (tag or "").strip()
+    because = (because or "").strip()
+    if not project:
+        return {"error": "project is required"}
+    if not tag:
+        return {"error": "tag is required — asserting a blank tag is not a fact"}
+    if not because:
+        return {"error": "because is required — a tag assertion is testimony, the same "
+                         "discipline every other declared project property in this house "
+                         "holds"}
+    if not _WINDOW_TAG_RE.fullmatch(tag):
+        return {"error": f"{tag!r} is not a legal window tag — 1-4 uppercase letters "
+                         "(A-Z), exactly as given; set_tag refuses rather than silently "
+                         "truncating, lowercasing, or uppercasing it for you — pass the "
+                         "exact code you want rendered as `[TAG] handle`"}
+    row, err = await _resolve_project_ref(actions.pool, project, verb="set_project_window_tag")
+    if err:
+        return err
+    if row is None:
+        return {"error": f"no such SoftwareProject: {project!r}"}
+    await actions.assert_property(row["id"], "window_tag", tag, actor, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return {"project": row["canonical"], "window_tag": tag}
+
+
 # --- fold_project (task #102's LANE 2, Thoth's dispatch DM 2302/2310) --------------------
 
 async def _contradicting_properties(

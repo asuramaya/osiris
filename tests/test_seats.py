@@ -4003,7 +4003,52 @@ async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Act
 
     facts = await seat_facts(actions.pool, "seat:wt1worker")
     assert facts["house"] == "hector-vector"
-    assert _house_tag(facts["house"]) == "HE"  # not "OS" — the bug the operator caught live
+    assert await _house_tag(actions.pool, facts["house"]) == "HE"  # not "OS" — the bug the
+    # operator caught live
+
+
+async def test_explicit_window_tag_overrides_the_derived_default(actions: Actions) -> None:
+    """THE GAP window-tag-gets-an-owner CLOSES: a persisted `window_tag` assertion on the
+    SoftwareProject a house/project name resolves to (via `set_project_window_tag`) must
+    win over `_house_tag`'s own first-two-letters derivation — the operator's own declared
+    "MH" for monsterhouse, instead of the auto-derived "MO" (decision 26f4f825's own
+    specimen: [MH] Chowder vs the expected-by-derivation [MO] Chowder)."""
+    from src.orchestrator.projects import set_project_window_tag
+    from src.orchestrator.trigger import _house_tag, _window_name
+
+    await actions.create_or_find_object("SoftwareProject", "repo:monsterhouse", "test")
+    await actions.assert_property(
+        (await actions.create_or_find_object("SoftwareProject", "repo:monsterhouse", "test")),
+        "name", "monsterhouse", "test", datetime.now(UTC), 0.9)
+
+    # BEFORE any explicit tag: plain derivation, "MO"
+    assert await _house_tag(actions.pool, "monsterhouse") == "MO"
+
+    out = await set_project_window_tag(actions, project="monsterhouse", tag="MH",
+                                       because="operator's own code", actor="agent:test")
+    assert out["window_tag"] == "MH"
+
+    # AFTER: the explicit assertion wins, never the derived "MO"
+    assert await _house_tag(actions.pool, "monsterhouse") == "MH"
+    assert await _window_name(actions.pool, "monsterhouse", "Chowder") == "[MH] Chowder"
+
+
+async def test_no_explicit_tag_leaves_derivation_unchanged(actions: Actions) -> None:
+    """REGRESSION GUARD: a house/project with NO `window_tag` assertion at all renders
+    EXACTLY the pre-existing first-two-letters derivation — the persisted-override read
+    must never change behavior for the overwhelming majority of houses that never declare
+    one."""
+    from src.orchestrator.trigger import _house_tag, _window_name
+
+    await actions.create_or_find_object("SoftwareProject", "repo:untagged-house", "test")
+    await actions.assert_property(
+        (await actions.create_or_find_object("SoftwareProject", "repo:untagged-house",
+                                             "test")),
+        "name", "untagged-house", "test", datetime.now(UTC), 0.9)
+
+    assert await _house_tag(actions.pool, "untagged-house") == "UN"
+    assert (await _window_name(actions.pool, "untagged-house", "Ferryman")
+            == "[UN] Ferryman")
 
 
 # ═══ ATTENDANCE (thread 96f62338, replacing ruling d8a77f80's broken managed_by proxy) ═══
