@@ -4913,6 +4913,19 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                     n["project"] = label_map[n["project"]]
     except Exception:  # noqa: BLE001
         pass
+    # RESOLVE EACH SESSION'S REAL GRAPH PROJECT (operator ruling f6b758fc, requirement 1):
+    # writes `resolved_project` onto every node — an active SoftwareProject's own label, a
+    # Worktree's parent, project_of's own charter/lineage fallback, or None (unfiled) — the
+    # key fleetview.render_fleet_tree groups by. Best-effort, same fail-open law as every
+    # other probe in this function: a resolution failure leaves `resolved_project` unset on
+    # every node, and the render falls back to grouping on the raw label (today's behavior)
+    # rather than breaking fleet() outright.
+    try:
+        from src.orchestrator.agents import resolve_fleet_projects
+
+        await resolve_fleet_projects(pool, nodes)
+    except Exception:  # noqa: BLE001
+        pass
     # LAND ON COUNTS, WALK IN: the roster's history is 1000+ rows and never what you came for.
     # The flat rows are the LIVE ones (or everything, if you deliberately asked) — the counts
     # below are always over the whole fleet, so nothing here undercounts, it only under-SHOWS.
@@ -5116,10 +5129,18 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies, ghost_gap=ghost_gap),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
-             "parent": n["parent"], "live": n["live"],
+             "parent": n["parent"], "live": n["live"], "retired": n["retired"],
              "last_seen": n["ts"].isoformat() if n["ts"] else None,
              **({"seat": n["seat"]} if n["seat"] else {}),
-             **({"adoption": n["adoption"]} if n.get("adoption") else {})}
+             **({"bound": n["bound"]} if n.get("bound") else {}),
+             **({"adoption": n["adoption"]} if n.get("adoption") else {}),
+             # the CLI's own client-side render (requirement 3, ruling f6b758fc): only
+             # present when `resolve_fleet_projects` actually ran — same optional-key
+             # shape as seat/bound/adoption above, so a resolution failure upstream (fail-
+             # open, same law as every other probe) degrades this row exactly the way
+             # fleetview's own grouping degrades: fall back to the raw `project` label.
+             **({"resolved_project": n["resolved_project"]}
+                if "resolved_project" in n else {})}
             for c, n in shown.items()
         ],
         **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "

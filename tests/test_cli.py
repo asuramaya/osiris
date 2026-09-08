@@ -37,6 +37,7 @@ from src.cli import (
     cmd_decide,
     cmd_deploy,
     cmd_desk,
+    cmd_fleet,
     cmd_fleet_reconcile,
     cmd_fold_project,
     cmd_heal_seat_anchor,
@@ -264,6 +265,77 @@ async def test_cmd_show_exits_nonzero_when_recall_refuses(monkeypatch: Any) -> N
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _no_match)
     assert await cmd_show("nope") == 1
+
+
+# --- cmd_fleet (ruling f6b758fc): --json keeps the OLD wire contract (the caller's own
+# `full`); human mode always asks the server for full=True and re-renders CLIENT-SIDE from
+# `registered` — proven here by asserting the ARGUMENTS each mode actually sends, and that
+# the printed text is the fleetview render (project-grouped), never the server's own `tree`.
+
+async def test_cmd_fleet_json_mode_sends_the_callers_own_full_unchanged(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"tree": "▸ osiris — 0 live · 0 sessions", "registered": []}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_fleet(full=False, as_json=True) == 0
+    assert calls == [("fleet", {"full": False})]
+    import json as _json
+    assert _json.loads(capsys.readouterr().out) == {
+        "tree": "▸ osiris — 0 live · 0 sessions", "registered": []}
+
+
+async def test_cmd_fleet_human_mode_always_requests_full_regardless_of_the_flag(
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"tree": "SERVER OWN TEXT — never printed by human mode", "registered": []}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_fleet(full=False, as_json=False) == 0
+    assert calls == [("fleet", {"full": True})]
+
+
+async def test_cmd_fleet_human_mode_rebuilds_grouped_by_resolved_project(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """The point of the whole client-side path: the raw label ('prototype') is a section
+    the OLD server-text render would have shown; the CLI's own re-render groups by
+    `resolved_project` ('osiris') instead, and never prints the server's own `tree` field."""
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "tree": "▸ prototype — 1 live · 1 sessions",  # must NOT be what gets printed
+            "registered": [
+                {"agent": "agent:live1", "model": "claude-fable-5", "project": "prototype",
+                 "resolved_project": "osiris", "depth": 0, "parent": None, "live": True,
+                 "retired": False, "last_seen": "2026-07-07T13:00:00+00:00"},
+            ],
+        }
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    monkeypatch.setenv("NO_COLOR", "1")  # deterministic: no ANSI noise in the assertion
+    assert await cmd_fleet(full=False, as_json=False) == 0
+    out = capsys.readouterr().out
+    assert "▸ osiris — 1 live · 1 sessions" in out
+    assert "prototype" not in out
+
+
+async def test_cmd_fleet_reports_a_dark_daemon_honestly(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    async def _dark(url: str, name: str, arguments: dict[str, Any]) -> str:
+        return "error: connection refused"
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _dark)
+    assert await cmd_fleet(full=False, as_json=False) == 1
+    assert "osiris-mcp" in capsys.readouterr().err
 
 
 # --- cmd_seed: a real pool (never mocked), just injected instead of self-created ----------------

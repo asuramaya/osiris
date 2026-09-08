@@ -4040,6 +4040,13 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
 
+    # an ACTIVE SoftwareProject named "bytebye" so ruling f6b758fc's own resolve_fleet_
+    # projects resolves these two sessions (never unfiled) — this test is about claimed
+    # names, not project resolution, and the fixture's raw label must resolve for the
+    # default (non---full) tree to still expand them individually the way this test reads.
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
+    await actions.assert_property(proj, "name", "bytebye", "test", datetime.now(UTC), 0.9)
+
     named, anon = "agent:fleettest01", "agent:fleettest02"
     for a in (named, anon):
         obj = await actions.create_or_find_object("Agent", a, a)
@@ -4075,6 +4082,15 @@ async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> N
     the same cwd."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
+
+    # ACTIVE SoftwareProjects for both raw labels, so ruling f6b758fc's own
+    # resolve_fleet_projects resolves them (never unfiled) — this test is about the
+    # ghost_gap breakdown per project, not project resolution, and the fixture's raw
+    # labels must resolve for the default (non---full) tree to still show each project's
+    # own head line the way this test's `next(... startswith("▸ ghosttown"))` reads.
+    for label in ("ghosttown", "quietplace"):
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{label}", "test")
+        await actions.assert_property(proj, "name", label, "test", datetime.now(UTC), 0.9)
 
     # ghosttown/census0: LIVE, no real body at its cwd -> false_live.
     # ghosttown/census1: LIVE, a real body backs its cwd -> clean.
