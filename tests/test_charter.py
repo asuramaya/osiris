@@ -682,6 +682,29 @@ async def test_charter_for_the_manager_declares_successfully(actions: Actions) -
     assert await charter_of(actions.pool, worker_seat) == ["osiris"]
 
 
+async def test_charter_for_the_manager_declares_by_the_worker_s_handle(
+    actions: Actions,
+) -> None:
+    """The Tantra specimen (thread c851c81b) one level up: set_charter's own seat_id
+    resolves by canonical/handle/id, but charter_for's AUTHORIZATION check ran
+    manager_of_seat against the caller's raw, unresolved spelling — a worker referenced
+    by its bare handle (never its full `seat:...` canonical) read as having "no manager
+    on record" even though attach_seat's own bond was live, because manager_of_seat's
+    exact-canonical lookup never matched a handle."""
+    from src.orchestrator.charter import charter_for
+    from src.orchestrator.seats import attach_seat
+
+    await _repo(actions, "osiris")
+    manager_seat = await _seated(actions, "agent:manager1b", "Manager1b")
+    worker_seat = await _seat(actions, "Worker1b")
+    await attach_seat(actions, worker_seat, manager_seat, evidence="org chart", actor="test")
+    out = await charter_for(actions, "Worker1b", ["osiris"], because="onboarding by handle",
+                            actor="agent:manager1b")
+    assert out["charter"] == ["osiris"] and out["because"] == "onboarding by handle"
+    assert out["declared_by"] == "agent:manager1b"
+    assert await charter_of(actions.pool, worker_seat) == ["osiris"]
+
+
 async def test_charter_for_refuses_a_non_manager_non_operator(actions: Actions) -> None:
     from src.orchestrator.charter import charter_for
     from src.orchestrator.seats import attach_seat
