@@ -26,7 +26,10 @@ import sys
 import time
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.ingest.soul_store import RoundTripReport
 
 import asyncpg
 
@@ -218,7 +221,10 @@ def _format_round_trip_failure(failures: list[dict[str, str]] | None) -> str | N
     --drill-gated call to `collect_soul_round_trip_sample` (which, like `drill_pitr`,
     runs AFTER `evaluate(m)`'s single pass, so `m` never actually carries this key at
     evaluate-time in the real flow — this function is what makes both call sites agree
-    on the exact wording without a copy-pasted f-string)."""
+    on the exact wording without a copy-pasted f-string). A skipped-live session is
+    NEVER a failure — see `main()`'s own separate, unconditional "skipped live: N"
+    print, per Thoth's ruling that the count must be reported, never folded silently
+    into a clean pass, but also never treated as a defect worth an operator alarm."""
     if not failures:
         return None
     anchors = ", ".join(f["anchor_sid"] for f in failures[:5])
@@ -393,7 +399,7 @@ def drill_pitr() -> str | None:
     return run_drill(Path(newest.path), None, marker)
 
 
-async def collect_soul_round_trip_sample() -> list[dict[str, str]]:
+async def collect_soul_round_trip_sample() -> RoundTripReport:
     """THE SOUL STORE'S OWN ROUND-TRIP PROOF (thread 78efd46d item 2): "a backup that's
     never been restored is a hope, not a backup" — the same law this file's own plain-
     dump `drill()` already holds, extended to the soul store. Reuses
@@ -477,12 +483,18 @@ def main() -> int:
         if p:
             fails.append(p)
     if "--drill" in sys.argv:
-        roundtrip, roundtrip_broken = _run_check(
+        report, roundtrip_broken = _run_check(
             "collect_soul_round_trip_sample", collect_soul_round_trip_sample())
-        m["soul_round_trip_failures"] = roundtrip
-        f = _format_round_trip_failure(roundtrip)
-        if f:
-            fails.append(f)
+        if report is not None:
+            # ALWAYS PRINTED, pass or fail — Thoth's own ruling off the 2026-09-08
+            # full sweep: a skipped-live session must be reported as "skipped live:
+            # N", never silently folded into a clean pass.
+            print(f"soul store round-trip: {len(report.failures)} failure(s), "
+                  f"skipped live: {report.skipped_live}")
+            m["soul_round_trip_failures"] = report.failures
+            f = _format_round_trip_failure(report.failures)
+            if f:
+                fails.append(f)
         if roundtrip_broken:
             fails.append(roundtrip_broken)
     if not fails:
