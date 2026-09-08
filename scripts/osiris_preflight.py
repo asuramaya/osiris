@@ -66,6 +66,13 @@ DEFAULT_PORTS = ["5432", "6379"]  # the shadow-trap band: settings' fallback DSN
 # directory from an orphaned one, not just an age cutoff) — it only guarantees the NEXT
 # climb is seen before every shell on the box dies silently, per Thoth's own ask.
 TMP_INODE_ALARM_PCT = 80.0
+# THE DISK GUARD'S OWN READ-SIDE HALF (the vault lane, item 5): osiris_disk_guard.py stops a
+# single WRITE from landing on a full disk; this is the standing weekly early-warning that
+# catches the climb long before any single write is refused — the same emergency that opened
+# the whole lane (92% full, ~3 days runway at 44GB/day) was caught by a human noticing, not by
+# a check. 15% free (85% used) gives real runway at that measured burn rate before the guard
+# above starts refusing writes.
+DISK_FREE_ALARM_PCT = 15.0
 
 
 def _run(cmd: list[str]) -> str:
@@ -88,11 +95,24 @@ def _tmp_inode_pct(path: str = "/tmp") -> float | None:
     return 100.0 * (st.f_files - st.f_ffree) / st.f_files
 
 
+def _disk_free_pct(path: Path) -> float | None:
+    """Percent of `path`'s filesystem free, by bytes (`shutil.disk_usage`) — None when
+    `path` doesn't exist yet (a young vault is not a failure; `evaluate` already alarms
+    separately on a missing/empty vault)."""
+    import shutil
+
+    if not path.exists():
+        return None
+    du = shutil.disk_usage(path)
+    return 100.0 * du.free / du.total
+
+
 def collect() -> dict:
     """Gather the survival matrix — thin collectors, all judgment lives in evaluate()."""
     m: dict = {"units": {}, "timers": {}, "containers": {}, "ports": [],
                "backup_age_h": None, "vault_age_d": None, "unpushed": None,
-               "tmp_inode_pct": _tmp_inode_pct()}
+               "tmp_inode_pct": _tmp_inode_pct(),
+               "disk_free_pct": _disk_free_pct(VAULT_DIR)}
     for u in UNITS:
         m["units"][u] = {
             "enabled": _run(["systemctl", "--user", "is-enabled", u]),
@@ -224,6 +244,12 @@ def evaluate(m: dict) -> list[str]:
                      "— the fleet-wide ENOSPC incident's own early-warning (obligation "
                      "a867ae37): every Bash tool call across every live seat fails once "
                      "this reaches 100%, silently, until it does")
+    disk_pct = m.get("disk_free_pct")
+    if disk_pct is not None and disk_pct <= DISK_FREE_ALARM_PCT:
+        fails.append(f"disk free at {disk_pct:.1f}% on the vault's filesystem (alarm at "
+                     f"{DISK_FREE_ALARM_PCT:.0f}%) — the vault lane's own disk guard "
+                     "(item 5): run scripts/osiris_prune_ladder.py for a dry-run of what "
+                     "could be pruned, then act on the operator's word")
     # THE MINER IS SUMMONED, NOT SCHEDULED (ceae1604). It used to walk every transcript every ten
     # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
     # crawl is gone: the adversary now runs ONCE, at a session's death rite, so a quiet hour means

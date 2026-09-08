@@ -189,6 +189,50 @@ def test_tmp_inode_pct_degrades_quietly_on_a_path_that_does_not_exist() -> None:
     assert _tmp_inode_pct("/no/such/path/at/all") is None
 
 
+# --- the vault lane item 5: the disk guard's read-side weekly early-warning ------------------
+
+def test_no_disk_free_pct_key_is_quiet() -> None:
+    """Absent (the vault doesn't exist yet, or the field was never collected) is silence,
+    same as every other None-shaped field in this matrix."""
+    assert evaluate(_green()) == []
+
+
+def test_plenty_of_free_disk_is_quiet() -> None:
+    m = _green()
+    m["disk_free_pct"] = 40.0
+    assert evaluate(m) == []
+
+
+def test_low_free_disk_is_named_loudly() -> None:
+    """The exact shape of the emergency that opened this whole lane: 92% full, ~3 days
+    runway at 44GB/day, caught by a human noticing rather than by any check."""
+    m = _green()
+    m["disk_free_pct"] = 8.0
+    fails = "\n".join(evaluate(m))
+    assert "disk free at 8.0%" in fails and "osiris_prune_ladder.py" in fails
+
+
+def test_free_disk_right_at_the_alarm_threshold_fires() -> None:
+    """Boundary case: <= the threshold, not only strictly under it."""
+    m = _green()
+    m["disk_free_pct"] = 15.0
+    assert any("disk free at" in f for f in evaluate(m))
+
+
+def test_disk_free_pct_reads_a_real_filesystem(tmp_path: Path) -> None:
+    from scripts.osiris_preflight import _disk_free_pct
+
+    pct = _disk_free_pct(tmp_path)
+    assert pct is not None
+    assert 0.0 <= pct <= 100.0
+
+
+def test_disk_free_pct_degrades_quietly_on_a_path_that_does_not_exist() -> None:
+    from scripts.osiris_preflight import _disk_free_pct
+
+    assert _disk_free_pct(Path("/no/such/path/at/all")) is None
+
+
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
     """The exact repro from thread 3e96c10e: `.venv/bin/python scripts/backfill_thread_arc.py`
     from the repo root, PYTHONPATH deliberately unset — sys.path[0] is the script's own

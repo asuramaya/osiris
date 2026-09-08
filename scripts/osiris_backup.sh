@@ -22,8 +22,26 @@ mkdir -p "$DIR" "$VAULT"
 # which a flat .sql text dump cannot. Extension is `.dump`, never `.sql` — -Fc is a binary
 # format, and a `.sql`-named custom-format file misleads the next reader into `psql <`ing
 # it, which fails opaquely on binary garbage instead of naming the actual mistake.
-docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$DIR/osiris-$(date +%Y%m%d-%H%M%S).dump"
-ls -1t "$DIR"/osiris-*.dump | tail -n +29 | xargs -r rm --
+#
+# THE DISK GUARD (the vault lane, item 5): refuse to WRITE a new full dump when there is
+# not room for one — this is the same emergency that opened the whole lane (92% full, ~3
+# days runway at 44GB/day), caught by a human noticing rather than by any check in this
+# house. A refusal alarms the desk and skips ONLY this dump; it never prunes anything
+# itself (that stays osiris_prune_ladder.py's job, always dry-run until the operator's own
+# word) and never blocks the rest of this script's other duties (bundle/vault
+# mirror/transcript archive/WAL pull all still run below).
+if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$DIR"; then
+  "$REPO/.venv/bin/python" "$REPO/scripts/osiris_alarm.py" --from backup \
+    "DISK GUARD: refusing to write a new full pg_dump into $DIR — not enough free space for " \
+"another dump the size of the last one plus margin. Run scripts/osiris_prune_ladder.py for a " \
+"dry-run of what could be pruned; nothing is deleted automatically." || true
+else
+  docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$DIR/osiris-$(date +%Y%m%d-%H%M%S).dump"
+fi
+# `|| true`: a guard-refused first-ever run leaves $DIR with zero dumps, and the glob
+# below then fails to expand at all — under pipefail that would kill the whole script
+# over a directory listing, not a real backup failure.
+ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +29 | xargs -r rm -- || true
 
 # the repo bundle: all refs, atomic replace (never a half-written only-copy)
 git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
