@@ -8,12 +8,15 @@ NEWEST survives (the operator's own reasoning: "the graph is append-only so a ne
 contains every older one" -- every survivor here IS a full pg_dump by construction, no
 special-casing needed).
 
-SCOPED TO DB DUMPS ONLY (osiris-*.dump / the pre-.dump-switch osiris-*.sql still on disk
-during the transition), never the transcript tarballs osiris_backup.sh's own incremental
---listed-incremental chain produces -- pruning an incremental archive by "newest N" (or
-by this ladder) breaks every later day's restorability the moment it removes a link out
-of the middle of the chain. That population needs its own, chain-aware retention design,
-not this one; deliberately out of scope here (flagged on commit 27058bd already).
+SCOPED TO DB DUMPS ONLY for `plan_prune`/`--apply`'s main pass (osiris-*.dump / the
+pre-.dump-switch osiris-*.sql still on disk during the transition) -- an individual
+transcript tarball is never a candidate here, since pruning one out of the middle of its
+own incremental chain breaks every later day's restorability. `plan_prune_transcript_chains`
+is the SEPARATE, chain-aware sibling (Thoth msg 8211, off the same ruling): osiris_backup.sh
+now keys the snapshot file and each day's tarball by ISO WEEK, so restorability only ever
+needs to span one week's own chain -- this prunes whole weekly chains at a time (every
+tarball plus the snapshot file sharing one week-key, together, never a partial chain),
+keeping the last 4 weekly chains plus one chain per calendar month beyond that.
 
 DRY-RUN IS THE ONLY WIRED MODE (operator's own word, relayed by Thoth: "do not delete
 anything until I relay the operator's word on that list"). `--apply` exists so a human
@@ -111,6 +114,77 @@ def _scan(directory: Path) -> list[DumpFile]:
     return out
 
 
+_WEEK_RE = re.compile(r"^claude-transcripts-(\d{4})-W(\d{2})-\d{8}\.tar\.gz$")
+
+
+@dataclass(frozen=True)
+class TranscriptChain:
+    week_key: str  # "2026-W37"
+    week_start: datetime  # the ISO week's own Monday, for month-bucketing
+    files: list[str]  # every tarball + snapshot file belonging to this chain
+    size_bytes: int = 0
+
+
+def plan_prune_transcript_chains(
+    chains: list[TranscriptChain], *, keep_recent: int = 4,
+) -> dict[str, list[TranscriptChain]]:
+    """Chain-aware, unlike `plan_prune`: the unit thinned is a WHOLE weekly chain (every
+    tarball sharing one week-key, plus that week's snapshot file), never a single tarball
+    out of the middle of one — removing a chain removes exactly the week it belongs to,
+    always in full, so a survivor's own restorability never depends on a chain this
+    function didn't keep. The most recent `keep_recent` chains (by week, not by age
+    against `now` — "the last four weekly chains", not a fixed cutoff) survive whole;
+    older chains thin to one per calendar month, newest-in-month wins."""
+    chains_sorted = sorted(chains, key=lambda c: c.week_start, reverse=True)
+    keep_keys = {c.week_key for c in chains_sorted[:keep_recent]}
+    buckets: dict[str, TranscriptChain] = {}
+    for c in chains_sorted[keep_recent:]:
+        mkey = c.week_start.strftime("%Y-%m")
+        if mkey not in buckets or c.week_start > buckets[mkey].week_start:
+            buckets[mkey] = c
+    keep_keys.update(c.week_key for c in buckets.values())
+    return {
+        "keep": [c for c in chains_sorted if c.week_key in keep_keys],
+        "remove": [c for c in chains_sorted if c.week_key not in keep_keys],
+    }
+
+
+def _scan_transcript_chains(directory: Path) -> list[TranscriptChain]:
+    """Every `claude-transcripts-<week>-<day>.tar.gz` in `directory`, grouped by its own
+    week-key into a `TranscriptChain` — the corresponding `.transcript-archive-<week>.snar`
+    snapshot file, if still present, rides along as part of the SAME chain (it's only ever
+    needed to produce that week's own next incremental, never to extract an existing one,
+    but it belongs to the chain's identity all the same)."""
+    if not directory.is_dir():
+        return []
+    groups: dict[str, list[Path]] = {}
+    for p in sorted(directory.glob("claude-transcripts-*.tar.gz")):
+        m = _WEEK_RE.match(p.name)
+        if m:
+            groups.setdefault(f"{m.group(1)}-W{m.group(2)}", []).append(p)
+    chains = []
+    for key, paths in groups.items():
+        year, week = int(key[:4]), int(key[6:8])
+        week_start = datetime.fromisocalendar(year, week, 1).replace(tzinfo=UTC)
+        snar = directory / f".transcript-archive-{key}.snar"
+        files = [str(p) for p in paths]
+        if snar.is_file():
+            files.append(str(snar))
+        size = sum(Path(f).stat().st_size for f in files)
+        chains.append(TranscriptChain(key, week_start, files, size))
+    return chains
+
+
+def _report_chains(label: str, plan: dict[str, list[TranscriptChain]]) -> None:
+    removed_bytes = sum(c.size_bytes for c in plan["remove"])
+    print(f"\n{label} transcript chains: {len(plan['keep'])} kept, "
+          f"{len(plan['remove'])} whole chains would be removed "
+          f"({removed_bytes / (1024**3):.2f} GB)")
+    for c in plan["remove"]:
+        print(f"  REMOVE CHAIN {c.week_key}  ({len(c.files)} files, "
+              f"{c.size_bytes / (1024**2):.1f} MB)")
+
+
 def _report(label: str, plan: dict[str, list[DumpFile]]) -> None:
     removed_bytes = sum(f.size_bytes for f in plan["remove"])
     print(f"\n{label}: {len(plan['keep'])} kept, {len(plan['remove'])} would be removed "
@@ -138,15 +212,26 @@ def main(argv: list[str] | None = None) -> int:
     }
     for label, plan in plans.items():
         _report(label, plan)
+    # transcript CHAINS live only in the vault (osiris_backup.sh never writes them to
+    # backups/) — a distinct population, reported and pruned as whole chains
+    chain_plan = plan_prune_transcript_chains(_scan_transcript_chains(args.vault))
+    _report_chains("vault", chain_plan)
+
     total_remove = sum(len(p["remove"]) for p in plans.values())
+    total_chains_remove = len(chain_plan["remove"])
     if not args.apply:
-        print(f"\nDRY RUN ONLY — {total_remove} file(s) would be removed, none deleted. "
-              "Re-run with --apply once the operator has ruled on this list.")
+        print(f"\nDRY RUN ONLY — {total_remove} dump file(s) and {total_chains_remove} "
+              "transcript chain(s) would be removed, none deleted. Re-run with --apply "
+              "once the operator has ruled on this list.")
         return 0
-    print(f"\n--apply given — deleting {total_remove} file(s) now.")
+    print(f"\n--apply given — deleting {total_remove} dump file(s) and "
+          f"{total_chains_remove} transcript chain(s) now.")
     for plan in plans.values():
         for f in plan["remove"]:
             Path(f.path).unlink(missing_ok=True)
+    for c in chain_plan["remove"]:
+        for path in c.files:
+            Path(path).unlink(missing_ok=True)
     return 0
 
 
