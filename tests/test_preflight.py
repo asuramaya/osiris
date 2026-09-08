@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from scripts.osiris_preflight import _run_check, evaluate
 
 
@@ -231,6 +232,20 @@ def test_disk_free_pct_degrades_quietly_on_a_path_that_does_not_exist() -> None:
     from scripts.osiris_preflight import _disk_free_pct
 
     assert _disk_free_pct(Path("/no/such/path/at/all")) is None
+
+
+# --- the vault lane item 3's own last piece: the PITR drill --------------------------------
+
+def test_drill_pitr_is_quiet_when_no_base_backup_exists_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An environment where item 3 hasn't produced a base backup yet (a fresh checkout,
+    a test run, a fleet member that hasn't hit its first weekly timer) is not a
+    failure of THIS check — a real failed restore against an EXISTING base backup is."""
+    import scripts.osiris_preflight as preflight
+
+    monkeypatch.setattr(preflight, "VAULT_DIR", tmp_path)
+    assert preflight.drill_pitr() is None
 
 
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
