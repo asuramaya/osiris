@@ -20,6 +20,7 @@ from src.orchestrator.boot_compiler import (
     compile_managed_body,
     derive_role,
     locate_managed_section,
+    migrate_identity_to_charter,
     reissue_office,
     template_version,
     wrap_managed,
@@ -32,7 +33,7 @@ from src.orchestrator.capture import (
     refute_practice,
 )
 from src.orchestrator.mintseat import mint_seat
-from src.orchestrator.seats import ensure_seat, peer_seats
+from src.orchestrator.seats import bind_seat_tree, ensure_seat, peer_seats
 
 # ═══════════ PURE: version + marker location ═══════════
 
@@ -624,3 +625,175 @@ async def test_reissue_renders_the_real_charter_never_never_formally_declared(
     after = orders_path.read_text()
     assert "never formally declared" not in after
     assert "You govern: `reissue-charter-proj`." in after
+
+
+# ═══════════ migrate_identity_to_charter (task #141) ═══════════
+
+
+async def _mint_tree_bound(
+    actions: Actions, tmp_path: Path, *, handle: str, boss_handle: str,
+) -> tuple[str, Path, Path]:
+    """Mint a worker seat, bind its tree to a directory distinct from its office, and
+    return (seat_id, orders_path, charter_path)."""
+    await ensure_seat(actions, house=f"{handle.lower()}house", handle=boss_handle,
+                      source="test")
+    minted = await mint_seat(actions, manager=boss_handle, handle=handle,
+                             office_root=tmp_path / "seats", actor="agent:test")
+    seat_id = minted["seat_id"]
+    office = tmp_path / "seats" / handle.lower()
+    orders_path = office / "CLAUDE.md"
+    charter_path = office / "charter.md"
+    tree = tmp_path / "trees" / handle.lower()
+    tree.mkdir(parents=True)
+    await bind_seat_tree(actions, seat_id=seat_id, tree_cwd=str(tree), actor="operator",
+                         because="test: code checkout distinct from office")
+    return seat_id, orders_path, charter_path
+
+
+async def test_migrate_identity_moves_real_hand_written_content(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat_id, orders_path, charter_path = await _mint_tree_bound(
+        actions, tmp_path, handle="MigrateWorker", boss_handle="MigrateBoss")
+    narrative = ("# MigrateWorker — WHY YOU EXIST\nThis seat was minted for a very "
+                "specific reason, hand-written long ago.\n\n")
+    orders_path.write_text(narrative + orders_path.read_text())
+    charter_before = charter_path.read_text()
+    assert charter_before  # scaffolded by mint_seat's own _CHARTER_TEMPLATE
+
+    out = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="task #141 migration", actor="agent:test")
+    assert out["migrated"] is True
+    assert out["dry_run"] is False
+
+    charter_after = charter_path.read_text()
+    assert charter_after.startswith("<!-- osiris:identity-migrated:v1 -->")
+    assert "## Identity (migrated from CLAUDE.md, task #141)" in charter_after
+    assert "WHY YOU EXIST" in charter_after
+    assert "specific reason, hand-written long ago." in charter_after
+    # (f) charter.md's own pre-existing content survives byte-for-byte below the new block
+    assert charter_after.endswith(charter_before)
+
+    orders_after = orders_path.read_text()
+    assert "WHY YOU EXIST" not in orders_after
+    assert "identity content has moved to charter.md" in orders_after
+    assert "<!-- osiris:compiled:begin v=" in orders_after
+    assert "<!-- osiris:compiled:end -->" in orders_after
+
+
+async def test_migrate_identity_is_idempotent_on_a_second_call(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat_id, orders_path, charter_path = await _mint_tree_bound(
+        actions, tmp_path, handle="TwiceWorker", boss_handle="TwiceBoss")
+    orders_path.write_text("# hand-written identity\nSome real prose.\n\n"
+                           + orders_path.read_text())
+
+    first = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="first migration", actor="agent:test")
+    assert first["migrated"] is True
+    charter_once = charter_path.read_text()
+    orders_once = orders_path.read_text()
+
+    second = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="second migration attempt", actor="agent:test")
+    assert second["migrated"] is False
+    assert "already migrated" in second["reason"]
+    assert charter_path.read_text() == charter_once  # unchanged, byte for byte
+    assert orders_path.read_text() == orders_once
+
+
+async def test_migrate_identity_leaves_a_non_tree_bound_seat_untouched(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    await ensure_seat(actions, house="notreehouse", handle="NoTreeBoss", source="test")
+    minted = await mint_seat(actions, manager="NoTreeBoss", handle="NoTreeWorker",
+                             office_root=tmp_path / "seats", actor="agent:test")
+    seat_id = minted["seat_id"]
+    orders_path = tmp_path / "seats" / "notreeworker" / "CLAUDE.md"
+    charter_path = tmp_path / "seats" / "notreeworker" / "charter.md"
+    orders_path.write_text("# hand-written identity\nSome real prose.\n\n"
+                           + orders_path.read_text())
+    orders_before = orders_path.read_text()
+    charter_before = charter_path.read_text()
+
+    out = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="attempted migration", actor="agent:test")
+    assert out["migrated"] is False
+    assert "not tree-bound" in out["reason"]
+    assert orders_path.read_text() == orders_before
+    assert charter_path.read_text() == charter_before
+
+
+async def test_migrate_identity_dry_run_computes_preview_and_touches_no_files(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat_id, orders_path, charter_path = await _mint_tree_bound(
+        actions, tmp_path, handle="DryRunWorker", boss_handle="DryRunBoss")
+    orders_path.write_text("# hand-written identity\nSome real prose.\n\n"
+                           + orders_path.read_text())
+    orders_before = orders_path.read_text()
+    charter_before = charter_path.read_text()
+
+    out = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="dry run preview", actor="agent:test",
+        dry_run=True)
+    assert out["migrated"] is True
+    assert out["dry_run"] is True
+    assert "Some real prose." in out["prepended_to_charter"]
+    assert "<!-- osiris:identity-migrated:v1 -->" in out["prepended_to_charter"]
+    assert "identity content has moved to charter.md" in out["claude_md_pointer"]
+    # nothing written to disk
+    assert orders_path.read_text() == orders_before
+    assert charter_path.read_text() == charter_before
+
+    # a real (non-dry-run) call afterward still succeeds and actually migrates
+    real = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="real migration after dry run",
+        actor="agent:test")
+    assert real["migrated"] is True
+    assert real["dry_run"] is False
+    assert orders_path.read_text() != orders_before
+
+
+async def test_migrate_identity_whitespace_only_hand_written_span_is_a_no_op(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A freshly-minted, tree-bound office has NOTHING hand-written above the compiled
+    markers yet (mint_seat writes the wrapped section alone) — the exact 'nothing worth
+    migrating' case."""
+    seat_id, orders_path, charter_path = await _mint_tree_bound(
+        actions, tmp_path, handle="EmptySpanWorker", boss_handle="EmptySpanBoss")
+    orders_before = orders_path.read_text()
+    charter_before = charter_path.read_text()
+    assert orders_before.startswith("<!-- osiris:compiled:begin v=")
+
+    out = await migrate_identity_to_charter(
+        actions, seat_id=seat_id, because="attempted migration", actor="agent:test")
+    assert out["migrated"] is False
+    assert "nothing worth migrating" in out["reason"]
+    assert orders_path.read_text() == orders_before
+    assert charter_path.read_text() == charter_before
+
+
+async def test_reissue_office_wires_the_migration_automatically(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """`seat(action='reissue_office')` on a tree-bound seat performs the migration as
+    part of the SAME call — no separate migrate step required."""
+    seat_id, orders_path, charter_path = await _mint_tree_bound(
+        actions, tmp_path, handle="WiredWorker", boss_handle="WiredBoss")
+    orders_path.write_text("# hand-written identity\nWired-in prose.\n\n"
+                           + orders_path.read_text())
+
+    out = await reissue_office(actions, seat_id=seat_id, because="reissue with migration",
+                               actor="agent:test")
+    assert out["identity_migration"]["migrated"] is True
+    assert "Wired-in prose." in charter_path.read_text()
+    assert "Wired-in prose." not in orders_path.read_text()
+    assert "<!-- osiris:compiled:begin v=" in orders_path.read_text()
+
+    # a second reissue is a true no-op on the migration side
+    again = await reissue_office(actions, seat_id=seat_id, because="second reissue",
+                                 actor="agent:test")
+    assert again["identity_migration"]["migrated"] is False
