@@ -26,19 +26,27 @@ explicitly `None` (present, but false) is UNFILED — collapsed into one trailin
 Ordering (requirement 2 of the ruling): project sections are LIVE-BODIES-FIRST, then by
 last activity — never alphabetical. `sorted(groups)` is gone.
 
-Color (requirement 3): an optional `paint` (`cli_render.Paint`) recolors the same text —
-project names bold, live green, the ghost note amber, its false-live/unclaimed-body
-breakdown red, retired dim. `paint=None` (the MCP `fleet()` tool's own default) renders
-byte-identical to today's plain text — `Paint(enabled=False)` makes every call a no-op.
+Color (requirement 3) is NOT baked in here — `render_fleet_tree` always returns plain text,
+computed ONE way, over whatever `nodes` it is given (the MCP `fleet()` tool always calls it
+server-side over the FULL node set). `paint_fleet_text`, below, is a separate, purely
+cosmetic pass that recolors an ALREADY-RENDERED tree's text line by line — the CLI's own
+job, applied to the server's own plain `tree` string, never a second call to
+`render_fleet_tree` over some other, possibly-partial data (the regression this split
+fixes: the CLI used to re-derive the tree client-side from `fleet()`'s receipt-diet-capped
+`registered` sample, producing a handful of sections where the server's own full-data tree
+carried dozens — ONE renderer, over the complete data, always; color is a client concern
+applied to its output, never a second computation of the tree itself).
 
 Pure — the MCP fleet() tool feeds it rows; tests feed it fixtures.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.cli_render import Paint
+if TYPE_CHECKING:
+    from src.cli_render import Paint
 
 Node = dict[str, Any]  # canonical -> {model, project, parent, live, ts: datetime|None}
 
@@ -115,12 +123,11 @@ def _group_order_key(
 
 def _render_expanded(
     canon: str, indent: int, nodes: dict[str, Node], kids: dict[str | None, list[str]],
-    lines: list[str], *, full: bool, paint: Paint,
+    lines: list[str], *, full: bool,
 ) -> None:
     n = nodes[canon]
     prefix = "  " + "    " * indent + ("└─ " if indent else "")
-    live = bool(n.get("live"))
-    mark = paint.good("●") if live else (paint.dim("○") if n.get("retired") else "○")
+    mark = "●" if n.get("live") else "○"
     lines.append(f"{prefix}{mark} {_id_label(canon, nodes)}  {_short(n.get('model'))}".rstrip())
     children = kids.get(canon, [])
     if not children:
@@ -128,17 +135,16 @@ def _render_expanded(
     expand = [c for c in children if full or _any_live(c, nodes, kids)]
     fold = [c for c in children if c not in expand]
     for c in _sort_roots(expand, nodes):
-        _render_expanded(c, indent + 1, nodes, kids, lines, full=full, paint=paint)
+        _render_expanded(c, indent + 1, nodes, kids, lines, full=full)
     if fold:
         folded = [d for c in fold for d in _subtree(c, kids)]
         pad = "  " + "    " * (indent + 1) + "└─ "
-        lines.append(f"{pad}{paint.dim('○ swarm')}: {len(folded)} retired "
-                     f"({_tally(folded, nodes)})")
+        lines.append(f"{pad}○ swarm: {len(folded)} retired ({_tally(folded, nodes)})")
 
 
 def render_fleet_tree(
     nodes: dict[str, Node], *, full: bool = False, os_bodies: dict[str, int] | None = None,
-    ghost_gap: dict[str, dict[str, list[Any]]] | None = None, paint: Paint | None = None,
+    ghost_gap: dict[str, dict[str, list[Any]]] | None = None,
 ) -> str:
     """The glanceable fleet: one section per project, live expanded, retired collapsed.
 
@@ -152,10 +158,11 @@ def render_fleet_tree(
     both). Rendered honestly as however many of each this project actually carries, never a
     net that can hide one behind the other.
 
-    `paint` (`cli_render.Paint`, ruling f6b758fc requirement 3) recolors the SAME text —
-    `None` (the MCP `fleet()` tool's own default: "the MCP fleet verb's text render stays
-    plain") behaves exactly like `Paint(enabled=False)`, a no-op. The CLI passes a real
-    enabled `Paint` for its own client-side render.
+    ALWAYS PLAIN TEXT (ruling f6b758fc requirement 3, split from this function after a live
+    regression): color is `paint_fleet_text`'s own job, applied to this function's output
+    string, never a parameter here — this function has exactly one job (build the correct
+    tree from `nodes`) and one caller shape (the MCP `fleet()` tool, always over the full
+    node set) to keep straight.
 
     GROUPING is by `resolved_project` (requirement 1) where a caller supplied one — the
     REAL graph project, never the raw session-registry label — falling back to the raw
@@ -164,7 +171,6 @@ def render_fleet_tree(
     explicitly `None` is UNFILED: collapsed into one trailing `unfiled: N sessions in M
     dirs` line (M = distinct raw labels/cwds among them), expanded into its own per-label
     sections — same as before this ruling — only under `full=True`."""
-    paint = paint or Paint(enabled=False)
     kids = _children_of(nodes)
     roots = kids.get(None, [])
     groups: dict[str, list[str]] = {}
@@ -195,7 +201,7 @@ def render_fleet_tree(
         proj_roots = _sort_roots(groups[project], nodes)
         live_n = sum(1 for r in proj_roots if _any_live(r, nodes, kids))
         swarm_n = sum(len(_subtree(r, kids)) - 1 for r in proj_roots)
-        head = f"▸ {paint.bold(project)} — {live_n} live · {len(proj_roots)} sessions"
+        head = f"▸ {project} — {live_n} live · {len(proj_roots)} sessions"
         if swarm_n:
             head += f" · swarm {swarm_n}"
         if os_bodies is not None:
@@ -209,17 +215,16 @@ def render_fleet_tree(
             if total:
                 bits = []
                 if n_false_live:
-                    bits.append(paint.bad(f"{n_false_live} false-live"))
+                    bits.append(f"{n_false_live} false-live")
                 if n_false_dead:
                     noun = "body" if n_false_dead == 1 else "bodies"
-                    bits.append(paint.bad(f"{n_false_dead} unclaimed {noun}"))
-                ghost_word = paint.warn(f"⚠ {total} ghost{'s' if total != 1 else ''}")
-                head += f" · {ghost_word} ({', '.join(bits)})"
+                    bits.append(f"{n_false_dead} unclaimed {noun}")
+                head += f" · ⚠ {total} ghost{'s' if total != 1 else ''} ({', '.join(bits)})"
         lines.append(head)
         expand = [r for r in proj_roots if full or _any_live(r, nodes, kids)]
         fold = [r for r in proj_roots if r not in expand]
         for r in expand:
-            _render_expanded(r, 0, nodes, kids, lines, full=full, paint=paint)
+            _render_expanded(r, 0, nodes, kids, lines, full=full)
         if fold:
             latest = _latest(fold, nodes)
             note = f" (latest {_id_label(latest, nodes)})" if latest else ""
@@ -234,9 +239,9 @@ def render_fleet_tree(
             # that dies is the one that cannot write), and nothing here will sign one on its
             # behalf: we say what we observed — it went quiet — and no more.
             signed = sum(1 for r in fold if nodes[r].get("retired"))
-            past = f"  {paint.dim('○')} {len(fold)} past session{'s' if len(fold) != 1 else ''}"
+            past = f"  ○ {len(fold)} past session{'s' if len(fold) != 1 else ''}"
             if signed:
-                past += paint.dim(f" · {signed} retired")
+                past += f" · {signed} retired"
             lines.append(f"{past}{note}")
     if unfiled:
         n_sessions = len(unfiled)
@@ -245,7 +250,42 @@ def render_fleet_tree(
         # (never merged together: two DIFFERENT unlabeled dirs are two different dirs).
         dirs = {nodes[r].get("project") or nodes[r].get("cwd") or "?" for r in unfiled}
         m_dirs = len(dirs)
-        lines.append(f"▸ {paint.dim('unfiled')}: {n_sessions} "
+        lines.append(f"▸ unfiled: {n_sessions} "
                      f"session{'s' if n_sessions != 1 else ''} in {m_dirs} "
                      f"dir{'s' if m_dirs != 1 else ''}")
     return "\n".join(lines)
+
+
+# ── COLOR, a pure text pass (requirement 3) ─────────────────────────────────────────────
+# Applied to render_fleet_tree's OWN output string — never a second computation of the
+# tree over any other data. Line shapes this depends on (all produced only by the
+# function above): a project header starts "▸ "; the unfiled summary line starts exactly
+# "▸ unfiled:"; a live node line contains "●", any other node/summary line "○"; a ghost
+# note is the parenthesised "⚠ N ghost(s) (...)" span inside a header line.
+_GHOST_SPAN_RE = re.compile(r"⚠ \d+ ghosts?( \([^)]*\))?")
+_GHOST_DETAIL_RE = re.compile(r"\d+ false-live|\d+ unclaimed (?:body|bodies)")
+
+
+def paint_fleet_text(text: str, paint: Paint) -> str:
+    """Recolor an ALREADY-RENDERED `render_fleet_tree` string, line by line — project names
+    bold, live marks green, the ghost note amber with its false-live/unclaimed-body
+    breakdown red inside it, retired/summary marks and the unfiled line dim. A disabled
+    `paint` (`Paint(enabled=False)`, every one of its methods a no-op) returns `text`
+    unchanged — cheap enough to call unconditionally rather than branch around."""
+    if not paint.enabled:
+        return text
+    out: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith("▸ unfiled:"):
+            out.append(paint.dim(line))
+            continue
+        if line.startswith("▸ "):
+            def _detail(m: re.Match[str]) -> str:
+                return paint.bad(m.group(0))
+            line = _GHOST_SPAN_RE.sub(
+                lambda m: paint.warn(_GHOST_DETAIL_RE.sub(_detail, m.group(0))), line)
+            name, sep, rest = line[2:].partition(" — ")
+            line = f"▸ {paint.bold(name)}{sep}{rest}" if sep else line
+        line = line.replace("●", paint.good("●")).replace("○", paint.dim("○"))
+        out.append(line)
+    return "\n".join(out)

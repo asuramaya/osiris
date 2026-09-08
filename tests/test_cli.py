@@ -267,10 +267,12 @@ async def test_cmd_show_exits_nonzero_when_recall_refuses(monkeypatch: Any) -> N
     assert await cmd_show("nope") == 1
 
 
-# --- cmd_fleet (ruling f6b758fc): --json keeps the OLD wire contract (the caller's own
-# `full`); human mode always asks the server for full=True and re-renders CLIENT-SIDE from
-# `registered` — proven here by asserting the ARGUMENTS each mode actually sends, and that
-# the printed text is the fleetview render (project-grouped), never the server's own `tree`.
+# --- cmd_fleet (ruling f6b758fc, SPLIT after a live regression, Thoth msg 8159): --json
+# keeps the OLD wire contract (the caller's own `full`); human mode passes the SAME `full`
+# through and prints the SERVER's own `tree` (always computed over the complete node set —
+# never re-derived client-side from `registered`, the receipt diet's own capped sample,
+# which is exactly the bug that shipped once: 3 sections client-side where the server's
+# own full-data tree carried 36), recolored as a pure text pass.
 
 async def test_cmd_fleet_json_mode_sends_the_callers_own_full_unchanged(
     monkeypatch: Any, capsys: Any,
@@ -289,29 +291,32 @@ async def test_cmd_fleet_json_mode_sends_the_callers_own_full_unchanged(
         "tree": "▸ osiris — 0 live · 0 sessions", "registered": []}
 
 
-async def test_cmd_fleet_human_mode_always_requests_full_regardless_of_the_flag(
+async def test_cmd_fleet_human_mode_forwards_the_callers_own_full(
     monkeypatch: Any,
 ) -> None:
+    """No more hardcoded full=True — the server's own `tree` is already correctly folded/
+    expanded for whatever `full` the caller asked for; the CLI has nothing left to
+    recompute, so it just forwards the flag."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"tree": "SERVER OWN TEXT — never printed by human mode", "registered": []}
+        return {"tree": "SERVER OWN TEXT", "registered": []}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
-    assert await cmd_fleet(full=False, as_json=False) == 0
+    assert await cmd_fleet(full=True, as_json=False) == 0
     assert calls == [("fleet", {"full": True})]
 
 
-async def test_cmd_fleet_human_mode_rebuilds_grouped_by_resolved_project(
+async def test_cmd_fleet_human_mode_prints_the_servers_own_tree_never_registered(
     monkeypatch: Any, capsys: Any,
 ) -> None:
-    """The point of the whole client-side path: the raw label ('prototype') is a section
-    the OLD server-text render would have shown; the CLI's own re-render groups by
-    `resolved_project` ('osiris') instead, and never prints the server's own `tree` field."""
+    """The regression this test guards: the CLI must print exactly the server's own `tree`
+    (computed over the full node set) — never rebuild anything from `registered`, whose
+    'osiris'-labeled row here must NOT leak into the output at all."""
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {
-            "tree": "▸ prototype — 1 live · 1 sessions",  # must NOT be what gets printed
+            "tree": "▸ osiris — 1 live · 1 sessions",
             "registered": [
                 {"agent": "agent:live1", "model": "claude-fable-5", "project": "prototype",
                  "resolved_project": "osiris", "depth": 0, "parent": None, "live": True,
@@ -323,8 +328,37 @@ async def test_cmd_fleet_human_mode_rebuilds_grouped_by_resolved_project(
     monkeypatch.setenv("NO_COLOR", "1")  # deterministic: no ANSI noise in the assertion
     assert await cmd_fleet(full=False, as_json=False) == 0
     out = capsys.readouterr().out
-    assert "▸ osiris — 1 live · 1 sessions" in out
+    assert out.strip() == "▸ osiris — 1 live · 1 sessions"
     assert "prototype" not in out
+
+
+async def test_cmd_fleet_section_count_matches_the_tree_when_registered_is_capped(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """The live specimen (Thoth msg 8159): fleet()'s own receipt diet caps `registered` far
+    below the real fleet size — a server tree with 3 project sections but a `registered`
+    sample of only 1 row must still print all 3 sections, proving the CLI never counts
+    sections off `registered`'s own length."""
+    server_tree = "\n".join([
+        "▸ atlas — 1 live · 1 sessions",
+        "  ● agent:one  fable-5",
+        "▸ rotten-apple — 0 live · 2 sessions",
+        "  ○ 2 past sessions",
+        "▸ unfiled: 4 sessions in 3 dirs",
+    ])
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"tree": server_tree,
+                "registered": [{"agent": "agent:one", "model": "claude-fable-5",
+                                "project": "atlas", "depth": 0, "parent": None,
+                                "live": True, "retired": False,
+                                "last_seen": "2026-07-07T13:00:00+00:00"}]}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert await cmd_fleet(full=False, as_json=False) == 0
+    out = capsys.readouterr().out
+    assert out.count("▸ ") == server_tree.count("▸ ") == 3
 
 
 async def test_cmd_fleet_reports_a_dark_daemon_honestly(

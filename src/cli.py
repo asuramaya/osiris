@@ -1285,55 +1285,29 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
         render.emit(result, as_json=True)
         return 0
 
-    # HUMAN MODE (ruling f6b758fc, requirement 3): this side re-renders CLIENT-SIDE from
-    # the raw `registered` rows, never prints the server's own `tree` — fleet()'s own text
-    # render stays PLAIN (a client-agnostic contract for any non-CLI consumer) and grouped
-    # by the raw session-registry label, never the resolved graph project. Color depends
+    # HUMAN MODE (ruling f6b758fc, requirement 3 — SPLIT AFTER A LIVE REGRESSION, Thoth msg
+    # 8159): the first cut of this rebuilt the tree CLIENT-SIDE from `fleet()`'s own
+    # `registered` rows — but that list is the receipt diet's own capped sample (a handful
+    # of rows), never the full node set `render_fleet_tree` needs to fold/group correctly.
+    # Live result: 3 sections where the server's own full-data tree carried 36. ONE
+    # renderer now: the server's plain `tree` (always computed over the complete node set,
+    # `render_fleet_tree`'s only caller shape) is printed as-is, recolored by
+    # `paint_fleet_text` — a pure text pass, never a second tree computation. Color depends
     # on THIS terminal (`cli_render.supports_color()`), which the server can never know.
-    #
-    # Correct fold math (a retired-collapse count, a swarm tally, the freshest-id pointer
-    # on a collapsed line) needs the WHOLE node set regardless of the caller's own --full —
-    # that flag controls LOCAL expand/collapse only, exactly like `render_fleet_tree`'s own
-    # `full` parameter — so this always asks the server for full=True (no extra query cost:
-    # fleet()'s row-fetch is unconditional: `full` only changes how much of it it hands
-    # back) and folds/expands locally, same as the server does for its own text render.
-    result = await call_mcp_tool(url, "fleet", {"full": True})
+    result = await call_mcp_tool(url, "fleet", {"full": full})
     if isinstance(result, str):
         print(f"osiris fleet: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    registered = result.get("registered")
-    if not isinstance(registered, list):
-        # An older/unrecognized server shape still gets an honest fallback: its own
-        # pre-rendered plain text, never a crash on a missing key.
-        tree = result.get("tree")
-        print(tree if isinstance(tree, str) else "")
+    tree = result.get("tree")
+    if not isinstance(tree, str):
+        print("")
         return 0
 
-    from datetime import datetime
-
-    from src.orchestrator.fleetview import render_fleet_tree
-
-    nodes: dict[str, dict[str, Any]] = {}
-    for row in registered:
-        canon = row.get("agent")
-        if not canon:
-            continue
-        last_seen = row.get("last_seen")
-        node: dict[str, Any] = {
-            "model": row.get("model"), "project": row.get("project"),
-            "parent": row.get("parent"), "depth": row.get("depth"),
-            "live": row.get("live", False), "retired": row.get("retired", False),
-            "ts": datetime.fromisoformat(last_seen) if last_seen else None,
-            "seat": row.get("seat"), "bound": row.get("bound"),
-        }
-        if "resolved_project" in row:  # tri-state — see render_fleet_tree's own docstring
-            node["resolved_project"] = row["resolved_project"]
-        nodes[canon] = node
+    from src.orchestrator.fleetview import paint_fleet_text
 
     paint = render.Paint(render.supports_color())
-    print(render_fleet_tree(nodes, full=full, os_bodies=result.get("os_bodies"),
-                            ghost_gap=result.get("ghost_gap"), paint=paint))
+    print(paint_fleet_text(tree, paint))
     return 0
 
 
