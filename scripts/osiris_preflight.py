@@ -113,7 +113,12 @@ def collect() -> dict:
             m["containers"][c] = None
     listeners = _run(["ss", "-ltn"])
     m["ports"] = [p for p in DEFAULT_PORTS if f":{p} " in listeners]
-    dumps = sorted(BACKUP_DIR.glob("osiris-*.sql"), key=lambda p: p.stat().st_mtime)
+    # `.dump` (osiris_backup.sh's own -Fc switch, the vault lane, ruling 39384a87 item 1)
+    # is the CURRENT extension; `.sql` still matches so the retention window's last plain-
+    # text dumps (kept ~7 days after the switch) don't cause a false "backup_age_h: None"
+    # gap the moment this deploys.
+    dumps = sorted([*BACKUP_DIR.glob("osiris-*.sql"), *BACKUP_DIR.glob("osiris-*.dump")],
+                   key=lambda p: p.stat().st_mtime)
     if dumps:
         m["backup_age_h"] = (time.time() - dumps[-1].stat().st_mtime) / 3600
         m["newest_dump"] = str(dumps[-1])
