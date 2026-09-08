@@ -1238,17 +1238,9 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
 # --- status (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
 
 async def cmd_status(*, as_json: bool = False) -> int:
-    from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
-
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "get_status", {})
-    if isinstance(result, str):
-        print(f"osiris status: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
-        return 1
-    render.emit(result, as_json=as_json, title="status")
-    return 0
+    return await _call_and_emit_text(
+        url, "get_status", {}, as_json=as_json, title="status", error_prefix="osiris status")
 
 
 # --- search (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
@@ -1435,17 +1427,10 @@ async def cmd_inbox(*, project: str, as_json: bool = False) -> int:
     """osiris inbox --project <repo>: a peek at a project's own mailbox, terminal-native.
     Always a peek (never leases) -- settling mail is an agent's own act mid-session, not
     a human glancing from a terminal."""
-    from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
-
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "inbox", {"project": project, "peek": True})
-    if isinstance(result, str):
-        print(f"osiris inbox: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
-        return 1
-    render.emit(result, as_json=as_json, title=f"inbox · {project}")
-    return 0
+    return await _call_and_emit_text(
+        url, "inbox", {"project": project, "peek": True}, as_json=as_json,
+        title=f"inbox · {project}", error_prefix="osiris inbox")
 
 
 # --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
