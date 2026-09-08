@@ -222,23 +222,38 @@ async def charter_for(
     Agent-origin union, with no awareness of a charter already declared post-rekey — it
     could heal away what `charter_for` just wrote. A real, separate gap in the migration
     itself, still open."""
-    from src.orchestrator.seats import _OPERATOR_ACTORS, held_seat, manager_of_seat
+    from src.orchestrator.seats import (
+        _OPERATOR_ACTORS,
+        _resolve_active_seat,
+        held_seat,
+        manager_of_seat,
+    )
 
     because = (because or "").strip()
     if not because:
         return {"error": "because is required — a charter declared on another seat's "
                          "behalf is testimony, same discipline rename_seat runs"}
     if actor not in _OPERATOR_ACTORS:
+        # RESOLVED FIRST, same as set_charter's own seat_id (the Tantra specimen, thread
+        # c851c81b, one level up): the authorization check used to run manager_of_seat
+        # against the caller's raw, unresolved spelling of `seat_id` — a handle never
+        # matches manager_of_seat's exact-canonical lookup, so a real bond read as "no
+        # manager on record" purely because of how the target was spelled.
+        target_row = await _resolve_active_seat(actions.pool, seat_id)
+        if target_row is None:
+            return {"error": f"no such active seat: {seat_id!r} — a charter is declared "
+                             "for a seat, and this one doesn't exist (or isn't active)"}
+        resolved_seat_id = str(target_row["canonical"])
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
-        manager_seat_id = await manager_of_seat(actions.pool, seat_id)
+        manager_seat_id = await manager_of_seat(actions.pool, resolved_seat_id)
         if caller_seat_id is None or caller_seat_id != manager_seat_id:
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
             return {"error": f"{caller_desc} is not authorized to declare a charter for "
-                             f"{seat_id} — its manager is {manager_desc}, and {actor} is "
-                             "neither that manager nor an operator actor"}
+                             f"{resolved_seat_id} — its manager is {manager_desc}, and "
+                             f"{actor} is neither that manager nor an operator actor"}
     out = await set_charter(actions, seat_id, repos, actor=actor)
     if "error" not in out:
         out["because"] = because
