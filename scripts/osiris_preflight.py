@@ -205,6 +205,42 @@ async def collect_schema_drift() -> str | None:
         await pool.close()
 
 
+def find_missing_sessions(disk_anchors: set[str], stored_anchors: set[str]) -> set[str]:
+    """Pure set difference — on-disk sessions the store has no soul_sessions row for at
+    all. Tested directly; the collector below is the thin disk+DB shell around it."""
+    return disk_anchors - stored_anchors
+
+
+async def collect_soul_store_coverage(root: Path | None = None) -> int | None:
+    """THE SOUL STORE'S OWN COVERAGE GUARANTEE (thread 78efd46d, "let osiris eat every
+    agent history": "a session on disk and not in the store is a preflight failure,
+    never a quiet gap"). Every Claude Code transcript this box can see — the SAME
+    ClaudeJsonlAdapter.enumerate() walk the backfill cron already trusts, so this check
+    and that sweep can never disagree on what counts as a session — must have a
+    soul_sessions row. Returns the count missing, or None when there's nothing to walk
+    (no transcripts root configured/present here — not a failure, just nothing to check
+    in this environment)."""
+    from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
+
+    base = root or Path(os.environ.get("OSIRIS_TRANSCRIPTS")
+                        or Path.home() / ".claude" / "projects")
+    if not base.is_dir():
+        return None
+    disk = {loc.anchor_sid for loc in ClaudeJsonlAdapter().enumerate(root=base)}
+    if not disk:
+        return None
+    pool = await asyncpg.create_pool(
+        DSN, min_size=1, max_size=1,
+        server_settings={"application_name": "osiris-script:preflight-soul-coverage"})
+    try:
+        rows = await pool.fetch(
+            "SELECT anchor_sid FROM soul_sessions WHERE harness='claude-code'")
+    finally:
+        await pool.close()
+    stored = {r["anchor_sid"] for r in rows}
+    return len(find_missing_sessions(disk, stored))
+
+
 def evaluate(m: dict) -> list[str]:
     """The judgments — pure, tested. Returns human-readable failures; [] = all green."""
     fails: list[str] = []
@@ -250,6 +286,14 @@ def evaluate(m: dict) -> list[str]:
                      f"{DISK_FREE_ALARM_PCT:.0f}%) — the vault lane's own disk guard "
                      "(item 5): run scripts/osiris_prune_ladder.py for a dry-run of what "
                      "could be pruned, then act on the operator's word")
+    missing = m.get("soul_store_missing")
+    if missing:
+        fails.append(f"SOUL STORE COVERAGE GAP: {missing} session(s) on disk have no "
+                     "soul_sessions row (thread 78efd46d) — the store is not yet the "
+                     "durable record it claims to be for these; investigate why "
+                     "backfill_transcripts's cron hasn't caught them "
+                     "(SoulStore(pool).ingest_path directly, per-session, is the fastest "
+                     "way to see the real error instead of the sweep's own swallowed one)")
     # THE MINER IS SUMMONED, NOT SCHEDULED (ceae1604). It used to walk every transcript every ten
     # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
     # crawl is gone: the adversary now runs ONCE, at a session's death rite, so a quiet hour means
@@ -372,8 +416,10 @@ def main() -> int:
     m = collect()
     m["miner"], miner_broken = _run_check("collect_miner", collect_miner())
     m["schema_drift"], drift_broken = _run_check("collect_schema_drift", collect_schema_drift())
+    m["soul_store_missing"], soul_broken = _run_check(
+        "collect_soul_store_coverage", collect_soul_store_coverage())
     fails = evaluate(m)
-    fails.extend(b for b in (miner_broken, drift_broken) if b)
+    fails.extend(b for b in (miner_broken, drift_broken, soul_broken) if b)
     if "--drill" in sys.argv and m.get("newest_dump"):
         d = drill(m["newest_dump"])
         if d:

@@ -248,6 +248,67 @@ def test_drill_pitr_is_quiet_when_no_base_backup_exists_yet(
     assert preflight.drill_pitr() is None
 
 
+# --- thread 78efd46d, the soul store's own coverage guarantee ---------------------------
+
+def test_no_missing_sessions_key_is_quiet() -> None:
+    assert evaluate(_green()) == []
+
+
+def test_zero_missing_is_quiet() -> None:
+    m = _green()
+    m["soul_store_missing"] = 0
+    assert evaluate(m) == []
+
+
+def test_a_real_coverage_gap_is_named_loudly() -> None:
+    m = _green()
+    m["soul_store_missing"] = 3
+    fails = "\n".join(evaluate(m))
+    assert "SOUL STORE COVERAGE GAP: 3 session" in fails and "78efd46d" in fails
+
+
+def test_find_missing_sessions_is_a_pure_set_difference() -> None:
+    from scripts.osiris_preflight import find_missing_sessions
+
+    disk = {"aaa", "bbb", "ccc"}
+    stored = {"aaa", "bbb"}
+    assert find_missing_sessions(disk, stored) == {"ccc"}
+
+
+def test_find_missing_sessions_is_empty_when_store_has_everything() -> None:
+    from scripts.osiris_preflight import find_missing_sessions
+
+    assert find_missing_sessions({"aaa", "bbb"}, {"aaa", "bbb", "ccc"}) == set()
+
+
+async def _no_transcripts_root(tmp_path: Path) -> int | None:
+    from scripts.osiris_preflight import collect_soul_store_coverage
+
+    return await collect_soul_store_coverage(root=tmp_path / "does-not-exist")
+
+
+def test_collect_soul_store_coverage_is_quiet_with_no_transcripts_root(
+    tmp_path: Path,
+) -> None:
+    """No transcripts root present in this environment (a fresh checkout, a test box) is
+    not a failure of THIS check — nothing to walk, nothing to claim about."""
+    import asyncio
+
+    assert asyncio.run(_no_transcripts_root(tmp_path)) is None
+
+
+def test_collect_soul_store_coverage_is_quiet_with_an_empty_transcripts_root(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    from scripts.osiris_preflight import collect_soul_store_coverage
+
+    root = tmp_path / "projects"
+    root.mkdir()
+    assert asyncio.run(collect_soul_store_coverage(root=root)) is None
+
+
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
     """The exact repro from thread 3e96c10e: `.venv/bin/python scripts/backfill_thread_arc.py`
     from the repo root, PYTHONPATH deliberately unset — sys.path[0] is the script's own
