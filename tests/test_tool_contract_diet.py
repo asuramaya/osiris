@@ -1367,7 +1367,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # A genuinely new binding-moving verb, load-bearing growth per this file's own escape
 # valve, not incidental bloat trimmed away. No new tool. Measured exact (114,316), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 114566
+# 114,316 -> 114,808 (2026-09-07, mount-cache heal generalization, wave 6, dispatch
+# 7dfc38a5): `_heal_mount_cache_for_seats` (extracted from promote's own inline heal)
+# wired into charter/charter_for/attach-detach's own gap, plus a genuinely new self-
+# service verb, seat(action='refresh_project') — a new SEAT_INPUT_SCHEMA branch (no
+# params beyond action) plus a one-line ACTION TABLE entry. No new tool, load-bearing
+# growth per this file's own escape valve. Measured exact (114,808), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 115058
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
