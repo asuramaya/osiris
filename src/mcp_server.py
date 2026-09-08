@@ -6952,21 +6952,43 @@ async def _seat_edge_impl(
 ) -> dict[str, Any]:
     """Shared body behind `seat_edge` and its two hidden single-purpose aliases (attach_
     seat/detach_seat) — one code path, three names. Each action below is copied
-    verbatim from what was that alias's own top-level function body before the fold."""
+    verbatim from what was that alias's own top-level function body before the fold,
+    plus a reissue of BOTH sides' offices (thread 613cda0a): promote already refreshes
+    manager and worker through its own caller (mcp_server.py's `seat(action='promote')`
+    branch); attach/detach mint or cut the SAME `managed_by` edge but, before this,
+    refreshed neither — a manager's own "## Your team" listing and a worker's own
+    manager-of-record line both went stale the moment either verb ran outside promote."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": f"mount first — {action}ing a seat's manager is a deliberate "
                          "act on the record", "why": _anchorless(ctx)}
+    pool = await _pool_get()
     if action == "detach":
         from src.orchestrator.seats import detach_seat as _detach
-        return await _detach(Actions(await _pool_get()), worker, because=because,
-                             actor=ident.agent_id)
-    if action == "attach":
+        result = await _detach(Actions(pool), worker, because=because, actor=ident.agent_id)
+        if result.get("error"):
+            return result
+        affected = {result["detached"], result["was_managed_by"]}
+    elif action == "attach":
         assert manager is not None
         from src.orchestrator.seats import attach_seat as _attach
-        return await _attach(Actions(await _pool_get()), worker, manager, evidence=because,
-                             actor=ident.agent_id)
-    return {"error": f"unknown action {action!r} — one of attach/detach"}
+        result = await _attach(Actions(pool), worker, manager, evidence=because,
+                               actor=ident.agent_id)
+        if result.get("error"):
+            return result
+        affected = {result["attached"], result["now_managed_by"]}
+    else:
+        return {"error": f"unknown action {action!r} — one of attach/detach"}
+
+    from src.orchestrator.boot_compiler import reissue_office as _reissue_office
+
+    office_refresh: dict[str, Any] = {}
+    for seat_id_affected in affected:
+        office_refresh[seat_id_affected] = await _reissue_office(
+            Actions(pool), seat_id=seat_id_affected, because=f"{action}: {because}",
+            actor=ident.agent_id)
+    result["office_refresh"] = office_refresh
+    return result
 
 
 @mcp.tool(meta={

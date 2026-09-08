@@ -39,6 +39,18 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 _MARKER_BEGIN_RE = re.compile(r"<!-- osiris:compiled:begin v=(\S+) -->")
 _MARKER_END_RE = re.compile(r"<!-- osiris:compiled:end -->")
 
+
+def _office_header_re(handle: str) -> re.Pattern[str]:
+    """The compiler's OWN header line (`house_law.md`'s own line 1) — used only by
+    `reissue_office`'s `adopt` path (thread 49169c2f, nebbercracker/jenny's live
+    specimens) to tell a genuinely FOREIGN hand-written office (never seen this
+    template, e.g. "# AdoptWorker's hand-written orders") from an office that predates
+    the MARKER convention but was already written IN this shape — by a hand-copy, an
+    older compiler revision, or a prior `adopt` call whose markers were later stripped
+    by hand. Anchored on the exact handle so an unrelated line elsewhere in a hand-
+    written office (a different seat quoted in prose) can never false-match."""
+    return re.compile(rf"^# {re.escape(handle)} — seat office\s*$", re.MULTILINE)
+
 _ROLE_SURFACES = {"worker", "coordinator"}
 _PRACTICE_LIMIT = 5
 
@@ -90,6 +102,36 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
     who = handle or manager_seat_id
     return (f"\nYour manager of record is **{who}** — the `managed_by` edge is live "
             f"in the graph.\n", who)
+
+
+async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
+    """The "## Your team" section (thread 613cda0a, nebbercracker 8046 item C): promote
+    writes the bond DOWN (a worker's own office names its manager, `_manager_block`
+    above) but never UP — a coordinator cold-booting could not tell who it manages
+    without calling `team()`. Every seat with an active `managed_by` edge INTO
+    `manager_seat_id` (`seats_managed_by`'s own reverse-of-`manager_of_seat` query, not
+    a second copy), by handle, with its own governed repos (`charter_of` — the same
+    live source the charter section above already trusts, never a stored/cached
+    roster). Empty string — never a hollow heading — for a coordinator with no team
+    yet; a freshly promoted seat with zero workers bonded is not a bug worth a section
+    that says nothing."""
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import seats_managed_by
+
+    workers = await seats_managed_by(pool, manager_seat_id)
+    if not workers:
+        return ""
+    lines: list[str] = []
+    for worker_seat_id in workers:
+        handle = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+            "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat_id)
+        repos = await charter_of(pool, worker_seat_id)
+        repo_text = ", ".join(f"`{r}`" for r in repos) if repos else "no charter yet"
+        lines.append(f"- **{handle or worker_seat_id}** ({worker_seat_id}) — governs "
+                     f"{repo_text}")
+    return "\n## Your team\n" + "\n".join(lines) + "\n"
 
 
 _AMENDMENT_RENDER_CAP = 200
@@ -211,7 +253,10 @@ async def compile_managed_body(
             handle=handle, office=office, manager_block=manager_block,
             manager_handle=manager_handle)
     elif resolved_role == "coordinator":
-        role_body = _read_template("role_coordinator.md").format(handle=handle, office=office)
+        assert seat_id is not None  # resolved_role only derives from a real seat_id
+        team_block = await _team_block(actions.pool, seat_id)
+        role_body = _read_template("role_coordinator.md").format(
+            handle=handle, office=office, team_block=team_block)
     # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
     # the clause disappears entirely rather than rendering an empty "house **`**", which
     # would misread as a graph defect rather than the deliberate unset state it now is.
@@ -278,11 +323,25 @@ async def reissue_office(
     repaired, re-wrapped, or ignored.
 
     `adopt=True` is the one-time on-ramp for an office that predates the compiler (zero
-    markers on disk) — appends a fresh managed section at the end of the existing file,
-    touching nothing already there. Without it, a file with zero markers refuses too (a
-    missing section is never silently assumed to mean 'append one'); WITH it, a file
-    that already carries any marker-shaped text — well-formed or not — also refuses,
-    naming the seat, since adopt is for a first compile, not a second."""
+    markers on disk). Without it, a file with zero markers refuses too (a missing
+    section is never silently assumed to mean 'append one'); WITH it, a file that
+    already carries any marker-shaped text — well-formed or not — also refuses, naming
+    the seat, since adopt is for a first compile, not a second.
+
+    ONE HEADER, EVER (thread 49169c2f, nebbercracker 116 lines / jenny 137, both with a
+    duplicated "# handle — seat office" header): a naive adopt that always APPENDS
+    silently duplicates the header the instant the pre-existing file was already
+    shaped like an office — house_law.md's own line 1 IS that header, so any
+    hand-written or previously-adopted-then-demarkered office already carries one.
+    Before touching anything, adopt now searches `text` for that exact header line
+    (`_office_header_re`, anchored on `handle` so it can never false-match unrelated
+    prose). Found: everything from that header to end-of-file IS the old, unmarked
+    managed section — it is REPLACED by the fresh `wrapped` body, not appended after
+    (leading text ahead of the header, if any, is preserved untouched, same as
+    outside-the-markers text always is). Not found (genuinely foreign content, no
+    office-shaped header anywhere): the old append behavior stands — nothing here
+    resembles a managed section, so nothing is safe to replace, and the whole file is
+    preserved with the fresh section appended at the end."""
     if not because.strip():
         return {"error": "because is required — a reissue is testimony, same as a rename"}
     from src.orchestrator.charter import charter_of
@@ -348,7 +407,17 @@ async def reissue_office(
     wrapped = wrap_managed(body, version)
 
     if adopt:
-        new_text = text.rstrip("\n") + "\n\n" + wrapped
+        header_match = _office_header_re(handle).search(text)
+        if header_match is not None:
+            # ONE HEADER, EVER (thread 49169c2f): the old file already carries this
+            # exact office's own header line somewhere — everything from there to EOF
+            # is the pre-marker managed section, replaced wholesale rather than
+            # duplicated below. Leading text ahead of the header (rare, but possible)
+            # is preserved untouched.
+            lead = text[:header_match.start()].rstrip("\n")
+            new_text = (lead + "\n\n" if lead else "") + wrapped
+        else:
+            new_text = text.rstrip("\n") + "\n\n" + wrapped
     else:
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
         new_text = text[:b_start] + wrapped + text[e_end:]
