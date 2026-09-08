@@ -959,6 +959,130 @@ def test_dormant_history_confession_not_resumable_when_the_tail_is_empty(
     assert "seam itself" in info["not_resumable_reason"]
 
 
+# --- resume_verdict's CEILING is now OCCUPANCY, not raw tail bytes (2026-09-08, operator
+# dispatch, the anubis specimen: "29.52 MB tail over the 8 MB ceiling" refused a candidate
+# whose last recorded context occupancy was well under its window). `ceiling_bytes` keeps
+# exactly one job now: a catastrophic-corruption sanity bound (still byte-based, still
+# fires regardless of occupancy). -----------------------------------------------------------
+
+def _usage_line(input_tokens: int, cache_read: int = 0, cache_creation: int = 0) -> bytes:
+    """One main-loop assistant transcript line carrying a usage block — the same shape
+    `context_lens._usage_of` parses (`message.usage.{input,cache_read,cache_creation}_tokens`)."""
+    entry = {
+        "type": "assistant",
+        "message": {
+            "usage": {
+                "input_tokens": input_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+                "output_tokens": 1,
+            }
+        },
+    }
+    return (json.dumps(entry) + "\n").encode()
+
+
+def test_resume_verdict_resumes_a_byte_huge_tail_with_low_occupancy(tmp_path: Path) -> None:
+    """(a) THE ANUBIS SHAPE ITSELF: a tail dominated by a huge tool-output blob (never
+    rehydrated by a resume) followed by a small, low-occupancy usage block. Under the OLD
+    byte-ceiling (8MB) this tail — comfortably over 8MB — would have refused; under the new
+    occupancy ceiling it resumes, because what a resume actually rehydrates is small."""
+    from src.ingest.sessions import resume_diagnostics, resume_verdict
+
+    t = tmp_path / "x.jsonl"
+    # a large tool-result-shaped blob, never carrying a usage block itself — the exact shape
+    # a resume does NOT rehydrate (file reads, search results, fed to the model once)
+    blob = (b'{"type":"user","message":{"role":"user","content":[{"type":"tool_result",'
+            b'"content":"' + b"x" * 200 + b'"}]}}\n')
+    tail = blob * 50_000  # >8MB of tool-output-shaped lines
+    tail += _usage_line(5_000)  # the LAST recorded usage — low occupancy
+    t.write_bytes(tail)
+
+    _count, tail_bytes, _lines = resume_diagnostics(t)
+    assert tail_bytes > 8_000_000, "the specimen must actually be over the OLD 8MB ceiling"
+
+    # the NEW default (64MB corruption bound) passes this specimen clean
+    verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=1)
+    assert verdict is None, f"expected resumable, got: {verdict!r}"
+
+
+def test_resume_verdict_refuses_when_occupancy_genuinely_exceeds_the_window(
+    tmp_path: Path,
+) -> None:
+    """(b) The occupancy ceiling still refuses a GENUINELY over-window transcript — and its
+    message names tokens/percentage, never bytes. Occupancy is pushed past 1M (not just
+    200k) because `window_for(None, used)` self-corrects to the 1M tier the instant
+    occupancy exceeds 200k — an occupancy of merely 250k would self-correct to a window it
+    still fits inside."""
+    from src.ingest.sessions import resume_verdict
+
+    t = tmp_path / "x.jsonl"
+    t.write_bytes(_usage_line(1_050_000))
+
+    verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=1)
+    assert verdict is not None
+    assert "1,050,000 tokens" in verdict
+    assert "window" in verdict
+    assert "byte" not in verdict and "MB" not in verdict
+
+
+def test_resume_verdict_min_tail_floor_still_fires_independent_of_occupancy(
+    tmp_path: Path,
+) -> None:
+    """(c) The min_tail_bytes FLOOR is completely unchanged: still byte-based, still fires
+    before the occupancy check even runs — a tiny tail refuses even carrying a usage block
+    that would otherwise pass the occupancy ceiling easily."""
+    from src.ingest.sessions import resume_verdict
+
+    t = tmp_path / "x.jsonl"
+    t.write_bytes(_usage_line(10))  # tiny occupancy — would pass the ceiling on its own
+
+    verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=10_000_000)
+    assert verdict is not None
+    assert "seam itself" in verdict
+
+
+def test_resume_verdict_corruption_bound_fires_regardless_of_occupancy(
+    tmp_path: Path,
+) -> None:
+    """(d) The catastrophic-corruption sanity bound (what `ceiling_bytes` now means) fires
+    on a pathologically large tail REGARDLESS of what the occupancy read says — here the
+    occupancy itself is tiny (would pass the occupancy ceiling easily), but a small
+    `ceiling_bytes` stands in for "truly pathological" without needing an actual 64MB
+    fixture file."""
+    from src.ingest.sessions import resume_verdict
+
+    t = tmp_path / "x.jsonl"
+    t.write_bytes(b"x" * 5000 + _usage_line(10))
+
+    verdict = resume_verdict(t, ceiling_bytes=1000, min_tail_bytes=1)
+    assert verdict is not None
+    assert "catastrophic-corruption sanity bound" in verdict
+
+
+def test_resume_verdict_passes_when_no_usage_block_in_the_tail(tmp_path: Path) -> None:
+    """(e) No usage block anywhere in the tail (a young session, or one whose read window
+    landed entirely on non-assistant/no-usage lines) PASSES the occupancy ceiling — the
+    documented fallback: with no occupancy signal there is nothing to refuse ON, and the
+    corruption-sanity bound is the independent backstop for a genuinely dangerous tail."""
+    from src.ingest.sessions import resume_verdict
+
+    t = tmp_path / "x.jsonl"
+    t.write_bytes(b'{"type":"user","message":{"role":"user","content":"hello"}}\n' * 10)
+
+    verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=1)
+    assert verdict is None
+
+
+def test_osiris_resume_ceiling_bytes_default_is_the_corruption_bound() -> None:
+    """Settings default (2026-09-08 correction): raised from 8,000,000 (the old primary
+    resumability ceiling) to 64,000,000 (a loose catastrophic-corruption sanity bound,
+    several times any verified-live legitimate specimen's tail)."""
+    from src.config.settings import Settings
+
+    assert Settings().osiris_resume_ceiling_bytes == 64_000_000
+
+
 def test_dormant_history_note_names_the_resume_command_when_resumable() -> None:
     from src.ingest.sessions import dormant_history_note
 

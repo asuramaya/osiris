@@ -1198,7 +1198,14 @@ def _gate_name(detail: str) -> str:
     already warns against for every OTHER gate it names."""
     if "seam itself" in detail:
         return "compaction"
-    if "context ceiling" in detail:
+    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen): the ceiling refusal's
+    # own prose no longer says "context ceiling" — it names either the occupancy read
+    # (`_occupancy_ceiling_verdict`, the primary ceiling now) or the catastrophic-corruption
+    # sanity bound (`_verdict_from_diagnostics`'s narrowed ceiling check). Both still name
+    # the SAME gate here — a caller asking "which named gate refused this" does not need to
+    # tell the two apart, only that it was a ceiling-shaped refusal, not the floor or a
+    # missing-anchor one.
+    if "context occupancy" in detail or "catastrophic-corruption sanity bound" in detail:
         return "ceiling"
     if "no anchored transcript" in detail:
         return "no-anchor"
@@ -1559,8 +1566,10 @@ async def _lineage_resume_candidate(
     SPECIFIC gate that refused it (numbers, not adjectives — Thoth's own explicit
     requirement), so a caller's receipt can read one line instead of a human re-running
     succession_chain by hand."""
-    from src.ingest.sessions import _verdict_from_diagnostics
+    from src.ingest.sessions import _occupancy_ceiling_verdict, _verdict_from_diagnostics
     from src.ingest.soul_store import SoulStore
+    from src.ingest.transcript_store import TranscriptStore
+    from src.orchestrator.context_lens import _usage_from_store
     from src.orchestrator.offices import seat_office_target
     from src.orchestrator.succession import succession_chain
 
@@ -1617,6 +1626,25 @@ async def _lineage_resume_candidate(
         verdict = _verdict_from_diagnostics(
             tail_bytes, tail_lines, ceiling_bytes=st.osiris_resume_ceiling_bytes,
             min_tail_bytes=st.osiris_resume_min_tail_bytes)
+        if verdict is None:
+            # THE OCCUPANCY CEILING, STORE SIDE (2026-09-08, operator dispatch, the anubis
+            # specimen — see sessions.py's `_occupancy_ceiling_verdict` for the full
+            # mechanics): this loop has no transcript Path to hand `context_lens.last_usage`
+            # (its own read is entirely `SoulStore`-mediated, keyed on `anchor_sid`), so the
+            # store-side symmetry `context_lens._usage_from_store` was built for is used
+            # instead — `TranscriptStore.last_usage_of_session` reads the SAME harness's
+            # most recent recorded usage row from `harness_turns` (a sibling store to
+            # `soul_lines`, populated off the same transcripts) and `_usage_from_store`
+            # adapts its {input, output, cache_*} shape to what `occupancy()` expects.
+            # `None` (no usage row for this anchor_sid — e.g. a harness that never recorded
+            # per-turn tokens, or a session `TranscriptStore` has not itself ingested) falls
+            # through to `_occupancy_ceiling_verdict`'s own None-passes fallback, same as the
+            # disk path's "no usage block in the tail" case — never a spurious refusal for
+            # want of a reading this loop cannot always get.
+            usage_row = await TranscriptStore(pool).last_usage_of_session(
+                "claude-code", anchor_sid)
+            usage = _usage_from_store(usage_row) if usage_row is not None else None
+            verdict = _occupancy_ceiling_verdict(usage)
         if verdict is not None:
             log.append(f"gen {gen} (session {session[:8]}, {tail_mb:.2f}MB store tail): "
                        f"{verdict}")

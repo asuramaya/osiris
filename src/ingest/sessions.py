@@ -71,6 +71,7 @@ from src.ingest.providers import LLMClient, Usage, llm_provider, spend_is_metere
 from src.ingest.redact import credential_shaped, redact, strip_off_record
 from src.ingest.scope import scope_match, sense_scopes
 from src.ingest.usage import record_usage, usage_summary
+from src.orchestrator import context_lens
 from src.orchestrator.capture import link_repo
 from src.orchestrator.ceiling import may_spend
 from src.orchestrator.dispose import licence
@@ -412,7 +413,20 @@ def resume_diagnostics(transcript: Path) -> tuple[int, int, int]:
     useful fact about a transcript (how many seams it has crossed), just no longer a
     pass/fail decision on its own. Sequential single-pass read, no line held in memory
     beyond the current one — lives here, not in trigger.py, because it is a transcript-file
-    fact like `locate_current_transcript`, not a dispatch decision."""
+    fact like `locate_current_transcript`, not a dispatch decision.
+
+    CORRECTION (2026-09-08, operator dispatch, the anubis specimen): `tail_bytes` measures
+    the right SPAN (content since the last compaction) but the wrong UNIT for the
+    resumability CEILING specifically — raw JSONL bytes are not context tokens, and a tail
+    can be dominated by huge tool-output blobs (file reads, search results) that were fed to
+    the model once and are NOT what a resume actually rehydrates. `resume_verdict` below no
+    longer treats `tail_bytes` as the ceiling measure; it now checks the last recorded
+    assistant usage OCCUPANCY instead (`context_lens.last_usage`/`occupancy`/`window_for`),
+    and this function's `tail_bytes`/`tail_lines` pair is used for two narrower things: the
+    MINIMUM-tail floor (unchanged — see `_verdict_from_diagnostics`) and a catastrophic-
+    corruption sanity bound (a tail so large — 64MB+ by default — that something is actually
+    broken, independent of what the occupancy read says). `tail_bytes` itself is unchanged
+    in meaning or computation; only what a CALLER does with it for the ceiling changed."""
     total = 0
     count = 0
     lines_total = 0
@@ -450,13 +464,84 @@ def _verdict_from_diagnostics(
     checks — the exact drift this house was already burned by once (eebeb1f, #136) and the
     reason `resume_verdict` itself was unified in the first place. `resume_verdict` below
     is now a thin file-reading wrapper over this; every existing caller's contract is
-    unchanged."""
+    unchanged.
+
+    CORRECTION (2026-09-08, operator dispatch, the anubis specimen — "29.52 MB tail over
+    the 8 MB ceiling" refused a candidate whose actual re-hydrated context was well under
+    the window): `ceiling_bytes` no longer names the PRIMARY resumability ceiling here. Raw
+    JSONL bytes measure a tail's cumulative SIZE, not what a resume rehydrates into context
+    — a tail can be dominated by huge tool-output blobs (file reads, search results) fed to
+    the model once and never re-hydrated by a resume at all. The real ceiling is now the
+    last recorded assistant usage OCCUPANCY, checked separately by
+    `_occupancy_ceiling_verdict` (below) against `context_lens.window_for` — `resume_verdict`
+    calls both, this floor check first (cheap, always meaningful) then the occupancy check
+    (needs a usage read) only once the floor passes. `ceiling_bytes` keeps exactly ONE job
+    here now: a CATASTROPHIC-CORRUPTION sanity bound — a tail so large (64MB+ default,
+    `osiris_resume_ceiling_bytes`) that its very shape suggests something is actually
+    broken (a runaway append, a malformed boundary marker never matched, ...), refused
+    regardless of what the occupancy read says, because a transcript that shape is not
+    trusted to have a coherent occupancy reading in the first place. This message still
+    names bytes on purpose — see `resume_verdict`'s own docstring for why that is judged
+    a defensible, deliberate exception to "never mention bytes in a refusal", not an
+    oversight."""
     if tail_bytes < min_tail_bytes:
         return (f"found a candidate, but its tail after the last compaction boundary is "
                 f"only {tail_bytes} byte(s) ({tail_lines} line(s)) — it closed at or near "
                 f"the seam itself, with nothing real to resume into")
     if tail_bytes > ceiling_bytes:
-        return "found a candidate, but its resumable content is over the context ceiling"
+        mb, ceiling_mb = tail_bytes / 1_000_000, ceiling_bytes / 1_000_000
+        return (f"found a candidate, but its tail after the last compaction boundary is "
+                f"{mb:.1f}MB — over the {ceiling_mb:.0f}MB catastrophic-corruption sanity "
+                f"bound, a shape that suggests something is actually broken rather than "
+                f"merely large; refused regardless of what its last recorded context "
+                f"occupancy reads")
+    return None
+
+
+def _occupancy_ceiling_verdict(usage: dict[str, int] | None) -> str | None:
+    """THE REAL CEILING (2026-09-08, operator dispatch, the anubis specimen — see
+    `_verdict_from_diagnostics`'s own CORRECTION note for the full story): `usage` is the
+    last recorded main-loop assistant usage block — `context_lens.last_usage(transcript)`
+    on the disk path, or a store row adapted through `context_lens._usage_from_store` on
+    the store path (`resume_verdict` and trigger.py's chain-walk resumability check,
+    respectively — the SAME shared pure function both call, the exact "one decision, never
+    two hand-synchronized copies" discipline `_verdict_from_diagnostics` was already built
+    on, ruling 38c71544).
+
+    `usage is None` PASSES, deliberately, not refuses (JUDGMENT CALL, documented per the
+    dispatch's own instruction): no usage block was found in the read tail at all — a
+    brand-new session, a store with no usage rows for this session, or (rare) a tail whose
+    read window landed entirely on lines with no assistant usage block inside it. With no
+    occupancy signal there is nothing to refuse ON — inventing a fallback number here would
+    just be re-growing a proxy for the exact thing this correction exists to stop measuring
+    by proxy. This is judged safe because `_verdict_from_diagnostics`'s own corruption-
+    sanity bound still stands as an independent backstop against a truly pathological tail,
+    and because a genuinely usage-less tail is the RARE case — every real assistant turn in
+    Claude Code's own transcript format carries a usage block, so a session with none in its
+    tail is far more likely young/unusual than large and dangerous.
+
+    Otherwise: `occ = context_lens.occupancy(usage)`; `window, _assumed =
+    context_lens.window_for(None, occ)` — passing `raw_model=None` is SAFE and CORRECT here
+    per `window_for`'s own docstring: it self-corrects to the 1M tier the moment occupancy
+    already exceeds 200k, using the SAME number this function is about to check against it,
+    so no caller of `_occupancy_ceiling_verdict` needs to thread a raw_model string through
+    Settings/trigger.py just to ask this one question (verified: none of this file's or
+    trigger.py's resume call sites have easy access to one). Refuses at `occ >= window`, not
+    `occ > window`: AT the window a harness resume has ZERO headroom left to even receive
+    the resumed state before needing to compact again — indistinguishable in practical
+    effect from being past it, so treating them the same is the more honest reading of
+    "under the window passes." The message names TOKENS AND PERCENTAGE, never bytes — the
+    entire point of this correction is that bytes were never the right unit."""
+    if usage is None:
+        return None
+    occ = context_lens.occupancy(usage)
+    window, _assumed = context_lens.window_for(None, occ)
+    if occ >= window:
+        pct = round(100 * occ / window) if window else 100
+        return (f"found a candidate, but its last recorded context occupancy "
+                f"({occ:,} tokens, {pct}% of the {window // 1000}k window) is at or over "
+                f"the window — a resume would have no room left to even receive the "
+                f"resumed state before needing to compact again")
     return None
 
 
@@ -480,22 +565,40 @@ def resume_verdict(
     (`osiris_resume_min_tail_bytes`), not here — this function only enforces whatever floor
     it is given.
 
-    THEN THE RESUMABLE-TAIL CEILING, NOT RAW FILE SIZE (unchanged from the original fix,
-    thread 771366d1): raw file size measures a session's cumulative lifetime, not what a
-    resume actually hydrates — verified live on two real specimens (72MB/103MB
-    transcripts) that only 2-3% of the file, the content since the LAST compaction, is
-    what a resume needs. Checked against `tail_bytes`, the SAME number the floor above
-    checks — one measurement, two-sided range, not two unrelated gates.
+    THEN THE OCCUPANCY CEILING, NOT RAW TAIL BYTES (CORRECTED 2026-09-08, operator dispatch,
+    the anubis specimen: "29.52 MB tail over the 8 MB ceiling" refused a candidate whose
+    actual re-hydrated context was well under the window — raw file size was already known
+    wrong for measuring a session's cumulative lifetime (thread 771366d1's original fix,
+    verified live on two real specimens that only 2-3% of a 72MB/103MB transcript, the
+    content since the LAST compaction, is what a resume needs) but `tail_bytes` itself turns
+    out to be the wrong UNIT for the ceiling specifically, not just the wrong SPAN: a tail
+    can be dominated by huge tool-output blobs — file reads, search results — fed to the
+    model once and never rehydrated by a resume, which the harness's own compaction/resume
+    mechanism restores only the conversational state from, compacting again on resume if
+    genuinely too large. The ceiling now checks the last recorded assistant usage OCCUPANCY
+    (`context_lens.last_usage` → `occupancy` → `window_for`) instead — see
+    `_occupancy_ceiling_verdict`'s own docstring for the full mechanics, the `usage is None`
+    fallback's reasoning, and why `raw_model=None` is the correct call into `window_for`
+    here. `tail_bytes` keeps exactly one ceiling-shaped job now: `ceiling_bytes` (still
+    passed to `_verdict_from_diagnostics`) is a catastrophic-corruption sanity bound only —
+    see that function's own CORRECTION note.
 
-    THE TWO GATES THEMSELVES now live in `_verdict_from_diagnostics` — this function is
-    just `resume_diagnostics` (the disk read) followed by that pure check."""
+    THE TWO GATES THEMSELVES now live in `_verdict_from_diagnostics` (the floor, plus the
+    corruption-sanity bound) and `_occupancy_ceiling_verdict` (the real ceiling) — this
+    function is `resume_diagnostics` (the disk read) followed by the first pure check, then
+    — only once that passes — `context_lens.last_usage` (a second, small tail-only disk
+    read) followed by the second pure check."""
     _count, tail_bytes, tail_lines = resume_diagnostics(transcript)
-    return _verdict_from_diagnostics(
+    verdict = _verdict_from_diagnostics(
         tail_bytes, tail_lines, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
+    if verdict is not None:
+        return verdict
+    usage = context_lens.last_usage(transcript)
+    return _occupancy_ceiling_verdict(usage)
 
 
 def dormant_history_confession(
-    cwd: str, *extra_cwds: str, root: Path | None = None, ceiling_bytes: int = 8_000_000,
+    cwd: str, *extra_cwds: str, root: Path | None = None, ceiling_bytes: int = 64_000_000,
     min_tail_bytes: int = 1,
 ) -> dict[str, Any] | None:
     """None when every candidate cwd's newest transcript is absent or below the trivial
@@ -522,14 +625,20 @@ def dormant_history_confession(
     still true and useful: whether a human (or another lane entirely) COULD resume it by
     hand, and the exact command.
 
-    RESUMABLE MEANS TWO INDEPENDENT GATES, BOTH MUST PASS, via `resume_verdict` (shared
-    with trigger.py's own resume path — one decision, never two hand-synchronized copies,
-    38c71544): the corrected ceiling check (thread 771366d1) against `tail_bytes`, not raw
-    file size, AND a MINIMUM floor on that same `tail_bytes` (2026-08-09, the operator's
-    own correction, replacing the old compaction-COUNT gate — "closed at exactly the
-    compaction seam is a rare special case"; see `resume_diagnostics`'s own docstring for
-    the full finding, including sekhmet's live specimen the old count-based gate got
-    wrong: 12 compactions, 4.07MB of real work after the last one, refused anyway).
+    RESUMABLE MEANS THE SAME GATES `resume_verdict` ENFORCES (shared with trigger.py's own
+    resume path — one decision, never two hand-synchronized copies, 38c71544): a MINIMUM
+    floor on `tail_bytes` (2026-08-09, the operator's own correction, replacing the old
+    compaction-COUNT gate — "closed at exactly the compaction seam is a rare special case";
+    see `resume_diagnostics`'s own docstring for the full finding, including sekhmet's live
+    specimen the old count-based gate got wrong: 12 compactions, 4.07MB of real work after
+    the last one, refused anyway), a catastrophic-corruption sanity bound on that same
+    `tail_bytes` (`ceiling_bytes`, now 64MB default — CORRECTED 2026-09-08, see
+    `resume_verdict`'s own docstring: this used to be the PRIMARY ceiling, measured in the
+    wrong unit — see below), and THEN the real ceiling: the last recorded assistant usage
+    OCCUPANCY against the harness's own context window (`_occupancy_ceiling_verdict`) —
+    raw JSONL bytes were never what a resume rehydrates into context, and a tail can be
+    dominated by huge tool-output blobs that were fed to the model once and are not part of
+    what a resume restores.
 
     A REFUSAL keyed on "any history exists" would misfire on every ordinary relaunch in
     this house — a seat's office is durable by design (never moves, reused across every
@@ -602,8 +711,13 @@ def dormant_history_note(info: dict[str, Any]) -> str:
                 f"compaction summary, not the mind that did the work — a fresh mind's own "
                 f"graph-based orient()+handoff already IS approximately that same summary, "
                 f"from an audited source instead of a lossy one (ruling 7fa4b599).")
-    return (f"{base} NOT resumable — its content since the last compaction boundary is "
-            f"over the context ceiling, a real cost concern on its own.")
+    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen): this branch used to
+    # name its own generic "over the context ceiling" wording, which drifted from — and in
+    # anubis's case actively contradicted — the actual reason `resume_verdict` computed
+    # (occupancy now, not raw bytes; or the rare catastrophic-corruption sanity bound). The
+    # reason string IS the precise, current fact; repeat it verbatim rather than
+    # re-describing it in older, staler words.
+    return f"{base} NOT resumable — {reason}, a real cost concern on its own."
 
 
 def locate_current_transcript(
