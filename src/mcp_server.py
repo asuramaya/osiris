@@ -7224,6 +7224,9 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("fleet_reconcile"), "execute": _b(False),
         }, ["action"]),
         _dispatcher_action_schema({
+            "action": _action_const("fleet_prune"), "execute": _b(False),
+        }, ["action"]),
+        _dispatcher_action_schema({
             "action": _action_const("file_subagent"), "subagent_id": _s(),
         }, ["action", "subagent_id"]),
         _dispatcher_action_schema({
@@ -7244,6 +7247,7 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
                            ["agent_id", "because"]),
     "retire": (["agent_id", "because", "override_live"], ["agent_id", "because"]),
     "fleet_reconcile": (["execute"], []),
+    "fleet_prune": (["execute"], []),
     "file_subagent": (["subagent_id"], ["subagent_id"]),
     "file_subagents": (["project", "dry_run"], []),
 }
@@ -7326,6 +7330,13 @@ async def _agent_impl(
         from src.orchestrator.fleet_reconcile import reconcile_execute
         return await reconcile_execute(Actions(await _pool_get()), actor=ident.agent_id,
                                        execute=execute)
+    if action == "fleet_prune":
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first", "why": _anchorless(ctx)}
+        from src.orchestrator.fleet_prune import prune_execute
+        return await prune_execute(Actions(await _pool_get()), actor=ident.agent_id,
+                                   execute=execute)
     if action == "file_subagent":
         assert subagent_id is not None
         ident = await _ident_for(ctx)
@@ -7370,6 +7381,8 @@ async def agent(
         because)
       fleet_reconcile: the bulk reaper over stale/anonymous fleet mounts (dry run by
         default; execute=True to act)
+      fleet_prune: dead_transcript + unclaimed_body mounts, narrower than fleet_reconcile
+        (never touches its folding buckets) — dry run by default, execute=True to act
       file_subagent: file ONE ephemeral subagent under its spawner (subagent_id)
       file_subagents: THE SWEEP — file_subagent's own resolver over every active
         subagent in scope (project=None is fleet-wide; dry run by default)

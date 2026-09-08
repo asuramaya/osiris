@@ -1380,7 +1380,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # reading the tool's own contract needs to know the new shape exists, not just the code.
 # No new tool, no new schema param, load-bearing growth per this file's own escape
 # valve. Measured exact (115,087), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 115087
+# 114,808 -> 115,179 (2026-09-08, wave 8, thread 07ca68ca, "automatic mechanical fleet
+# hygiene"): agent() gains action='fleet_prune' — a new AGENT_INPUT_SCHEMA branch
+# (execute only) plus a one-line ACTION TABLE entry, mirroring fleet_reconcile's own
+# shape. A genuinely new mechanical-hygiene verb, no new tool, load-bearing growth per
+# this file's own escape valve. Measured exact (115,179), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 115458
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

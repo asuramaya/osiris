@@ -1,1 +1,3 @@
-Show the fleet at a glance. Call the osiris MCP tool `fleet` and render its `tree` verbatim in a code block (● live / ○ historical), then call `fleet_digest` with hours=24 and give ONE summary line from its `summary` (agents, unresolved, swapped, conversations, operator_unread) plus the danger map rows if any agents are swapped. Compact — no tables beyond the tree, no advice.
+`/fleet prune`: call `agent(action='fleet_prune', execute=<True iff "execute"/"--execute" follows, else False>)`. Print `would_drop_transcripts`/`would_bind` (dry run) or `dropped_transcripts`/`bound` (executed), plus `reconcile_buckets_untouched` as one note line. Compact, no advice.
+
+`/fleet` alone: show the fleet at a glance. Call `fleet`, render `tree` verbatim (● live / ○ historical), then `fleet_digest(hours=24)`, one summary line (agents, unresolved, swapped, conversations, operator_unread) + danger map if swapped. Compact, no advice.

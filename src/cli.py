@@ -3911,6 +3911,46 @@ async def cmd_fleet_reconcile(
     return 0
 
 
+async def cmd_fleet_prune(
+    *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris fleet-prune [--execute] [--actor W] — the console-script door onto
+    orchestrator.fleet_prune.prune_execute (thread 07ca68ca, wave 8), the same function
+    `agent(action='fleet_prune')` wraps. Dry run is the default (returns the plan, writes
+    nothing); --execute performs it. Deliberately narrower than fleet-reconcile: only
+    dead_transcript (a mount row whose own job_dir is gone from disk) and unclaimed_body
+    (a live OS body bound to its seat when tree_seat_hint resolves one) — fleet-reconcile's
+    own identity-folding buckets stay behind its own kill switch, untouched here."""
+    from src.actions.core import Actions
+    from src.orchestrator.fleet_prune import prune_execute
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:fleet-prune")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris fleet-prune: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await prune_execute(Actions(pool), actor=actor, execute=execute)
+    finally:
+        if owns_pool:
+            await pool.close()
+    verb = "executed" if execute else "planned (dry run — pass --execute to write)"
+    print(f"fleet-prune {verb}: {out}")
+    return 0
+
+
 async def cmd_heal_seat_transcript(
     handle: str, source_paths: list[str], *, apply: bool = False, because: str = "",
     pool: asyncpg.Pool | None = None,
@@ -5067,7 +5107,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
-                        fleet-reconcile
+                        fleet-reconcile, fleet-prune
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -5689,6 +5729,23 @@ def _build_parser() -> argparse.ArgumentParser:
                                    help=f"who is performing this reconcile — defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
+    p_fleet_prune = sub.add_parser(
+        "fleet-prune", description=_d(
+            "THE MECHANICAL PRUNE (thread 07ca68ca) — dead_transcript (a mount row whose "
+            "own job_dir is gone from disk) and unclaimed_body (a live OS body bound to "
+            "its seat when tree_seat_hint resolves one), the same orchestrator.fleet_prune"
+            ".prune_execute the MCP tool wraps. Dry run is the default: returns the plan, "
+            "writes nothing. fleet-reconcile's own identity-folding buckets are untouched "
+            "here — see that command instead"),
+        epilog="example: osiris fleet-prune\n"
+            "example, to actually write: osiris fleet-prune --execute")
+    p_fleet_prune.add_argument("--execute", action="store_true",
+                               help="act on the plan rather than just report it — "
+                                    "default is dry-run")
+    p_fleet_prune.add_argument("--actor", default=_CONSOLE_ACTOR,
+                               help=f"who is performing this prune — defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
+
     p_heal_transcript = sub.add_parser(
         "heal-seat-transcript", description=_d(
             "splice a seat's session, fragmented across multiple project slugs by a "
@@ -6182,6 +6239,8 @@ def main(argv: list[str] | None = None) -> int:
             args.seat, args.because, override_live=args.override_live, actor=args.actor))
     if args.command == "fleet-reconcile":
         return asyncio.run(cmd_fleet_reconcile(execute=args.execute, actor=args.actor))
+    if args.command == "fleet-prune":
+        return asyncio.run(cmd_fleet_prune(execute=args.execute, actor=args.actor))
     if args.command == "heal-seat-transcript":
         return asyncio.run(cmd_heal_seat_transcript(
             args.seat, args.source_paths, apply=args.apply, because=args.because))
