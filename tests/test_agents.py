@@ -5268,6 +5268,66 @@ async def test_a_half_healed_phantom_report_is_idempotent(actions: Actions) -> N
     assert count == 1, "open_thread's own idempotency must collapse repeat sightings to one"
 
 
+async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_resweep(
+    actions: Actions,
+) -> None:
+    """Thread 672972a2, the widened status-regression's own first live finding: a human
+    resolves the report, the very next 15-minute sweep re-flags the identical condition —
+    open_thread's own idempotency (same summary hash, same Thread object) was
+    unconditionally re-asserting status='open', overriding the resolve every cycle. The
+    condition being STILL PRESENT is real; re-opening a thread a human already closed is
+    not this detector's call. A resolved report must stay resolved, picking up an
+    annotation instead."""
+    from src.orchestrator.agents import (
+        _DEBOUNCE_SRC,
+        EvidenceClass,
+        confidence_for,
+        fold_existing_zero_turn_phantoms,
+        mint_heir,
+    )
+    from src.orchestrator.capture import resolve_thread
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0003", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0003", root, because="live-swap",
+                                           succession="a → b")
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC)):
+        await actions.assert_property(phantom_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                      evidence_class=do.value)
+
+    await fold_existing_zero_turn_phantoms(actions)
+    thread = await actions.pool.fetchrow(
+        "SELECT o.canonical, o.id FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE $1",
+        f"%HALF-HEALED PHANTOM: {phantom}%")
+    assert thread is not None
+    await resolve_thread(actions, str(thread["canonical"]), because="a human's own call",
+                         source="agent:human-reviewer")
+
+    # the very next sweep — the condition is still unhealed, unchanged
+    await fold_existing_zero_turn_phantoms(actions)
+
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", thread["id"])
+    assert status == "resolved", "a human's resolve must never be silently overridden"
+    note = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name LIKE 'note:%' LIMIT 1", thread["id"])
+    assert note is not None and "still present" in note
+
+    # never TWO threads either — the sweep must not have minted a fresh one instead
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE $1",
+        f"%HALF-HEALED PHANTOM: {phantom}%")
+    assert count == 1
+
+
 # ═══ _debounce_roundtrip ATOMICITY (decision ee012ebc) ═══
 
 async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_exception(
