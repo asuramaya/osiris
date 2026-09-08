@@ -1500,6 +1500,21 @@ async def _own_house_stamp(pool: asyncpg.Pool, seat_id: str) -> tuple[str | None
     return (row["house"], row["source_id"]) if row else (None, None)
 
 
+async def _is_ghost_house(pool: asyncpg.Pool, seat_id: str, house: str) -> bool:
+    """THE GHOST CLAUSE (operator ruling 2026-09-07, thread a732e331, "adopt all three"):
+    a seat's stamped `house` equal to its own governed project's name, case-insensitive,
+    is a leftover from before houses were optional at all — the era when a seat's house
+    and its charter were the same string by construction, never a deliberate house
+    declaration. `derive_house` must read it as empty before any comparison, exactly as
+    if the property had never been stamped, on both branches that consult it (a head's
+    own answer, and the anchor's real-crossing check alike) — never a special case one
+    of the two forgets."""
+    from src.orchestrator.charter import charter_of
+
+    governed = await charter_of(pool, seat_id)
+    return any(house.lower() == g.lower() for g in governed)
+
+
 _MAX_HOUSE_HOPS = 32  # generous for any real org depth (mirrors mint_heir's own bounded-
                       # walk convention, range(64)) — exists to catch a managed_by CYCLE,
                       # a data bug, not a legitimately deep chain
@@ -1553,6 +1568,26 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
     operator-sourced edge onto a seat with no stamped house of its own still derives
     through, never anchoring at emptiness.
 
+    THE GHOST CLAUSE (operator ruling 2026-09-07, thread a732e331, "adopt all three" —
+    on top of a418b017's own two-signal AND above): a MANAGED seat's own stamped `house`
+    equal to its own governed project's name, case-insensitive, is a GHOST from before
+    houses were optional — the era a seat's house and its charter were the same string by
+    construction, never a deliberate declaration. `_is_ghost_house` reads it as empty
+    BEFORE the anchor's real-crossing comparison runs, so a ghost never anchors (nothing
+    crosses when there was never a real house there) — it walks through to the manager's
+    derivation exactly like a seat with no stamp at all. DELIBERATELY BLIND ON A HEAD:
+    the identical string match is the ordinary, legitimate shape for a head (Thoth's own
+    'osiris' house governing the 'osiris' project) — the ghost clause only ever protects
+    the managed-seat anchor check, never a head's own authoritative declaration.
+
+    THE NONE CLAUSE (same ruling): a boundary needs TWO REAL, DIFFERENT houses — a manager
+    side that itself derives to None never anchors the seat below it, however loud the
+    operator's hand on the crossing. A promoted worker whose stamped house differs from a
+    manager who is itself houseless (its own chain never reaches a real stamp) WALKS
+    THROUGH to that None rather than anchoring at its own now-orphaned value — the anchor
+    exists to preserve a real house crossing a real boundary, not to manufacture one where
+    the far side never had a house to cross into.
+
     READ-TIME ONLY, same discipline as reachability(): computed fresh every call, nothing
     written back. LOUD on a managed_by CYCLE — a seat reappearing in its own chain is a
     graph bug, not a deep hierarchy, so this logs and returns None rather than silently
@@ -1567,15 +1602,22 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
             return None
         seen.add(current)
         manager = await manager_of_seat(pool, current)
-        if manager is None:  # current is the HEAD — its own stamped house is authoritative
+        if manager is None:  # current is the HEAD — its own stamped house is authoritative,
+            # GHOST-BLIND ON PURPOSE: a head's own house deliberately matching its own
+            # flagship repo (Thoth's own 'osiris' house governing the 'osiris' project) is
+            # the common, legitimate case, not a leftover — the ghost clause only ever
+            # protects the ANCHOR comparison below from a managed seat's stale pre-house
+            # snapshot, never a head's own deliberate declaration.
             house, _source = await _own_house_stamp(pool, current)
             return house
         house, house_source = await _own_house_stamp(pool, current)
+        if house and await _is_ghost_house(pool, current, house):
+            house = None
         if house:
             link_source = await _managed_by_source(pool, current)
             if link_source in _OPERATOR_ACTORS or house_source in _OPERATOR_ACTORS:
                 manager_house = await derive_house(pool, manager, max_hops=max_hops)
-                if house != manager_house:
+                if manager_house is not None and house != manager_house:
                     return house  # a house ANCHOR — a real crossing, operator's hand
         current = manager
     logger.warning("house derivation for %s exceeded %d hops without reaching a head",
