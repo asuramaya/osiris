@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     # it even when unavailable (every door then refuses by name, never silently falls
     # through to a different adapter than the one named).
     osiris_harness_adapter: str = "auto"
+    osiris_crush_binary: str = "crush"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
     # Semantic search (the max-level ruling a0cfcca1). The Claude CLI has no embeddings
     # endpoint and keyless is a feature, so the embedder is a LOCAL static model

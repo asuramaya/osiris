@@ -162,13 +162,121 @@ async def test_dsh_list_sessions_wraps_enumerate(monkeypatch: pytest.MonkeyPatch
                     "project": "proj", "harness": "dsh", "anchored": True}]
 
 
-# ═══ Crush/Cursor stubs: declared, nothing built ══════════════════════════════════════════
+# ═══ CrushAdapter: real spawn + list_sessions, everything else refuses ════════════════════
 
-@pytest.mark.parametrize("adapter_cls", [CrushAdapter, CursorAdapter])
-async def test_stub_adapters_declare_no_capabilities_and_refuse_everything(
-    adapter_cls: type,
+async def test_crush_capabilities_is_spawn_and_list_sessions_only() -> None:
+    assert CrushAdapter().capabilities() == frozenset({"spawn", "list_sessions"})
+
+
+async def test_crush_resume_reply_stop_all_refuse_by_name() -> None:
+    crush = CrushAdapter()
+    for coro in (crush.resume(), crush.reply(), crush.stop()):
+        out = await coro
+        assert out["error"].startswith("adapter 'crush' does not support")
+
+
+async def test_crush_spawn_needs_a_prompt() -> None:
+    out = await CrushAdapter().spawn(repo="/tmp/r")
+    assert "error" in out
+
+
+async def test_crush_spawn_calls_crush_run_with_the_prompt_as_a_trailing_positional(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = adapter_cls()
+    calls: list[dict[str, Any]] = []
+
+    class _FakeProc:
+        pid = 4242
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _FakeProc:
+        calls.append({"argv": list(argv), **kwargs})
+        return _FakeProc()
+
+    monkeypatch.setattr("src.orchestrator.harness_process.asyncio.create_subprocess_exec",
+                        _fake_exec)
+
+    out = await CrushAdapter().spawn(repo="/tmp/r", prompt="do the thing", model="glm-4.6")
+
+    assert out == {"spawned": True, "repo": "/tmp/r", "pid": 4242}
+    assert calls == [{"argv": ["crush", "run", "--model", "glm-4.6", "do the thing"],
+                      "cwd": "/tmp/r", "stdout": -3, "stderr": -3}]
+
+
+async def test_crush_spawn_tolerates_a_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_exec(*argv: str, **kwargs: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "crush")
+
+    monkeypatch.setattr("src.orchestrator.harness_process.asyncio.create_subprocess_exec",
+                        _fake_exec)
+
+    out = await CrushAdapter().spawn(repo="/tmp/r", prompt="do the thing")
+
+    assert "error" in out
+
+
+async def test_crush_list_sessions_needs_a_cwd() -> None:
+    assert await CrushAdapter().list_sessions() == []
+
+
+async def test_crush_list_sessions_sets_the_subprocess_cwd_never_a_cwd_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIVE-MEASURED (this module's own docstring): `--cwd` is a no-op for `crush session
+    list` -- it silently returns [] regardless of what's on disk. The subprocess's own
+    cwd= is the only door that actually works, and this asserts the flag is never passed."""
+    calls: list[dict[str, Any]] = []
+
+    class _FakeProc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (b'[{"id":"abc123","title":"a session"}]', b"")
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _FakeProc:
+        calls.append({"argv": list(argv), **kwargs})
+        return _FakeProc()
+
+    monkeypatch.setattr("src.orchestrator.harness_process.asyncio.create_subprocess_exec",
+                        _fake_exec)
+
+    out = await CrushAdapter().list_sessions(cwd="/tmp/r")
+
+    assert out == [{"id": "abc123", "title": "a session"}]
+    call = calls[0]
+    assert call["argv"] == ["crush", "session", "list", "--json"]  # no --cwd flag, ever
+    assert call["cwd"] == "/tmp/r"
+
+
+async def test_crush_list_sessions_tolerates_a_missing_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_exec(*argv: str, **kwargs: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "crush")
+
+    monkeypatch.setattr("src.orchestrator.harness_process.asyncio.create_subprocess_exec",
+                        _fake_exec)
+
+    assert await CrushAdapter().list_sessions(cwd="/tmp/r") == []
+
+
+async def test_crush_list_sessions_tolerates_malformed_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProc:
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (b"not json", b"")
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _FakeProc:
+        return _FakeProc()
+
+    monkeypatch.setattr("src.orchestrator.harness_process.asyncio.create_subprocess_exec",
+                        _fake_exec)
+
+    assert await CrushAdapter().list_sessions(cwd="/tmp/r") == []
+
+
+# ═══ Cursor stub: declared, nothing built ══════════════════════════════════════════════════
+
+async def test_cursor_stub_declares_no_capabilities_and_refuses_everything() -> None:
+    adapter = CursorAdapter()
     assert adapter.capabilities() == frozenset()
     assert adapter.available() is False
     for coro in (adapter.spawn(), adapter.resume(), adapter.reply(), adapter.stop()):
@@ -214,10 +322,12 @@ def test_resolve_unknown_name_falls_back_to_the_auto_order(
 ) -> None:
     """An unknown pin name is never a caller error this door raises on -- it degrades to
     the SAME 'auto' order every other unnamed selection uses (never a guess at what the
-    typo meant). Both candidates forced unavailable here so the test is deterministic
-    regardless of whatever this box's own ~/.dsh/sessions or PATH actually holds."""
+    typo meant). Every real candidate forced unavailable here so the test is deterministic
+    regardless of whatever this box's own ~/.dsh/sessions, PATH, or installed crush binary
+    actually holds."""
     monkeypatch.setattr(ClaudeAdapter, "available", lambda self: False)
     monkeypatch.setattr(DshAdapter, "available", lambda self: False)
+    monkeypatch.setattr(CrushAdapter, "available", lambda self: False)
     st = Settings(osiris_harness_adapter="not-a-real-harness")
 
     adapter = resolve_process_adapter(st)

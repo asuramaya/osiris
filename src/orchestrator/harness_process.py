@@ -19,8 +19,23 @@ _clear_stale_stopped_record) verbatim -- zero behavior change for the harness th
 already runs on. THE DSH ADAPTER IS THE GRACEFUL-DEGRADE SPECIMEN THE RULING NAMES: it
 supports list_sessions only, built on Khnum's DshSessionAdapter.enumerate() (1209db6) --
 there is no DSH process-control surface anywhere in this codebase today, confirmed live, so
-spawn/resume/reply/stop refuse by name rather than pretend. CRUSH AND CURSOR ARE STUBS:
-capabilities() = frozenset() -- declared and refusing everything, nothing built.
+spawn/resume/reply/stop refuse by name rather than pretend.
+
+THE CRUSH ADAPTER (thread 96b5b217, wave 10 item 2): spawn (via `crush run <prompt>`, fire-
+and-forget, same discipline as `_spawn_claude`) and list_sessions (via `crush session list
+--json`) are real; resume/reply/stop refuse by name -- crush's CLI does support continuing a
+session (`--session`/`--continue`), but the dispatch scoped this wave to exactly these two
+capabilities, matching DshAdapter's own shape rather than building the rest speculatively.
+
+LIVE-MEASURED QUIRK, NOT DOCUMENTED ANYWHERE (found running the real binary, 2026-09-08):
+`crush session list --json --cwd <dir>` silently returns `[]` regardless of what's on disk
+-- the `--cwd` FLAG is a no-op for this subcommand (confirmed: a project with a real,
+non-empty crush.db returned `[]` via `--cwd`, then the correct row via the SAME command run
+with the process's own OS-level cwd set to that directory instead). So `list_sessions` sets
+the SUBPROCESS's own `cwd=`, exactly like `_claude_agents_json` already does for a
+DIFFERENT reason (repo-scoped listing) -- never the `--cwd` flag, which this adapter never
+passes to `session list` at all. CURSOR STAYS A STUB: capabilities() = frozenset(), nothing
+built.
 
 SELECTION: `resolve_process_adapter()` reads Settings.osiris_harness_adapter ('auto' by
 default; pydantic-settings already reads the OSIRIS_HARNESS_ADAPTER env var into that field
@@ -32,6 +47,7 @@ addition, msg 8147): the reply lane must not shell out to `which` on every wake.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from typing import Any, Protocol
 
@@ -255,8 +271,75 @@ class _StubAdapter:
         return _refuse(self.name, "stop", self.capabilities())
 
 
-class CrushAdapter(_StubAdapter):
+_CRUSH_CAPABILITIES = frozenset({"spawn", "list_sessions"})
+
+
+class CrushAdapter:
+    """Real spawn + list_sessions on crush's own CLI (thread 96b5b217); resume/reply/stop
+    refuse by name, matching DshAdapter's own narrower-than-full-parity shape."""
+
     name = "crush"
+    _available: bool | None = None
+
+    def capabilities(self) -> frozenset[str]:
+        return _CRUSH_CAPABILITIES
+
+    def available(self) -> bool:
+        if self._available is None:
+            from src.config.settings import get_settings
+            self._available = shutil.which(get_settings().osiris_crush_binary) is not None
+        return self._available
+
+    async def spawn(
+        self, *, repo: str, prompt: str | None = None, job_dir: str | None = None,
+        model: str | None = None, allowed_tools: str | None = None, name: str | None = None,
+    ) -> dict[str, Any]:
+        if not prompt:
+            return {"error": "adapter 'crush' spawn needs a prompt"}
+        cmd = ["crush", "run"]
+        if model:
+            cmd += ["--model", model]
+        cmd.append(prompt)
+        # FIRE-AND-FORGET, same discipline as trigger.py's own _spawn_claude (B1's scar:
+        # an arq timeout that awaited a live billing subprocess once wedged the worker) --
+        # this confirms only that the command was ISSUED, never that it completed.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=repo, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+        except OSError as exc:
+            return {"error": f"adapter 'crush' spawn failed to exec: {exc}"}
+        return {"spawned": True, "repo": repo, "pid": proc.pid}
+
+    async def resume(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "resume", self.capabilities())
+
+    async def reply(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "reply", self.capabilities())
+
+    async def list_sessions(
+        self, *, cwd: str | None = None, include_completed: bool = False,
+    ) -> list[dict[str, Any]]:
+        if cwd is None:
+            return []
+        # cwd= on the SUBPROCESS, never a --cwd flag (see this module's own docstring: the
+        # flag is a live-confirmed no-op for `session list`, silently returning [] instead
+        # of the real on-disk rows).
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "crush", "session", "list", "--json", cwd=cwd,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _stderr = await proc.communicate()
+        except OSError:
+            return []
+        try:
+            rows = json.loads(out.decode() or "[]")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return []
+        return rows if isinstance(rows, list) else []
+
+    async def stop(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "stop", self.capabilities())
 
 
 class CursorAdapter(_StubAdapter):
