@@ -28,25 +28,23 @@ last activity — never alphabetical. `sorted(groups)` is gone.
 
 Color (requirement 3) is NOT baked in here — `render_fleet_tree` always returns plain text,
 computed ONE way, over whatever `nodes` it is given (the MCP `fleet()` tool always calls it
-server-side over the FULL node set). `paint_fleet_text`, below, is a separate, purely
-cosmetic pass that recolors an ALREADY-RENDERED tree's text line by line — the CLI's own
-job, applied to the server's own plain `tree` string, never a second call to
-`render_fleet_tree` over some other, possibly-partial data (the regression this split
-fixes: the CLI used to re-derive the tree client-side from `fleet()`'s receipt-diet-capped
-`registered` sample, producing a handful of sections where the server's own full-data tree
-carried dozens — ONE renderer, over the complete data, always; color is a client concern
-applied to its output, never a second computation of the tree itself).
+server-side over the FULL node set). `cli_render.paint_fleet_text` (thread dd937122, wave
+11 — folded there from this module, alongside the read triangle's own `paint_text`, so every
+CLI paint concern has one home) is a separate, purely cosmetic pass that recolors an
+ALREADY-RENDERED tree's text line by line — the CLI's own job, applied to the server's own
+plain `tree` string, never a second call to `render_fleet_tree` over some other,
+possibly-partial data (the regression this split fixes: the CLI used to re-derive the tree
+client-side from `fleet()`'s receipt-diet-capped `registered` sample, producing a handful of
+sections where the server's own full-data tree carried dozens — ONE renderer, over the
+complete data, always; color is a client concern applied to its output, never a second
+computation of the tree itself).
 
 Pure — the MCP fleet() tool feeds it rows; tests feed it fixtures.
 """
 from __future__ import annotations
 
-import re
 from collections import Counter
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.cli_render import Paint
+from typing import Any
 
 Node = dict[str, Any]  # canonical -> {model, project, parent, live, ts: datetime|None}
 
@@ -123,19 +121,29 @@ def _group_order_key(
 
 def _render_expanded(
     canon: str, indent: int, nodes: dict[str, Node], kids: dict[str | None, list[str]],
-    lines: list[str], *, full: bool,
+    lines: list[str], *, full: bool, context_pct: dict[str, int] | None = None,
 ) -> None:
     n = nodes[canon]
     prefix = "  " + "    " * indent + ("└─ " if indent else "")
     mark = "●" if n.get("live") else "○"
-    lines.append(f"{prefix}{mark} {_id_label(canon, nodes)}  {_short(n.get('model'))}".rstrip())
+    line = f"{prefix}{mark} {_id_label(canon, nodes)}  {_short(n.get('model'))}"
+    # THE SEAM READING (thread dd937122, wave 11): a LIVE node's own context_pct, when the
+    # caller supplied one — additive and optional, same precedent as os_bodies/ghost_gap
+    # below. Plain text here, always: "NN%ctx" is a token cli_render.paint_fleet_text's own
+    # regex recognizes and colors client-side (amber/red past the whisper/self-compact
+    # thresholds) — this function never colors anything, never will.
+    if context_pct is not None and n.get("live"):
+        pct = context_pct.get(canon)
+        if pct is not None:
+            line += f"  {pct}%ctx"
+    lines.append(line.rstrip())
     children = kids.get(canon, [])
     if not children:
         return
     expand = [c for c in children if full or _any_live(c, nodes, kids)]
     fold = [c for c in children if c not in expand]
     for c in _sort_roots(expand, nodes):
-        _render_expanded(c, indent + 1, nodes, kids, lines, full=full)
+        _render_expanded(c, indent + 1, nodes, kids, lines, full=full, context_pct=context_pct)
     if fold:
         folded = [d for c in fold for d in _subtree(c, kids)]
         pad = "  " + "    " * (indent + 1) + "└─ "
@@ -145,6 +153,7 @@ def _render_expanded(
 def render_fleet_tree(
     nodes: dict[str, Node], *, full: bool = False, os_bodies: dict[str, int] | None = None,
     ghost_gap: dict[str, dict[str, list[Any]]] | None = None,
+    context_pct: dict[str, int] | None = None,
 ) -> str:
     """The glanceable fleet: one section per project, live expanded, retired collapsed.
 
@@ -158,11 +167,17 @@ def render_fleet_tree(
     both). Rendered honestly as however many of each this project actually carries, never a
     net that can hide one behind the other.
 
+    `context_pct` (thread dd937122, wave 11) is the SAME additive-optional shape: canonical ->
+    the freshest context_pct reading stop-hook osiris_hook.py stamped on that Agent (the exact
+    property _co_agents already reads for the mount/orient briefing, never a second copy of
+    that query's own shape). A LIVE node carrying a reading grows a trailing "NN%ctx" token;
+    everything else about the line is unchanged.
+
     ALWAYS PLAIN TEXT (ruling f6b758fc requirement 3, split from this function after a live
-    regression): color is `paint_fleet_text`'s own job, applied to this function's output
-    string, never a parameter here — this function has exactly one job (build the correct
-    tree from `nodes`) and one caller shape (the MCP `fleet()` tool, always over the full
-    node set) to keep straight.
+    regression): color is `cli_render.paint_fleet_text`'s own job, applied to this function's
+    output string, never a parameter here — this function has exactly one job (build the
+    correct tree from `nodes`) and one caller shape (the MCP `fleet()` tool, always over the
+    full node set) to keep straight.
 
     GROUPING is by `resolved_project` (requirement 1) where a caller supplied one — the
     REAL graph project, never the raw session-registry label — falling back to the raw
@@ -224,7 +239,7 @@ def render_fleet_tree(
         expand = [r for r in proj_roots if full or _any_live(r, nodes, kids)]
         fold = [r for r in proj_roots if r not in expand]
         for r in expand:
-            _render_expanded(r, 0, nodes, kids, lines, full=full)
+            _render_expanded(r, 0, nodes, kids, lines, full=full, context_pct=context_pct)
         if fold:
             latest = _latest(fold, nodes)
             note = f" (latest {_id_label(latest, nodes)})" if latest else ""
@@ -256,36 +271,8 @@ def render_fleet_tree(
     return "\n".join(lines)
 
 
-# ── COLOR, a pure text pass (requirement 3) ─────────────────────────────────────────────
-# Applied to render_fleet_tree's OWN output string — never a second computation of the
-# tree over any other data. Line shapes this depends on (all produced only by the
-# function above): a project header starts "▸ "; the unfiled summary line starts exactly
-# "▸ unfiled:"; a live node line contains "●", any other node/summary line "○"; a ghost
-# note is the parenthesised "⚠ N ghost(s) (...)" span inside a header line.
-_GHOST_SPAN_RE = re.compile(r"⚠ \d+ ghosts?( \([^)]*\))?")
-_GHOST_DETAIL_RE = re.compile(r"\d+ false-live|\d+ unclaimed (?:body|bodies)")
-
-
-def paint_fleet_text(text: str, paint: Paint) -> str:
-    """Recolor an ALREADY-RENDERED `render_fleet_tree` string, line by line — project names
-    bold, live marks green, the ghost note amber with its false-live/unclaimed-body
-    breakdown red inside it, retired/summary marks and the unfiled line dim. A disabled
-    `paint` (`Paint(enabled=False)`, every one of its methods a no-op) returns `text`
-    unchanged — cheap enough to call unconditionally rather than branch around."""
-    if not paint.enabled:
-        return text
-    out: list[str] = []
-    for line in text.split("\n"):
-        if line.startswith("▸ unfiled:"):
-            out.append(paint.dim(line))
-            continue
-        if line.startswith("▸ "):
-            def _detail(m: re.Match[str]) -> str:
-                return paint.bad(m.group(0))
-            line = _GHOST_SPAN_RE.sub(
-                lambda m: paint.warn(_GHOST_DETAIL_RE.sub(_detail, m.group(0))), line)
-            name, sep, rest = line[2:].partition(" — ")
-            line = f"▸ {paint.bold(name)}{sep}{rest}" if sep else line
-        line = line.replace("●", paint.good("●")).replace("○", paint.dim("○"))
-        out.append(line)
-    return "\n".join(out)
+# COLOR (requirement 3) now lives in src/cli_render.py's own `paint_fleet_text` (thread
+# dd937122, wave 11): folded there alongside the read triangle's `paint_text` so every CLI
+# paint concern has exactly one home, never two client-side painters built independently for
+# the same reason. This module stays what its own header promises — pure, plain-text-only,
+# never a color parameter or a color import.

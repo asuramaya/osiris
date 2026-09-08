@@ -4073,6 +4073,44 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
     assert "seat" not in rows[anon]                      # never a guessed/empty field
 
 
+async def test_fleet_surfaces_a_live_agents_context_pct_as_a_seam_reading(
+    actions: Actions,
+) -> None:
+    """Thread dd937122, wave 11: fleet()'s own tree carries a LIVE node's own context_pct
+    (the same property stop-hook osiris_hook.py stamps and _co_agents already reads for
+    the mount/orient briefing) as a trailing 'NN%ctx' token, plain text -- coloring is
+    cli_render.paint_fleet_text's own job, applied client-side."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:seamtest", "test")
+    await actions.assert_property(proj, "name", "seamtest", "test", datetime.now(UTC), 0.9)
+
+    live, quiet = "agent:seamtest01", "agent:seamtest02"
+    for a in (live, quiet):
+        obj = await actions.create_or_find_object("Agent", a, a)
+        await actions.assert_property(obj, "project", "seamtest", a, datetime.now(UTC), 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        await mounts.save_mount(actions.pool, job_dir=f"/j/{a.replace(':', '_')}", agent_id=a,
+                                project="seamtest", cwd="/x", model="claude-fable-5",
+                                session_key=a)
+    live_obj = await actions.create_or_find_object("Agent", live, live)
+    await actions.assert_property(live_obj, "context_pct", "62", live, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+
+    live_line = next(line for line in out["tree"].splitlines() if live in line)
+    quiet_line = next(line for line in out["tree"].splitlines() if quiet in line)
+    assert "62%ctx" in live_line
+    assert "%ctx" not in quiet_line  # no reading ever stamped for this one
+
+
 async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> None:
     """heinrich's ghost-seat filing (thread 1fe6811c) made visible, PER-IDENTITY (thread #174,
     2026-08-18): 'ghosttown' carries BOTH a false-live row (a mount with no real process behind

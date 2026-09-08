@@ -1304,10 +1304,8 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
         print("")
         return 0
 
-    from src.orchestrator.fleetview import paint_fleet_text
-
     paint = render.Paint(render.supports_color())
-    print(paint_fleet_text(tree, paint))
+    print(render.paint_fleet_text(tree, paint))
     return 0
 
 

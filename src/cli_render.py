@@ -452,6 +452,69 @@ def paint_text(text: str, paint: Paint) -> str:
     return "\n".join(out)
 
 
+# --- painting the fleet tree (thread dd937122, wave 11): FOLDED HERE from fleetview.py's own
+# paint_fleet_text -- two client-side painters built independently for the same reason
+# (color an already-rendered server string, never re-derive it) now live in the one module
+# that owns every CLI paint concern. Kept as its OWN function, not merged into paint_text
+# above: the fleet tree's line shapes (a "▸ " project header, a ghost-note span, a bare
+# "●"/"○" with no glyph-then-space contract) are genuinely different from the read
+# triangle's, and forcing one function to recognize both risks the same "guess wrong on an
+# edge case" failure paint_text's own docstring explicitly refuses to take. -------------------
+
+# Line shapes this depends on (all produced only by fleetview.render_fleet_tree): a project
+# header starts "▸ "; the unfiled summary line starts exactly "▸ unfiled:"; a live node line
+# contains "●", any other node/summary line "○"; a ghost note is the parenthesised
+# "⚠ N ghost(s) (...)" span inside a header line; a live node MAY carry a trailing "NN%ctx"
+# seam reading (added alongside this fold, thread dd937122's own "seam amber and red" ask).
+_GHOST_SPAN_RE = re.compile(r"⚠ \d+ ghosts?( \([^)]*\))?")
+_GHOST_DETAIL_RE = re.compile(r"\d+ false-live|\d+ unclaimed (?:body|bodies)")
+_SEAM_PCT_RE = re.compile(r"\d+%ctx")
+
+
+def _paint_seam_pct(token: str, paint: Paint) -> str:
+    """A live node's own context_pct reading, colored at the SAME two thresholds the stop
+    hook itself alarms on -- osiris_seam_whisper_pct (45, the "seam soon" nudge) and
+    context_lens.SELF_COMPACT_PCT (70, self-compaction) -- never a third, re-invented
+    number. Below the whisper threshold: unstyled, an ordinary reading, not a verdict."""
+    from src.config.settings import get_settings
+    from src.orchestrator.context_lens import SELF_COMPACT_PCT
+
+    pct = int(token[:-len("%ctx")])
+    whisper = get_settings().osiris_seam_whisper_pct
+    if pct >= SELF_COMPACT_PCT:
+        return paint.bad(token)
+    if whisper and pct >= whisper:
+        return paint.warn(token)
+    return token
+
+
+def paint_fleet_text(text: str, paint: Paint) -> str:
+    """Recolor an ALREADY-RENDERED `render_fleet_tree` string, line by line — project names
+    bold, live marks green, the ghost note amber with its false-live/unclaimed-body
+    breakdown red inside it, retired/summary marks and the unfiled line dim, a live node's
+    own seam percentage (when present) amber/red past the whisper/self-compact thresholds.
+    A disabled `paint` (`Paint(enabled=False)`, every one of its methods a no-op) returns
+    `text` unchanged — cheap enough to call unconditionally rather than branch around."""
+    if not paint.enabled:
+        return text
+    out: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith("▸ unfiled:"):
+            out.append(paint.dim(line))
+            continue
+        if line.startswith("▸ "):
+            def _detail(m: re.Match[str]) -> str:
+                return paint.bad(m.group(0))
+            line = _GHOST_SPAN_RE.sub(
+                lambda m: paint.warn(_GHOST_DETAIL_RE.sub(_detail, m.group(0))), line)
+            name, sep, rest = line[2:].partition(" — ")
+            line = f"▸ {paint.bold(name)}{sep}{rest}" if sep else line
+        line = _SEAM_PCT_RE.sub(lambda m: _paint_seam_pct(m.group(0), paint), line)
+        line = line.replace("●", paint.good("●")).replace("○", paint.dim("○"))
+        out.append(line)
+    return "\n".join(out)
+
+
 # --- the one choke point -------------------------------------------------------------------
 
 def emit(data: Any, *, as_json: bool, title: str | None = None,
