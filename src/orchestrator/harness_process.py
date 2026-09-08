@@ -5,13 +5,33 @@ own TRANSCRIPT into TurnRows -- a read-only concern); this one is PROCESS LIFECY
 session, resume one, list what's running, send a one-shot reply, stop one. Two different
 doors, deliberately never folded into one Protocol under the same word.
 
-FIVE CAPABILITIES, never a sixth without a design pass: spawn (mint a fresh persistent
+SIX CAPABILITIES, never a seventh without a design pass: spawn (mint a fresh persistent
 background session), resume (continue an existing persistent one), reply (the daemon
 wake-triage lane -- a one-shot headless turn with a cost receipt, NOT the same as spawn/
-resume's `--bg` persistence), list_sessions, stop. Every adapter declares its own
-capabilities() statically; every door needing one the active adapter lacks refuses with a
-NAMED reason dict -- `{"error": ...}`, the same idiom retire_project/retire_assertion/every
-other refusal door in this codebase already uses -- never an exception.
+resume's `--bg` persistence), list_sessions, stop, and materialize (thread 78efd46d item 5,
+the soul-store lane's own last piece: write a harness's NATIVE transcript file back to disk
+from the store alone). Every adapter declares its own capabilities() statically; every door
+needing one the active adapter lacks refuses with a NAMED reason dict -- `{"error": ...}`,
+the same idiom retire_project/retire_assertion/every other refusal door in this codebase
+already uses -- never an exception.
+
+MATERIALIZE IS THE ONE CAPABILITY THAT TOUCHES THE GRAPH DB, deliberately unlike the other
+five (pure subprocess/file IO) -- it takes an explicit `pool: asyncpg.Pool` parameter, the
+SAME dependency-injection style trigger.py's own resume-materialization functions already
+thread through their own callers (never a fetched global singleton, which would tie this
+process-lifecycle module to one specific daemon's pool lifecycle). ClaudeAdapter's own
+materialize is a thin wrap around `SoulStore.rematerialize_to_disk` -- the SAME function the
+MCP `rematerialize` tool and `osiris rematerialize` CLI command already call directly; this
+adapter method exists so a caller going through the harness-abstraction door (rather than
+assuming claude) can ask "can THIS harness materialize a session" the same way it already
+asks about spawn/resume/stop. DSH and CRUSH REFUSE BY NAME: both have a read-only harness
+adapter (src/ingest/harness/) that can DISCOVER their own session files, but neither has a
+VERBATIM store to materialize FROM -- soul_store.py's own SoulStore.backfill() is scoped to
+claude-code only (piece 1's stated boundary: "Crush is SQLite-backed with no line-oriented
+raw concept... out of scope here on purpose"), so there is nothing in soul_lines for either
+harness yet. "Until their readers land" means until a DSH/Crush verbatim-ingest piece exists
+to feed materialize something real -- refusing honestly now is the graceful degrade the
+ruling asks for, not a stub pretending to work.
 
 THE CLAUDE ADAPTER IS A THIN WRAP, NOT A REWRITE: it calls trigger.py's own five existing
 functions (_spawn_claude_bg, _spawn_claude, _claude_agents_json, _real_kill_pid,
@@ -49,9 +69,13 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-CAPABILITIES = frozenset({"spawn", "resume", "reply", "list_sessions", "stop"})
+if TYPE_CHECKING:
+    import asyncpg
+
+CAPABILITIES = frozenset(
+    {"spawn", "resume", "reply", "list_sessions", "stop", "materialize"})
 
 
 def _refuse(adapter_name: str, capability: str, declared: frozenset[str]) -> dict[str, Any]:
@@ -93,6 +117,11 @@ class ProcessAdapter(Protocol):
 
     async def stop(
         self, *, session_id: str | None = None, pid: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def materialize(
+        self, *, pool: asyncpg.Pool, anchor_sid: str, dest: str | None = None,
+        force: bool = False,
     ) -> dict[str, Any]: ...
 
 
@@ -197,6 +226,15 @@ class ClaudeAdapter:
         return {"error": f"claude stop {session_id!r} exited non-zero and no pid was given "
                          "for a SIGTERM fallback"}
 
+    async def materialize(
+        self, *, pool: asyncpg.Pool, anchor_sid: str, dest: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        from src.ingest.soul_store import SoulStore
+
+        return await SoulStore(pool).rematerialize_to_disk(
+            anchor_sid, dest=dest, force=force)
+
 
 _DSH_CAPABILITIES = frozenset({"list_sessions"})
 
@@ -239,6 +277,9 @@ class DshAdapter:
     async def stop(self, **_kwargs: Any) -> dict[str, Any]:
         return _refuse(self.name, "stop", self.capabilities())
 
+    async def materialize(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "materialize", self.capabilities())
+
 
 class _StubAdapter:
     """Crush and Cursor (thread e7f173a6): declared, nothing built. capabilities() = the
@@ -269,6 +310,9 @@ class _StubAdapter:
 
     async def stop(self, **_kwargs: Any) -> dict[str, Any]:
         return _refuse(self.name, "stop", self.capabilities())
+
+    async def materialize(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "materialize", self.capabilities())
 
 
 _CRUSH_CAPABILITIES = frozenset({"spawn", "list_sessions"})
@@ -340,6 +384,9 @@ class CrushAdapter:
 
     async def stop(self, **_kwargs: Any) -> dict[str, Any]:
         return _refuse(self.name, "stop", self.capabilities())
+
+    async def materialize(self, **_kwargs: Any) -> dict[str, Any]:
+        return _refuse(self.name, "materialize", self.capabilities())
 
 
 class CursorAdapter(_StubAdapter):
