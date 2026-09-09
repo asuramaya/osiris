@@ -65,6 +65,20 @@ class Settings(BaseSettings):
     # through to a different adapter than the one named).
     osiris_harness_adapter: str = "auto"
     osiris_crush_binary: str = "crush"
+    # THE DSH OPT-IN PROFILE (wave 13 item 1, thread e7f173a6, Thoth's ruling msg 8543):
+    # dsh's own launcher (`dsh --profile <name> [args...]`) forwards everything after its
+    # own flags VERBATIM to whatever profile-specific app boots — it never itself parses
+    # `--resume`, and "headless"/"tui" in its own --help text are illustrative EXAMPLE
+    # profile names, not a guaranteed universal contract (this box's real ~/.dsh/profiles/
+    # carries only "web" — confirmed live, not assumed). EMPTY BY DEFAULT: DshAdapter
+    # keeps refusing spawn/resume by name until an operator who has a real profile
+    # configured for headless task execution names it here — never a hardcoded guess.
+    # `osiris_dsh_profile` names that profile; `osiris_dsh_resume_flag` is the EXACT flag
+    # that profile's own app understands for continuing a session (its value is forwarded
+    # verbatim, never invented — a different profile app may spell this differently, or
+    # not support it at all).
+    osiris_dsh_profile: str = ""
+    osiris_dsh_resume_flag: str = "--resume"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
     # Semantic search (the max-level ruling a0cfcca1). The Claude CLI has no embeddings
     # endpoint and keyless is a feature, so the embedder is a LOCAL static model

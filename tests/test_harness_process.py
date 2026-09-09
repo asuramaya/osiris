@@ -205,18 +205,126 @@ async def test_claude_available_is_cached(monkeypatch: pytest.MonkeyPatch) -> No
 
 # ═══ DshAdapter: the graceful-degrade specimen ═══════════════════════════════════════════
 
-async def test_dsh_capabilities_is_list_sessions_only() -> None:
+async def test_dsh_capabilities_is_list_sessions_only_with_no_profile_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings", lambda: Settings(osiris_dsh_profile=""))
     assert DshAdapter().capabilities() == frozenset({"list_sessions"})
+    assert "spawn" not in DshAdapter().capabilities()
     assert "materialize" not in DshAdapter().capabilities()
 
 
-async def test_dsh_spawn_resume_reply_stop_materialize_all_refuse_by_name() -> None:
+async def test_dsh_capabilities_gains_spawn_and_resume_when_a_profile_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_dsh_profile="headless"))
+    assert DshAdapter().capabilities() == frozenset(
+        {"list_sessions", "spawn", "resume"})
+
+
+async def test_dsh_reply_stop_materialize_always_refuse_by_name() -> None:
     dsh = DshAdapter()
-    coros = (dsh.spawn(), dsh.resume(), dsh.reply(), dsh.stop(),
-             dsh.materialize(pool=None, anchor_sid="x"))
+    coros = (dsh.reply(), dsh.stop(), dsh.materialize(pool=None, anchor_sid="x"))
     for coro in coros:
         out = await coro
         assert out["error"].startswith("adapter 'dsh' does not support")
+
+
+async def test_dsh_spawn_refuses_by_name_with_no_profile_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings", lambda: Settings(osiris_dsh_profile=""))
+    out = await DshAdapter().spawn(repo="/tmp/r", prompt="hi")
+    assert out["error"].startswith("adapter 'dsh' does not support")
+
+
+async def test_dsh_resume_refuses_by_name_with_no_profile_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings", lambda: Settings(osiris_dsh_profile=""))
+    out = await DshAdapter().resume(repo="/tmp/r", session_id="s1")
+    assert out["error"].startswith("adapter 'dsh' does not support")
+
+
+async def test_dsh_spawn_calls_dsh_with_the_configured_profile_and_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_dsh_profile="headless"))
+    captured: dict[str, Any] = {}
+
+    class _FakeProc:
+        pid = 4242
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _FakeProc:
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "src.orchestrator.harness_process.asyncio.create_subprocess_exec", _fake_exec)
+
+    out = await DshAdapter().spawn(repo="/tmp/r", prompt="do the thing")
+
+    assert out == {"spawned": True, "repo": "/tmp/r", "pid": 4242, "profile": "headless"}
+    assert captured["argv"] == ("dsh", "--profile", "headless", "do the thing")
+    assert captured["kwargs"]["cwd"] == "/tmp/r"
+
+
+async def test_dsh_spawn_needs_a_prompt_even_with_a_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_dsh_profile="headless"))
+    out = await DshAdapter().spawn(repo="/tmp/r")
+    assert "error" in out
+
+
+async def test_dsh_resume_forwards_the_configured_resume_flag_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_dsh_profile="tui", osiris_dsh_resume_flag="--continue"))
+    captured: dict[str, Any] = {}
+
+    class _FakeProc:
+        pid = 99
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _FakeProc:
+        captured["argv"] = argv
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "src.orchestrator.harness_process.asyncio.create_subprocess_exec", _fake_exec)
+
+    out = await DshAdapter().resume(repo="/tmp/r", session_id="sess-9", prompt="go on")
+
+    assert out == {"resumed": True, "repo": "/tmp/r", "session_id": "sess-9",
+                   "pid": 99, "profile": "tui"}
+    assert captured["argv"] == ("dsh", "--profile", "tui", "--continue", "sess-9", "go on")
+
+
+async def test_dsh_spawn_tolerates_a_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_dsh_profile="headless"))
+
+    async def _boom(*argv: str, **kwargs: Any) -> Any:
+        raise OSError("no such file")
+
+    monkeypatch.setattr(
+        "src.orchestrator.harness_process.asyncio.create_subprocess_exec", _boom)
+
+    out = await DshAdapter().spawn(repo="/tmp/r", prompt="hi")
+    assert "error" in out
 
 
 async def test_dsh_list_sessions_wraps_enumerate(monkeypatch: pytest.MonkeyPatch) -> None:

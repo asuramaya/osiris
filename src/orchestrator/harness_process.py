@@ -237,28 +237,82 @@ class ClaudeAdapter:
 
 
 _DSH_CAPABILITIES = frozenset({"list_sessions"})
+_DSH_CAPABILITIES_WITH_PROFILE = frozenset({"list_sessions", "spawn", "resume"})
 
 
 class DshAdapter:
-    """THE GRACEFUL-DEGRADE SPECIMEN the operator's ruling names by example: list_sessions
-    only, built on Khnum's DshSessionAdapter.enumerate() (1209db6) -- confirmed live, this
-    codebase has no DSH process-control surface at all, so spawn/resume/reply/stop refuse
-    by name rather than pretend a capability that doesn't exist."""
+    """list_sessions is always real, built on Khnum's DshSessionAdapter.enumerate()
+    (1209db6). spawn/resume are THE GRACEFUL-DEGRADE SPECIMEN the operator's ruling
+    names by example, but no longer an unconditional refusal (wave 13 item 1, thread
+    e7f173a6, Thoth's ruling msg 8543): dsh's own launcher forwards everything after its
+    own flags verbatim to a user-configured PROFILE app — there is no universal "the
+    dsh spawn command" the way `claude --bg` or `crush run` are, only whatever profile
+    an operator has actually set up for headless task execution. `osiris_dsh_profile`
+    empty (the default) keeps refusing both by name, honestly, exactly as before this
+    wave; set it and spawn/resume become real, using `osiris_dsh_resume_flag` verbatim
+    — never a guessed/hardcoded profile name or resume flag."""
 
     name = "dsh"
 
     def capabilities(self) -> frozenset[str]:
+        # DYNAMIC, unlike every sibling adapter's static declaration — because whether
+        # spawn/resume are REAL here depends on operator configuration, not on code that
+        # exists unconditionally. Declaring them always would be exactly the
+        # "capability that doesn't exist" lie this module's whole design refuses.
+        from src.config.settings import get_settings
+
+        if get_settings().osiris_dsh_profile:
+            return _DSH_CAPABILITIES_WITH_PROFILE
         return _DSH_CAPABILITIES
 
     def available(self) -> bool:
         from src.ingest.harness.dsh import _dsh_sessions
         return _dsh_sessions().is_dir()
 
-    async def spawn(self, **_kwargs: Any) -> dict[str, Any]:
-        return _refuse(self.name, "spawn", self.capabilities())
+    async def spawn(
+        self, *, repo: str, prompt: str | None = None, job_dir: str | None = None,
+        model: str | None = None, allowed_tools: str | None = None, name: str | None = None,
+    ) -> dict[str, Any]:
+        from src.config.settings import get_settings
 
-    async def resume(self, **_kwargs: Any) -> dict[str, Any]:
-        return _refuse(self.name, "resume", self.capabilities())
+        profile = get_settings().osiris_dsh_profile
+        if not profile:
+            return _refuse(self.name, "spawn", self.capabilities())
+        if not prompt:
+            return {"error": "adapter 'dsh' spawn needs a prompt"}
+        cmd = ["dsh", "--profile", profile, prompt]
+        # FIRE-AND-FORGET, same discipline as CrushAdapter's own spawn (B1's scar: an
+        # arq timeout that awaited a live billing subprocess once wedged the worker) --
+        # this confirms only that the command was ISSUED, never that it completed.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=repo, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+        except OSError as exc:
+            return {"error": f"adapter 'dsh' spawn failed to exec: {exc}"}
+        return {"spawned": True, "repo": repo, "pid": proc.pid, "profile": profile}
+
+    async def resume(
+        self, *, repo: str, session_id: str, prompt: str | None = None,
+        model: str | None = None, allowed_tools: str | None = None,
+    ) -> dict[str, Any]:
+        from src.config.settings import get_settings
+
+        profile = get_settings().osiris_dsh_profile
+        if not profile:
+            return _refuse(self.name, "resume", self.capabilities())
+        resume_flag = get_settings().osiris_dsh_resume_flag
+        cmd = ["dsh", "--profile", profile, resume_flag, session_id]
+        if prompt:
+            cmd.append(prompt)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=repo, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+        except OSError as exc:
+            return {"error": f"adapter 'dsh' resume failed to exec: {exc}"}
+        return {"resumed": True, "repo": repo, "session_id": session_id,
+                "pid": proc.pid, "profile": profile}
 
     async def reply(self, **_kwargs: Any) -> dict[str, Any]:
         return _refuse(self.name, "reply", self.capabilities())
