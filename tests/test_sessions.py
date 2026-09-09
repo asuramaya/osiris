@@ -59,6 +59,42 @@ async def test_emit_yield_rehomes_cross_project_items(actions: Actions) -> None:
     assert home["tune the extractor inheritance test until it converges"] == "repo:osiris"
 
 
+async def test_emit_yield_fails_closed_on_conflicting_foreign_projects(actions: Actions) -> None:
+    """THE CWD BUG (thread 7c65472b, Anubis's census of heinrich's own candidate pile): 6 of
+    heinrich's 7 "misfiled" drops were OTHER projects' work — dispose.py's own drop-class
+    taxonomy names the mechanism outright ("misfiled": "attributed here by the cwd bug"). An
+    item that distinctively names TWO OTHER real, registered projects and never its own used to
+    still land under the mining session's cwd repo (`_home_repo`'s old "ambiguity keeps default"
+    covered this case too, not just genuine silence) — a guess exactly as wrong as filing
+    decepticons' own bug under heinrich's wall. Now it fails closed: no `in_repo` edge is minted
+    at all, so the row is genuinely unowned and `dispose.orphans()` — the existing tripwire for
+    "a producer that cannot name an owner for its output" — catches it, instead of it silently
+    piling onto whichever project the miner happened to be sitting in."""
+    from src.orchestrator.dispose import orphans
+
+    now = datetime.now(UTC)
+    for name in ("decepticons", "chronohorn"):
+        p = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "gitlog")
+        await actions.assert_property(p, "name", name, "gitlog", now, 0.9)
+    summary = "decepticons and chronohorn both hit the same migration race"
+    y = SessionYield(threads_opened=[summary])
+    await emit_yield(actions, y, repo="heinrich")
+
+    row = await actions.pool.fetchrow(
+        "SELECT o.id, "
+        " (SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "  WHERE l.from_id=o.id AND l.type='in_repo' LIMIT 1) AS home "
+        "FROM objects o WHERE o.type='Thread' AND EXISTS ("
+        "  SELECT 1 FROM current_assertions a WHERE a.object_id=o.id AND a.name='summary' "
+        "  AND a.value#>>'{}' = $1)", summary)
+    assert row is not None
+    assert row["home"] is None  # neither heinrich (the guess) nor either named project (ambiguous)
+
+    report = await orphans(actions.pool)
+    assert report["orphans"] >= 1
+    assert any(r["source_id"] == "session-miner" for r in report["by_producer"])
+
+
 class FakeLLM:
     """Canned yield; records every prompt so tests can assert what the model SAW."""
 
