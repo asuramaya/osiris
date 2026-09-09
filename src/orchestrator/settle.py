@@ -227,6 +227,14 @@ async def filed_under_check(
     # returns exactly this shape) stayed permanently mismatched, incoherent whenever the
     # seat's charter didn't happen to cover the spread either. Resolved the SAME way a
     # charter declaration is: canonical-or-name-property, one real project, unambiguous.
+    # THOTH/METRON (thread 8678/8687): the rescue above used to clear `mismatched` without
+    # ever updating `project` itself, so a rescued receipt reported `coherent: true` while
+    # `filed_under` still showed the raw alias/display name that FAILED the literal compare
+    # — inconsistent with the fold-normalization path above, which already reassigns
+    # `project` to the survivor's own canonical before this point. Once a rescue actually
+    # resolves `project` to the SAME canonical `went_to` already carries, `project` is
+    # reassigned too — both sides of the receipt now name the one real canonical, never a
+    # mix of "canonical over here, alias over there" for what settle() calls one project.
     if mismatched:
         try:
             from src.orchestrator.capture import _resolve_repo
@@ -238,6 +246,7 @@ async def filed_under_check(
                 real = str(real_canon).removeprefix("repo:") if real_canon else None
                 if real is not None and real in went_to:
                     mismatched = [p for p in went_to if p != real]
+                    project = real
         except Exception:  # noqa: BLE001 — a diagnostic refinement must never be the
             pass          # reason this check goes blind (577988ed) — report-only, unchanged
     result: dict[str, Any] = {
