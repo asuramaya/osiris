@@ -1011,6 +1011,68 @@ async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
     return alarmed
 
 
+async def retention_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE RETENTION HEARTBEAT (wave 12 item 1, operator's word via Thoth DM 8378: "put
+    outbox_retention and audit_log_retention ... on the heartbeat"): outbox/audit_log are
+    the two highest-churn append-only tables (src.orchestrator.retention's own module
+    docstring — measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB, neither ever
+    pruned), so this DELETEs (execute=True, batched — the acting logic lives entirely in
+    retention.py, never duplicated here) published outbox rows and audit_log rows older
+    than 90 days, once a day (not every-15-min like this file's other siblings — a
+    multi-million-row table does not need that granularity, and the operator's own
+    acceptance test is "flat over a week", not "flat over 15 minutes"). A no-op unless
+    osiris_retention_heartbeat_enabled (TRUE BY DEFAULT, a named exception to this file's
+    dark-by-default convention — the operator asked for this to RUN, not merely exist).
+
+    A DESK RECEIPT EVERY RUN (the operator's own explicit acceptance: "the first run's
+    counts on the desk"), unlike every sibling above's "log only when something happened"
+    convention — a daily cadence means this never floods the desk, and a silent zero-
+    delete run is itself useful confirmation the job is alive. `run_at_startup=True` so a
+    fresh deploy of this wave gets its first receipt immediately, not at the next 03:30.
+
+    A DB hiccup on either table logs and skips ONLY that table's own retention + receipt
+    line — the other table's run is independent, same "one hiccup never sinks a sibling"
+    discipline as classification_laws_heartbeat's four sub-sweeps."""
+    from src.config.settings import get_settings
+    from src.orchestrator.mailbox import send_message
+    from src.orchestrator.retention import audit_log_retention, outbox_retention
+
+    if not get_settings().osiris_retention_heartbeat_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+
+    lines: list[str] = []
+    deleted = 0
+    try:
+        outbox = await outbox_retention(pool, days=90, execute=True)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("outbox retention heartbeat failed: %r", exc)
+    else:
+        deleted += outbox["deleted"]
+        lines.append(f"outbox: -{outbox['deleted']} rows older than 90d "
+                     f"(cutoff {outbox['cutoff']})")
+
+    try:
+        audit = await audit_log_retention(pool, days=90, execute=True)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("audit_log retention heartbeat failed: %r", exc)
+    else:
+        deleted += audit["deleted"]
+        lines.append(f"audit_log: -{audit['deleted']} rows older than 90d "
+                     f"(cutoff {audit['cutoff']})")
+
+    if lines:
+        with contextlib.suppress(Exception):  # the desk being unreachable must not sink the cron
+            await send_message(
+                pool, from_agent="cron:retention_heartbeat", from_project="osiris",
+                to_project="operator", body="retention: " + "; ".join(lines),
+                desk_kind="fyi", dedup_window_secs=3600)
+    if deleted:
+        _log.info("retention heartbeat: deleted %d row(s)", deleted)
+    return deleted
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1222,6 +1284,13 @@ class WorkerSettings:
         # first boot already carries current classification, not just after 15 minutes.
         cron(watched(classification_laws_heartbeat, every=900), minute={6, 21, 36, 51},
              second={45}, timeout=600, run_at_startup=True),
+        # wave 12 item 1: outbox/audit_log retention, once a day (not the 15-min cadence
+        # class above — a multi-million-row prune has no need of that granularity). TRUE
+        # BY DEFAULT on osiris_retention_heartbeat_enabled, per the operator's own explicit
+        # dispatch (Thoth DM 8378) asking for this to run. run_at_startup=True so this
+        # wave's own deploy gets its first receipt immediately.
+        cron(watched(retention_heartbeat, every=86400), hour={3}, minute={30}, second={0},
+             timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

@@ -456,6 +456,15 @@ class Settings(BaseSettings):
     # dark-by-default convention, per the operator's own explicit instruction ("land it
     # with the flag ON").
     osiris_obligation_hygiene_enabled: bool = True
+    # THE RETENTION HEARTBEAT'S OWN SWITCH (wave 12 item 1, operator's word via Thoth DM
+    # 8378: "put outbox_retention and audit_log_retention ... on the heartbeat"): a daily
+    # tick DELETEs (src.orchestrator.retention, execute=True) published outbox rows and
+    # audit_log rows older than 90 days, batched, and posts a desk receipt naming both
+    # counts every run. TRUE BY DEFAULT — same named exception as osiris_obligation_
+    # hygiene_enabled above, per the operator's own explicit dispatch asking for this to
+    # run, not merely be built. Measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB,
+    # neither ever pruned before this.
+    osiris_retention_heartbeat_enabled: bool = True
     # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
     # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
     # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a
