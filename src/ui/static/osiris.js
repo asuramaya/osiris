@@ -255,6 +255,46 @@ const Osiris = (() => {
       // nodes off-viewport (the recurring "opening leads to nothing" blank board).
       cy.resize();
       cy.fit(undefined, 45);
+      // WAVE A item 5: layout is the ONE act allowed to move an already-placed node — every
+      // node it just positioned is now "placed", so a later incremental merge treats them as
+      // real neighbors to land new nodes near, and this run's own result is saved as the
+      // sticky position a future add (or reload) restores.
+      cy.nodes().forEach((n) => PLACED.add(n.id()));
+      savePositions();
+    };
+    // sticky positions — a placed node moves ONLY via layout() above (Re-layout, or an
+    // empty board's own first population) or a human drag; simply adding more graph must
+    // never re-shuffle what's already on screen. Persisted per-browser (localStorage, not
+    // just in-memory) so a reload doesn't scramble a board someone spent time arranging.
+    const POS_KEY = "osiris.board.positions";
+    const loadPositions = () => {
+      try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}"); } catch (e) { return {}; }
+    };
+    const savePositions = () => {
+      try {
+        const pos = {};
+        cy.nodes().forEach((n) => { pos[n.id()] = n.position(); });
+        localStorage.setItem(POS_KEY, JSON.stringify(pos));
+      } catch (e) {}
+    };
+    const SAVED_POS = loadPositions();
+    const PLACED = new Set();
+    cy.on("dragfree", "node", savePositions);
+    // a freshly-added node: its own saved position wins; otherwise land it near an already-
+    // PLACED neighbor (small jitter so siblings don't stack exactly on top of each other);
+    // otherwise (a true isolate on a populated board) leave it near the origin for a human's
+    // own explicit Re-layout to spread properly, rather than silently invoking one.
+    const settleNewNode = (n) => {
+      const saved = SAVED_POS[n.id()];
+      if (saved) { n.position(saved); PLACED.add(n.id()); return; }
+      const anchor = n.connectedEdges().connectedNodes().filter((m) => m.id() !== n.id() && PLACED.has(m.id()));
+      if (anchor.length) {
+        const p = anchor[0].position();
+        n.position({ x: p.x + (Math.random() - 0.5) * 90, y: p.y + (Math.random() - 0.5) * 90 });
+      } else {
+        n.position({ x: (Math.random() - 0.5) * 40, y: (Math.random() - 0.5) * 40 });
+      }
+      PLACED.add(n.id());
     };
     // WAVE A item 4: an Agent node's server-supplied `agent_state` (live/idle/dead, the
     // fleet view's own window) rides along as node data when present — passed through
@@ -272,21 +312,34 @@ const Osiris = (() => {
       const node = cy.getElementById(bundleId);
       if (!node.length) return;
       const info = node.data("bundleOf");
+      const anchorPos = node.position();
       node.connectedEdges().remove();
       node.remove();
       if (!info) return;
+      const newIds = [];
       info.nodes.forEach((n) => {
-        if (n && !cy.getElementById(n.id).length) cy.add({ group: "nodes", data: nodeData(n) });
+        if (n && !cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); newIds.push(n.id); }
       });
       info.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;
         if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
           cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
       });
-      layout(true);
+      // land the restored nodes where the bundle itself sat, jittered apart — an expand is
+      // the one case with no better anchor than "where the summary used to be".
+      newIds.forEach((id) => {
+        const n = cy.getElementById(id);
+        if (SAVED_POS[id]) { n.position(SAVED_POS[id]); } else {
+          n.position({ x: anchorPos.x + (Math.random() - 0.5) * 90, y: anchorPos.y + (Math.random() - 0.5) * 90 });
+        }
+        PLACED.add(id);
+      });
+      savePositions();
     };
     const mergeGraph = (g) => {
+      const wasEmpty = cy.nodes().length === 0;
       let added = 0;
+      const newIds = [];
       const claimed = new Set();       // edge keys already spoken for by a bundle
       const bundledNodeIds = new Set(); // far-node ids hidden behind a bundle
       const groups = {};
@@ -311,11 +364,12 @@ const Osiris = (() => {
             id: bundleId, type: "bundle", label: `${fresh.length} ${gr.type}`,
             bundleOf: { hub: gr.hub, dir: gr.dir, type: gr.type, nodes: farNodes, edges: fresh },
           } });
+          newIds.push(bundleId);
           // the hub itself may not be on the board yet within THIS merge call (e.g. a fresh
           // placeObjects batch) — plant it now so the bundle edge has both ends to attach to.
           if (!cy.getElementById(gr.hub).length) {
             const hubNode = g.nodes.find((n) => n.id === gr.hub);
-            if (hubNode) { cy.add({ group: "nodes", data: nodeData(hubNode) }); added++; }
+            if (hubNode) { cy.add({ group: "nodes", data: nodeData(hubNode) }); newIds.push(gr.hub); added++; }
           }
           if (cy.getElementById(gr.hub).length) {
             cy.add({ group: "edges", data: gr.dir === "out"
@@ -326,7 +380,7 @@ const Osiris = (() => {
         });
       g.nodes.forEach((n) => {
         if (bundledNodeIds.has(n.id)) return; // hidden behind a bundle — expandBundle() adds it back
-        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); added++; }
+        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); newIds.push(n.id); added++; }
       });
       g.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;
@@ -334,6 +388,12 @@ const Osiris = (() => {
         if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
           cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
       });
+      // WAVE A item 5: an empty board's first population still deserves a real layout (no
+      // neighbors exist yet to land near); anything added to an ALREADY-populated board
+      // lands near its neighbors instead — layout() is never called here past that point,
+      // so the explicit Re-layout button stays the only thing that moves a placed node.
+      if (wasEmpty) { layout(false); }
+      else { newIds.forEach((id) => settleNewNode(cy.getElementById(id))); savePositions(); }
       return added;
     };
     // a bundle node's own click is EXPAND, not the normal select/focus verb — it isn't a

@@ -72,3 +72,33 @@ def test_agent_nodes_paint_by_live_idle_dead_state() -> None:
     for state in ("live", "idle", "dead"):
         assert f"node[type='Agent'][agent_state='{state}']" in _JS
     assert "agent_state: n.agent_state" in _JS  # nodeData() passthrough
+
+
+# --- item 5: sticky positions -- Re-layout is the only thing that moves a placed node -----
+
+def test_positions_persist_across_reload() -> None:
+    assert 'const POS_KEY = "osiris.board.positions"' in _JS
+    assert "localStorage.setItem(POS_KEY" in _JS and "localStorage.getItem(POS_KEY" in _JS
+
+
+def test_a_human_drag_saves_its_own_new_position() -> None:
+    assert 'cy.on("dragfree", "node", savePositions)' in _JS
+
+
+def test_new_nodes_land_near_an_already_placed_neighbor_not_at_random() -> None:
+    assert "const settleNewNode = (n) =>" in _JS
+    assert "connectedEdges().connectedNodes().filter((m) => m.id() !== n.id()" in _JS
+    assert "PLACED.has(m.id()))" in _JS
+
+
+def test_merge_graph_only_calls_layout_when_the_board_was_empty() -> None:
+    assert "const wasEmpty = cy.nodes().length === 0" in _JS
+    assert "if (wasEmpty) { layout(false); }" in _JS
+    assert "newIds.forEach((id) => settleNewNode(cy.getElementById(id)))" in _JS
+
+
+def test_focus_no_longer_forces_a_layout_on_every_click() -> None:
+    console_js = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
+    assert "(ensureBoard()).layout((ensureBoard()).cy.nodes().length > 1)" not in console_js
+    assert ("(ensureBoard()).mergeGraph(g); (ensureBoard()).focusNode(id); "
+            "(ensureBoard()).fit();") in console_js

@@ -485,7 +485,10 @@ async function focus(id) {
   const g = await fetch('/objects/' + id + '/graph?hops=1').then(r => r.json());
   let capped = 0;
   if (g.nodes.length > 29) { capped = g.nodes.length - 1; const keep = new Set([id, ...g.nodes.filter(n => n.id !== id).slice(0, 28).map(n => n.id)]); g.nodes = g.nodes.filter(n => keep.has(n.id)); g.edges = g.edges.filter(e => keep.has(e.source) && keep.has(e.target)); }
-  (ensureBoard()).mergeGraph(g); (ensureBoard()).layout((ensureBoard()).cy.nodes().length > 1); (ensureBoard()).focusNode(id);
+  // WAVE A item 5 (thread 8839): mergeGraph decides layout() for itself now (only an
+  // otherwise-empty board gets one; an already-populated board lands new nodes near their
+  // neighbors instead) — this call site just frames whatever landed, it never re-shuffles it.
+  (ensureBoard()).mergeGraph(g); (ensureBoard()).focusNode(id); (ensureBoard()).fit();
   inspect(id);
   setStatus(capped ? 'Showing 28 of ' + capped + ' connections.' : (ensureBoard()).cy.nodes().length + ' objects on the board.');
 }
