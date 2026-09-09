@@ -7,8 +7,11 @@ preserving receipt, and the never-move-a-current-row invariant.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+from typing import Any
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator.migration_0064 import (
     ReconciliationError,
@@ -225,12 +228,119 @@ async def test_plan_migration_0064_is_read_only(actions: Actions) -> None:
     assert (before_hot, before_cold) == (after_hot, after_cold)
 
 
+async def test_apply_migration_0064_survives_concurrent_writes_during_the_run(
+    actions: Actions,
+) -> None:
+    """The exact false positive found live in production (wave 12): while the archiver
+    is mid-run, the rest of the fleet keeps writing brand-new rows into assertions_hot
+    via ordinary Actions.assert_property calls, completely unrelated to the migration.
+    Real interleaving, not a simulation after the fact: apply_migration_0064 (batch_size
+    small enough to force several batches) and a second coroutine that writes new rows
+    are run concurrently with asyncio.gather over the SAME connection pool, so the writer
+    genuinely lands rows in the gaps between the archiver's own batch transactions.
+    Because before/after are both scoped to a single `run_start` captured at the top of
+    apply_migration_0064, none of those concurrent rows (created_at >= run_start) can
+    ever be counted on either side, and the run must complete with count_preserved=True
+    -- no ReconciliationError, exactly the bug this fix closes."""
+    obj = await actions.create_or_find_object("Agent", "agent:concurrent", "test")
+
+    old_ids = []
+    for i in range(30):
+        aid = await actions.assert_property(
+            obj, f"cf{i}", "v1", f"agent:c{i}", OLD, 0.9)
+        await _age(actions, aid, OLD)
+        await actions.assert_property(obj, f"cf{i}", "v2", f"agent:c{i}", RECENT, 0.9)
+        old_ids.append(aid)
+
+    async def write_concurrently() -> None:
+        # each iteration yields to the event loop first so these genuinely interleave
+        # with the archiver's own batch-by-batch transactions rather than all landing
+        # before the run even starts.
+        for i in range(20):
+            await asyncio.sleep(0)
+            await actions.assert_property(
+                obj, f"live{i}", "just-written", f"agent:live{i}", RECENT, 0.9)
+
+    receipt, _ = await asyncio.gather(
+        apply_migration_0064(actions.pool, batch_size=5, cutoff=CUTOFF),
+        write_concurrently(),
+    )
+
+    assert receipt["rows_moved"] == 30
+    assert receipt["batches_run"] == 6
+    assert receipt["count_preserved"] is True
+
+    for aid in old_ids:
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM assertions_cold WHERE id=$1", aid) == 1
+
+    # the concurrently-written rows are real, and still in hot -- they were correctly
+    # excluded from the reconciliation count, not lost or miscounted
+    live_count = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions_hot WHERE name LIKE 'live%' AND object_id=$1",
+        obj,
+    )
+    assert live_count == 20
+
+
+class _DeleteAfterBeforeCounts:
+    """Wraps a real asyncpg pool so that, right after apply_migration_0064 finishes
+    taking its two before-counts (fetchval calls 1 and 2: assertions_hot then
+    assertions_cold), an eligible row is deleted directly from assertions_hot --
+    bypassing the archiver's own copy-verify-delete path entirely. This simulates a
+    genuine external interference (a stray manual DELETE, a bad migration, disk
+    corruption repair gone wrong) landing between the before-snapshot and the loop:
+    exactly the class of REAL mismatch the final reconciliation check exists to catch,
+    as opposed to the concurrent-insert false positive fixed above. Every other call is
+    passed straight through to the real pool/connection.
+    """
+
+    def __init__(self, pool: Any, victim_id: int) -> None:
+        self._pool = pool
+        self._victim_id = victim_id
+        self._fetchval_calls = 0
+        self.deleted = False
+
+    def acquire(self) -> Any:
+        return self._pool.acquire()
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        result = await self._pool.fetchval(query, *args)
+        self._fetchval_calls += 1
+        if self._fetchval_calls == 2 and not self.deleted:
+            await self._pool.execute(
+                "DELETE FROM assertions_hot WHERE id=$1", self._victim_id,
+            )
+            self.deleted = True
+        return result
+
+
 async def test_apply_migration_0064_raises_loudly_on_a_reconciliation_mismatch(
     actions: Actions,
 ) -> None:
-    """A count mismatch must never be swallowed into a receipt that looks fine --
-    simulate the failure by racing a manual delete of an eligible row mid-run isn't
-    practical here, so this proves the raise path directly: ReconciliationError is
-    exactly the class apply_migration_0064 raises, and it is a RuntimeError (so nothing
-    upstream can quietly catch-and-ignore it as a plain return value)."""
+    """A GENUINE mismatch -- a pre-existing eligible row vanishing out-of-band, not a
+    concurrent-write artifact -- must still raise loudly. `_DeleteAfterBeforeCounts`
+    deletes one already-old, already-eligible row directly from assertions_hot right
+    after the before-counts are taken (before the archiver's own loop even starts), so
+    the row is gone by the time the loop runs: never copied to cold, never deleted by
+    the archiver's own verified delete, simply missing from both tables' after-counts.
+    before_total (which counted it) must then legitimately differ from after_total (which
+    can't), and ReconciliationError must fire with the real before/after numbers in it."""
+    obj = await actions.create_or_find_object("Agent", "agent:mismatch", "test")
+    victim_id = await actions.assert_property(
+        obj, "doomed", "v1", "agent:src", OLD, 0.9)
+    await _age(actions, victim_id, OLD)
+    await actions.assert_property(obj, "doomed", "v2", "agent:src", RECENT, 0.9)
+
+    spy_pool = _DeleteAfterBeforeCounts(actions.pool, victim_id)
+
+    with pytest.raises(ReconciliationError) as excinfo:
+        await apply_migration_0064(spy_pool, batch_size=5, cutoff=CUTOFF)
+
+    assert spy_pool.deleted
+    assert "COUNT MISMATCH" in str(excinfo.value)
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM assertions_hot WHERE id=$1", victim_id) is None
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM assertions_cold WHERE id=$1", victim_id) is None
     assert issubclass(ReconciliationError, RuntimeError)
