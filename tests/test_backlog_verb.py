@@ -2,12 +2,17 @@
 standalone read verb over digest.py's own `_obligation_pressure`, scoped to the caller's
 project by default with an `all_projects` widen, ordered caller's-project-first / then
 past-window / then open-count, capped and folded in text mode.
+
+THE BACKLOG BAND, piece 2 (thread 8608): `fleet=True` swaps the same verb onto the
+per-seat axis (compositions.obligation_backlog) instead of per-project -- tested below
+alongside the original per-project behavior since it is the same tool, one more mode.
 """
 from __future__ import annotations
 
 from src.actions.core import Actions
 from src.orchestrator.capture import open_thread
 from src.orchestrator.mounts import save_mount
+from src.orchestrator.seats import ensure_seat
 
 
 class _Ctx:
@@ -107,3 +112,44 @@ async def test_backlog_render_text_returns_only_a_text_field_capped_with_remaind
     lines = out["text"].splitlines()
     assert lines[-1].startswith("+") and "more project" in lines[-1]
     assert len(lines) == BACKLOG_BAND_CAP + 1
+
+
+async def test_backlog_fleet_true_returns_the_per_seat_view(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    await ensure_seat(actions, house="blfleethouse", handle="Blfleeter", source="test")
+    await open_thread(actions, "a seated duty", kind="obligation", owner="Blfleeter",
+                      repo="blfleetproj", source="agent:seed-blfleet1")
+
+    ctx = _Ctx()
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.backlog(fleet=True, ctx=ctx)
+    finally:
+        srv._pool = saved
+
+    assert "by_seat" in out and "by_project" in out
+    row = next(r for r in out["by_seat"] if r["seat"] == "Blfleeter")
+    assert row["open"] >= 1
+
+
+async def test_backlog_fleet_true_render_text_lists_seats_and_tail_counts(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+
+    await open_thread(actions, "an unowned duty for the text render", kind="obligation",
+                      owner=None, repo="blfleetproj2", source="session")
+
+    ctx = _Ctx()
+    saved = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.backlog(fleet=True, render="text", ctx=ctx)
+    finally:
+        srv._pool = saved
+
+    assert set(out.keys()) == {"text"}
+    assert out["text"].startswith("fleet total:")
+    assert "unowned:" in out["text"]

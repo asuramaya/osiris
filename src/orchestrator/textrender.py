@@ -68,6 +68,38 @@ def _render_backlog_row(row: dict[str, Any]) -> str:
     return f"{row['project']}: {row['open']}{target} open{past} — oldest: {owners}"
 
 
+def render_obligation_backlog_text(result: dict[str, Any]) -> str:
+    """THE BACKLOG BAND, `--fleet` view (thread 8608): one line per carrying seat instead
+    of `render_backlog_text`'s per-project rows — `backlog(fleet=True)`'s own shape, so
+    the crunch is visible per body without a hand-run query. Same cap/remainder
+    convention as `render_backlog_text` (`BACKLOG_BAND_CAP`), plus a trailing line for
+    `unowned`/`literal_owner` (both hidden at zero — a clean fleet with nothing to
+    reassign should read that way, not carry two zero-lines forever)."""
+    rows = result.get("by_seat") or []
+    shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
+    lines = [f"fleet total: {result.get('fleet_total', 0)} open"]
+    if shown:
+        lines.extend(_render_seat_backlog_row(r) for r in shown)
+    else:
+        lines.append("  no seat carries an open obligation")
+    if remainder:
+        lines.append(f"+{remainder} more seat(s)")
+    tail = []
+    if result.get("unowned"):
+        tail.append(f"unowned: {result['unowned']}")
+    if result.get("literal_owner"):
+        tail.append(f"literal owner (no matching seat): {result['literal_owner']}")
+    if tail:
+        lines.append(" — ".join(tail))
+    return "\n".join(lines)
+
+
+def _render_seat_backlog_row(row: dict[str, Any]) -> str:
+    past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
+    oldest = ", ".join(o["id"] for o in (row.get("oldest") or []))
+    return f"  {row['seat']}: {row['open']} open{past} — oldest: {oldest}"
+
+
 _OCCUPANCY_GLYPH = {"occupied": "●", "cold": "○", "vacant": "·"}
 
 

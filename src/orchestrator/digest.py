@@ -479,6 +479,46 @@ _OBLIGATION_TARGET_OSIRIS = 40
 _OBLIGATION_TARGET_CLIENT = 15
 
 
+async def _open_obligation_rows(actions: Actions) -> list[dict[str, Any]]:
+    """Fleet-wide, every OPEN kind='obligation' Thread as a raw row: `id`, `project`
+    (`(unfiled)` when no in_repo link), `created_at`, `owner` (free text — a seat id, an
+    agent/lineage id, or open_thread's own default: the bare handle), `stale_after`, and
+    `summary` (corrected_summary over summary, same COALESCE convention obligation_hygiene.py
+    and stophook_logic.py already use). The single shared query behind `_obligation_pressure`
+    (per-project) and `obligation_backlog` (per-project AND per-seat, thread 8608) — extracted
+    so the two never hand-roll two copies of the same WHERE clause to drift apart."""
+    rows = await actions.pool.fetch(
+        "SELECT o.id, COALESCE(p.canonical, '(unfiled)') AS project, o.created_at, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS stale_after, "
+        " COALESCE("
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at "
+        "    DESC LIMIT 1), "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
+        "   AS summary "
+        "FROM objects o "
+        "LEFT JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "LEFT JOIN objects p ON p.id=l.to_id "
+        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
+        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "    WHERE a.object_id=o.id AND a.name='status' "
+        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "    AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "    ='obligation' "
+        "ORDER BY project, o.created_at ASC")
+    return [{"id": r["id"], "project": r["project"], "created_at": r["created_at"],
+             "owner": r["owner"], "stale_after": r["stale_after"], "summary": r["summary"]}
+            for r in rows]
+
+
 async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
     """No-regrow hygiene item 4's own weekly gauge: every project carrying at least one
     OPEN kind='obligation' Thread, against its fixed target (osiris itself under
@@ -495,26 +535,7 @@ async def _obligation_pressure(actions: Actions) -> list[dict[str, Any]]:
     definition `owned_obligations`/`compute_stale_obligations` in stophook_logic.py use) —
     0 for a row with none, or every row whose obligations predate the stale_after_days
     migration (no window stamped at all)."""
-    rows = await actions.pool.fetch(
-        "SELECT COALESCE(p.canonical, '(unfiled)') AS project, o.created_at, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS owner, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='stale_after' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS stale_after "
-        "FROM objects o "
-        "LEFT JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
-        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "LEFT JOIN objects p ON p.id=l.to_id "
-        "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
-        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "    WHERE a.object_id=o.id AND a.name='status' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "    ='obligation' "
-        "ORDER BY project, o.created_at ASC")
+    rows = await _open_obligation_rows(actions)
     now = datetime.now(UTC)
     by_project: dict[str, list[dict[str, Any]]] = {}
     for r in rows:

@@ -346,6 +346,49 @@ def test_find_missing_sessions_is_empty_when_store_has_everything() -> None:
     assert find_missing_sessions({"aaa", "bbb"}, {"aaa", "bbb", "ccc"}) == set()
 
 
+# --- THE BACKLOG BAND, piece 3 (thread 8608): pure halves only, same convention
+# `_format_round_trip_failure` set for this file's own DB-touching collectors -------------
+
+def test_backlog_delta_is_none_on_the_first_run() -> None:
+    from scripts.osiris_preflight import _backlog_delta
+
+    assert _backlog_delta(7, None) is None
+
+
+def test_backlog_delta_is_the_arithmetic_difference() -> None:
+    from scripts.osiris_preflight import _backlog_delta
+
+    assert _backlog_delta(10, "7") == 3
+    assert _backlog_delta(4, "9") == -5
+    assert _backlog_delta(5, "5") == 0
+
+
+def test_format_backlog_weekly_line_names_first_run() -> None:
+    from scripts.osiris_preflight import _format_backlog_weekly_line
+
+    line = _format_backlog_weekly_line(
+        {"fleet_total": 12, "delta": None, "top_seats": [{"seat": "Thoth", "open": 5}]})
+    assert "12 open obligation(s) fleet-wide" in line
+    assert "first run, no prior week to compare" in line
+    assert "Thoth:5" in line
+
+
+def test_format_backlog_weekly_line_signs_a_positive_and_negative_delta() -> None:
+    from scripts.osiris_preflight import _format_backlog_weekly_line
+
+    up = _format_backlog_weekly_line({"fleet_total": 12, "delta": 3, "top_seats": []})
+    down = _format_backlog_weekly_line({"fleet_total": 9, "delta": -3, "top_seats": []})
+    assert "+3 since last week" in up
+    assert "-3 since last week" in down
+
+
+def test_format_backlog_weekly_line_names_no_seats_when_empty() -> None:
+    from scripts.osiris_preflight import _format_backlog_weekly_line
+
+    line = _format_backlog_weekly_line({"fleet_total": 0, "delta": 0, "top_seats": []})
+    assert "Top seats: none." in line
+
+
 async def _no_transcripts_root(tmp_path: Path) -> int | None:
     from scripts.osiris_preflight import collect_soul_store_coverage
 

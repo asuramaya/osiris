@@ -114,9 +114,10 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
                                 "desk_overview", "desk_project", "echoes", "family",
                                 "family_drift", "fleet_live", "fleet_live_agents",
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",
-                                "mail_threads", "overhead", "portfolio", "practices",
-                                "project", "pulse", "reference_catalog", "roadmap_open",
-                                "screen_network", "search", "subject_report", "triage", "wall"]
+                                "mail_threads", "obligation_backlog", "overhead", "portfolio",
+                                "practices", "project", "pulse", "reference_catalog",
+                                "roadmap_open", "screen_network", "search", "subject_report",
+                                "triage", "wall"]
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:

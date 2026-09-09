@@ -469,6 +469,74 @@ async def collect_soul_round_trip_sample() -> RoundTripReport:
         await pool.close()
 
 
+# THE BACKLOG BAND, piece 3 (thread 8608, operator nudge via Thoth): the weekly delta line
+# needs a durable prior-week number to compare against — a bare `watermarks` cursor, the
+# same generic key/value store digest.py's own OPERATOR_WATERMARK already uses.
+_BACKLOG_WEEKLY_CURSOR_KEY = "preflight:backlog_weekly_fleet_total"
+
+
+def _backlog_delta(fleet_total: int, prior: str | None) -> int | None:
+    """Pure: `None` on the very first run (no prior cursor to compare against), never
+    coerced to 0 — a real "no change" and "nothing to compare yet" are different facts."""
+    return fleet_total - int(prior) if prior is not None else None
+
+
+def _format_backlog_weekly_line(m: dict[str, Any]) -> str:
+    """Pure message formatting for the backlog band's weekly line — shared by `main()`'s
+    own unconditional print and `brief_backlog_weekly`'s desk post, same convention
+    `_format_round_trip_failure` already set for this file's own DB-touching collectors."""
+    delta = m["delta"]
+    delta_text = ("first run, no prior week to compare" if delta is None else
+                  f"{'+' if delta >= 0 else ''}{delta} since last week")
+    seats = ", ".join(f"{s['seat']}:{s['open']}" for s in m["top_seats"]) or "none"
+    return (f"BACKLOG BAND — {m['fleet_total']} open obligation(s) fleet-wide "
+            f"({delta_text}). Top seats: {seats}.")
+
+
+async def collect_obligation_backlog_weekly() -> dict[str, Any]:
+    """THE BACKLOG BAND, piece 3: fleet total open obligations, the top five carrying
+    seats, and the delta since the last time this ran — a bare snapshot tells nobody
+    whether the crunch is working, the delta does. Reuses
+    `compositions._fn_obligation_backlog` (piece 1) rather than a fourth hand-rolled
+    query. Read-mostly: the only write is advancing this collector's own cursor, same
+    posture `fleet_digest`'s watermark advance already holds itself to."""
+    from src.db.pool import create_pool
+    from src.orchestrator.compositions import _fn_obligation_backlog
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-backlog-weekly")
+    try:
+        result = await _fn_obligation_backlog(pool, None, {})
+        fleet_total = int(result["fleet_total"])
+        prior = await get_cursor(pool, _BACKLOG_WEEKLY_CURSOR_KEY)
+        delta = _backlog_delta(fleet_total, prior)
+        await set_cursor(pool, _BACKLOG_WEEKLY_CURSOR_KEY, str(fleet_total))
+        return {"fleet_total": fleet_total, "top_seats": result["by_seat"][:5], "delta": delta}
+    finally:
+        await pool.close()
+
+
+async def brief_backlog_weekly(m: dict[str, Any]) -> None:
+    """Post the backlog band's weekly line to the operator's desk — informational
+    (`desk_kind='fyi'`), never a regression alarm: this runs every week regardless of
+    whether the number moved, same cadence `collect_soul_round_trip_sample` already
+    runs at (--drill-gated, which the systemd timer passes only on its weekly pass)."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mailbox import send_message
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-backlog-brief")
+    try:
+        await send_message(pool, from_agent="system:preflight", from_project="osiris",
+                           to_project="operator", body=_format_backlog_weekly_line(m),
+                           desk_kind="fyi", grade="fyi")
+    finally:
+        await pool.close()
+
+
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe).
 
@@ -547,6 +615,17 @@ def main() -> int:
                 fails.append(f)
         if roundtrip_broken:
             fails.append(roundtrip_broken)
+    if "--drill" in sys.argv:
+        backlog_weekly, backlog_broken = _run_check(
+            "collect_obligation_backlog_weekly", collect_obligation_backlog_weekly())
+        if backlog_weekly is not None:
+            print(_format_backlog_weekly_line(backlog_weekly))
+            try:
+                asyncio.run(brief_backlog_weekly(backlog_weekly))
+            except Exception as e:  # noqa: BLE001 — the desk being down is itself printed
+                print(f"(could not post the backlog band brief: {e})")
+        if backlog_broken:
+            fails.append(backlog_broken)
     if not fails:
         print("preflight: all green"
               f" (backup {m['backup_age_h']:.1f}h, vault {m['vault_age_d']:.1f}d,"
