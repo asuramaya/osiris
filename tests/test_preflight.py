@@ -349,7 +349,12 @@ def test_find_missing_sessions_is_empty_when_store_has_everything() -> None:
 async def _no_transcripts_root(tmp_path: Path) -> int | None:
     from scripts.osiris_preflight import collect_soul_store_coverage
 
-    return await collect_soul_store_coverage(root=tmp_path / "does-not-exist")
+    # check_crush=False: CrushSqliteAdapter.enumerate() takes no root at all (it always
+    # walks the REAL ~/.local/share/crush/projects.json + seat offices, wave 13 item 2's
+    # own documented limit) — a dev box with real crush sessions would otherwise make
+    # this "nothing to check" test reach for a real DB connection.
+    return await collect_soul_store_coverage(
+        root=tmp_path / "does-not-exist", check_crush=False)
 
 
 def test_collect_soul_store_coverage_is_quiet_with_no_transcripts_root(
@@ -371,7 +376,8 @@ def test_collect_soul_store_coverage_is_quiet_with_an_empty_transcripts_root(
 
     root = tmp_path / "projects"
     root.mkdir()
-    assert asyncio.run(collect_soul_store_coverage(root=root)) is None
+    assert asyncio.run(
+        collect_soul_store_coverage(root=root, check_crush=False)) is None
 
 
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:

@@ -3,9 +3,12 @@ across claude/dsh/crush/cursor, capability refusal by name, and selection by pin
 """
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 import pytest
+from src.actions.core import Actions
 from src.config.settings import Settings
 from src.orchestrator.harness_process import (
     ClaudeAdapter,
@@ -15,6 +18,41 @@ from src.orchestrator.harness_process import (
     claude_pty_argv,
     resolve_process_adapter,
 )
+
+
+def _make_crush_db(path: Path, *, session_id: str, n: int) -> Path:
+    """A minimal, real crush.db (the actual schema, verified live against a real
+    install) — `n` messages for one session, so ingest_crush_session has something
+    genuine to read."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT, "
+            " title TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0, "
+            " prompt_tokens INTEGER NOT NULL DEFAULT 0, "
+            " completion_tokens INTEGER NOT NULL DEFAULT 0, "
+            " cost REAL NOT NULL DEFAULT 0.0, updated_at INTEGER NOT NULL, "
+            " created_at INTEGER NOT NULL, summary_message_id TEXT, todos TEXT)")
+        conn.execute(
+            "CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+            " role TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', model TEXT, "
+            " created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, "
+            " finished_at INTEGER, provider TEXT, "
+            " is_summary_message INTEGER DEFAULT 0 NOT NULL)")
+        conn.execute(
+            "INSERT INTO sessions (id, title, message_count, updated_at, created_at) "
+            "VALUES (?, 'test session', ?, 1700000000, 1700000000)", (session_id, n))
+        for i in range(n):
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, parts, model, "
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (f"msg-{i}", session_id, "user" if i % 2 == 0 else "assistant",
+                 f'[{{"type":"text","data":{{"text":"line {i}"}}}}]', "test-model",
+                 1700000000 + i, 1700000000 + i))
+        conn.commit()
+    finally:
+        conn.close()
+    return path
 
 # ═══ ClaudeAdapter: a thin wrap, zero behavior change ═════════════════════════════════════
 
@@ -198,16 +236,15 @@ async def test_dsh_list_sessions_wraps_enumerate(monkeypatch: pytest.MonkeyPatch
 
 # ═══ CrushAdapter: real spawn + list_sessions, everything else refuses ════════════════════
 
-async def test_crush_capabilities_is_spawn_and_list_sessions_only() -> None:
-    assert CrushAdapter().capabilities() == frozenset({"spawn", "list_sessions"})
-    assert "materialize" not in CrushAdapter().capabilities()
+async def test_crush_capabilities_is_spawn_list_sessions_and_materialize(
+) -> None:
+    assert CrushAdapter().capabilities() == frozenset(
+        {"spawn", "list_sessions", "materialize"})
 
 
-async def test_crush_resume_reply_stop_materialize_all_refuse_by_name() -> None:
+async def test_crush_resume_reply_stop_all_refuse_by_name() -> None:
     crush = CrushAdapter()
-    coros = (crush.resume(), crush.reply(), crush.stop(),
-             crush.materialize(pool=None, anchor_sid="x"))
-    for coro in coros:
+    for coro in (crush.resume(), crush.reply(), crush.stop()):
         out = await coro
         assert out["error"].startswith("adapter 'crush' does not support")
 
@@ -308,6 +345,71 @@ async def test_crush_list_sessions_tolerates_malformed_json(
                         _fake_exec)
 
     assert await CrushAdapter().list_sessions(cwd="/tmp/r") == []
+
+
+# ═══ CrushAdapter.materialize (wave 13 item 2): writes soul_lines back into a target
+# crush.db — a genuine restore (real sessions/messages schema), never a rewrite of the
+# session's original db. ═══════════════════════════════════════════════════════════════════
+
+async def test_crush_materialize_needs_a_dest(actions: Actions) -> None:
+    out = await CrushAdapter().materialize(pool=actions.pool, anchor_sid="x")
+    assert "error" in out
+
+
+async def test_crush_materialize_errors_when_nothing_ingested(actions: Actions) -> None:
+    out = await CrushAdapter().materialize(
+        pool=actions.pool, anchor_sid="never-ingested", dest="/tmp/whatever.db")
+    assert "error" in out
+
+
+async def test_crush_materialize_writes_a_real_readable_crush_db(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.ingest.soul_store import SoulStore
+
+    source_db = _make_crush_db(tmp_path / "source.db", session_id="sess-mat-1", n=3)
+    store = SoulStore(actions.pool)
+    n = await store.ingest_crush_session(str(source_db), "sess-mat-1", "sessmat1")
+    assert n == 3
+
+    dest = tmp_path / "restored" / "crush.db"
+    out = await CrushAdapter().materialize(
+        pool=actions.pool, anchor_sid="sessmat1", dest=str(dest))
+    assert out == {"written": str(dest), "session_id": "sess-mat-1", "messages": 3}
+
+    conn = sqlite3.connect(str(dest))
+    try:
+        msg_count = conn.execute("SELECT count(*) FROM messages").fetchone()[0]
+        session_row = conn.execute(
+            "SELECT id, message_count FROM sessions").fetchone()
+    finally:
+        conn.close()
+    assert msg_count == 3
+    assert session_row == ("sess-mat-1", 3)
+
+
+async def test_crush_materialize_refuses_an_existing_session_without_force(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.ingest.soul_store import SoulStore
+
+    source_db = _make_crush_db(tmp_path / "source.db", session_id="sess-mat-2", n=2)
+    store = SoulStore(actions.pool)
+    await store.ingest_crush_session(str(source_db), "sess-mat-2", "sessmat2")
+
+    dest = tmp_path / "crush.db"
+    first = await CrushAdapter().materialize(
+        pool=actions.pool, anchor_sid="sessmat2", dest=str(dest))
+    assert "error" not in first
+
+    second = await CrushAdapter().materialize(
+        pool=actions.pool, anchor_sid="sessmat2", dest=str(dest))
+    assert "error" in second
+    assert "already exists" in second["error"]
+
+    forced = await CrushAdapter().materialize(
+        pool=actions.pool, anchor_sid="sessmat2", dest=str(dest), force=True)
+    assert "error" not in forced
 
 
 # ═══ Cursor stub: declared, nothing built ══════════════════════════════════════════════════

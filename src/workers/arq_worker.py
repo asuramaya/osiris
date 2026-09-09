@@ -337,6 +337,12 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     # for the identical pattern — never SessionEnd/PreCompact, per the ruling's own
     # constraint that nothing may wedge a session's exit
     soul = await SoulStore(ctx["pool"]).backfill(root=Path(root))
+    # crush sessions become canonical too (wave 13 item 2, thread 78efd46d): unlike the
+    # claude-code half above, crush's own discovery (projects.json + seat offices) never
+    # depends on osiris_transcripts, so this runs unconditionally, same free-observer,
+    # one-switch-one-cost law — ingest_crush_session resumes from last_line_idx, so a
+    # steady-state tick with nothing new costs one SQLite query per known session.
+    soul_crush = await SoulStore(ctx["pool"]).backfill_crush()
     # the disk census too (thread 5e37630b): a free walk that makes 'exists on disk'
     # a graph fact — observation only, never the watch list
     roots = [r for r in get_settings().osiris_census_roots.split(":") if r.strip()]
@@ -349,7 +355,8 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
                      len(cs["refused"]), "y" if len(cs["refused"]) == 1 else "ies",
                      ", ".join(r["name"] for r in cs["refused"]))
     return ((sum(out.values()) if out else 0) + tel
-            + (sum(soul.values()) if soul else 0) + len(cs["minted"]))
+            + (sum(soul.values()) if soul else 0)
+            + (sum(soul_crush.values()) if soul_crush else 0) + len(cs["minted"]))
 
 
 async def sweep_doors(ctx: dict[str, Any]) -> int:

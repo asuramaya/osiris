@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1578,3 +1579,150 @@ async def test_soul_cold_tier_heartbeat_is_silent_when_nothing_is_eligible(
     ctx = {"cascade": SimpleNamespace(actions=actions)}
     assert await soul_cold_tier_heartbeat(ctx) == 0
     assert calls == []  # nothing to report — no desk noise
+
+
+# ═══ wave 13 item 2 (thread 78efd46d): crush sessions become canonical ══════════════════
+# closes the gap soul store piece 1 named on day one ("Crush is SQLite-backed... needs
+# its own verbatim strategy, out of scope here on purpose").
+
+def _make_crush_db(path: Path, *, session_id: str, n: int, start: int = 0) -> Path:
+    """A minimal, real crush.db (schema verified live against a real install) — `n`
+    messages for one session, `start` offsetting `created_at`/message ids so a second
+    call against the SAME path can append genuinely NEW rows (incremental-ingest
+    tests)."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, "
+            " parent_session_id TEXT, title TEXT NOT NULL, "
+            " message_count INTEGER NOT NULL DEFAULT 0, "
+            " prompt_tokens INTEGER NOT NULL DEFAULT 0, "
+            " completion_tokens INTEGER NOT NULL DEFAULT 0, "
+            " cost REAL NOT NULL DEFAULT 0.0, updated_at INTEGER NOT NULL, "
+            " created_at INTEGER NOT NULL, summary_message_id TEXT, todos TEXT)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, "
+            " session_id TEXT NOT NULL, role TEXT NOT NULL, "
+            " parts TEXT NOT NULL DEFAULT '[]', model TEXT, "
+            " created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, "
+            " finished_at INTEGER, provider TEXT, "
+            " is_summary_message INTEGER DEFAULT 0 NOT NULL)")
+        conn.execute(
+            "INSERT INTO sessions (id, title, message_count, updated_at, created_at) "
+            "VALUES (?, 'test session', ?, 1700000000, 1700000000) "
+            "ON CONFLICT (id) DO UPDATE SET message_count=excluded.message_count",
+            (session_id, start + n))
+        for i in range(start, start + n):
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, parts, model, "
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (f"msg-{i}", session_id, "user" if i % 2 == 0 else "assistant",
+                 f'[{{"type":"text","data":{{"text":"line {i}"}}}}]', "test-model",
+                 1700000000 + i, 1700000000 + i))
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+async def test_ingest_crush_session_stores_every_message_verbatim(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-a", n=5)
+    n = await store.ingest_crush_session(str(db), "sess-a", "sessa000")
+    assert n == 5
+    rows = await store.pool.fetch(
+        "SELECT line_idx, raw_line FROM soul_lines WHERE harness='crush' "
+        "AND anchor_sid='sessa000' ORDER BY line_idx")
+    assert [r["line_idx"] for r in rows] == list(range(5))
+    decoded = json.loads(bytes(rows[0]["raw_line"]))
+    assert decoded["session_id"] == "sess-a"
+    assert decoded["id"] == "msg-0"
+    assert decoded["parts"] == '[{"type":"text","data":{"text":"line 0"}}]'
+
+
+async def test_ingest_crush_session_is_idempotent_and_resumes(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    db = tmp_path / "crush.db"
+    _make_crush_db(db, session_id="sess-b", n=3)
+    first = await store.ingest_crush_session(str(db), "sess-b", "sessb000")
+    assert first == 3
+    second = await store.ingest_crush_session(str(db), "sess-b", "sessb000")
+    assert second == 0  # nothing new
+
+    _make_crush_db(db, session_id="sess-b", n=2, start=3)  # 2 more messages appended
+    third = await store.ingest_crush_session(str(db), "sess-b", "sessb000")
+    assert third == 2
+    assert await store.verify_chain("sessb000", harness="crush") is True
+
+
+async def test_ingest_crush_session_none_when_db_or_session_missing(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    assert await store.ingest_crush_session(
+        str(tmp_path / "nope.db"), "sess-x", "anchorx0") == 0
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-real", n=2)
+    assert await store.ingest_crush_session(str(db), "sess-ghost", "anchory0") == 0
+
+
+async def test_backfill_crush_ingests_every_discovered_session(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import Any
+
+    from src.ingest.harness import SessionLocator
+
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-bf", n=4)
+    locator = SessionLocator(
+        anchor_sid="sessbf00", session_id="sess-bf", harness="crush",
+        source_path=str(db), cwd=str(tmp_path), project="t", anchored=True)
+
+    def _fake_enumerate(self: Any, *, root: Path | None = None) -> Any:
+        yield locator
+
+    monkeypatch.setattr(
+        "src.ingest.harness.crush_sqlite.CrushSqliteAdapter.enumerate", _fake_enumerate)
+
+    counts = await store.backfill_crush()
+    assert counts == {str(db): 1}
+    rows = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE harness='crush' AND anchor_sid='sessbf00'")
+    assert rows == 4
+
+    # a second sweep with nothing new touches no sessions
+    counts2 = await store.backfill_crush()
+    assert counts2 == {}
+
+
+async def test_verify_crush_round_trip_sample_clean_when_db_matches_store(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-rt1", n=4)
+    await store.ingest_crush_session(str(db), "sess-rt1", "sess-rt1")
+    report = await store.verify_crush_round_trip_sample(n=5)
+    assert report.failures == []
+
+
+async def test_verify_crush_round_trip_sample_catches_a_live_divergence(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-rt2", n=3)
+    await store.ingest_crush_session(str(db), "sess-rt2", "sess-rt2")
+    # mutate the LIVE db after ingest — the store now disagrees with the source
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE messages SET parts='[]' WHERE id='msg-0'")
+    conn.commit()
+    conn.close()
+    report = await store.verify_crush_round_trip_sample(n=5)
+    assert any(f["anchor_sid"] == "sess-rt2" for f in report.failures)
+
+
+async def test_verify_crush_round_trip_sample_skips_a_vanished_db(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    db = _make_crush_db(tmp_path / "crush.db", session_id="sess-rt3", n=2)
+    await store.ingest_crush_session(str(db), "sess-rt3", "sess-rt3")
+    db.unlink()
+    report = await store.verify_crush_round_trip_sample(n=5)
+    assert report.failures == []
