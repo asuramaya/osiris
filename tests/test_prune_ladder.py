@@ -239,6 +239,41 @@ def test_scan_parses_the_basebackup_filenames_own_timestamp(tmp_path) -> None:
     assert found.size_bytes == 42
 
 
+def test_scan_never_counts_the_repo_bundle_as_a_dump(tmp_path) -> None:
+    """osiris_backup.sh writes osiris-repo.bundle straight into the SAME vault
+    directory _scan's own default `osiris-*` glob matches, and rewrites it every
+    6-hourly run — its mtime is therefore ALWAYS the freshest thing there. Before this
+    guard, the mtime fallback let it win `max(dumps, key=lambda f: f.when)` in
+    osiris_disk_guard.py's own main(), silently substituting a ~10MB bundle for a real
+    ~2.7GB dump as "the last dump" (found live, 2026-09-09, Thoth mail 8525 item 2)."""
+    from scripts.osiris_prune_ladder import _scan
+
+    real_dump = tmp_path / "osiris-20260908-163007.dump"
+    real_dump.write_bytes(b"x" * 100)
+    bundle = tmp_path / "osiris-repo.bundle"
+    bundle.write_bytes(b"y" * 10)
+    import os
+    import time
+    future = time.time() + 3600  # the bundle is always refreshed LAST, i.e. newest
+    os.utime(bundle, (future, future))
+
+    found = _scan(tmp_path)
+    assert {f.path for f in found} == {str(real_dump)}
+
+
+def test_scan_still_falls_back_to_mtime_for_a_real_dump_shaped_stray(tmp_path) -> None:
+    """The fallback isn't removed for genuine dump-shaped files, only narrowed away
+    from unrelated ones — a .dump file with a name _NAME_RE doesn't parse still gets a
+    real answer via mtime, same as before this guard."""
+    from scripts.osiris_prune_ladder import _scan
+
+    stray = tmp_path / "osiris-manual-export.dump"
+    stray.write_bytes(b"z" * 7)
+    [found] = _scan(tmp_path)
+    assert found.path == str(stray)
+    assert found.size_bytes == 7
+
+
 def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     tmp_path, capsys,
 ) -> None:

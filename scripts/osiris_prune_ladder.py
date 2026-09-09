@@ -111,17 +111,32 @@ def plan_prune(
     }
 
 
+_DUMP_LIKE_SUFFIXES = (".dump", ".sql", ".tar.gz")
+
+
 def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
     """Every file matching `glob` in `directory` (non-recursive — `backups/`, the vault,
     and `<vault>/basebackups/` are each flat). Timestamp parsed from the filename itself
     (the identity osiris_backup.sh/osiris_base_backup.sh already stamp into it — either
     `_NAME_RE` for a DB dump or `_BASEBACKUP_RE` for a base backup, tried in that order),
-    falling back to the file's own mtime only for a name neither pattern recognizes —
-    never silently skipped, so a stray file still gets a real answer instead of vanishing
-    from the ladder's view. A base backup is, like a DB dump, a complete and
+    falling back to the file's own mtime for a name that carries one of the dump-shaped
+    extensions (`_DUMP_LIKE_SUFFIXES`) but not the exact naming pattern — never silently
+    skipped, so a stray REAL dump/base-backup still gets a real answer instead of
+    vanishing from the ladder's view. A base backup is, like a DB dump, a complete and
     independently-restorable unit on its own (`pg_basebackup`'s whole point) — the SAME
     `plan_prune` ladder applies to both, unlike the transcript tarballs' own chain-scoped
-    sibling."""
+    sibling.
+
+    ANYTHING ELSE matching `glob` but NOT one of those extensions is skipped outright,
+    never given a mtime fallback — the broad `osiris-*` glob this function's own callers
+    default to also matches `osiris-repo.bundle` (osiris_backup.sh's own git-bundle
+    refresh, rewritten every 6-hourly run), and that file's mtime is ALWAYS the most
+    recent thing in the vault. Before this guard, the mtime fallback let it win
+    `max(dumps, key=lambda f: f.when)` in osiris_disk_guard.py's own `main()` every
+    single time, silently replacing a ~2.7GB real dump with a ~10MB bundle as "the last
+    dump" — the disk guard's own margin check (item 5, the exact safety net this vault
+    lane was built to add) was checking against the wrong file's size on every run,
+    found while investigating the 2026-09-09 WAL-pull gap (Thoth mail 8525 item 2)."""
     out: list[DumpFile] = []
     if not directory.is_dir():
         return out
@@ -131,8 +146,10 @@ def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
         m = _NAME_RE.match(p.name) or _BASEBACKUP_RE.match(p.name)
         if m:
             when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=UTC)
-        else:
+        elif p.name.endswith(_DUMP_LIKE_SUFFIXES):
             when = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
+        else:
+            continue
         out.append(DumpFile(str(p), when, p.stat().st_size))
     return out
 
