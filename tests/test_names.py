@@ -229,6 +229,50 @@ async def test_a_transient_mind_that_ACTED_is_a_real_generation(actions: Actions
     assert "healed" not in back
 
 
+async def test_a_subagent_can_never_trigger_a_live_swap_mint(actions: Actions) -> None:
+    """Thread bbb9aa0b/6c80d178 item 4 ("sub-agents never mint"), traced end to end through
+    the REAL mount path rather than asserted by inspection: mcp_server.mount()'s own
+    subagent branch (`if _lineage.normalize_spawn_id(subagent_id) is not None`) registers
+    the child via `register_spawn` and explicitly NEVER calls `mounts.save_mount` — its own
+    comment says so ("NEVER a hot-cache write — the connection belongs to the parent").
+    register_spawn itself never touches agent_mounts (grep confirms it: only
+    create_or_find_object/assert_property/create_link on the Agent/SoftwareProject
+    objects). So a subagent's own session id can never resolve through
+    mounts.find_session_row, which is the ONE lookup live_succession's model-swap
+    detector keys on — structurally, not by a special-cased guard, a subagent has no row
+    for a model change to disagree with.
+
+    Proven here with the real functions: register a spawn exactly as the harness's
+    SubagentStart/mount() branch would, confirm no agent_mounts row exists for it at all,
+    then call live_succession with the spawn's own session id and a model that
+    genuinely differs from anything on record — it must no-op, never mint, regardless of
+    what "model change" is claimed."""
+    from src.orchestrator.agents import live_succession
+    from src.orchestrator.lineage import register_spawn
+
+    await actions.create_or_find_object("Agent", "agent:parent0001", "test")
+    subagent_session = "deadbeef-0000-4000-8000-000000000001"
+    child = await register_spawn(
+        actions, "deadbeef01", parent_agent="agent:parent0001", project="handlingtheloop",
+        session=subagent_session, witnessed=True)
+    assert child == "agent:deadbeef01"
+
+    # the structural guarantee: register_spawn's own onboarding path left NO agent_mounts
+    # row behind at all — not for the child's canonical, not for its session
+    row_count = await actions.pool.fetchval(
+        "SELECT count(*) FROM agent_mounts WHERE job_dir=$1 OR session_key=$1",
+        subagent_session)
+    assert row_count == 0, "register_spawn must never write agent_mounts"
+
+    out = await live_succession(
+        actions, session_id=subagent_session, observed_model="claude-opus-4-8")
+    assert out == {"unchanged": True, "reason": "no mount"}
+    # and no heir was minted in its name regardless
+    minted = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='agent:deadbeef01-ii'")
+    assert minted == 0
+
+
 async def test_a_display_variant_is_not_a_death(actions: Actions) -> None:
     """The [1m] false-mint bug (field-found 2026-07-09, two phantom heirs in an hour): the
     harness reports claude-opus-4-8[1m] for the 1M-context tier of the SAME weights the
