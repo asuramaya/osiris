@@ -21,3 +21,16 @@ def test_labels_truncate_to_forty_characters() -> None:
 def test_labels_hide_below_a_zoom_threshold() -> None:
     assert "ZOOM_LABEL_THRESHOLD" in _JS
     assert 'cy.on("zoom"' in _JS and "cy.style().update()" in _JS
+
+
+# --- item 2: edge labels off by default, shown on hover and on the selected node's edges --
+
+def test_edge_labels_are_off_by_default() -> None:
+    assert '"edge", style: {' in _JS
+    assert 'label: "", "font-size": 9' in _JS
+
+
+def test_edge_labels_show_on_hover_and_on_the_focused_nodes_edges() -> None:
+    assert "edge.edge-hover, edge.edge-focus" in _JS
+    assert 'cy.on("mouseover", "edge"' in _JS and 'cy.on("mouseout", "edge"' in _JS
+    assert "connectedEdges().addClass(\"edge-focus\")" in _JS

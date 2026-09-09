@@ -198,14 +198,21 @@ const Osiris = (() => {
           "text-background-color": "#0d1219", "text-background-opacity": 0.88, "text-background-padding": 3,
           "text-background-shape": "roundrectangle", "min-zoomed-font-size": 6 } },
         { selector: "node.focus", style: { "border-width": 3, "border-color": "#58a6ff" } },
+        // WAVE A item 2: edge labels OFF by default (a hairball of "spawned_by"/"in_repo"
+        // text under every line was the actual readability problem, not the lines
+        // themselves) — shown only on hover (.edge-hover) or on the selected node's own
+        // incident edges (.edge-focus), both toggled by class, never by re-deriving style.
         { selector: "edge", style: {
           width: 1.5, "line-color": "#2c3744", "target-arrow-color": "#58a6ff", "target-arrow-shape": "triangle",
-          "curve-style": "bezier", "arrow-scale": 0.9, label: "data(type)", "font-size": 9, color: "#8b949e",
+          "curve-style": "bezier", "arrow-scale": 0.9, label: "", "font-size": 9, color: "#8b949e",
           "text-background-color": "#0d1219", "text-background-opacity": 0.9, "text-background-padding": 2,
           "text-rotation": "autorotate", "min-zoomed-font-size": 6 } },
+        { selector: "edge.edge-hover, edge.edge-focus", style: { label: "data(type)", "line-color": "#4a5a6a" } },
       ],
     });
     cy.on("zoom", () => cy.style().update());
+    cy.on("mouseover", "edge", (e) => e.target.addClass("edge-hover"));
+    cy.on("mouseout", "edge", (e) => e.target.removeClass("edge-hover"));
     const layout = (preserve) => {
       // a DISCONNECTED set (unrelated nodes, no edges — e.g. 5 open threads) force-packs into
       // an overlapping cluster under fcose; a grid spreads them cleanly. Edges → force layout.
@@ -246,7 +253,11 @@ const Osiris = (() => {
       // then frame the graph. Without this a board revealed from a panel paints blank.
       resizeFit: () => { cy.resize(); cy.fit(undefined, 40); },
       clear: () => cy.elements().remove(),
-      focusNode: (id) => { cy.nodes().removeClass("focus"); cy.getElementById(id).addClass("focus"); },
+      focusNode: (id) => {
+        cy.nodes().removeClass("focus"); cy.edges().removeClass("edge-focus");
+        const n = cy.getElementById(id);
+        n.addClass("focus"); n.connectedEdges().addClass("edge-focus");
+      },
       // place a set of {id,label,type} as nodes + the links AMONG the set only. NOT each
       // node's 1-hop neighborhood — that pulled in strangers and made the hairball. A result
       // SET renders as itself; neighborhood expansion is "search around", a separate verb.
