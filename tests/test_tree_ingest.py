@@ -161,9 +161,133 @@ async def test_alarm_tick_mails_the_owning_seat_when_enabled(actions: Actions) -
     out = await uningested_trees_alarm_tick(
         actions, settings=Settings(osiris_tree_ingest_alarm_enabled=True))
     assert out["enabled"] is True
-    assert out["alarmed"] == [{"tree": "blindtree", "seat": "seat:owner"}]
+    assert len(out["alarmed"]) == 1
+    row = out["alarmed"][0]
+    assert row["tree"] == "blindtree" and row["seat"] == "seat:owner"
+    assert row["first_notice"] is True
     cursor = await get_cursor(actions.pool, "tree-ingest-alarm:blindtree")
     assert cursor is not None
+    # a real Thread was minted for this tree, obligation-kind, owned by the seat
+    thread_status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.id=$1::uuid AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", row["thread"])
+    assert thread_status == "open"
+    sent = await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE body LIKE '%tree-ingest-alarm%'")
+    assert sent == 1
+
+
+async def test_alarm_tick_re_check_past_cooldown_annotates_not_mails(
+    actions: Actions,
+) -> None:
+    """Thread 358ac1ae's own point: the SECOND time this tree is still found blind (past
+    its own cooldown), the SAME thread is touched again, never a second graded 'ask' DM —
+    the grade-inflation defect this whole fix exists to close."""
+    from datetime import timedelta
+
+    from src.orchestrator.monitor import set_cursor
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:stillblind", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/stillblind",
+                                  "disk-census", datetime.now(UTC), 0.9)
+    seat = await actions.create_or_find_object("Seat", "seat:owner3", "session")
+    await actions.create_link(seat, proj, "governs", "session", datetime.now(UTC), 0.9)
+    settings = Settings(osiris_tree_ingest_alarm_enabled=True)
+
+    first = await uningested_trees_alarm_tick(actions, settings=settings)
+    assert first["alarmed"][0]["first_notice"] is True
+    thread_id = first["alarmed"][0]["thread"]
+
+    # force the cooldown to have already elapsed, same convention the pre-existing
+    # never-re-alarms-within-24h test uses for its own mail-count assertion
+    stale = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+    await set_cursor(actions.pool, "tree-ingest-alarm:stillblind", stale)
+
+    second = await uningested_trees_alarm_tick(actions, settings=settings)
+    assert len(second["alarmed"]) == 1
+    assert second["alarmed"][0]["first_notice"] is False
+    assert second["alarmed"][0]["thread"] == thread_id
+    sent = await actions.pool.fetchval(
+        "SELECT count(*) FROM fleet_messages WHERE body LIKE '%tree-ingest-alarm%'")
+    assert sent == 1  # still just the one, from the first tick — the re-touch never mails
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.id=$1::uuid AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", thread_id)
+    assert status == "open"
+
+
+async def test_alarm_tick_never_reopens_a_thread_a_human_already_resolved(
+    actions: Actions,
+) -> None:
+    """`_open_or_annotate_persisting_alarm`'s own guard (deploy_guard.py, reused as-is):
+    a human resolving the alarm thread is respected — the next tick that still finds the
+    tree blind annotates the still-present condition instead of silently re-opening what
+    a human closed."""
+    from datetime import timedelta
+
+    from src.orchestrator.capture import resolve_thread, thread_notes
+    from src.orchestrator.monitor import set_cursor
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:humanclosed", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/humanclosed",
+                                  "disk-census", datetime.now(UTC), 0.9)
+    seat = await actions.create_or_find_object("Seat", "seat:owner5", "session")
+    await actions.create_link(seat, proj, "governs", "session", datetime.now(UTC), 0.9)
+    settings = Settings(osiris_tree_ingest_alarm_enabled=True)
+
+    first = await uningested_trees_alarm_tick(actions, settings=settings)
+    thread_id = first["alarmed"][0]["thread"]
+
+    await resolve_thread(actions, thread_id, because="a human closed this by hand")
+    stale = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+    await set_cursor(actions.pool, "tree-ingest-alarm:humanclosed", stale)
+
+    second = await uningested_trees_alarm_tick(actions, settings=settings)
+    assert second["alarmed"][0]["thread"] == thread_id
+
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.id=$1::uuid AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", thread_id)
+    assert status == "resolved"  # never silently reopened
+    import uuid as _uuid
+
+    notes = await thread_notes(actions.pool, _uuid.UUID(thread_id))
+    assert len(notes) >= 1
+    assert "still present" in notes[-1]["note"]
+
+
+async def test_alarm_tick_self_clears_when_the_tree_is_no_longer_blind(
+    actions: Actions,
+) -> None:
+    """Defect (3), thread 358ac1ae: once a tree stops reading zero-commits, its own
+    still-open alarm Thread resolves itself on the next tick — nobody has to notice and
+    close it by hand."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:willclear", "git")
+    await actions.assert_property(proj, "on_disk_path", "/home/x/code/willclear",
+                                  "disk-census", datetime.now(UTC), 0.9)
+    seat = await actions.create_or_find_object("Seat", "seat:owner4", "session")
+    await actions.create_link(seat, proj, "governs", "session", datetime.now(UTC), 0.9)
+    settings = Settings(osiris_tree_ingest_alarm_enabled=True)
+
+    first = await uningested_trees_alarm_tick(actions, settings=settings)
+    thread_id = first["alarmed"][0]["thread"]
+
+    # the tree lands a commit — discover_trees now reports commits > 0 for it
+    commit = await actions.create_or_find_object(
+        "Commit", "commit:deadbeefcafe", "willclear-ingest")
+    await actions.create_link(commit, proj, "in_repo", "willclear-ingest",
+                              datetime.now(UTC), 0.9)
+
+    second = await uningested_trees_alarm_tick(actions, settings=settings)
+    assert second["resolved"] == ["willclear"]
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.id=$1::uuid AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", thread_id)
+    assert status == "resolved"
 
 
 async def test_alarm_tick_reports_a_tree_with_no_governing_seat_without_mailing(
@@ -185,7 +309,9 @@ async def test_alarm_tick_never_re_alarms_the_same_tree_within_24h(actions: Acti
     await actions.create_link(seat, proj, "governs", "session", datetime.now(UTC), 0.9)
     settings = Settings(osiris_tree_ingest_alarm_enabled=True)
     first = await uningested_trees_alarm_tick(actions, settings=settings)
-    assert first["alarmed"] == [{"tree": "cooling", "seat": "seat:owner2"}]
+    assert len(first["alarmed"]) == 1
+    assert first["alarmed"][0]["tree"] == "cooling"
+    assert first["alarmed"][0]["seat"] == "seat:owner2"
     second = await uningested_trees_alarm_tick(actions, settings=settings)
     assert second["alarmed"] == []
     assert second["cooling"] == ["cooling"]

@@ -13,9 +13,27 @@ combining `gitlog.ingest_repo` (idempotent, always writes when not dry_run) with
 and closing the threads it witnesses is one decision, not two half-remembered ones.
 
 `uningested_trees_alarm_tick` is the heartbeat leg: it never ingests anything itself — it
-tells the owning Seat's mailbox, as a graded 'ask', that their tree is blind, and leaves the
-act to them. Cold by default (osiris_tree_ingest_alarm_enabled), same law as every other
-scheduled writer in this house."""
+tracks the owning Seat's own OBLIGATION THREAD for a blind tree, and leaves the act to them.
+Cold by default (osiris_tree_ingest_alarm_enabled), same law as every other scheduled writer
+in this house.
+
+THE MAIL-TO-THREAD SHAPE FIX (thread 358ac1ae, operator complaint routed via Atlas msg 6404
+— Thoth's own reframe: "a condition that is STILL TRUE is a thread, not mail"): this used to
+`send_message(..., grade='ask')` on every cooldown-cleared tick, so a tree that stayed blind
+for 14 days sent 14 byte-identical graded asks — grade inflation (mount()/orient() reported
+"14 ask" when it meant one), fleet-wide unread-count degradation, and no self-clearing (the
+first alarm sat unsettled even after the tree was ingested on day two). Now: the FIRST time
+a tree is seen blind, `_open_or_annotate_persisting_alarm` (deploy_guard.py's own shared
+mint-or-annotate primitive, reused rather than re-derived — the tree-ingest alarm shares its
+exact shape with schema-drift/unreviewed-boot: a periodic, source-not-a-human caller re-
+running on the SAME condition) mints the Thread AND fires the one-and-only graded 'ask' DM;
+every later tick that still finds the SAME tree blind (past its own unchanged 24h cooldown,
+task text: "DO NOT 'FIX' THE CADENCE — the 24h per-tree cooldown is BY DESIGN and working")
+only ANNOTATES the existing thread — no mail, ever, on a re-assertion. The moment a
+previously-alarmed tree stops being actionable (its commits land, by whatever hand), this
+tick resolves that tree's own still-open thread itself — the self-clearing defect (3) this
+thread named. Defect (1), no dedupe on condition, was always the symptom, not a defect of
+its own — the thread's own idempotent identity IS the dedupe now."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -26,6 +44,8 @@ from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.closure import close_by_commits
 from src.ingest.gitlog import ingest_repo, read_commits
+from src.orchestrator.capture import _thread_canon, resolve_thread
+from src.orchestrator.deploy_guard import _open_or_annotate_persisting_alarm
 from src.orchestrator.mailbox import send_message
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.orchestrator.neighborhoods import discover_trees
@@ -33,6 +53,14 @@ from src.orchestrator.neighborhoods import discover_trees
 _ALARM_PREFIX = "tree-ingest-alarm"
 _ALARM_COOLDOWN_SECS = 86400  # one alarm per tree per day — a heartbeat firing every 15
                                # minutes must not re-page the same seat 96 times a day
+
+
+def _alarm_summary(tree: str) -> str:
+    """The Thread's own canonical identity text — DELIBERATELY volatile-detail-free (no
+    path, no watermark), same law `_open_or_annotate_persisting_alarm`'s own docstring
+    states for schema-drift/unreviewed-boot: baking a detail that can change per-tick into
+    the summary would mint a fresh Thread each time instead of converging on one."""
+    return f"[tree-ingest-alarm] {tree} has zero commits ingested"
 
 
 def _canonical(project: str) -> str:
@@ -154,22 +182,32 @@ async def uningested_trees_alarm_tick(
     never in the cron wrapper, so a test can exercise this directly). Runs discover_trees
     fleet-wide; for every row that is genuinely actionable (commits==0 AND an on_disk_path
     IS registered — a tree the graph knows nothing to ingest FROM is not this alarm's
-    business) with exactly one governing Seat, mails that Seat a graded 'ask' UNLESS one
-    already fired for this tree within the last 24h (per-tree watermark, same primitive
-    close_by_commits' own cursor uses — a 15-minute cadence must not re-page the same seat
-    96 times a day for a tree nobody has acted on yet). Never ingests anything itself.
+    business) with exactly one governing Seat, tracks that Seat's own obligation Thread for
+    the blind tree UNLESS one already fired for this tree within the last 24h (per-tree
+    watermark, same primitive close_by_commits' own cursor uses, and the SAME cooldown this
+    function always held — thread 358ac1ae is explicit that the cadence itself was never
+    the bug). Never ingests anything itself.
 
-    Returns what it found and what it sent, including trees it could NOT alarm (no
-    governing seat, or more than one) — reported, never silently dropped."""
+    THE SHAPE (thread 358ac1ae): the FIRST time a tree's own Thread is minted, one graded
+    'ask' DM fires alongside it — a human/mind should be told a new duty exists. Every later
+    tick past cooldown that still finds the SAME tree blind only ANNOTATES that Thread
+    (`_open_or_annotate_persisting_alarm`) — no mail. A tree that stops being actionable
+    (commits now land) resolves its own still-open Thread, if one exists — self-clearing,
+    the defect this thread's own dispatch named as (3).
+
+    Returns what it found and what it did, including trees it could NOT alarm (no governing
+    seat, or more than one) and trees it self-resolved — reported, never silently dropped."""
     st = settings or get_settings()
     if not st.osiris_tree_ingest_alarm_enabled:
         return {"enabled": False, "alarmed": []}
     watched = [w.strip() for w in st.osiris_dev_repos.split(",") if w.strip()]
     rows = await discover_trees(actions.pool, watched=watched)
     actionable = [r for r in rows if r["commits"] == 0 and r["path"]]
+    actionable_trees = {r["tree"] for r in actionable}
     alarmed: list[dict[str, Any]] = []
     unowned: list[str] = []
     cooling: list[str] = []
+    resolved: list[str] = []
     for r in actionable:
         canonical = f"repo:{r['tree']}"
         cursor_key = f"{_ALARM_PREFIX}:{r['tree']}"
@@ -183,13 +221,44 @@ async def uningested_trees_alarm_tick(
         if seat is None:
             unowned.append(r["tree"])
             continue
-        body = (f"[tree-ingest-alarm] {r['tree']} is on disk at {r['path']} with zero "
-                f"commits ingested ({r['reason']}). Self-heal it: mount there and call "
-                f"ingest_project(dry_run=True) for a receipt, then dry_run=False when it "
-                f"looks right — no sign-off needed, this is your own tree.")
-        await send_message(actions.pool, from_agent="tree-ingest-alarm", from_project=None,
-                           to_agent=seat, body=body, grade="ask")
+        summary = _alarm_summary(r["tree"])
+        first_notice = not await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE canonical=$1 AND type='Thread'",
+            _thread_canon(summary, None))
+        tid = await _open_or_annotate_persisting_alarm(
+            actions, summary, kind="obligation", owner=seat, arc="Fleet-Hygiene",
+            severity="alarm", source="cron:tree_ingest_alarm")
+        if first_notice:
+            body = (f"[tree-ingest-alarm] {r['tree']} is on disk at {r['path']} with zero "
+                    f"commits ingested ({r['reason']}). Self-heal it: mount there and call "
+                    f"ingest_project(dry_run=True) for a receipt, then dry_run=False when it "
+                    f"looks right — no sign-off needed, this is your own tree. Tracked from "
+                    f"here as an open obligation thread; further re-checks annotate it, "
+                    f"they don't re-mail you.")
+            await send_message(actions.pool, from_agent="tree-ingest-alarm", from_project=None,
+                               to_agent=seat, body=body, grade="ask")
         await set_cursor(actions.pool, cursor_key, datetime.now(UTC).isoformat())
-        alarmed.append({"tree": r["tree"], "seat": seat})
+        alarmed.append({"tree": r["tree"], "seat": seat, "thread": str(tid),
+                        "first_notice": first_notice})
+
+    # SELF-CLEARING (defect 3, thread 358ac1ae): a tree that no longer reads zero-commits
+    # (whatever hand ingested it) resolves its own still-open alarm Thread here, rather than
+    # leaving the first notice unsettled forever once the underlying condition has cleared.
+    for r in rows:
+        if r["tree"] in actionable_trees:
+            continue
+        canon = _thread_canon(_alarm_summary(r["tree"]), None)
+        status = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+            "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+        if status == "open":
+            await resolve_thread(
+                actions, canon,
+                because=f"{r['tree']} now has commits ingested — the zero-ingest "
+                        "condition that opened this alarm has cleared",
+                source="cron:tree_ingest_alarm")
+            resolved.append(r["tree"])
+
     return {"enabled": True, "checked": len(rows), "actionable": len(actionable),
-            "alarmed": alarmed, "unowned": unowned, "cooling": cooling}
+            "alarmed": alarmed, "unowned": unowned, "cooling": cooling, "resolved": resolved}
