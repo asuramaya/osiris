@@ -646,20 +646,23 @@ async def _cascade_governing_seats(
         # is a permanent read alias forever (this house's own convention), so the only
         # honest test is "does this entry resolve to the SAME project id being renamed"
         # — the identical write-vs-read-key split idiom PIN/HOUSE above already hold.
-        # Only runs when new_name != old_name — a genuine SELF-rename (renaming X to X,
-        # BUG 2's own shape) is a clean no-op across every tier, never a chance for this
-        # tier to go correcting some unrelated older alias that this particular call was
-        # never asked to touch.
+        # RUNS REGARDLESS OF new_name == old_name (correction, Thoth's own dry-run
+        # catch on Deckard's re-run, mail 8678): a self-rename is exactly how this
+        # verb's own repair population gets invoked — an operator calling rename(X, X)
+        # on purpose to HEAL a stale alias, not a no-op to protect. Skipping the resolve
+        # loop on new_name==old_name silently no-op'd the very specimen this tier exists
+        # to fix. A genuinely vacuous self-rename (no stale alias present at all) still
+        # naturally reports "already-correct" below — nothing in `stale` — so removing
+        # the guard changes nothing for that case, only unblocks the real one.
         try:
             current_charter = await charter_of(pool, seat_id)
             stale: list[str] = []
-            if new_name != old_name:
-                for entry in current_charter:
-                    if entry == new_name:
-                        continue
-                    resolved = await _resolve_repo(pool, entry)
-                    if resolved is not None and resolved == project_oid:
-                        stale.append(entry)
+            for entry in current_charter:
+                if entry == new_name:
+                    continue
+                resolved = await _resolve_repo(pool, entry)
+                if resolved is not None and resolved == project_oid:
+                    stale.append(entry)
             if stale:
                 new_charter = sorted(
                     ({new_name} | set(current_charter)) - set(stale))
