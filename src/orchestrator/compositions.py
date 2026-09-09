@@ -4023,17 +4023,22 @@ async def _fn_obligation_backlog(
         seat), grouped by the resolved seat, oldest three owned as `{id, summary}` refs.
         Sorted by `open` descending, then by handle — the heaviest-carrying seat first.
       `unowned` — count of rows with no owner property at all.
-      `literal_owner` — count of rows whose owner IS set but matches NO live roster seat
-        (a name once real, since retired, or a hand-typed value that was never a seat ref
-        to begin with) — distinct from `unowned`: a literal owner is a filing gap of a
-        DIFFERENT shape (wrong reference, not no reference), and collapsing the two would
-        hide which repair verb applies (reassign vs. simply assign).
+      `operator_owned` — count of rows literally owned by `mailbox.OPERATOR_ADDR`
+        ("operator") — a LEGAL literal owner (peer-governed and operator-owned rows are a
+        real, expected population, Thoth's correction msg 8670), never counted as a miss.
+      `literal_owner` — every OTHER owner string that matches NO live roster seat (a name
+        once real since retired, or a hand-typed value that was never a seat ref to begin
+        with), as a NAMED list `[{"owner": name, "count": n}, ...]` sorted heaviest first
+        — a bare count told nobody which name to chase; distinct from `unowned` (a filing
+        gap of a DIFFERENT shape: wrong reference, not no reference) and from
+        `operator_owned` (legal, not a gap at all).
 
     `fleet_total` is the flat open count across every project — the single number a weekly
     digest line needs beside `by_seat`'s top-N. Read-only, no writes, same as every other
     Function here."""
     from src.actions.core import Actions
     from src.orchestrator.digest import _obligation_pressure, _open_obligation_rows
+    from src.orchestrator.mailbox import OPERATOR_ADDR
     from src.orchestrator.seats import roster as _roster
 
     actions = Actions(pool)
@@ -4050,15 +4055,19 @@ async def _fn_obligation_backlog(
 
     now = datetime.now(UTC)
     by_seat: dict[str, list[dict[str, Any]]] = {}
-    unowned = literal_owner = 0
+    literal_counts: dict[str, int] = {}
+    unowned = operator_owned = 0
     for r in rows:
         owner = (r["owner"] or "").strip()
         if not owner:
             unowned += 1
             continue
+        if owner.lower() == OPERATOR_ADDR:
+            operator_owned += 1
+            continue
         seat = seat_names.get(owner.lower())
         if seat is None:
-            literal_owner += 1
+            literal_counts[owner] = literal_counts.get(owner, 0) + 1
             continue
         by_seat.setdefault(seat, []).append(r)
 
@@ -4073,10 +4082,15 @@ async def _fn_obligation_backlog(
                           "oldest": oldest})
     seat_rows.sort(key=lambda r: (-r["open"], r["seat"]))
 
+    literal_owner = [{"owner": owner, "count": count}
+                     for owner, count in sorted(literal_counts.items(),
+                                                key=lambda kv: (-kv[1], kv[0]))]
+
     return {
         "by_project": by_project,
         "by_seat": seat_rows,
         "unowned": unowned,
+        "operator_owned": operator_owned,
         "literal_owner": literal_owner,
         "fleet_total": len(rows),
     }

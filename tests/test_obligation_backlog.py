@@ -45,7 +45,32 @@ async def test_obligation_backlog_unowned_and_literal_owner_are_distinct_buckets
 
     out = await _fn_obligation_backlog(actions.pool, None, {})
     assert out["unowned"] >= 1
-    assert out["literal_owner"] >= 1
+    literal_names = {o["owner"] for o in out["literal_owner"]}
+    assert "not-a-real-seat-xyz" in literal_names
+
+
+async def test_obligation_backlog_operator_is_a_legal_owner_not_a_literal_miss(
+    actions: Actions,
+) -> None:
+    await open_thread(actions, "operator-owned by law", kind="obligation",
+                      owner="operator", repo="obproj3b", source="agent:seed-ob5b")
+
+    out = await _fn_obligation_backlog(actions.pool, None, {})
+    assert out["operator_owned"] >= 1
+    assert "operator" not in {o["owner"].lower() for o in out["literal_owner"]}
+
+
+async def test_obligation_backlog_literal_owner_names_are_counted_not_just_summed(
+    actions: Actions,
+) -> None:
+    await open_thread(actions, "ghost duty one", kind="obligation", owner="ghost-x",
+                      repo="obproj3c", source="agent:seed-ob5c")
+    await open_thread(actions, "ghost duty two", kind="obligation", owner="ghost-x",
+                      repo="obproj3c", source="agent:seed-ob5d")
+
+    out = await _fn_obligation_backlog(actions.pool, None, {})
+    row = next(o for o in out["literal_owner"] if o["owner"] == "ghost-x")
+    assert row["count"] == 2
 
 
 async def test_obligation_backlog_past_window_and_oldest_ride_along_per_seat(
@@ -74,7 +99,8 @@ async def test_obligation_backlog_fleet_total_accounts_for_every_bucket(
 
     out = await _fn_obligation_backlog(actions.pool, None, {})
     assert out["fleet_total"] == (
-        sum(r["open"] for r in out["by_seat"]) + out["unowned"] + out["literal_owner"])
+        sum(r["open"] for r in out["by_seat"]) + out["unowned"] + out["operator_owned"]
+        + sum(o["count"] for o in out["literal_owner"]))
 
 
 async def test_obligation_backlog_by_project_matches_obligation_pressure_verbatim(
