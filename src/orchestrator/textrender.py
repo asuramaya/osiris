@@ -73,8 +73,12 @@ def render_obligation_backlog_text(result: dict[str, Any]) -> str:
     of `render_backlog_text`'s per-project rows — `backlog(fleet=True)`'s own shape, so
     the crunch is visible per body without a hand-run query. Same cap/remainder
     convention as `render_backlog_text` (`BACKLOG_BAND_CAP`), plus a trailing line for
-    `unowned`/`literal_owner` (both hidden at zero — a clean fleet with nothing to
-    reassign should read that way, not carry two zero-lines forever)."""
+    `unowned`/`operator_owned`/`literal_owner` (hidden at zero — a clean fleet with
+    nothing to reassign should read that way). `operator_owned` (Thoth's correction, msg
+    8670: 'operator' is a LEGAL literal owner, not a filing miss) gets its own count,
+    kept apart from `literal_owner` — every OTHER unresolved owner string, now a NAMED
+    list (`{"owner", "count"}`) rather than a bare count, capped at 5 named entries with
+    a remainder fold, so the line points at exactly which names to chase."""
     rows = result.get("by_seat") or []
     shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
     lines = [f"fleet total: {result.get('fleet_total', 0)} open"]
@@ -87,8 +91,15 @@ def render_obligation_backlog_text(result: dict[str, Any]) -> str:
     tail = []
     if result.get("unowned"):
         tail.append(f"unowned: {result['unowned']}")
-    if result.get("literal_owner"):
-        tail.append(f"literal owner (no matching seat): {result['literal_owner']}")
+    if result.get("operator_owned"):
+        tail.append(f"operator: {result['operator_owned']}")
+    literal = result.get("literal_owner") or []
+    if literal:
+        lit_shown, lit_remainder = literal[:5], max(0, len(literal) - 5)
+        named = ", ".join(f"{o['owner']}:{o['count']}" for o in lit_shown)
+        if lit_remainder:
+            named += f", +{lit_remainder} more"
+        tail.append(f"literal, no seat: {named}")
     if tail:
         lines.append(" — ".join(tail))
     return "\n".join(lines)
