@@ -166,6 +166,21 @@ const Osiris = (() => {
   }
 
   // ---- the cytoscape board (objects render here) ---------------------------
+  // WAVE A item 1 (operator dispatch, wave 15, thread 8839): board labels are TITLES, not
+  // full text — full text lives only in the side panel's Osiris.objectDetail read (inspect()
+  // already fetches the real object, unabbreviated). Truncated here so a long summary never
+  // crowds the neighborhood it's rendered in.
+  const LABEL_MAX = 40;
+  const truncateLabel = (s) => {
+    s = s || "";
+    return s.length > LABEL_MAX ? s.slice(0, LABEL_MAX - 1) + "…" : s;
+  };
+  // hidden below a zoom threshold (labels are for orientation once you're close enough to
+  // read them, not for a zoomed-out overview where they'd just overlap) — cy.style().update()
+  // on every zoom tick is what makes the style FUNCTION below re-run; a static mapper is only
+  // ever evaluated once per element otherwise.
+  const ZOOM_LABEL_THRESHOLD = 0.45;
+
   // onFocus(id, deep, type): tap = select (deep=false), double-tap = primary action (deep=true).
   // onCtx(id, type, mouseEvent): right-click = the object's contextual action menu.
   function makeBoard(container, onFocus, onCtx) {
@@ -177,7 +192,8 @@ const Osiris = (() => {
         { selector: "node", style: {
           "background-color": (e) => ty(e.data("type")).c, shape: (e) => ty(e.data("type")).s,
           width: 32, height: 32, "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
-          label: "data(label)", color: "#f0f6fc", "font-size": 11, "font-weight": 600,
+          label: (e) => (cy.zoom() < ZOOM_LABEL_THRESHOLD ? "" : truncateLabel(e.data("label"))),
+          color: "#f0f6fc", "font-size": 11, "font-weight": 600,
           "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": 120,
           "text-background-color": "#0d1219", "text-background-opacity": 0.88, "text-background-padding": 3,
           "text-background-shape": "roundrectangle", "min-zoomed-font-size": 6 } },
@@ -189,6 +205,7 @@ const Osiris = (() => {
           "text-rotation": "autorotate", "min-zoomed-font-size": 6 } },
       ],
     });
+    cy.on("zoom", () => cy.style().update());
     const layout = (preserve) => {
       // a DISCONNECTED set (unrelated nodes, no edges — e.g. 5 open threads) force-packs into
       // an overlapping cluster under fcose; a grid spreads them cleanly. Edges → force layout.
