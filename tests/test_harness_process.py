@@ -119,6 +119,37 @@ async def test_claude_stop_with_session_only_and_a_missing_binary_reports_an_err
     assert "error" in out
 
 
+async def test_claude_capabilities_includes_materialize() -> None:
+    assert "materialize" in ClaudeAdapter().capabilities()
+
+
+async def test_claude_materialize_calls_rematerialize_to_disk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _FakeSoulStore:
+        def __init__(self, pool: Any) -> None:
+            calls.append({"pool": pool})
+
+        async def rematerialize_to_disk(
+            self, anchor_sid: str, *, dest: Any = None, force: bool = False,
+        ) -> dict[str, Any]:
+            calls.append({"anchor_sid": anchor_sid, "dest": dest, "force": force})
+            return {"written": dest or "/default/path", "lines": 3, "sha256": "abc"}
+
+    monkeypatch.setattr("src.ingest.soul_store.SoulStore", _FakeSoulStore)
+
+    out = await ClaudeAdapter().materialize(
+        pool="fake-pool", anchor_sid="deadbeef", dest="/tmp/out.jsonl")
+
+    assert out == {"written": "/tmp/out.jsonl", "lines": 3, "sha256": "abc"}
+    assert calls == [
+        {"pool": "fake-pool"},
+        {"anchor_sid": "deadbeef", "dest": "/tmp/out.jsonl", "force": False},
+    ]
+
+
 async def test_claude_available_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
@@ -138,11 +169,14 @@ async def test_claude_available_is_cached(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_dsh_capabilities_is_list_sessions_only() -> None:
     assert DshAdapter().capabilities() == frozenset({"list_sessions"})
+    assert "materialize" not in DshAdapter().capabilities()
 
 
-async def test_dsh_spawn_resume_reply_stop_all_refuse_by_name() -> None:
+async def test_dsh_spawn_resume_reply_stop_materialize_all_refuse_by_name() -> None:
     dsh = DshAdapter()
-    for coro in (dsh.spawn(), dsh.resume(), dsh.reply(), dsh.stop()):
+    coros = (dsh.spawn(), dsh.resume(), dsh.reply(), dsh.stop(),
+             dsh.materialize(pool=None, anchor_sid="x"))
+    for coro in coros:
         out = await coro
         assert out["error"].startswith("adapter 'dsh' does not support")
 
@@ -166,11 +200,14 @@ async def test_dsh_list_sessions_wraps_enumerate(monkeypatch: pytest.MonkeyPatch
 
 async def test_crush_capabilities_is_spawn_and_list_sessions_only() -> None:
     assert CrushAdapter().capabilities() == frozenset({"spawn", "list_sessions"})
+    assert "materialize" not in CrushAdapter().capabilities()
 
 
-async def test_crush_resume_reply_stop_all_refuse_by_name() -> None:
+async def test_crush_resume_reply_stop_materialize_all_refuse_by_name() -> None:
     crush = CrushAdapter()
-    for coro in (crush.resume(), crush.reply(), crush.stop()):
+    coros = (crush.resume(), crush.reply(), crush.stop(),
+             crush.materialize(pool=None, anchor_sid="x"))
+    for coro in coros:
         out = await coro
         assert out["error"].startswith("adapter 'crush' does not support")
 
@@ -279,7 +316,9 @@ async def test_cursor_stub_declares_no_capabilities_and_refuses_everything() -> 
     adapter = CursorAdapter()
     assert adapter.capabilities() == frozenset()
     assert adapter.available() is False
-    for coro in (adapter.spawn(), adapter.resume(), adapter.reply(), adapter.stop()):
+    coros = (adapter.spawn(), adapter.resume(), adapter.reply(), adapter.stop(),
+             adapter.materialize(pool=None, anchor_sid="x"))
+    for coro in coros:
         out = await coro
         assert "error" in out
     assert await adapter.list_sessions() == []

@@ -26,7 +26,10 @@ import sys
 import time
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.ingest.soul_store import RoundTripReport
 
 import asyncpg
 
@@ -218,7 +221,10 @@ def _format_round_trip_failure(failures: list[dict[str, str]] | None) -> str | N
     --drill-gated call to `collect_soul_round_trip_sample` (which, like `drill_pitr`,
     runs AFTER `evaluate(m)`'s single pass, so `m` never actually carries this key at
     evaluate-time in the real flow — this function is what makes both call sites agree
-    on the exact wording without a copy-pasted f-string)."""
+    on the exact wording without a copy-pasted f-string). A skipped-live session is
+    NEVER a failure — see `main()`'s own separate, unconditional "skipped live: N"
+    print, per Thoth's ruling that the count must be reported, never folded silently
+    into a clean pass, but also never treated as a defect worth an operator alarm."""
     if not failures:
         return None
     anchors = ", ".join(f["anchor_sid"] for f in failures[:5])
@@ -335,10 +341,38 @@ def evaluate(m: dict) -> list[str]:
     return fails
 
 
+_DRILL_CONTAINER_NAME = "osiris-preflight-drill"
+
+
+def _restore_cmd(name: str, dump_path: str) -> list[str]:
+    """-Fc CUSTOM FORMAT NEEDS pg_restore, NEVER psql (thread 9fac4e0d part 4's own
+    live find: piping a .dump file into psql failed — pg_dump's own -Fc switch, the
+    vault lane item 1, is a BINARY container format, not SQL text; only pg_restore
+    reads it). `.sql` (the pre-item-1 legacy extension, collect()'s glob still
+    tolerates it during the transition) is genuine SQL text and still needs psql —
+    branch on the extension actually on disk rather than assuming one format forever."""
+    if dump_path.endswith(".dump"):
+        return ["docker", "exec", "-i", name, "pg_restore", "-U", "osiris",
+                "-d", "osiris", "--no-owner"]
+    return ["docker", "exec", "-i", name, "psql", "-U", "osiris", "-d", "osiris", "-q"]
+
+
 def drill(newest_dump: str) -> str | None:
     """Restore the newest dump into a scratch container and count objects. Returns a failure
-    string or None. Heavy (~2 min) — timer runs pass --drill; ad-hoc runs may skip."""
-    name = "osiris-preflight-drill"
+    string or None. Heavy (~2 min) — timer runs pass --drill; ad-hoc runs may skip.
+
+    NEVER THE LIVE CLUSTER (thread 9fac4e0d part 4, codified after the exact live
+    incident that named this obligation: a manual pg_basebackup restore into a
+    DIFFERENTLY-NAMED database on the SAME live cluster still generated real WAL
+    against production — a drill's own point is to generate zero WAL against the
+    thing being drilled). `_DRILL_CONTAINER_NAME` is a hardcoded module constant, not
+    a caller-supplied parameter, precisely so this can never drift toward the live
+    container's own name by accident — the assertion below is the machine-checked
+    version of that same guarantee, not just a naming convention trusted by eye."""
+    name = _DRILL_CONTAINER_NAME
+    assert name not in CONTAINERS, (  # noqa: S101 — a real safety assertion, not a debug aid
+        f"the preflight drill's own scratch container name {name!r} must never "
+        f"collide with a live-fleet container name {CONTAINERS!r}")
     try:
         # -v (not just -f): postgres:16 declares an anonymous VOLUME for its data dir —
         # `docker rm -f` alone drops the container but leaves that volume orphaned, links=0,
@@ -355,9 +389,8 @@ def drill(newest_dump: str) -> str | None:
                 break
             time.sleep(1)
         with open(newest_dump, "rb") as f:
-            subprocess.run(["docker", "exec", "-i", name, "psql", "-U", "osiris",
-                            "-d", "osiris", "-q"], stdin=f, capture_output=True,
-                           timeout=600, check=True)
+            subprocess.run(_restore_cmd(name, newest_dump), stdin=f,
+                           capture_output=True, timeout=600, check=True)
         out = subprocess.run(["docker", "exec", name, "psql", "-U", "osiris", "-d", "osiris",
                               "-tc", "SELECT count(*) FROM objects"],
                              capture_output=True, text=True, timeout=30)
@@ -393,7 +426,7 @@ def drill_pitr() -> str | None:
     return run_drill(Path(newest.path), None, marker)
 
 
-async def collect_soul_round_trip_sample() -> list[dict[str, str]]:
+async def collect_soul_round_trip_sample() -> RoundTripReport:
     """THE SOUL STORE'S OWN ROUND-TRIP PROOF (thread 78efd46d item 2): "a backup that's
     never been restored is a hope, not a backup" — the same law this file's own plain-
     dump `drill()` already holds, extended to the soul store. Reuses
@@ -477,12 +510,18 @@ def main() -> int:
         if p:
             fails.append(p)
     if "--drill" in sys.argv:
-        roundtrip, roundtrip_broken = _run_check(
+        report, roundtrip_broken = _run_check(
             "collect_soul_round_trip_sample", collect_soul_round_trip_sample())
-        m["soul_round_trip_failures"] = roundtrip
-        f = _format_round_trip_failure(roundtrip)
-        if f:
-            fails.append(f)
+        if report is not None:
+            # ALWAYS PRINTED, pass or fail — Thoth's own ruling off the 2026-09-08
+            # full sweep: a skipped-live session must be reported as "skipped live:
+            # N", never silently folded into a clean pass.
+            print(f"soul store round-trip: {len(report.failures)} failure(s), "
+                  f"skipped live: {report.skipped_live}")
+            m["soul_round_trip_failures"] = report.failures
+            f = _format_round_trip_failure(report.failures)
+            if f:
+                fails.append(f)
         if roundtrip_broken:
             fails.append(roundtrip_broken)
     if not fails:

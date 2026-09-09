@@ -29,6 +29,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -387,6 +388,25 @@ def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
                     f"nothing in {file_a} or earlier in {file_b}")
         seen.add(u)
     return None
+
+
+@dataclass(frozen=True)
+class RoundTripReport:
+    """verify_round_trip_sample's own receipt (thread 78efd46d item 2 / Thoth's ruling
+    off the 2026-09-08 full sweep): `failures` is the same shape as before (a list of
+    {"anchor_sid", "error"} dicts) — [] still means every COMPARED session verified
+    byte-identical. `skipped_live` is a SEPARATE, named count of sessions still being
+    actively appended to at sweep time (never silently folded into "clean") — a caller
+    must report both, e.g. "0 failures, skipped live: 2", not just the failure count."""
+
+    failures: list[dict[str, str]] = field(default_factory=list)
+    skipped_live: int = 0
+
+    def __bool__(self) -> bool:
+        """Truthy iff there are real failures — lets a caller write `if report:` for
+        the alarm-worthy case without spelling out `.failures`, matching how the old
+        bare-list return read at call sites before this became a dataclass."""
+        return bool(self.failures)
 
 
 class SoulStore:
@@ -1135,7 +1155,7 @@ class SoulStore:
 
     async def verify_round_trip_sample(
         self, *, n: int = 20, harness: str = _HARNESS,
-    ) -> list[dict[str, str]]:
+    ) -> RoundTripReport:
         """THE ROUND-TRIP PROOF (thread 78efd46d item 2, operator ruling: "a backup
         that's never been restored is a hope, not a backup" — the same law osiris_
         preflight.py's own plain-dump `drill()` holds, extended to the soul store).
@@ -1156,19 +1176,32 @@ class SoulStore:
         A session whose on-disk file no longer exists (pruned, moved, archived into
         the vault's own transcript tarballs) is SKIPPED, never a failure of this
         check — that absence is item 4's own concern (cache with a budget), not
-        proof the store's own content is wrong. Returns failures only; [] = every
-        sampled session verified byte-identical."""
+        proof the store's own content is wrong.
+
+        LIVE SESSIONS ARE SKIPPED TOO, COUNTED SEPARATELY FROM A PASS (Thoth's own
+        ruling off a full sweep run 2026-09-08: 2 of 5 raw mismatches were sessions
+        still being actively appended to at sweep time — the file's own mtime was
+        newer than last_ingested_at, the SAME guard `rematerialize_to_disk` already
+        uses to refuse overwriting a live transcript, applied here to avoid comparing
+        a frozen store snapshot against a moving target). `RoundTripReport.skipped_live`
+        names the count explicitly — a caller must report it as "skipped live: N",
+        never fold it silently into a clean pass."""
         import asyncio
         import tempfile
 
         rows = await self.pool.fetch(
-            "SELECT anchor_sid, source_path FROM soul_sessions WHERE harness=$1 "
-            "ORDER BY random() LIMIT $2", harness, n)
+            "SELECT anchor_sid, source_path, last_ingested_at FROM soul_sessions "
+            "WHERE harness=$1 ORDER BY random() LIMIT $2", harness, n)
         failures: list[dict[str, str]] = []
+        skipped_live = 0
         for row in rows:
             anchor_sid, source_path = row["anchor_sid"], row["source_path"]
             src = Path(source_path)
-            if not _path_is_file(src):
+            mtime = _path_mtime(src)
+            if mtime is None:
+                continue  # gone since ingest — item 4's own concern, not this check's
+            if mtime > row["last_ingested_at"]:
+                skipped_live += 1  # still being appended to — a moving target, not a defect
                 continue
             with tempfile.TemporaryDirectory() as tmpdir:
                 scratch = Path(tmpdir) / f"{anchor_sid}.roundtrip"
@@ -1185,7 +1218,7 @@ class SoulStore:
                                  f"{result['sha256'][:12]}…, the file on disk hashes to "
                                  f"{src_hash[:12]}…",
                     })
-        return failures
+        return RoundTripReport(failures=failures, skipped_live=skipped_live)
 
 
 def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:

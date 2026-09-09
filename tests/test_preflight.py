@@ -248,6 +248,42 @@ def test_drill_pitr_is_quiet_when_no_base_backup_exists_yet(
     assert preflight.drill_pitr() is None
 
 
+# --- thread 9fac4e0d part 4: never the live cluster -----------------------------------
+
+def test_drill_container_name_never_collides_with_a_live_fleet_container() -> None:
+    """The regression guard on the module constants themselves — the exact live
+    incident this obligation was named for was a drill-shaped restore that DID
+    collide with the live cluster, just under a different database name inside the
+    same container, which this guard cannot see; codifying the container-name half
+    at least closes the door this script's own drill could walk through."""
+    from scripts.osiris_preflight import _DRILL_CONTAINER_NAME, CONTAINERS
+
+    assert _DRILL_CONTAINER_NAME not in CONTAINERS
+
+
+def test_restore_cmd_uses_pg_restore_for_a_dot_dump_file() -> None:
+    """THE REAL LIVE BUG (found running the drill against a real production dump,
+    thread 9fac4e0d part 4): -Fc custom-format dumps (the vault lane item 1) piped
+    into psql fail — psql expects SQL text, not pg_dump's own binary container
+    format. Only pg_restore reads a .dump file."""
+    from scripts.osiris_preflight import _restore_cmd
+
+    cmd = _restore_cmd("drillbox", "/vault/osiris-20260908-163007.dump")
+    assert "pg_restore" in cmd
+    assert "psql" not in cmd
+    assert "--no-owner" in cmd
+
+
+def test_restore_cmd_uses_psql_for_a_legacy_dot_sql_file() -> None:
+    """The pre-item-1 legacy extension collect()'s own glob still tolerates during
+    the transition window — genuine SQL text, still needs psql, never pg_restore."""
+    from scripts.osiris_preflight import _restore_cmd
+
+    cmd = _restore_cmd("drillbox", "/vault/osiris-20260901-000000.sql")
+    assert "psql" in cmd
+    assert "pg_restore" not in cmd
+
+
 # --- thread 78efd46d, the soul store's own coverage guarantee ---------------------------
 
 def test_no_missing_sessions_key_is_quiet() -> None:

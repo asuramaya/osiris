@@ -252,7 +252,10 @@ async def test_verify_round_trip_sample_is_clean_on_a_healthy_ingest(
 ) -> None:
     p = _write_transcript(tmp_path / "roundtrip1.jsonl", _synthetic_lines(4))
     await store.ingest_path(str(p), "r0undtr1p")
-    assert await store.verify_round_trip_sample() == []
+    report = await store.verify_round_trip_sample()
+    assert report.failures == []
+    assert report.skipped_live == 0
+    assert bool(report) is False
 
 
 async def test_verify_round_trip_sample_skips_a_session_whose_file_is_gone(
@@ -264,7 +267,25 @@ async def test_verify_round_trip_sample_skips_a_session_whose_file_is_gone(
     p = _write_transcript(tmp_path / "gone.jsonl", _synthetic_lines(3))
     await store.ingest_path(str(p), "va n1shed0")
     p.unlink()
-    assert await store.verify_round_trip_sample() == []
+    report = await store.verify_round_trip_sample()
+    assert report.failures == []
+    assert report.skipped_live == 0
+
+
+async def test_verify_round_trip_sample_skips_a_live_session_never_as_a_failure(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A file touched AFTER the store's last ingest is a moving target, not proof of
+    a defect (Thoth's ruling off the 2026-09-08 full sweep: 2 of 5 raw mismatches
+    were exactly this shape) — counted in skipped_live, never in failures."""
+    p = _write_transcript(tmp_path / "live1.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "l1vesess1")
+    await store.pool.execute(
+        "UPDATE soul_sessions SET last_ingested_at = now() - interval '1 hour' "
+        "WHERE harness='claude-code' AND anchor_sid='l1vesess1'")
+    report = await store.verify_round_trip_sample()
+    assert report.failures == []
+    assert report.skipped_live == 1
 
 
 async def test_verify_round_trip_sample_catches_a_tampered_session(
@@ -275,8 +296,10 @@ async def test_verify_round_trip_sample_catches_a_tampered_session(
     await store.pool.execute(
         "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea "
         "WHERE harness='claude-code' AND anchor_sid='tamper3d1' AND line_idx=1")
-    failures = await store.verify_round_trip_sample()
+    report = await store.verify_round_trip_sample()
+    failures = report.failures
     assert len(failures) == 1
+    assert report.skipped_live == 0
     assert failures[0]["anchor_sid"] == "tamper3d1"
     assert "error" in failures[0]
 

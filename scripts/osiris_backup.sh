@@ -2,11 +2,11 @@
 # The graph's survival ritual (born 2026-07-08, the day the anonymous-volume arrangement
 # nearly ate the civilization at a reboot; residuals closed under task #51).
 #
-# Every 6 hours (timer): dump the durable container's DB to backups/ (keep 28 ≈ 7 days),
-# refresh the repo's git bundle (the ~180 unpushed commits' only second copy until P6
-# pushes), and rsync the lot into the vault — so the vault is a LIVE mirror, not the
-# one-time snapshot it was born as. Same-disk still (the off-box rung stays open until
-# the operator names a target); RPO drops from 24h to 6h.
+# Every 6 hours (timer): dump the durable container's DB straight to the VAULT (the
+# canonical copy — thread 9fac4e0d part 3, "drop the mirror, backups/ keeps one day, the
+# vault owns the ladder"), refresh the repo's git bundle, and hardlink the dump into
+# backups/ for fast local access to the last day only. Same-disk still (the off-box rung
+# stays open until the operator names a target).
 set -euo pipefail
 # Portable: derive the repo from THIS script's location, never a hardcoded home. A path baked
 # to one machine is a script that only works for the person who wrote it.
@@ -28,29 +28,40 @@ mkdir -p "$DIR" "$VAULT"
 # days runway at 44GB/day), caught by a human noticing rather than by any check in this
 # house. A refusal alarms the desk and skips ONLY this dump; it never prunes anything
 # itself (that stays osiris_prune_ladder.py's job, always dry-run until the operator's own
-# word) and never blocks the rest of this script's other duties (bundle/vault mirror/WAL
-# pull all still run below).
-if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$DIR"; then
+# word) and never blocks the rest of this script's other duties (bundle/local cache/WAL
+# pull all still run below). Checks $VAULT now, not $DIR — the vault is where the real
+# write lands (see below).
+NEW_DUMP=""
+if ! "$REPO/.venv/bin/python" "$REPO/scripts/osiris_disk_guard.py" "$VAULT"; then
   "$REPO/.venv/bin/python" "$REPO/scripts/osiris_alarm.py" --from backup \
-    "DISK GUARD: refusing to write a new full pg_dump into $DIR — not enough free space for " \
-"another dump the size of the last one plus margin. Run scripts/osiris_prune_ladder.py for a " \
-"dry-run of what could be pruned; nothing is deleted automatically." || true
+    "DISK GUARD: refusing to write a new full pg_dump into $VAULT — not enough free space " \
+"for another dump the size of the last one plus margin. Run scripts/osiris_prune_ladder.py " \
+"for a dry-run of what could be pruned; nothing is deleted automatically." || true
 else
-  docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$DIR/osiris-$(date +%Y%m%d-%H%M%S).dump"
+  # THE VAULT IS CANONICAL, backups/ IS A THIN LOCAL CACHE (thread 9fac4e0d part 3, "drop
+  # the mirror, backups/ keeps one day, the vault owns the ladder"): one write, straight to
+  # the vault — no more dump-then-rsync-mirror two-copy dance, and no more separate
+  # hardcoded "keep 57" cutoff drifting out of sync with osiris_prune_ladder.py's own
+  # ladder (now on its own weekly timer, part 1) — the vault's retention is that ladder's
+  # job alone from here on.
+  NEW_DUMP="$VAULT/osiris-$(date +%Y%m%d-%H%M%S).dump"
+  docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$NEW_DUMP"
 fi
-# `|| true`: a guard-refused first-ever run leaves $DIR with zero dumps, and the glob
-# below then fails to expand at all — under pipefail that would kill the whole script
-# over a directory listing, not a real backup failure.
-ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +29 | xargs -r rm -- || true
 
 # the repo bundle: all refs, atomic replace (never a half-written only-copy)
 git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
   && mv "$VAULT/osiris-repo.bundle.new" "$VAULT/osiris-repo.bundle"
 
-# the vault mirrors the dump dir (dumps only; deletions NOT propagated — the vault may
-# hold more history than the working set, never less)
-rsync -a "$DIR"/osiris-*.dump "$VAULT/" 2>/dev/null || cp -n "$DIR"/osiris-*.dump "$VAULT/" || true
-ls -1t "$VAULT"/osiris-2*.dump 2>/dev/null | tail -n +57 | xargs -r rm --
+# backups/ HARDLINKS the vault's own new dump (same filesystem, free — never a second
+# copy of the bytes) purely for fast local access; ITS OWN retention is a fixed, small
+# "keep 1 day" cutoff (6-hourly * 4), nothing more — this is a CACHE, not a second
+# archive. `ln` falling back to `cp` covers the rare case of $DIR and $VAULT crossing a
+# filesystem boundary (a hardlink can't span one; a plain copy still can).
+if [ -n "$NEW_DUMP" ]; then
+  ln "$NEW_DUMP" "$DIR/$(basename "$NEW_DUMP")" 2>/dev/null \
+    || cp "$NEW_DUMP" "$DIR/$(basename "$NEW_DUMP")"
+fi
+ls -1t "$DIR"/osiris-*.dump 2>/dev/null | tail -n +5 | xargs -r rm -- || true
 
 # THE TRANSCRIPT VAULT IS RETIRED (thread 78efd46d item 3, operator ruling: "once (2)
 # [the round-trip proof] passes the transcript archive line leaves osiris_backup.sh; the
