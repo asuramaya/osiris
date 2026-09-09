@@ -1,11 +1,8 @@
 # Weekly retention-ladder manifest — mails the dry-run prune plan to the operator's desk
-# a day before osiris-prune-apply would act on it (thread 9fac4e0d part 1). Ships as
-# plumbing, like osiris-manager.service beside it — installing/enabling this is a
-# separate, deliberate act, never automatic:
-#   cp deploy/osiris-prune-manifest.service deploy/osiris-prune-manifest.timer ~/.config/systemd/user/
-#   cp deploy/osiris-prune-apply.service deploy/osiris-prune-apply.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now osiris-prune-manifest.timer osiris-prune-apply.timer
+# a day before osiris-prune-apply would act on it (thread 9fac4e0d part 1). DEPLOY-
+# MANAGED (Thoth mail 8437, scripts/install_prune_timers.sh): every `osiris deploy`
+# keeps this installed, current, and enabled without a hand — unlike osiris-manager.
+# service beside it, which stays hand-install-only plumbing.
 [Unit]
 Description=Osiris weekly prune-ladder manifest to the operator's desk
 

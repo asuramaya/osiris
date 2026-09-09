@@ -2643,6 +2643,8 @@ async def cmd_deploy(
         from scripts.commands_status import commands_status
         print(commands_status(root))
 
+        print(_run_install_script("scripts/install_prune_timers.sh", root))
+
         return 1 if fails else 0
     finally:
         if owns_pool:

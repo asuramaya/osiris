@@ -3,12 +3,9 @@
 # 20h old and not dimmed (thread 9fac4e0d part 1 — "apply next day unless dimmed").
 # Refuses loudly and deletes nothing when the gate isn't clear (no manifest sent, too
 # young, or dimmed) — see osiris_prune_ladder.py's own find_clear_manifest docstring.
-# Ships as plumbing, like osiris-manager.service beside it — installing/enabling this is
-# a separate, deliberate act, never automatic:
-#   cp deploy/osiris-prune-manifest.service deploy/osiris-prune-manifest.timer ~/.config/systemd/user/
-#   cp deploy/osiris-prune-apply.service deploy/osiris-prune-apply.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now osiris-prune-manifest.timer osiris-prune-apply.timer
+# DEPLOY-MANAGED (Thoth mail 8437, scripts/install_prune_timers.sh): every `osiris
+# deploy` keeps this installed, current, and enabled without a hand — unlike osiris-
+# manager.service beside it, which stays hand-install-only plumbing.
 [Unit]
 Description=Osiris weekly prune-ladder apply, gated on an undimmed manifest
 

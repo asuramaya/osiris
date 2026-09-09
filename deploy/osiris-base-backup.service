@@ -1,10 +1,10 @@
 # Weekly pg_basebackup — the physical starting point WAL replay needs for point-in-time
 # recovery (vault lane, operator ruling 39384a87/c53a5fc0, item 3). Paired with
-# osiris-base-backup.timer (weekly). Ships as plumbing, like osiris-manager.service
-# beside it — installing/enabling this is a separate, deliberate act, never automatic:
-#   cp deploy/osiris-base-backup.service deploy/osiris-base-backup.timer ~/.config/systemd/user/
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now osiris-base-backup.timer
+# osiris-base-backup.timer (Sun 02:00 — one hour ahead of prune-apply's own Sun 03:00,
+# so the ladder's WAL retention always sees the fresh base first). DEPLOY-MANAGED
+# (Thoth mail 8437, scripts/install_prune_timers.sh): every `osiris deploy` keeps this
+# installed, current, and enabled without a hand — unlike osiris-manager.service
+# beside it, which stays hand-install-only plumbing.
 [Unit]
 Description=Osiris weekly pg_basebackup into the vault
 
