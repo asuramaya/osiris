@@ -4003,6 +4003,85 @@ async def _fn_closure_health(
     }
 
 
+async def _fn_obligation_backlog(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """THE BACKLOG BAND, piece 1 (operator nudge via Thoth, msg 8608): the ONE read this
+    house's obligation-crunch tools should all point at, so `backlog()`'s per-project view,
+    a fleet-wide `--fleet` widening, and the operator desk's weekly line are three renders
+    of the same numbers rather than three hand-rolled queries drifting apart. Composes
+    `digest._open_obligation_rows` (the raw query `_obligation_pressure` already ran) —
+    never re-derives the WHERE clause a third time.
+
+    Two views over the SAME open-obligation population:
+      `by_project` — verbatim `_obligation_pressure`'s own rows (project, open, target,
+        past_window, oldest_owners) — unchanged shape, existing callers (`backlog()`,
+        `render_desk_text`) keep working against it untouched.
+      `by_seat` — the NEW axis this composition adds: every open obligation's `owner`
+        resolved against the live roster's own seat ids/handles (case-insensitive, the
+        same two spellings `owner_refs` in stophook_logic.py already treats as the same
+        seat), grouped by the resolved seat, oldest three owned as `{id, summary}` refs.
+        Sorted by `open` descending, then by handle — the heaviest-carrying seat first.
+      `unowned` — count of rows with no owner property at all.
+      `literal_owner` — count of rows whose owner IS set but matches NO live roster seat
+        (a name once real, since retired, or a hand-typed value that was never a seat ref
+        to begin with) — distinct from `unowned`: a literal owner is a filing gap of a
+        DIFFERENT shape (wrong reference, not no reference), and collapsing the two would
+        hide which repair verb applies (reassign vs. simply assign).
+
+    `fleet_total` is the flat open count across every project — the single number a weekly
+    digest line needs beside `by_seat`'s top-N. Read-only, no writes, same as every other
+    Function here."""
+    from src.actions.core import Actions
+    from src.orchestrator.digest import _obligation_pressure, _open_obligation_rows
+    from src.orchestrator.seats import roster as _roster
+
+    actions = Actions(pool)
+    by_project = await _obligation_pressure(actions)
+    rows = await _open_obligation_rows(actions)
+    ros = await _roster(pool)
+    seat_names: dict[str, str] = {}
+    for r in ros.get("seats", []):
+        display = r.get("handle") or str(r.get("seat") or "")
+        if r.get("seat"):
+            seat_names[str(r["seat"]).lower()] = display
+        if r.get("handle"):
+            seat_names[str(r["handle"]).lower()] = display
+
+    now = datetime.now(UTC)
+    by_seat: dict[str, list[dict[str, Any]]] = {}
+    unowned = literal_owner = 0
+    for r in rows:
+        owner = (r["owner"] or "").strip()
+        if not owner:
+            unowned += 1
+            continue
+        seat = seat_names.get(owner.lower())
+        if seat is None:
+            literal_owner += 1
+            continue
+        by_seat.setdefault(seat, []).append(r)
+
+    seat_rows: list[dict[str, Any]] = []
+    for seat, items in by_seat.items():
+        items = sorted(items, key=lambda r: r["created_at"])
+        past_window = sum(
+            1 for it in items
+            if it["stale_after"] and datetime.fromisoformat(it["stale_after"]) <= now)
+        oldest = [{"id": str(it["id"])[:8], "summary": it["summary"]} for it in items[:3]]
+        seat_rows.append({"seat": seat, "open": len(items), "past_window": past_window,
+                          "oldest": oldest})
+    seat_rows.sort(key=lambda r: (-r["open"], r["seat"]))
+
+    return {
+        "by_project": by_project,
+        "by_seat": seat_rows,
+        "unowned": unowned,
+        "literal_owner": literal_owner,
+        "fleet_total": len(rows),
+    }
+
+
 _FUNCTIONS: dict[str, Function] = {
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
@@ -4033,6 +4112,7 @@ _FUNCTIONS: dict[str, Function] = {
     "closure_health": _fn_closure_health,
     "reference_catalog": _fn_reference_catalog,
     "census": _fn_census,
+    "obligation_backlog": _fn_obligation_backlog,
 }
 
 # Functions that brief the whole project rather than anchor on one entity — no subject needed.
@@ -4047,7 +4127,7 @@ _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "puls
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
                  "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
-                 "closure_health", "reference_catalog", "census"}
+                 "closure_health", "reference_catalog", "census", "obligation_backlog"}
 
 
 def list_functions() -> list[str]:
