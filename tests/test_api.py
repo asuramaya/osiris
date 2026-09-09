@@ -222,6 +222,101 @@ async def test_object_viewport_exclude_skips_ids_the_caller_already_holds(
     assert str(b) in ids
 
 
+async def test_graph_supernodes_counts_members_per_project(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave B item 3 (thread 8839): LOD level 0 -- one supernode per
+    project, sized by count. A project MEMBER always carries its own in_repo edge, so it
+    can never itself read as "orphan" (zero live links, graph_lint/triage's own bucket
+    definition) -- a project supernode's own orphans reads structurally 0; the real
+    zero-link population lands entirely in the unfiled bucket (tested separately below)."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-proj", "test")
+    connected = await actions.create_or_find_object("Thread", "thread:gv-lod-connected", "test")
+    member = await actions.create_or_find_object("Thread", "thread:gv-lod-member", "test")
+    other = await actions.create_or_find_object("Thread", "thread:gv-lod-other", "test")
+    await actions.create_link(connected, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(member, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(connected, other, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    body = r.json()
+    row = next(s for s in body["supernodes"] if s["label"] == "repo:gv-lod-proj")
+    assert row["count"] == 2
+    assert row["orphans"] == 0
+
+
+async def test_graph_supernodes_unfiled_orphans_are_the_true_zero_link_objects(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The real "zero links at all" population (graph_lint/triage's exact orphan
+    definition) can only ever land in `unfiled` -- project/cluster membership itself
+    requires a link, so a genuinely edgeless object is never IN a project to begin with."""
+    await actions.create_or_find_object("Thread", "thread:gv-lod-true-orphan", "test")
+    linked_but_unfiled = await actions.create_or_find_object(
+        "Thread", "thread:gv-lod-linked-unfiled", "test")
+    other = await actions.create_or_find_object("Thread", "thread:gv-lod-unfiled-peer", "test")
+    await actions.create_link(linked_but_unfiled, other, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    unfiled = r.json()["unfiled"]
+    assert unfiled["count"] >= 3          # both unfiled objects, at least
+    assert unfiled["orphans"] >= 1        # at least the truly-zero-link one
+
+
+async def test_graph_supernodes_weighs_inter_project_edges(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-a", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-b", "test")
+    obj_a = await actions.create_or_find_object("Thread", "thread:gv-lod-ia", "test")
+    obj_b = await actions.create_or_find_object("Thread", "thread:gv-lod-ib", "test")
+    await actions.create_link(obj_a, proj_a, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(obj_b, proj_b, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(obj_a, obj_b, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    edges = r.json()["project_edges"]
+    pair = {str(proj_a), str(proj_b)}
+    match = next(e for e in edges if {e["source"], e["target"]} == pair)
+    assert match["weight"] == 1
+
+
+async def test_graph_supernodes_unfiled_bucket_counts_projectless_objects(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    await actions.create_or_find_object("Thread", "thread:gv-lod-unfiled", "test")
+    r = await client.get("/graph/supernodes")
+    assert r.json()["unfiled"]["count"] >= 1
+
+
+async def test_graph_clusters_groups_by_type_inside_one_project(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-clusters", "test")
+    t1 = await actions.create_or_find_object("Thread", "thread:gv-cl-1", "test")
+    t2 = await actions.create_or_find_object("Thread", "thread:gv-cl-2", "test")
+    c1 = await actions.create_or_find_object("Commit", "commit:gv-cl-1", "test")
+    for oid in (t1, t2, c1):
+        await actions.create_link(oid, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/clusters", params={"project": "repo:gv-clusters"})
+    clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
+    assert clusters.get("Thread") == 2
+    assert clusters.get("Commit") == 1
+
+
+async def test_graph_clusters_resolves_a_bare_project_name(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-bare", "test")
+    t1 = await actions.create_or_find_object("Thread", "thread:gv-bare-1", "test")
+    await actions.create_link(t1, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/clusters", params={"project": "gv-bare"})
+    clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
+    assert clusters.get("Thread") == 1
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)
