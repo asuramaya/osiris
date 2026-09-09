@@ -389,6 +389,63 @@ def test_format_backlog_weekly_line_names_no_seats_when_empty() -> None:
     assert "Top seats: none." in line
 
 
+# THE ORPHAN LAWS, item 3 (operator's word wave 15, Thoth DM 8841) ------------------------
+
+def test_orphan_delta_is_none_on_the_first_run() -> None:
+    from scripts.osiris_preflight import _orphan_delta
+
+    assert _orphan_delta(7, None) is None
+
+
+def test_orphan_delta_is_the_arithmetic_difference() -> None:
+    from scripts.osiris_preflight import _orphan_delta
+
+    assert _orphan_delta(10, "7") == 3
+    assert _orphan_delta(4, "9") == -5
+    assert _orphan_delta(5, "5") == 0
+
+
+def test_format_orphan_weekly_line_names_first_run() -> None:
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    line = _format_orphan_weekly_line(
+        {"total": 12, "abstained_total": 3, "delta": None,
+         "by_type": {"Thread": {"count": 12, "abstained": 3}}})
+    assert "12 disconnected object(s) fleet-wide" in line
+    assert "3 already abstained" in line
+    assert "first run, no prior week to compare" in line
+    assert "Thread:12" in line
+
+
+def test_format_orphan_weekly_line_signs_a_positive_and_negative_delta() -> None:
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    up = _format_orphan_weekly_line(
+        {"total": 12, "abstained_total": 0, "delta": 3, "by_type": {}})
+    down = _format_orphan_weekly_line(
+        {"total": 9, "abstained_total": 0, "delta": -3, "by_type": {}})
+    assert "+3 since last week" in up
+    assert "-3 since last week" in down
+
+
+def test_format_orphan_weekly_line_names_no_types_when_empty() -> None:
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    line = _format_orphan_weekly_line(
+        {"total": 0, "abstained_total": 0, "delta": 0, "by_type": {}})
+    assert "Top types: none." in line
+
+
+def test_format_orphan_weekly_line_shows_the_five_biggest_types_only() -> None:
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    by_type = {f"Type{i}": {"count": i, "abstained": 0} for i in range(1, 8)}
+    line = _format_orphan_weekly_line(
+        {"total": 28, "abstained_total": 0, "delta": 0, "by_type": by_type})
+    assert "Type7:7" in line and "Type3:3" in line
+    assert "Type2:2" not in line and "Type1:1" not in line
+
+
 async def _no_transcripts_root(tmp_path: Path) -> int | None:
     from scripts.osiris_preflight import collect_soul_store_coverage
 
