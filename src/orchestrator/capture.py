@@ -3823,6 +3823,49 @@ async def thread_notes(pool: asyncpg.Pool, thread_id: uuid.UUID) -> list[dict[st
              "confidence": float(r["confidence"])} for r in rows]
 
 
+async def open_or_annotate_persisting_alarm(
+    actions: Actions, summary: str, *, kind: str, source: str,
+    arc: str | None = None, severity: str | None = None, owner: str | None = None,
+    unlinked_because: str | None = None,
+) -> str:
+    """THE SHARED MINT-OR-ANNOTATE DOOR for a periodic, source-not-a-human alarm/audit
+    re-run on the SAME persisting condition (thread f631adcc: promoted here from
+    deploy_guard.py, thread 358ac1ae's own tree_ingest.py needed the identical shape a
+    second time — never a second copy of the logic). The same guard
+    `agents._report_half_healed_phantom` carries (thread 672972a2's own live finding):
+    every caller of this shape shares a STABLE summary text (deliberately keeping a
+    volatile detail like `service`/age/watermark OUT of it, so `open_thread`'s own dedup
+    converges), re-run on every boot/deploy/heartbeat tick. `open_thread` is idempotent on
+    the summary hash — it finds the SAME Thread object regardless of current status and
+    unconditionally re-asserts status='open', so a caller that skipped this guard and
+    called `open_thread` directly on every tick would silently override a human's own
+    resolve the next tick that still sees the identical condition (Thoth msg 8175, naming
+    deploy_guard.py's own callers as this exact shape after status-regression's widened
+    check caught it live on the half-heal detector).
+
+    If the thread this summary would resolve to already reads status='resolved', this
+    annotates it with the still-present sighting instead of calling `open_thread` at all
+    — the condition being real stays on the record, but re-opening a thread a human
+    already closed is not an automated sweep's call. A never-seen-before or still-open
+    thread behaves exactly as a bare `open_thread` call always has."""
+    canon = _thread_canon(summary, None)
+    current_status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
+    if current_status == "resolved":
+        tid = await annotate_thread(
+            actions, canon,
+            f"still present at {datetime.now(UTC).isoformat()}: this alarm's own "
+            "condition has not cleared. Resolved once already — re-opening it is a "
+            "human's call, not this sweep's.",
+            source=source)
+        return str(tid) if tid is not None else canon
+    return str(await open_thread(
+        actions, summary, kind=kind, arc=arc, severity=severity, owner=owner,
+        source=source, unlinked_because=unlinked_because))
+
+
 async def correct_thread_summary(
     actions: Actions, ref: str, corrected_summary: str, *, because: str | None = None,
     source: str = _SOURCE,

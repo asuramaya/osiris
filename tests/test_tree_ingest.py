@@ -221,8 +221,8 @@ async def test_alarm_tick_re_check_past_cooldown_annotates_not_mails(
 async def test_alarm_tick_never_reopens_a_thread_a_human_already_resolved(
     actions: Actions,
 ) -> None:
-    """`_open_or_annotate_persisting_alarm`'s own guard (deploy_guard.py, reused as-is):
-    a human resolving the alarm thread is respected — the next tick that still finds the
+    """`open_or_annotate_persisting_alarm`'s own guard (capture.py, reused as-is): a
+    human resolving the alarm thread is respected — the next tick that still finds the
     tree blind annotates the still-present condition instead of silently re-opening what
     a human closed."""
     from datetime import timedelta

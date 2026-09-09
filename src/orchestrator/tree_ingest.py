@@ -23,10 +23,12 @@ THE MAIL-TO-THREAD SHAPE FIX (thread 358ac1ae, operator complaint routed via Atl
 for 14 days sent 14 byte-identical graded asks — grade inflation (mount()/orient() reported
 "14 ask" when it meant one), fleet-wide unread-count degradation, and no self-clearing (the
 first alarm sat unsettled even after the tree was ingested on day two). Now: the FIRST time
-a tree is seen blind, `_open_or_annotate_persisting_alarm` (deploy_guard.py's own shared
-mint-or-annotate primitive, reused rather than re-derived — the tree-ingest alarm shares its
-exact shape with schema-drift/unreviewed-boot: a periodic, source-not-a-human caller re-
-running on the SAME condition) mints the Thread AND fires the one-and-only graded 'ask' DM;
+a tree is seen blind, `open_or_annotate_persisting_alarm` (capture.py's own shared mint-
+or-annotate primitive, promoted there from deploy_guard.py, thread f631adcc, once this
+module became its second real caller — never a second copy of the logic: the tree-ingest
+alarm shares its exact shape with schema-drift/unreviewed-boot, a periodic, source-not-a-
+human caller re-running on the SAME condition) mints the Thread AND fires the
+one-and-only graded 'ask' DM;
 every later tick that still finds the SAME tree blind (past its own unchanged 24h cooldown,
 task text: "DO NOT 'FIX' THE CADENCE — the 24h per-tree cooldown is BY DESIGN and working")
 only ANNOTATES the existing thread — no mail, ever, on a re-assertion. The moment a
@@ -44,8 +46,11 @@ from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 from src.ingest.closure import close_by_commits
 from src.ingest.gitlog import ingest_repo, read_commits
-from src.orchestrator.capture import _thread_canon, resolve_thread
-from src.orchestrator.deploy_guard import _open_or_annotate_persisting_alarm
+from src.orchestrator.capture import (
+    _thread_canon,
+    open_or_annotate_persisting_alarm,
+    resolve_thread,
+)
 from src.orchestrator.mailbox import send_message
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.orchestrator.neighborhoods import discover_trees
@@ -57,7 +62,7 @@ _ALARM_COOLDOWN_SECS = 86400  # one alarm per tree per day — a heartbeat firin
 
 def _alarm_summary(tree: str) -> str:
     """The Thread's own canonical identity text — DELIBERATELY volatile-detail-free (no
-    path, no watermark), same law `_open_or_annotate_persisting_alarm`'s own docstring
+    path, no watermark), same law `open_or_annotate_persisting_alarm`'s own docstring
     states for schema-drift/unreviewed-boot: baking a detail that can change per-tick into
     the summary would mint a fresh Thread each time instead of converging on one."""
     return f"[tree-ingest-alarm] {tree} has zero commits ingested"
@@ -191,7 +196,7 @@ async def uningested_trees_alarm_tick(
     THE SHAPE (thread 358ac1ae): the FIRST time a tree's own Thread is minted, one graded
     'ask' DM fires alongside it — a human/mind should be told a new duty exists. Every later
     tick past cooldown that still finds the SAME tree blind only ANNOTATES that Thread
-    (`_open_or_annotate_persisting_alarm`) — no mail. A tree that stops being actionable
+    (`open_or_annotate_persisting_alarm`) — no mail. A tree that stops being actionable
     (commits now land) resolves its own still-open Thread, if one exists — self-clearing,
     the defect this thread's own dispatch named as (3).
 
@@ -225,7 +230,7 @@ async def uningested_trees_alarm_tick(
         first_notice = not await actions.pool.fetchval(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Thread'",
             _thread_canon(summary, None))
-        tid = await _open_or_annotate_persisting_alarm(
+        tid = await open_or_annotate_persisting_alarm(
             actions, summary, kind="obligation", owner=seat, arc="Fleet-Hygiene",
             severity="alarm", source="cron:tree_ingest_alarm")
         if first_notice:
