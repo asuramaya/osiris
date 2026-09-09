@@ -14,7 +14,7 @@ rejected here. Two real, load-bearing costs, not just style:
      partitioned table's own key by `id` alone; it would need to become
      `(supersedes, supersedes_created_at)`, touching the column shape every reader of
      `supersedes` (src/actions/core.py, src/orchestrator/retirement.py, compositions.py's
-     dossier, this file's own sibling `migration_0063.py`) would need to carry.
+     dossier, this file's own sibling `migration_0064.py`) would need to carry.
   2. Retrofitting partitioning onto an EXISTING, live, populated table is not an
      in-place ALTER in Postgres at all: it requires creating a NEW partitioned relation
      under a temporary name, copying every row across (exactly the "never one giant scan
@@ -31,11 +31,11 @@ app layer (Actions already SELECTs to validate a target's existence in
 because nothing else in this codebase can write this column.
 
 THE SHAPE actually built (Option B, refined past the dispatch's own sketch after a
-codebase-wide grep turned up a wrinkle IT didn't anticipate -- see migration_0063.py's
+codebase-wide grep turned up a wrinkle IT didn't anticipate -- see migration_0064.py's
 own module docstring for the full account):
 
   assertions_hot   -- the renamed original table. Holds every CURRENT row forever
-                      (is_current=true rows are NEVER moved -- migration_0063.py's own
+                      (is_current=true rows are NEVER moved -- migration_0064.py's own
                       invariant) plus recently-superseded rows still inside the trailing
                       window. No self-referencing FK (see above).
   assertions_cold  -- new, same column shape, holds only rows that are BOTH already
@@ -59,7 +59,7 @@ underlying table in step 1 leaves current_assertions pointing at exactly the sam
 relation (now called assertions_hot) without needing a `CREATE OR REPLACE`. Since a
 current (is_current=true) row is never archived, current_assertions keeps returning
 EXACTLY what it always did, off a permanently smaller table once the archiver
-(migration_0063.py) runs -- recall and search, which read current_assertions/
+(migration_0064.py) runs -- recall and search, which read current_assertions/
 winning_props, get the "out of the hot path" win the dispatch actually asked for, for
 free, with no risk of a view-definition edit landing wrong.
 
@@ -95,8 +95,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0063"
-down_revision = "0062"
+revision = "0064"
+down_revision = "0063"
 branch_labels = None
 depends_on = None
 

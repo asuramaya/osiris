@@ -1,5 +1,5 @@
-"""MIGRATION 0063, THE EVENT LOG COLD PARTITION (thread THE VAULT BUILD, dispatch wave
-12): the live-data archiver paired with alembic/versions/0063_assertions_hot_cold.py's
+"""MIGRATION 0064, THE EVENT LOG COLD PARTITION (thread THE VAULT BUILD, dispatch wave
+12): the live-data archiver paired with alembic/versions/0064_assertions_hot_cold.py's
 own schema half (read that file's docstring first -- it has the full A-vs-B reasoning
 for why this is a hot/cold table split behind an updatable view, not native declarative
 partitioning).
@@ -63,7 +63,7 @@ from typing import Any, cast
 
 import asyncpg
 
-MIGRATION_SOURCE = "migration:0063_assertions_hot_cold"
+MIGRATION_SOURCE = "migration:0064_assertions_hot_cold"
 DEFAULT_BATCH_SIZE = 5000
 
 _COLS = (
@@ -71,7 +71,7 @@ _COLS = (
     "evidence_sha256, observed_at, confidence, supersedes, created_at, evidence_class, "
     "is_current"
 )
-# Measured live (see tests/test_migration_0063.py's own compression probe): a plain
+# Measured live (see tests/test_migration_0064.py's own compression probe): a plain
 # `INSERT ... SELECT value FROM ...` copies the TOASTed bytes VERBATIM -- it does not
 # recompress into the destination column's own SET COMPRESSION method, so a naive mover
 # would silently keep every archived value pglz-compressed forever, no matter what
@@ -122,10 +122,10 @@ class ReconciliationError(RuntimeError):
     assertions_hot + assertions_cold. See this module's own docstring."""
 
 
-async def plan_migration_0063(
+async def plan_migration_0064(
     pool: asyncpg.Pool, *, cutoff: datetime | None = None,
 ) -> dict[str, Any]:
-    """DRY RUN -- read-only, never writes. Reports exactly what apply_migration_0063
+    """DRY RUN -- read-only, never writes. Reports exactly what apply_migration_0064
     would move, without moving it."""
     cutoff = cutoff or default_cutoff()
     eligible = cast(
@@ -146,7 +146,7 @@ async def plan_migration_0063(
     }
 
 
-async def apply_migration_0063(
+async def apply_migration_0064(
     pool: asyncpg.Pool,
     *,
     batch_size: int = DEFAULT_BATCH_SIZE,
@@ -231,7 +231,7 @@ async def apply_migration_0063(
     )
     if before_total != after_total:
         raise ReconciliationError(
-            f"COUNT MISMATCH after migration 0063: before={before_total} "
+            f"COUNT MISMATCH after migration 0064: before={before_total} "
             f"after={after_total} -- receipt={receipt.as_dict()!r}"
         )
     return receipt.as_dict()

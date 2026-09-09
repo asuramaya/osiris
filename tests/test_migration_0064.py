@@ -1,6 +1,6 @@
-"""MIGRATION 0063, THE EVENT LOG COLD PARTITION: assertions_hot/assertions_cold behind
-the `assertions` umbrella view (alembic/versions/0063_assertions_hot_cold.py), and the
-bounded-batch archiver (src/orchestrator/migration_0063.py). Boundary-spanning tests
+"""MIGRATION 0064, THE EVENT LOG COLD PARTITION: assertions_hot/assertions_cold behind
+the `assertions` umbrella view (alembic/versions/0064_assertions_hot_cold.py), and the
+bounded-batch archiver (src/orchestrator/migration_0064.py). Boundary-spanning tests
 prove current_assertions and the supersedes chain resolve correctly regardless of which
 physical table a row lands in; the archiver tests prove bounded batches, a count-
 preserving receipt, and the never-move-a-current-row invariant.
@@ -10,10 +10,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from src.actions.core import Actions
-from src.orchestrator.migration_0063 import (
+from src.orchestrator.migration_0064 import (
     ReconciliationError,
-    apply_migration_0063,
-    plan_migration_0063,
+    apply_migration_0064,
+    plan_migration_0064,
 )
 
 OLD = datetime(2020, 1, 15, tzinfo=UTC)
@@ -22,7 +22,7 @@ CUTOFF = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 async def _archive_row(actions: Actions, assertion_id: int) -> None:
-    """Simulate what apply_migration_0063 does to one row: copy to cold, delete from
+    """Simulate what apply_migration_0064 does to one row: copy to cold, delete from
     hot. Used to set up an ALREADY-ARCHIVED fixture without running the whole archiver,
     for tests that only care about read-side correctness."""
     cols = (
@@ -151,7 +151,7 @@ async def _age(actions: Actions, assertion_id: int, created_at: datetime) -> Non
         "UPDATE assertions_hot SET created_at=$2 WHERE id=$1", assertion_id, created_at)
 
 
-async def test_apply_migration_0063_moves_only_eligible_rows_in_bounded_batches(
+async def test_apply_migration_0064_moves_only_eligible_rows_in_bounded_batches(
     actions: Actions,
 ) -> None:
     """10 old, superseded rows are cold-eligible; a current (is_current=true) row and a
@@ -176,10 +176,10 @@ async def test_apply_migration_0063_moves_only_eligible_rows_in_bounded_batches(
         obj, "recent_fact", "v1", "agent:recent", RECENT, 0.9)
     await actions.assert_property(obj, "recent_fact", "v2", "agent:recent", RECENT, 0.9)
 
-    plan = await plan_migration_0063(actions.pool, cutoff=CUTOFF)
+    plan = await plan_migration_0064(actions.pool, cutoff=CUTOFF)
     assert plan["eligible_rows"] == 10
 
-    receipt = await apply_migration_0063(actions.pool, batch_size=3, cutoff=CUTOFF)
+    receipt = await apply_migration_0064(actions.pool, batch_size=3, cutoff=CUTOFF)
     assert receipt["rows_examined"] == 10
     assert receipt["rows_moved"] == 10
     assert receipt["batches_run"] == 4
@@ -202,13 +202,13 @@ async def test_apply_migration_0063_moves_only_eligible_rows_in_bounded_batches(
         "SELECT 1 FROM assertions_hot WHERE id=$1", recent_superseded) == 1
 
     # a second run is idempotent -- nothing left eligible, zero-row receipt
-    second = await apply_migration_0063(actions.pool, batch_size=3, cutoff=CUTOFF)
+    second = await apply_migration_0064(actions.pool, batch_size=3, cutoff=CUTOFF)
     assert second["rows_moved"] == 0
     assert second["batches_run"] == 0
     assert second["count_preserved"] is True
 
 
-async def test_plan_migration_0063_is_read_only(actions: Actions) -> None:
+async def test_plan_migration_0064_is_read_only(actions: Actions) -> None:
     obj = await actions.create_or_find_object("Agent", "agent:dryrun", "test")
     old_id = await actions.assert_property(obj, "x", "v1", "agent:s", OLD, 0.9)
     await _age(actions, old_id, OLD)
@@ -217,7 +217,7 @@ async def test_plan_migration_0063_is_read_only(actions: Actions) -> None:
     before_hot = await actions.pool.fetchval("SELECT count(*) FROM assertions_hot")
     before_cold = await actions.pool.fetchval("SELECT count(*) FROM assertions_cold")
 
-    plan = await plan_migration_0063(actions.pool, cutoff=CUTOFF)
+    plan = await plan_migration_0064(actions.pool, cutoff=CUTOFF)
     assert plan["eligible_rows"] >= 1
 
     after_hot = await actions.pool.fetchval("SELECT count(*) FROM assertions_hot")
@@ -225,12 +225,12 @@ async def test_plan_migration_0063_is_read_only(actions: Actions) -> None:
     assert (before_hot, before_cold) == (after_hot, after_cold)
 
 
-async def test_apply_migration_0063_raises_loudly_on_a_reconciliation_mismatch(
+async def test_apply_migration_0064_raises_loudly_on_a_reconciliation_mismatch(
     actions: Actions,
 ) -> None:
     """A count mismatch must never be swallowed into a receipt that looks fine --
     simulate the failure by racing a manual delete of an eligible row mid-run isn't
     practical here, so this proves the raise path directly: ReconciliationError is
-    exactly the class apply_migration_0063 raises, and it is a RuntimeError (so nothing
+    exactly the class apply_migration_0064 raises, and it is a RuntimeError (so nothing
     upstream can quietly catch-and-ignore it as a plain return value)."""
     assert issubclass(ReconciliationError, RuntimeError)
