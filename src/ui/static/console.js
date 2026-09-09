@@ -478,7 +478,40 @@ function openProjectInBrowse(name) {
 
 
 // ── Focus / Inspect ──────────────────────────────────────────────────────────
-async function focus(id) {
+// WAVE A item 6 (thread 8839): the breadcrumb trail behind focus()'s own navigation —
+// every node a click/search/dbltap brought into focus, in order, deduped only when it
+// repeats the CURRENT tail (revisiting an older crumb truncates forward, browser-history
+// style, rather than growing a trail that loops on itself).
+let BREADCRUMBS = [];
+function pushBreadcrumb(id, label) {
+  if (BREADCRUMBS.length && BREADCRUMBS[BREADCRUMBS.length - 1].id === id) return;
+  BREADCRUMBS.push({ id, label: label || id.slice(0, 8) });
+  if (BREADCRUMBS.length > 12) BREADCRUMBS = BREADCRUMBS.slice(-12);
+  renderBreadcrumbs();
+}
+function renderBreadcrumbs() {
+  var el = $('graph-breadcrumbs'); if (!el) return;
+  el.innerHTML = BREADCRUMBS.map(function(c, i) {
+    var cur = i === BREADCRUMBS.length - 1;
+    return (i ? '<span class="crumb-sep">/</span>' : '') +
+      '<span class="crumb' + (cur ? ' current' : '') + '" title="' + esc(c.label) + '" onclick="jumpToBreadcrumb(' + i + ')">' + esc(c.label) + '</span>';
+  }).join('');
+}
+function jumpToBreadcrumb(i) {
+  if (i < 0 || i >= BREADCRUMBS.length) return;
+  var target = BREADCRUMBS[i];
+  BREADCRUMBS = BREADCRUMBS.slice(0, i + 1);
+  focus(target.id, true);
+}
+// Escape steps back one crumb (console.js's own keydown handler calls this when the board
+// is the active surface and there's somewhere to step back TO).
+function stepBackBreadcrumb() {
+  if (BREADCRUMBS.length < 2) return false;
+  BREADCRUMBS.pop();
+  focus(BREADCRUMBS[BREADCRUMBS.length - 1].id, true);
+  return true;
+}
+async function focus(id, fromBreadcrumb) {
   FOCUS = id; postConsole({ focused_object_id: id });
   $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
   showBoard(); (ensureBoard()).clear();
@@ -490,7 +523,62 @@ async function focus(id) {
   // neighbors instead) — this call site just frames whatever landed, it never re-shuffles it.
   (ensureBoard()).mergeGraph(g); (ensureBoard()).focusNode(id); (ensureBoard()).fit();
   inspect(id);
+  var self = g.nodes.find(function(n){ return n.id === id; });
+  if (!fromBreadcrumb) pushBreadcrumb(id, self ? self.label : id.slice(0, 8));
   setStatus(capped ? 'Showing 28 of ' + capped + ' connections.' : (ensureBoard()).cy.nodes().length + ' objects on the board.');
+}
+// WAVE A item 6: expand/collapse the CURRENT selection's own one-hop neighborhood WITHOUT
+// clearing the board (focus() always does; this is the additive verb search/inspect use to
+// widen or narrow what's already on screen around one node).
+async function expandFocusOneHop() {
+  if (!FOCUS) { setStatus('Select a node first.'); return; }
+  var added = await (ensureBoard()).expandOneHop(FOCUS);
+  setStatus(added ? 'Expanded: +' + added + ' element(s).' : 'Nothing new to expand.');
+}
+function collapseFocusOneHop() {
+  if (!FOCUS) { setStatus('Select a node first.'); return; }
+  var n = (ensureBoard()).collapseOneHop(FOCUS);
+  setStatus(n ? 'Collapsed ' + n + ' leaf node(s).' : 'Nothing to collapse.');
+}
+// ── Graph search box (item 6) ───────────────────────────────────────────────
+let GRAPH_SEARCH_ITEMS = [], GRAPH_SEARCH_SEL = 0, GRAPH_SEARCH_TIMER = null, GRAPH_SEARCH_TOKEN = 0;
+function graphSearchInput(q) {
+  var dd = $('graph-search-dd'); if (!dd) return;
+  clearTimeout(GRAPH_SEARCH_TIMER);
+  if (!q || !q.trim()) { dd.style.display = 'none'; GRAPH_SEARCH_ITEMS = []; return; }
+  var myToken = ++GRAPH_SEARCH_TOKEN;
+  GRAPH_SEARCH_TIMER = setTimeout(async function() {
+    var hits = [];
+    try {
+      var res = await fetch('/search?q=' + encodeURIComponent(q) + '&limit=8').then(function(r){return r.json();});
+      hits = Array.isArray(res.hits) ? res.hits : (Array.isArray(res) ? res : []);
+    } catch(e) { hits = []; }
+    if (myToken !== GRAPH_SEARCH_TOKEN) return;
+    GRAPH_SEARCH_ITEMS = hits.filter(function(h){ return h && h.id; });
+    GRAPH_SEARCH_SEL = 0;
+    renderGraphSearchList();
+  }, 200);
+}
+function renderGraphSearchList() {
+  var dd = $('graph-search-dd'); if (!dd) return;
+  if (!GRAPH_SEARCH_ITEMS.length) { dd.style.display = 'none'; return; }
+  dd.style.display = 'block';
+  dd.innerHTML = GRAPH_SEARCH_ITEMS.map(function(h, i) {
+    var label = h.display_label || h.label || h.name || h.canonical || h.id;
+    return '<div class="dd-item' + (i === GRAPH_SEARCH_SEL ? ' sel' : '') + '" onclick="pickGraphSearch(' + i + ')"><div class="dd-item-main"><span class="dd-item-name">' + esc(label) + '</span><span class="dd-item-hint">' + esc(h.type || '') + '</span></div></div>';
+  }).join('');
+}
+function pickGraphSearch(i) {
+  var item = GRAPH_SEARCH_ITEMS[i]; if (!item) return;
+  $('graph-search-dd').style.display = 'none'; $('graph-search').value = '';
+  focus(item.id);
+}
+function graphSearchKey(e) {
+  if (!GRAPH_SEARCH_ITEMS.length) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); GRAPH_SEARCH_SEL = Math.min(GRAPH_SEARCH_SEL + 1, GRAPH_SEARCH_ITEMS.length - 1); renderGraphSearchList(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); GRAPH_SEARCH_SEL = Math.max(GRAPH_SEARCH_SEL - 1, 0); renderGraphSearchList(); }
+  else if (e.key === 'Enter') { e.preventDefault(); pickGraphSearch(GRAPH_SEARCH_SEL); }
+  else if (e.key === 'Escape') { $('graph-search-dd').style.display = 'none'; }
 }
 async function inspect(id) {
   FOCUS = id;
@@ -632,7 +720,16 @@ function openPalette() { $('search').focus(); $('global-search-box').classList.a
 async function openOmniSearch(val) { runOmniSearch(val); }
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────────────────
-document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName); if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); } else if (e.key === '/' && !inField) { e.preventDefault(); openPalette(); } else if (e.key === 'Escape') { closeAllDropdowns(); if ($('peek').className.includes('on')) closePeek(); } else if (e.key === '[' && !inField) { e.preventDefault(); toggleLeft(); } else if (e.key === ']' && !inField) { e.preventDefault(); toggleRight(); } });
+document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName); if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); } else if (e.key === '/' && !inField) { e.preventDefault(); openPalette(); } else if (e.key === 'Escape') {
+  // WAVE A item 6: Escape steps back one breadcrumb ONLY when nothing more local already
+  // consumed it (a dropdown, the peek overlay, or the search box's own Escape handler
+  // above) — same "most specific first" order this handler already follows.
+  const hadDropdown = !!document.querySelector('.dd-item') && ['workspace-dropdown','repo-dropdown','omni-dropdown'].some(id => { const el = $(id); return el && el.style.display && el.style.display !== 'none'; });
+  closeAllDropdowns();
+  const hadPeek = $('peek').className.includes('on');
+  if (hadPeek) closePeek();
+  if (!hadDropdown && !hadPeek && ACTIVE_SURFACE === 'browse') stepBackBreadcrumb();
+} else if (e.key === '[' && !inField) { e.preventDefault(); toggleLeft(); } else if (e.key === ']' && !inField) { e.preventDefault(); toggleRight(); } });
 function closePeek() { const o = $('peek'); o.className = 'peek-overlay'; o.innerHTML = ''; }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────

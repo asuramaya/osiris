@@ -423,6 +423,27 @@ const Osiris = (() => {
         const n = cy.getElementById(id);
         n.addClass("focus"); n.connectedEdges().addClass("edge-focus");
       },
+      // WAVE A item 6: expand/collapse one hop on the SELECTION — a search-driven verb
+      // distinct from focus() (which also recenters/reframes); this just widens or narrows
+      // what's on the board around one already-present node.
+      async expandOneHop(id) {
+        if (!cy.getElementById(id).length) return 0;
+        const g = await fetch(`/objects/${id}/graph?hops=1`).then((r) => r.json());
+        return mergeGraph(g);
+      },
+      // removes every neighbor of `id` whose ONLY connection to the board is `id` itself —
+      // the undo for expandOneHop's own leaves, never a node that's independently anchored
+      // elsewhere (collapsing must not silently delete someone else's context).
+      collapseOneHop(id) {
+        const center = cy.getElementById(id);
+        if (!center.length) return 0;
+        const doomed = center.neighborhood("node").filter((n) => n.degree() === 1);
+        const n = doomed.length;
+        doomed.connectedEdges().remove();
+        doomed.remove();
+        savePositions();
+        return n;
+      },
       // place a set of {id,label,type} as nodes + the links AMONG the set only. NOT each
       // node's 1-hop neighborhood — that pulled in strangers and made the hairball. A result
       // SET renders as itself; neighborhood expansion is "search around", a separate verb.

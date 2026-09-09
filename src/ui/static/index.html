@@ -94,7 +94,21 @@
     </aside>
     <div class="grip l" data-grip="l" title="drag to resize · double-click to reset"></div>
     <div id="stage">
-      <div id="cy"><div class="graph-canvas-controls"><button class="iconbtn" onclick="board.fit()">Fit</button><button class="iconbtn" onclick="board.layout(false)">Re-layout</button><button class="iconbtn" onclick="clearAll()">Clear</button></div></div>
+      <div id="cy">
+        <div class="graph-canvas-controls">
+          <button class="iconbtn" onclick="board.fit()">Fit</button>
+          <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
+          <button class="iconbtn" onclick="clearAll()">Clear</button>
+          <button class="iconbtn" onclick="expandFocusOneHop()">Expand</button>
+          <button class="iconbtn" onclick="collapseFocusOneHop()">Collapse</button>
+        </div>
+        <div class="graph-search-row">
+          <input id="graph-search" class="filter" placeholder="Find a node…" autocomplete="off"
+                 oninput="graphSearchInput(this.value)" onkeydown="graphSearchKey(event)" />
+          <div id="graph-search-dd" class="dd-list" style="display:none"></div>
+        </div>
+        <div id="graph-breadcrumbs" class="graph-breadcrumbs"></div>
+      </div>
       <div id="result"></div>
       <div class="stage-viewsw-footer"><div id="viewsw" class="viewsw-tabs"></div></div>
     </div>

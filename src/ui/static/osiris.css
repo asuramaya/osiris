@@ -1756,6 +1756,58 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   background: var(--chip);
 }
 
+/* WAVE A item 6: the graph's own find-a-node box + breadcrumb trail — top-right of the
+   board, out of the way of the canvas controls (bottom-left) and the fit/re-layout/clear
+   buttons they already own. */
+.graph-search-row {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 10;
+  width: 220px;
+}
+.graph-search-row .filter {
+  width: 100%;
+  background: rgba(13, 18, 25, 0.85);
+  backdrop-filter: blur(8px);
+}
+.graph-search-row .dd-list {
+  margin-top: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.graph-breadcrumbs {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 60%;
+}
+.graph-breadcrumbs .crumb {
+  background: rgba(13, 18, 25, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-breadcrumbs .crumb:hover { color: #fff; border-color: var(--blue); }
+.graph-breadcrumbs .crumb.current { color: #fff; border-color: var(--blue); }
+.graph-breadcrumbs .crumb-sep { color: var(--faint); font-size: 11px; align-self: center; }
+
 /* View Switcher Segmented Control */
 .viewsw {
   display: inline-flex;
