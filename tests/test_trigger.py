@@ -2172,6 +2172,77 @@ async def test_the_daemon_reply_rung_leads_and_wears_the_envelope(
         "SELECT mode FROM agent_wakes ORDER BY id DESC LIMIT 1") == "dm-reply"
 
 
+async def test_daemon_rung_excludes_a_stale_mount_row_from_its_candidate_ids(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Thread 962f32e2 (Khnum's independent measurement 2c4a82de): the daemon rung used to
+    pull EVERY job_dir this agent_id has ever mounted at into `jobs(ids)`'s own candidate
+    set with no freshness check — a long-dead mount row could still hand its job_dir to
+    the daemon's out-of-band registry, risking wrong-body delivery if it separately still
+    listed a session under that id. A mount row older than the shared liveness window
+    (mounts.LIVENESS_WINDOW_MINUTES) must never reach the daemon rung's own `ids`."""
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "deadbeef1"),
+                            agent_id="agent:staledoor", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
+        "WHERE agent_id='agent:staledoor'")
+    msg_id = int((await send_message(
+        actions.pool, from_agent="agent:sender", from_project="other",
+        to_agent="agent:staledoor", body="is anybody home", grade="ask"))["id"])
+
+    seen_ids: set[str] = set()
+
+    async def _jobs(ids: set) -> None:
+        seen_ids.update(ids)
+        return None
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        return None
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no job was found — nudge must never be called")
+
+    await dispatch_dm(actions.pool, addressee="agent:staledoor", msg_id=msg_id,
+                      sender="agent:sender", settings=_settings(enabled=True, sense=""),
+                      spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_boom)
+    assert "deadbeef1" not in seen_ids
+
+
+async def test_daemon_rung_includes_a_fresh_mount_row_in_its_candidate_ids(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The control case for the freshness filter above: a mount row within the shared
+    liveness window still reaches the daemon rung's own candidate ids, unchanged."""
+    from src.orchestrator import mounts
+
+    await mounts.save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "freshdoor1"),
+                            agent_id="agent:freshdoor", project="demo", cwd="/repo/demo",
+                            model=None, session_key=None)
+    msg_id = int((await send_message(
+        actions.pool, from_agent="agent:sender", from_project="other",
+        to_agent="agent:freshdoor", body="is anybody home", grade="ask"))["id"])
+
+    seen_ids: set[str] = set()
+
+    async def _jobs(ids: set) -> None:
+        seen_ids.update(ids)
+        return None
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        return None
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no job was found — nudge must never be called")
+
+    await dispatch_dm(actions.pool, addressee="agent:freshdoor", msg_id=msg_id,
+                      sender="agent:sender", settings=_settings(enabled=True, sense=""),
+                      spawn=_spawn, windows=_no_windows, jobs=_jobs, nudge=_boom)
+    assert "freshdoor1" in seen_ids
+
+
 async def test_a_dark_daemon_falls_open_to_the_resume_lane(
     actions: Actions, tmp_path: Path
 ) -> None:
