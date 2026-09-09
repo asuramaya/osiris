@@ -529,7 +529,10 @@ async def test_filed_under_check_coherent_when_filed_under_is_a_dead_display_nam
     assert out is not None
     assert out["coherent"] is True
     assert out["writes_went_to"] == ["fu10-oldcanon"]
-    assert out["filed_under"] == "Fu10DisplayName"   # the receipt still names what was given
+    # thread 8678/8687 (Thoth/Metron): once the rescue resolves a real canonical, the
+    # receipt reports THAT canonical on both sides — never the raw alias that failed the
+    # literal compare next to the real canonical it was rescued against.
+    assert out["filed_under"] == "fu10-oldcanon"
     assert "charter_repos" not in out                 # never touched the charter rescue
 
 
@@ -547,6 +550,37 @@ async def test_filed_under_check_stays_incoherent_when_the_dead_name_names_nothi
     assert out is not None
     assert out["coherent"] is False
     assert out["writes_went_to"] == ["fu11-real"]
+
+
+async def test_filed_under_check_shows_the_canonical_on_a_genuinely_split_rename(
+    actions: Actions,
+) -> None:
+    """Thread 8678/8687, Thoth relaying Metron's acceptance (8672): a project's own
+    `canonical` never changes on `rename_project` (only the mutable `name` property does —
+    see project_identity.rename_project's own docstring), so a session mounted under the
+    project's CURRENT display name post-rename always has `filed_under != went_to`'s literal
+    string on the first compare. This is the real (not merely display-name) specimen the
+    dead-name rescue above was built for: `filed_under` must come back naming the SAME
+    canonical `writes_went_to` does, never the post-rename display label the rescue had to
+    look past to get there."""
+    from src.orchestrator.project_identity import rename_project
+
+    agent = "agent:fu12"
+    mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("SoftwareProject", "repo:fu12-oldcanon", "test")
+    await record_decision(actions, "fu12's ruling, filed under the pre-rename canonical",
+                          repo="fu12-oldcanon", source=agent)
+    rn = await rename_project(actions, project="fu12-oldcanon", new_name="fu12-newdisplay",
+                              because="test: genuinely split fixture", actor="agent:test",
+                              dry_run=False)
+    assert "error" not in rn
+
+    out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=mounted_at,
+                                  project="fu12-newdisplay")
+    assert out is not None
+    assert out["coherent"] is True
+    assert out["writes_went_to"] == ["fu12-oldcanon"]
+    assert out["filed_under"] == "fu12-oldcanon"
 
 
 # ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
