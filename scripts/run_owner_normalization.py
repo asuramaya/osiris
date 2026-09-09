@@ -14,9 +14,17 @@ hand-written raw-SQL reassignment. Documented idempotent in RESULT, not row coun
 a re-run mints a fresh same-value assertion confirming "still true at T2" rather than a
 skip, which is the same law assert_property already enforces everywhere else.
 
+`--skip-project` (operator ruling via Thoth DM 8650: rotten-apple's own peer_of/
+managed_by contradiction between its two governing seats is "that project's own data
+defect, for the operator, not ours to touch" -- no resolver patch, no --apply on it)
+excludes matching projects from what --apply actually writes/folds, repeatable. The
+GENUINELY unowned row (no repo at all, project=None in the plan) is never named by this
+flag -- it has no project string to skip and folds under the operator's own ruling that
+"the fold is the correct mechanical answer" for it.
+
 `dry_run=True` is the hard default -- pass --apply to write.
 
-Usage: uv run python scripts/run_owner_normalization.py [--apply]
+Usage: uv run python scripts/run_owner_normalization.py [--apply] [--skip-project NAME ...]
 """
 from __future__ import annotations
 
@@ -37,7 +45,7 @@ from src.orchestrator.owner_normalization import (
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 
 
-async def run(*, apply: bool) -> dict[str, Any]:
+async def run(*, apply: bool, skip_projects: frozenset[str] = frozenset()) -> dict[str, Any]:
     refusal = refuse_silent_live_db("run_owner_normalization")
     if refusal is not None:
         print(refusal, file=sys.stderr)
@@ -53,13 +61,15 @@ async def run(*, apply: bool) -> dict[str, Any]:
     for entry in plan["resolved"]:
         print(f"  {entry['thread']}: {entry['current_owner']!r} -> {entry['new_owner']!r}"
               f" ({entry['class']})")
+    if skip_projects:
+        print(f"skipping (per operator ruling): {sorted(skip_projects)}")
 
     if not apply:
         print("\ndry run — pass --apply to write")
         await pool.close()
         return {"ok": True, "apply": False, **plan}
 
-    result = await apply_owner_normalization(Actions(pool))
+    result = await apply_owner_normalization(Actions(pool), skip_projects=skip_projects)
     print(f"\nwritten: {len(result['written'])}, surfaced: {len(result['surfaced'])}")
     await pool.close()
     return {"ok": True, "apply": True, **result}
@@ -68,5 +78,7 @@ async def run(*, apply: bool) -> dict[str, Any]:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--apply", action="store_true", help="write; default is a dry-run report")
+    p.add_argument("--skip-project", action="append", default=[],
+                   help="exclude this project from --apply; repeatable")
     args = p.parse_args()
-    asyncio.run(run(apply=args.apply))
+    asyncio.run(run(apply=args.apply, skip_projects=frozenset(args.skip_project)))
