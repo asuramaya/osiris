@@ -725,6 +725,144 @@ async def test_rename_cascade_reports_already_correct_on_a_second_run(
     assert tiers2["charter"]["status"] == "already-correct"
 
 
+async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_literal_string(
+    actions: Actions, tmp_path,
+) -> None:
+    """Deckard's own live shape (Thoth's dry-run report): a seat's charter carries a
+    project's MINT-TIME canonical label ("xxit") through an EARLIER, separate rename to
+    "handlingtheloop" — `charter_of`'s canonical-derived entry never moves off "xxit",
+    ever (rename_project's own contract: canonical is immutable). THIS rename call's
+    old_name/new_name pair (handlingtheloop -> flowrenamed) is neither literal string
+    ever seen in the charter, so the pre-fix literal `old_name in current_charter` /
+    `new_name in current_charter` compare silently reported a false 'already-correct'
+    with the note 'names neither'. The fix resolves "xxit" against the project's OWN id
+    (via `_resolve_repo`, the same resolver `set_charter` itself already uses) and must
+    correctly flag it as stale and plan its swap to the new label."""
+    office = tmp_path / "deckard_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="handlingtheloop", handle="Deckardseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:deck0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:deck0001")
+    proj = await _mk_project(actions, "xxit")  # mint-time canonical: repo:xxit, forever
+    # the EARLIER, separate rename: only the `name` property moves, never the canonical —
+    # exactly rename_project's own contract, done here directly to set up the specimen.
+    await actions.assert_property(proj, "name", "handlingtheloop", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    from src.orchestrator.charter import charter_of
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["xxit"]  # the exact specimen
+
+    dry = await rename_project(actions, project="handlingtheloop", new_name="flowrenamed",
+                               because="x", actor="agent:test", dry_run=True)
+    dtiers = dry["manifest"]["seats"][seat["seat_id"]]
+    assert dtiers["charter"]["status"] == "touched"
+    assert "xxit" in dtiers["charter"]["plan"] and "flowrenamed" in dtiers["charter"]["plan"]
+
+    out = await rename_project(actions, project="handlingtheloop", new_name="flowrenamed",
+                               because="operator ruling: fix drift", actor="agent:test",
+                               dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["charter"]["status"] == "touched"
+    assert "error" not in tiers["charter"]
+
+
+async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_shape(
+    actions: Actions, tmp_path,
+) -> None:
+    """Thoth's own note: 'Metron's seat shows the identical row' — a SECOND, differently
+    named seat/project pair hitting the exact same underlying defect, proving the charter
+    fix is not a Deckard-only patch narrowly matched to one literal specimen."""
+    office = tmp_path / "metron_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="metroncurrent", handle="Metronseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:metr0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:metr0001")
+    proj = await _mk_project(actions, "metronorig")  # mint-time canonical, forever
+    await actions.assert_property(proj, "name", "metroncurrent", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    from src.orchestrator.charter import charter_of
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["metronorig"]
+
+    out = await rename_project(actions, project="metroncurrent", new_name="metronfinal",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["charter"]["status"] == "touched"
+    assert "error" not in tiers["charter"]
+
+
+async def test_rename_cascade_charter_self_rename_never_touches_a_stale_alias(
+    actions: Actions, tmp_path,
+) -> None:
+    """BUG 2's own claim, verified at the charter tier specifically: renaming X to X (a
+    true self-rename/no-op) must be a clean no-op across every tier, even when the
+    charter carries the exact same stale-older-alias shape the fix above corrects for a
+    GENUINE rename — a self-rename never gets to go correcting drift this call was never
+    asked to touch."""
+    office = tmp_path / "selfstale_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="selfstalecur", handle="Selfstaleseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:sfst0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:sfst0001")
+    proj = await _mk_project(actions, "selfstaleorig")
+    await actions.assert_property(proj, "name", "selfstalecur", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    dry = await rename_project(actions, project="selfstalecur", new_name="selfstalecur",
+                               because="x", actor="agent:test", dry_run=True)
+    dtiers = dry["manifest"]["seats"][seat["seat_id"]]
+    assert dtiers["charter"]["status"] == "already-correct"
+    assert dry["collision"] is None
+
+
+async def test_rename_project_self_rename_collision_receipt_reports_no_op_never_a_false_merge_flag(
+    actions: Actions,
+) -> None:
+    """BUG 2: renaming a project to the name it ALREADY holds resolves `new_name` back to
+    the SAME object (`collide["id"] == row["id"]`) — never a real collision, and the
+    dry-run receipt's own `collision` field must say so (`None`), never the old
+    hardcoded 'would proceed only because merge_into=True' text — especially since here
+    `merge_into` was never passed at all (defaults False), the exact contradiction the
+    old text always asserted regardless of what was actually passed."""
+    await _mk_project(actions, "selfnoop")
+
+    out = await rename_project(actions, project="selfnoop", new_name="selfnoop",
+                               because="x", actor="agent:test", dry_run=True)
+
+    assert out["collision"] is None
+    assert "error" not in out
+
+
+async def test_rename_project_genuine_collision_receipt_reports_the_actual_merge_into_value(
+    actions: Actions,
+) -> None:
+    """A REAL collision (new_name already names a DIFFERENT active project) with
+    merge_into=True passed explicitly still surfaces as a collision — but the receipt
+    must echo the caller's ACTUAL merge_into value, not a hardcoded assumption; proven by
+    checking the exact value appears in the message, not just that a message exists."""
+    await _mk_project(actions, "collideother")
+    await _mk_project(actions, "collidemine")
+
+    out = await rename_project(actions, project="collidemine", new_name="collideother",
+                               because="x", actor="agent:test", dry_run=True, merge_into=True)
+
+    assert out["collision"] is not None
+    assert "collideother" in out["collision"]
+    assert "merge_into=True" in out["collision"]
+
+
 async def test_rename_cascade_never_overwrites_an_unrelated_house(
     actions: Actions, tmp_path,
 ) -> None:
