@@ -1398,6 +1398,14 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # fleet-wide roster+tree; this is self-scoped to what ONE manager governs, an
     # opposite-shape narrowing the same way threads narrows get_object_list.
     "team": {"binding_verb": False},
+    # object_events — the witness surface dossier() deliberately hides (thread
+    # 085039cc/0cc53329, Thoth DM 2469): merge/unmerge/split events plus same_as/
+    # not_same_as links for one object, read-only. Not a binding-mover (writes
+    # nothing) and not a parameterization of dossier() — dossier's own
+    # _HIDDEN_LINK_TYPES exclusion of same_as/not_same_as is a deliberate, separate
+    # design choice (identity bookkeeping vs. the entity's own network); this reads
+    # exactly the population dossier() excludes, not a mode switch on the same call.
+    "object_events": {"binding_verb": False},
 }
 
 

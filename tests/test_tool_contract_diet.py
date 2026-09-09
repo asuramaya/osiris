@@ -882,7 +882,11 @@ def _tool_chars(t: Any) -> int:
 # triangle's own manager-view verb (every seat managed_by the caller's own held seat:
 # live/owe/envelope), standalone rather than a mode of fleet() (fleet is the unscoped
 # fleet-wide roster+tree; this is self-scoped to what ONE manager governs).
-TOOL_CONTRACT_EXPECTED_COUNT = 76
+# 76 -> 77 (2026-09-09, Khnum, thread 085039cc/0cc53329, Thoth DM 2469): object_events
+# — the witness surface dossier() deliberately hides (same_as/not_same_as links,
+# merge/unmerge/split events), read-only, genuinely new capability, not a mode of
+# any existing tool.
+TOOL_CONTRACT_EXPECTED_COUNT = 77
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1385,7 +1389,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # (execute only) plus a one-line ACTION TABLE entry, mirroring fleet_reconcile's own
 # shape. A genuinely new mechanical-hygiene verb, no new tool, load-bearing growth per
 # this file's own escape valve. Measured exact (115,179), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 115458
+# 115,458 -> 116,027 (2026-09-09, Khnum, thread 085039cc/0cc53329, Thoth DM 2469):
+# object_events — a genuinely new read-only tool (merge/unmerge/split events plus
+# same_as/not_same_as links for one object, the witness surface dossier() deliberately
+# hides), trimmed to a minimal docstring already. New tool, load-bearing growth per
+# this file's own escape valve. Measured exact (116,027), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 116027
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
