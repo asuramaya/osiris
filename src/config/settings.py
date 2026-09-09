@@ -470,6 +470,15 @@ class Settings(BaseSettings):
     # dark-by-default convention, per the operator's own explicit instruction ("land it
     # with the flag ON").
     osiris_obligation_hygiene_enabled: bool = True
+    # THE NO-REGROW RULE'S OWN SWITCH (operator's word via Thoth DM 8606/8618,
+    # 2026-09-09): a SEPARATE clock from osiris_obligation_hygiene_enabled above, keyed
+    # off `stale_after` rather than idle-since-last-touch — an open obligation Thread
+    # with no annotate/owner-change/resolution for 21+ days past its own stale_after
+    # reclassifies to kind='task' (never resolved, never a status change), with a
+    # receipt on the owner's mail. OFF by default — no explicit "ship it ON" instruction
+    # accompanied this dispatch, unlike osiris_obligation_hygiene_enabled/osiris_
+    # retention_heartbeat_enabled's own named exceptions above.
+    osiris_no_regrow_enabled: bool = False
     # THE RETENTION HEARTBEAT'S OWN SWITCH (wave 12 item 1, operator's word via Thoth DM
     # 8378: "put outbox_retention and audit_log_retention ... on the heartbeat"): a daily
     # tick DELETEs (src.orchestrator.retention, execute=True) published outbox rows and
