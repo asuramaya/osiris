@@ -736,7 +736,38 @@ async def test_reissue_renders_the_real_charter_never_never_formally_declared(
     assert out["changed"] is True
     after = orders_path.read_text()
     assert "never formally declared" not in after
-    assert "You govern: `reissue-charter-proj`." in after
+    # mail 8788: the office line now shows the project's live NAME with its canonical
+    # beside it, resolved at render time, never the bare canonical alone.
+    assert "You govern: `ReissueCharterProjDisplay (repo:reissue-charter-proj)`." in after
+
+
+async def test_reissue_office_govern_line_shows_the_name_beside_the_canonical_deckards_shape(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's mail 8788, the presentation half of the 5031a74 finding: charter_of and
+    set_charter are correct to operate in canonical space forever — that's WHY a rename
+    can never need to touch a governs edge — but a human reads offices, not canonicals,
+    and Deckard's own office line 18 read "You govern: `xxit`" even after a real
+    reissue post-rename. Resolved LIVE at render time so a rename shows through without
+    any cascade touching the charter itself."""
+    from src.orchestrator.charter import set_charter
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:xxit", "test")
+    await actions.assert_property(proj, "name", "handlingtheloop", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    await ensure_seat(actions, house="deckardhouse", handle="DeckardBoss", source="test")
+    minted = await mint_seat(actions, manager="DeckardBoss", handle="DeckardOffice",
+                             office_root=tmp_path / "seats", actor="agent:test")
+    seat_id = minted["seat_id"]
+    orders_path = tmp_path / "seats" / "deckardoffice" / "CLAUDE.md"
+
+    await set_charter(actions, seat_id, ["xxit"], actor="agent:test")
+    out = await reissue_office(actions, seat_id=seat_id,
+                               because="test: Deckard's live shape", actor="agent:test")
+    assert out["changed"] is True
+    after = orders_path.read_text()
+    assert "You govern: `handlingtheloop (repo:xxit)`." in after
+    assert "You govern: `xxit`." not in after
 
 
 # ═══════════ migrate_identity_to_charter (task #141) ═══════════

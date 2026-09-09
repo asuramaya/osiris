@@ -232,6 +232,39 @@ async def _live_label(
     return str(name) if name else str(canonical).removeprefix("repo:")
 
 
+async def charter_display_label(pool: asyncpg.Pool | asyncpg.Connection, entry: str) -> str:
+    """A charter entry (`charter_of`'s own canonical-only output) rendered for a HUMAN,
+    never for a comparison — Thoth/Deckard, mail 8788, the presentation half of the
+    5031a74 finding: charter_of and set_charter are correct to operate in canonical
+    space forever (that's WHY a rename can never need to touch a governs edge), but a
+    human reads offices, not canonicals, and an office's own "You govern: `xxit`" line
+    after a real rename to "handlingtheloop" reads as stale even though the graph is
+    exactly right. Resolved LIVE at render time (never cached, never written anywhere)
+    so a rename shows through without any cascade touching the charter itself —
+    "handlingtheloop (repo:xxit)" when the two differ, or a bare "xxit" (no redundant
+    parenthetical) when the project's live name still equals its own canonical. Degrades
+    to the bare entry on any failure (577988ed — a presentation refinement must never be
+    the reason a charter line goes blind)."""
+    bare = entry.removeprefix("repo:")
+    try:
+        from src.orchestrator.capture import _resolve_repo
+
+        oid = await _resolve_repo(pool, bare)
+        if oid is None:
+            return bare
+        canon = await pool.fetchval("SELECT canonical FROM objects WHERE id=$1", oid)
+        label = await _live_label(pool, oid, str(canon))
+    except Exception:  # noqa: BLE001 — see note above
+        return bare
+    return f"{label} (repo:{bare})" if label != bare else bare
+
+
+async def charter_display_labels(pool: asyncpg.Pool | asyncpg.Connection,
+                                  entries: list[str]) -> list[str]:
+    """`charter_display_label` over a whole charter list, same order as given."""
+    return [await charter_display_label(pool, entry) for entry in entries]
+
+
 async def _normalize_project_label_through_merge(
     conn_or_pool: asyncpg.Pool | asyncpg.Connection, label: str,
 ) -> tuple[str, str | None]:
@@ -430,6 +463,11 @@ async def project_identity_evidence(
     candidates: dict[str, Any] = {}
     for name in candidate_names:
         entry: dict[str, Any] = {
+            # PRESENTATION, NEVER THE COMPARISON (Thoth/Deckard, mail 8788): `name` stays
+            # the raw canonical every comparison field below keys and compares on —
+            # `display` adds the name-with-canonical rendering a human reading this
+            # receipt actually wants, resolved live.
+            "display": await charter_display_label(pool, name),
             "declared_charter": name in charter,
             "pin_match": name == pin,
             "write_attribution": {

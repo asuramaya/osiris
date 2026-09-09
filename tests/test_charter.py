@@ -579,7 +579,8 @@ async def test_charter_tool_reads_through_a_re_seated_successor(actions: Actions
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out == {"agent": heir, "seat": seat_id, "charter": ["bytebye", "osiris"]}
+    assert out == {"agent": heir, "seat": seat_id, "charter": ["bytebye", "osiris"],
+                   "charter_display": ["bytebye", "osiris"]}
 
 
 async def test_orient_tool_surfaces_the_seats_charter(actions: Actions) -> None:

@@ -863,8 +863,11 @@ async def _establish_pure_seat_office(
     office.mkdir(parents=True, exist_ok=True)
     seat_line = f" — durable identity `{seat_id}`."
     repos = await charter_of(actions.pool, seat_id)
+    from src.orchestrator.project_identity import charter_display_labels
+
+    display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
-        "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
+        "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")
@@ -1023,10 +1026,12 @@ async def establish_office(
     # SAME `bound` this function already resolved for seat_line, one line up, no second
     # lookup and no lineage-string walk. An agent not yet seated has no charter to read.
     from src.orchestrator.charter import charter_of
+    from src.orchestrator.project_identity import charter_display_labels
 
     repos = await charter_of(actions.pool, bound["seat_id"]) if bound else []
+    display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
-        "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
+        "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")

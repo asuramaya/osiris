@@ -954,6 +954,14 @@ async def roster(
             pin_charter_agreement = "agree"
         else:
             pin_charter_agreement = "disagree"
+        # PRESENTATION, NEVER THE GRAPH (Thoth/Deckard, mail 8788): `chartered_repos`
+        # stays raw canonicals for `pin_charter_agreement`'s own comparisons (which must
+        # keep operating in canonical space forever, per 5031a74) — `chartered_repos_
+        # display` adds the name-with-canonical rendering a human reading roster text
+        # actually wants, resolved live so a rename shows through immediately.
+        from src.orchestrator.project_identity import charter_display_labels
+
+        chartered_display = await charter_display_labels(pool, chartered)
         rows.append({
             "seat": seat_id, "handle": facts["handle"], "house": facts["house"],
             "manager": manager_handle,
@@ -962,6 +970,7 @@ async def roster(
             "probed_anchor_cwd": probed_anchor,
             "office_exists": _dir_exists(effective_anchor),
             "chartered_repos": chartered,
+            "chartered_repos_display": chartered_display,
             "pin_charter_agreement": pin_charter_agreement,
             "pin": {"declared": pin.value, "state": pin_state, "path": pin.path,
                     "error": pin.error, "triage_bucket": triage_bucket,

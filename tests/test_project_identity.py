@@ -1114,6 +1114,46 @@ async def test_rename_project_genuine_collision_receipt_reports_the_actual_merge
     assert "merge_into=True" in out["collision"]
 
 
+async def test_charter_display_label_shows_name_beside_canonical_when_they_differ(
+    actions: Actions,
+) -> None:
+    """The presentation half of the 5031a74 finding (Thoth/Deckard, mail 8788): a
+    charter entry (always canonical, per charter_of's own contract) is rendered for a
+    human as "name (repo:canonical)" when the project's live name differs from its
+    canonical — the exact post-rename shape "xxit" never stops being."""
+    from src.orchestrator.project_identity import charter_display_label, charter_display_labels
+
+    proj = await _mk_project(actions, "displayxxit")
+    await actions.assert_property(proj, "name", "displayhandlingtheloop", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    assert (await charter_display_label(actions.pool, "displayxxit")
+           == "displayhandlingtheloop (repo:displayxxit)")
+    assert (await charter_display_labels(actions.pool, ["displayxxit"])
+           == ["displayhandlingtheloop (repo:displayxxit)"])
+
+
+async def test_charter_display_label_stays_bare_when_name_equals_canonical(
+    actions: Actions,
+) -> None:
+    """No redundant parenthetical for a project never renamed — its live name IS its own
+    canonical, so showing both would just repeat the same string."""
+    from src.orchestrator.project_identity import charter_display_label
+
+    await _mk_project(actions, "neverrenamed")
+    assert await charter_display_label(actions.pool, "neverrenamed") == "neverrenamed"
+
+
+async def test_charter_display_label_degrades_to_the_bare_entry_when_unresolvable(
+    actions: Actions,
+) -> None:
+    """A charter entry naming nothing real (should not happen given charter_of's own
+    contract, but a presentation refinement must never be the reason a charter line
+    goes blind, 577988ed) degrades to the bare string rather than erroring."""
+    from src.orchestrator.project_identity import charter_display_label
+
+    assert await charter_display_label(actions.pool, "nothing-names-this") == "nothing-names-this"
+
+
 async def test_rename_cascade_never_overwrites_an_unrelated_house(
     actions: Actions, tmp_path,
 ) -> None:
