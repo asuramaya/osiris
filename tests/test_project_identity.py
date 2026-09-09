@@ -807,6 +807,51 @@ async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_
     assert "error" not in tiers["charter"]
 
 
+async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governing_seat(
+    actions: Actions, tmp_path,
+) -> None:
+    """Deckard's addendum (mail 8687): 'already-correct' used to conflate two different
+    states — an entry genuinely matching new_name (verified) versus 'names neither'
+    (not-evaluated, a lie dressed as a pass). The two now carry distinct status strings.
+    This proves the invariant that makes 'not-evaluated' structurally unreachable in
+    practice: every seat this cascade processes was selected BY an active governs edge
+    to the project being renamed, so charter_of(seat_id) always contains at least one
+    entry whose own canonical resolves to that exact project — it either already equals
+    new_name (already-correct) or lands in `stale` and gets healed (touched). Across a
+    single-project seat, a multi-project seat, and a project renamed twice in a row
+    (testing the SAME invariant on a seat that has already been through one heal),
+    'not-evaluated' must never appear."""
+    from src.orchestrator.charter import charter_of
+
+    office = tmp_path / "invariant_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="invariantcur", handle="Invariantseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:invt0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:invt0001")
+    proj = await _mk_project(actions, "invariantorig")
+    other = await _mk_project(actions, "unrelatedproj")  # multi-project charter
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    await actions.create_link(seat_oid, other, "governs", "test", datetime.now(UTC), 0.9)
+    assert sorted(await charter_of(actions.pool, seat["seat_id"])) == [
+        "invariantorig", "unrelatedproj"]
+
+    out1 = await rename_project(actions, project="invariantorig", new_name="invariantnext",
+                                because="x", actor="agent:test", dry_run=False)
+    tiers1 = out1["manifest"]["seats"][seat["seat_id"]]
+    assert tiers1["charter"]["status"] == "touched"
+
+    # renamed a SECOND time (the same seat, already through one heal) — the invariant
+    # must hold again, not just on a fresh mint-time specimen
+    out2 = await rename_project(actions, project="invariantnext", new_name="invariantfinal",
+                                because="x", actor="agent:test", dry_run=False)
+    tiers2 = out2["manifest"]["seats"][seat["seat_id"]]
+    assert tiers2["charter"]["status"] == "touched"
+    assert tiers2["charter"]["status"] != "not-evaluated"
+
+
 async def test_rename_cascade_self_rename_heals_a_stale_alias_deckards_own_re_run(
     actions: Actions, tmp_path,
 ) -> None:
@@ -1637,3 +1682,4 @@ async def test_rename_project_migrates_edges_never_orphans_them(
     resolved_new = await _resolve_software_project(actions.pool, "aftername")
     assert resolved_new is not None
     assert resolved_new["id"] == proj
+

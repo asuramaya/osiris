@@ -675,11 +675,29 @@ async def _cascade_governing_seats(
                                         if cres.get("error")
                                         else {"status": "touched", "detail": cres})
             elif new_name in current_charter:
+                # VERIFIED-EQUAL (Deckard's addendum, mail 8687): current_charter
+                # genuinely contains new_name's own literal string — a real check,
+                # a real match, never a guess.
                 tiers["charter"] = {"status": "already-correct"}
             else:
-                tiers["charter"] = {"status": "already-correct",
+                # NOT-EVALUATED, NEVER "ALREADY-CORRECT" (Deckard's own words: "the
+                # lie") — structurally this should not fire for any seat THIS LOOP
+                # ever reaches: `governing` above is queried by an active `governs`
+                # edge to project_oid, so charter_of(seat_id) is guaranteed to
+                # return at least one entry whose own canonical IS project_oid's own
+                # canonical, which resolves to project_oid trivially and always
+                # lands in `stale` above unless it already equals new_name. Reaching
+                # this branch at all means something is wrong beneath the surface
+                # (a governs edge outliving its own target row, a resolver failure) —
+                # distinct status so a caller/test can tell "verified, matches" from
+                # "the check itself found nothing to compare," never conflating the
+                # two under one green word.
+                tiers["charter"] = {"status": "not-evaluated",
                                     "note": "charter names neither the old nor the new "
-                                            "label — left untouched"}
+                                            "label, and no entry resolved to this "
+                                            "project — left untouched; this should not "
+                                            "happen for a seat with an active governs "
+                                            "edge to the renamed project"}
         except Exception as exc:  # noqa: BLE001
             tiers["charter"] = {"status": "could-not", "detail": str(exc)}
 
