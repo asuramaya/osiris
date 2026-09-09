@@ -1423,3 +1423,53 @@ def _group_by_project(
                             .total_seconds() if p["oldest"] else None)
     out.sort(key=lambda p: (-int(p["critical"]), -p["owed"], -len(p["asks"]), p["project"]))
     return out
+
+
+async def zero_recipient_dm_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
+    """The exact population `graph_lint`'s own zero-recipient-dm check reports (thread
+    9d1d41c8): a DM (`fleet_messages.to_agent` IS NOT NULL) with no `message_recipients`
+    row at all. Extracted here, the ONE place this query lives, so the audit
+    (compositions._fn_lint) and the mechanical backlog closer
+    (scripts/close_zero_recipient_dm_backlog.py) always act on the identical rows — never
+    two queries that could quietly drift apart."""
+    rows = await pool.fetch(
+        "SELECT fm.id, fm.from_agent, fm.to_agent, fm.created_at FROM fleet_messages fm "
+        "WHERE fm.to_agent IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.message_id=fm.id) "
+        "ORDER BY fm.created_at DESC")
+    return [dict(r) for r in rows]
+
+
+async def close_zero_recipient_dm_backlog(
+    pool: asyncpg.Pool, *, thread_ref: str,
+) -> dict[str, Any]:
+    """THE MECHANICAL CLOSER (thread 9d1d41c8's own audit, wave 13 item 1, operator's
+    word 2026-09-09): a compensating `message_recipients` row per row `zero_recipient_dm_
+    rows` reports — NEVER a delete (`fleet_messages` stays the full historical record,
+    constitution #3) — so the check goes to zero live and stays a live-only FORWARD
+    signal instead of re-reporting the same dead rows forever.
+
+    THE MARKER: `message_recipients` has no free-text column, so the compensating row's
+    own `agent_id` carries the closure's own testimony —
+    'system:undeliverable-superseded-by-<thread_ref>' — naming the Thread that tracks
+    this closure, rather than impersonating a real reader. A row this shape settles the
+    check's own NOT EXISTS population without ever claiming the original addressee
+    actually read it.
+
+    Idempotent: `ON CONFLICT (message_id, agent_id) DO NOTHING` means a re-run with the
+    SAME `thread_ref` finds nothing left to close (every row it already closed now has a
+    row, out of the NOT EXISTS population by construction) — safe to call more than
+    once."""
+    rows = await zero_recipient_dm_rows(pool)
+    before = len(rows)
+    marker = f"system:undeliverable-superseded-by-{thread_ref}"
+    closed: list[int] = []
+    async with pool.acquire() as conn:
+        for r in rows:
+            await conn.execute(
+                "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at) "
+                "VALUES ($1, $2, now(), now()) ON CONFLICT (message_id, agent_id) DO NOTHING",
+                r["id"], marker)
+            closed.append(r["id"])
+    after = len(await zero_recipient_dm_rows(pool))
+    return {"before": before, "after": after, "closed_message_ids": closed, "marker": marker}
