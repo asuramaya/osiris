@@ -97,6 +97,36 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='follows'") == 1
 
 
+async def test_ingest_walks_every_branch_not_just_head(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread b4297a47/1c8e3907 (ingest registration phase 2, measured constraint 3):
+    a bare `git log` never sees a commit that lives only on a branch other than the
+    one currently checked out — 17 live worktree-agent-* branches proved this in
+    production. A commit made on a topic branch, HEAD left on main, must still be
+    ingested."""
+    repo = tmp_path / "multi-branch"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "on main")
+    _git(repo, "checkout", "-q", "-b", "topic")
+    (repo / "b.txt").write_text("2")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "on topic branch only")
+    _git(repo, "checkout", "-q", "-")  # back to main — HEAD never touches the topic commit
+
+    res = await ingest_repo(actions, str(repo))
+    assert res["commits"] == 2
+
+    subjects = {r["value"] for r in await actions.pool.fetch(
+        "SELECT value #>> '{}' AS value FROM current_assertions WHERE name='subject'")}
+    assert subjects == {"on main", "on topic branch only"}
+
+
 def test_parse_subject_extracts_conventional_commit() -> None:
     """The structure that makes the log queryable memory: type + scope + summary."""
     from src.ingest.gitlog import parse_subject
