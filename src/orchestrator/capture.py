@@ -41,6 +41,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -686,6 +687,100 @@ async def backfill_boot_alarm_commit_links(
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(threads), "to_mint": minted,
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
+# THE PROVENANCE SWEEP (thread/wave 15, operator's word relayed Thoth mail 8840: "the
+# graph has to take care of itself"): one derive_or_abstain lane per ORPHAN TYPE (no
+# live link of any kind), each resolving from that type's own recorded evidence, never
+# a guess. This lane is Agent (239 measured live, 2026-09-09): every orphan is
+# is_sidechain=true, registered by the miner's disk-reconstruction pass
+# (lineage.register_swarm/sense_swarms). LIVE-CHECKED (2026-09-09): every real orphan
+# carries only session/is_sidechain/agent_type-shaped properties, no `project` at
+# all — an OLDER register_swarm wrote them, before that function's own project-
+# stamping + works_in-mint block existed (current register_swarm resolves both
+# immediately, so calling it today never reproduces an orphan; see this file's own
+# test fixtures, which build the Agent object directly for that reason). The fix
+# landing for NEW writes never touches the historical backlog — this lane is that
+# backlog's own repair, using the ONE piece of evidence those old rows still carry.
+# THE SESSION VALUE ITSELF IS THE EVIDENCE: `_session_dirs(root)` walks every real
+# `<project-dir>/<session>/subagents/` under ~/.claude/projects, and `_project_of`
+# decodes the project name straight from the parent directory — no LLM, no guess, the
+# same on-disk fact scan_subagents already reads at write time. A `session` value that
+# is a FULL uuid matches at most one directory by construction; an 8-hex-fragment
+# `session` (an OLDER miner run, before scan_subagents carried the full uuid — the
+# live population's own shape) can legitimately match session directories under MORE
+# than one project if that fragment was ever reused — exactly the "multi-project
+# sidechain" case ruling 963aee42 names, and exactly why this resolves via
+# derive_or_abstain's own cardinality rule rather than picking the first/newest match.
+async def resolve_agent_orphans(
+    actions: Actions, *, root: Path | None = None, actor: str = "provenance-sweep:agent",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """Links every zero-live-link Agent to its project via `works_in`, resolved from
+    the `session` property register_swarm already stamped on it (never re-derived —
+    reading the SAME on-disk session directories that property names). Zero or
+    2+ distinct projects abstains via `derive_or_abstain`, candidate ids kept whole.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once an object is linked or already carries a
+    live abstention that `derive_or_abstain` itself dedupes against."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.orchestrator.lineage import _project_of, _session_dirs
+
+    root = root or (Path.home() / ".claude" / "projects")
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS session "
+        "FROM objects o WHERE o.type='Agent' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    session_dirs = _session_dirs(root)
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        session = (row["session"] or "").strip()
+        reason: str | None = None
+        candidate_ids: list[uuid.UUID] = []
+        if not session:
+            reason = "no session property recorded at all"
+        else:
+            matches = [d for d in session_dirs if d.name.startswith(session)]
+            projects = sorted({p for d in matches if (p := _project_of(d))})
+            if not projects:
+                reason = (f"session {session!r} matches no on-disk session directory "
+                          "under ~/.claude/projects — the tree may have been pruned")
+            else:
+                for proj in projects:
+                    pid = await actions.create_or_find_object(
+                        "SoftwareProject", f"repo:{proj}", actor)
+                    candidate_ids.append(pid)
+                if len(projects) > 1:
+                    reason = (f"session {session!r} matches {len(projects)} distinct "
+                              f"projects ({', '.join(projects)}) — not a unique lookup, "
+                              "never guessed")
+        if len(candidate_ids) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidate_ids[0]), "session": session}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": reason, "session": session,
+                     "candidate_count": len(candidate_ids)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "works_in", candidate_ids, actor,
+                                    why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
     """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
     name this codebase's own generic listing/describe queries already key on across
