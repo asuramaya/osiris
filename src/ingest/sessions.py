@@ -1523,16 +1523,35 @@ async def _known_projects(pool: asyncpg.Pool, exclude: str | None) -> dict[str, 
     return out
 
 
-def _home_repo(known: dict[str, str], summary: str, default: str) -> str:
+def _home_repo(known: dict[str, str], summary: str, default: str) -> str | None:
     """The project an item BELONGS to: its own repo, UNLESS the item distinctively names exactly
     ONE other registered project and NOT its own — the provenance fix (cwd-blind attribution
-    filed cross-project mentions under the working repo). Conservative: ambiguity keeps default."""
+    filed cross-project mentions under the working repo). Conservative on GENUINE ambiguity
+    (no other project named at all): keeps default, because most items about the session's own
+    project never bother repeating its name.
+
+    FAILS CLOSED on CONFLICTING evidence (thread 7c65472b, Anubis's census of heinrich's own
+    candidate pile: 6 of 7 "misfiled" drops were OTHER projects' work, filed under heinrich for
+    no reason but that the mining session's own cwd happened to be heinrich's — dispose.py's
+    own taxonomy names this "the cwd bug"). When the text distinctively names TWO OR MORE other
+    registered projects and never names its own, silently keeping `default` is a worse guess
+    than admitting the row cannot be homed — a project never bootstrapped into the graph as its
+    own canon has no seat standing over it either, so a guess here would land on a wall nobody
+    is entitled to judge. Returns None instead: the caller (`emit_yield`/`_emit_thread`) then
+    mints NO `in_repo` edge at all, so the row lands genuinely unowned and trips `orphans()`
+    (dispose.py) — the existing tripwire for exactly this shape, "a producer that cannot name an
+    owner for its output" — rather than piling onto whichever project the miner happened to be
+    sitting in."""
     s = summary.lower()
     own = default.removeprefix("repo:").strip().lower()
     if own and re.search(rf"\b{re.escape(own)}\b", s):
         return default  # names its own project → keep it here, even if it also names another
     hits = [name for low, name in known.items() if re.search(rf"\b{re.escape(low)}\b", s)]
-    return hits[0] if len(hits) == 1 else default
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) >= 2:
+        return None  # conflicting foreign evidence, no self-mention — refuse, don't guess
+    return default
 
 
 async def _writers_for(pool: asyncpg.Pool, agent_id: str) -> list[str]:
@@ -1697,8 +1716,10 @@ async def emit_yield(
             await actions.assert_property(oid, "source_model", source_model, writer,
                                           observed, _CONF, evidence_class=_EC, actor=_SOURCE)
         if repo:  # the repo home is the miner's OWN structural inference (cwd->project)
-            await link_repo(actions, oid, _home_repo(known, d["summary"], repo), observed,
-                            source=_SOURCE, evidence_class=_EC, confidence=_CONF)
+            home = _home_repo(known, d["summary"], repo)
+            if home is not None:  # None = conflicting foreign evidence — leave it unowned,
+                await link_repo(actions, oid, home, observed,  # orphans() catches it instead
+                                source=_SOURCE, evidence_class=_EC, confidence=_CONF)
         counts["decisions"] += 1
     opened_now: set[Any] = set()
     for t in y.threads_opened:
