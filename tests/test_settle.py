@@ -1963,6 +1963,37 @@ async def test_misfiled_by_lineage_normalizes_a_folded_project_and_ignores_heale
     assert out is None  # earned silence: the write is correctly filed once normalized
 
 
+async def test_misfiled_by_lineage_normalizes_a_post_rename_display_name(
+    actions: Actions,
+) -> None:
+    """Decision 6b4d185e item (5), the sibling gap to filed_under_check's own (closed at
+    thread 8678/8687 by f298e23) — never actually closed here until now. `rename_project`
+    never touches a project's own immutable `canonical`, only the mutable `name` property
+    (project_identity.rename_project's own docstring), so a successor mounted under the
+    CURRENT display name after a rename fails `_normalize_project_label_through_merge`'s
+    exact-canonical match (that helper only ever resolves a fold's survivor, no name-
+    property fallback) and used to report every one of its own lineage's correctly-filed
+    writes as 'misfiled' forever — purely because the label doesn't string-match, exactly
+    the false-positive class this whole function exists to avoid. Resolved the same way
+    filed_under_check's own display-name rescue is: canonical-or-name-property, one real
+    project, unambiguous — and `project` itself is reassigned so a caller reading this
+    receipt's own `filed_under` sees the same canonical `misfiled` is compared against."""
+    from src.orchestrator.agents import misfiled_by_lineage
+    from src.orchestrator.project_identity import rename_project
+
+    await actions.create_or_find_object("SoftwareProject", "repo:mbl06-oldcanon", "test")
+    await record_decision(actions, "mbl06's ruling, filed under the pre-rename canonical",
+                          repo="mbl06-oldcanon", source="agent:mbl06")
+    rn = await rename_project(actions, project="mbl06-oldcanon", new_name="mbl06-newdisplay",
+                              because="test: genuinely split fixture", actor="agent:test",
+                              dry_run=False)
+    assert "error" not in rn
+    await _succeed(actions, "agent:mbl06-ii", "agent:mbl06")
+
+    out = await misfiled_by_lineage(actions.pool, "agent:mbl06-ii", "mbl06-newdisplay")
+    assert out is None  # earned silence: correctly filed once resolved through the rename
+
+
 async def test_orient_surfaces_misfiled_elsewhere_for_a_correctly_filed_successor(
     actions: Actions,
 ) -> None:

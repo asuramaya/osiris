@@ -2027,6 +2027,31 @@ async def misfiled_by_lineage(
             ancestors)
     except Exception:  # noqa: BLE001 — fail open, same law as filed_under_check
         return None
+    # 6b4d185e ITEM (5), THE SIBLING GAP filed_under_check ALREADY CLOSED (thread
+    # 8678/8687): `_normalize_project_label_through_merge` above only ever matches an
+    # EXACT (or case-variant) canonical, no name-property fallback — a `project` that's a
+    # bare handle or a project's own `name` property post-rename (rename_project never
+    # touches `canonical`, only `name`) stayed permanently "misfiled" against every one of
+    # that lineage's genuinely-correct writes, purely because the label doesn't string-
+    # match. Resolved the SAME way filed_under_check's own rescue is: canonical-or-name-
+    # property, one real project, unambiguous — and, same fix as filed_under_check's own
+    # f298e23, `project` itself is reassigned to the resolved canonical (not just used to
+    # decide which rows still count as misfiled), so the receipt's own `filed_under` names
+    # the same canonical the `misfiled` rows are compared against.
+    filed_projects = {str(r["filed_project"]).removeprefix("repo:") for r in rows}
+    if filed_projects and project not in filed_projects:
+        try:
+            from src.orchestrator.capture import _resolve_repo
+
+            proj_id = await _resolve_repo(pool, project)
+            if proj_id is not None:
+                real_canon = await pool.fetchval(
+                    "SELECT canonical FROM objects WHERE id=$1", proj_id)
+                real = str(real_canon).removeprefix("repo:") if real_canon else None
+                if real is not None and real in filed_projects:
+                    project = real
+        except Exception:  # noqa: BLE001 — a diagnostic refinement must never be the
+            pass          # reason this check goes blind (577988ed) — report-only, unchanged
     misfiled = sorted({
         (str(r["id"])[:8], str(r["filed_project"]).removeprefix("repo:"))
         for r in rows if str(r["filed_project"]).removeprefix("repo:") != project
