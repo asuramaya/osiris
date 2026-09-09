@@ -1216,3 +1216,365 @@ async def test_ingest_path_touches_last_ingested_at_on_a_verified_full_sync(
     assert again is not None
     assert again["last_ingested_at"] == after        # a stale partial never touches it
     assert again["source_path"] == str(source)
+
+
+# ═══ wave 12 item 2 (thread 78efd46d): the soul store's cold tier ═══════════════════════
+# "memory gets tiers not deletion" (operator ruling via decision 64ec1905) — a session
+# unread for 30 days folds into one compressed soul_lines_cold row; rematerialize/resume/
+# verify_round_trip_sample read through both tiers without knowing which they hit.
+
+async def _backdate(store: SoulStore, anchor_sid: str, *, days: int) -> None:
+    from datetime import timedelta
+    await store.pool.execute(
+        "UPDATE soul_sessions SET last_ingested_at = now() - $1::interval "
+        "WHERE anchor_sid=$2", timedelta(days=days), anchor_sid)
+
+
+async def test_fold_to_cold_tier_moves_content_and_shrinks_storage(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _synthetic_lines(50)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "c01d0001")
+
+    result = await store.fold_to_cold_tier("c01d0001")
+    assert result["folded"] is True
+    assert result["line_count"] == 50
+    assert result["compressed_bytes"] < result["total_bytes"]  # the whole point: it shrinks
+
+    hot_rows = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='c01d0001'")
+    assert hot_rows == 0  # the per-line rows are gone
+    cold_row = await store.pool.fetchrow(
+        "SELECT line_count, total_bytes FROM soul_lines_cold WHERE anchor_sid='c01d0001'")
+    assert cold_row is not None
+    assert cold_row["line_count"] == 50
+    assert cold_row["total_bytes"] == result["total_bytes"]
+
+
+async def test_fold_to_cold_tier_refuses_a_broken_chain(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "c01dbad0")
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea "
+        "WHERE anchor_sid='c01dbad0' AND line_idx=1")
+
+    result = await store.fold_to_cold_tier("c01dbad0")
+    assert result["folded"] is False
+    assert "error" in result
+    # nothing was deleted or created on a refusal
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='c01dbad0'") == 4
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines_cold WHERE anchor_sid='c01dbad0'") == 0
+
+
+async def test_fold_to_cold_tier_is_a_noop_when_already_cold(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "c01da1re")
+    first = await store.fold_to_cold_tier("c01da1re")
+    assert first["folded"] is True
+    second = await store.fold_to_cold_tier("c01da1re")
+    assert second == {"anchor_sid": "c01da1re", "folded": False, "note": "already cold"}
+
+
+async def test_fold_to_cold_tier_is_a_noop_when_never_ingested(store: SoulStore) -> None:
+    result = await store.fold_to_cold_tier("never-existed")
+    assert result == {"anchor_sid": "never-existed", "folded": False,
+                       "note": "nothing ingested"}
+
+
+async def test_cold_eligible_sessions_respects_idle_days_and_already_cold(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    fresh = _write_transcript(tmp_path / "fresh.jsonl", _synthetic_lines(2))
+    idle = _write_transcript(tmp_path / "idle.jsonl", _synthetic_lines(2))
+    already_cold = _write_transcript(tmp_path / "cold.jsonl", _synthetic_lines(2))
+    await store.ingest_path(str(fresh), "fre5hs1d0")
+    await store.ingest_path(str(idle), "1d1e5e551")
+    await store.ingest_path(str(already_cold), "a1readyc0")
+    await _backdate(store, "1d1e5e551", days=31)
+    await _backdate(store, "a1readyc0", days=31)
+    await store.fold_to_cold_tier("a1readyc0")
+
+    eligible = await store.cold_eligible_sessions(idle_days=30, limit=20)
+    assert eligible == ["1d1e5e551"]  # fresh is too recent, already-cold is excluded
+
+
+async def test_fold_cold_tier_batch_folds_only_eligible_sessions(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    fresh = _write_transcript(tmp_path / "fresh.jsonl", _synthetic_lines(2))
+    idle_a = _write_transcript(tmp_path / "idle_a.jsonl", _synthetic_lines(2))
+    idle_b = _write_transcript(tmp_path / "idle_b.jsonl", _synthetic_lines(2))
+    await store.ingest_path(str(fresh), "batchfre5")
+    await store.ingest_path(str(idle_a), "batchid1e")
+    await store.ingest_path(str(idle_b), "batchid2e")
+    await _backdate(store, "batchid1e", days=31)
+    await _backdate(store, "batchid2e", days=31)
+
+    report = await store.fold_cold_tier_batch(idle_days=30, limit=20)
+    assert report["candidates"] == 2
+    assert {f["anchor_sid"] for f in report["folded"]} == {"batchid1e", "batchid2e"}
+    assert report["errors"] == []
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='batchfre5'") == 2  # untouched
+
+
+async def test_fold_cold_tier_batch_respects_the_limit(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    for i in range(3):
+        sid = f"lim1t000{i}"
+        p = _write_transcript(tmp_path / f"{sid}.jsonl", _synthetic_lines(2))
+        await store.ingest_path(str(p), sid)
+        await _backdate(store, sid, days=31)
+
+    report = await store.fold_cold_tier_batch(idle_days=30, limit=2)
+    assert report["candidates"] == 2
+    assert len(report["folded"]) == 2
+
+
+async def test_fold_cold_tier_batch_reports_one_bad_session_without_aborting_the_rest(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    ok = _write_transcript(tmp_path / "ok.jsonl", _synthetic_lines(3))
+    bad = _write_transcript(tmp_path / "bad.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(ok), "batchok01")
+    await store.ingest_path(str(bad), "batchbad1")
+    await _backdate(store, "batchok01", days=31)
+    await _backdate(store, "batchbad1", days=31)
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=E'TAMPERED'::bytea "
+        "WHERE anchor_sid='batchbad1' AND line_idx=1")
+
+    report = await store.fold_cold_tier_batch(idle_days=30, limit=20)
+    assert {f["anchor_sid"] for f in report["folded"]} == {"batchok01"}
+    assert len(report["errors"]) == 1
+    assert report["errors"][0]["anchor_sid"] == "batchbad1"
+
+
+# --- read-through: every consumer works identically before and after the fold ------------
+
+async def test_re_materialize_reads_through_the_cold_tier(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _synthetic_lines(6)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "rtc01mat0")
+    before = await store.re_materialize("rtc01mat0")
+    await store.fold_to_cold_tier("rtc01mat0")
+    after = await store.re_materialize("rtc01mat0")
+    assert after == before == "\n".join(lines)
+
+
+async def test_raw_lines_reads_through_the_cold_tier(store: SoulStore, tmp_path: Path) -> None:
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "rtc0raw01")
+    before = await store.raw_lines("rtc0raw01")
+    await store.fold_to_cold_tier("rtc0raw01")
+    after = await store.raw_lines("rtc0raw01")
+    assert after == before == lines
+
+
+async def test_mining_view_reads_through_the_cold_tier(store: SoulStore, tmp_path: Path) -> None:
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "rtc0min01")
+    before = await store.mining_view("rtc0min01")
+    await store.fold_to_cold_tier("rtc0min01")
+    after = await store.mining_view("rtc0min01")
+    assert after == before
+    assert after is not None and len(after) == 5
+
+
+async def test_verify_chain_true_after_a_fold(store: SoulStore, tmp_path: Path) -> None:
+    """THE ACCEPTANCE TEST NAMED IN THE DISPATCH: 'the hash chain verifies across the
+    fold' — the same chain that was true before folding must still be true after,
+    recomputed from the cold blob and checked against the hash captured at fold time."""
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(7))
+    await store.ingest_path(str(p), "rtc0chn01")
+    assert await store.verify_chain("rtc0chn01") is True
+    await store.fold_to_cold_tier("rtc0chn01")
+    assert await store.verify_chain("rtc0chn01") is True
+
+
+async def test_verify_chain_false_on_a_corrupted_cold_blob(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rtc0crpt0")
+    await store.fold_to_cold_tier("rtc0crpt0")
+    await store.pool.execute(
+        "UPDATE soul_lines_cold SET content_gzip=E'\\\\x00'::bytea "
+        "WHERE anchor_sid='rtc0crpt0'")
+    with pytest.raises(Exception):  # noqa: B017,PT011 — a corrupted gzip stream must not
+        # be silently swallowed into a false "verified" result; any decompress failure is
+        # an honest failure here, never treated as a clean chain.
+        await store.verify_chain("rtc0crpt0")
+
+
+async def test_resume_diagnostics_matches_before_and_after_a_fold(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _fixture_with_compaction_boundary()
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "rtc0res01")
+    before = await store.resume_diagnostics("rtc0res01")
+    await store.fold_to_cold_tier("rtc0res01")
+    after = await store.resume_diagnostics("rtc0res01")
+    assert after == before is not None
+
+
+async def test_rematerialize_to_disk_is_byte_identical_after_a_fold(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    lines = _fixture_with_compaction_boundary()
+    source = _write_transcript(tmp_path / "source" / "s.jsonl", lines)
+    await store.ingest_path(str(source), "rtc0dsk01")
+    await store.fold_to_cold_tier("rtc0dsk01")
+
+    dest = tmp_path / "recovered" / "s.jsonl"
+    receipt = await store.rematerialize_to_disk("rtc0dsk01", dest=str(dest))
+    assert "error" not in receipt
+    assert dest.read_bytes() == source.read_bytes()
+
+
+async def test_rematerialize_to_disk_writes_nothing_on_a_broken_cold_chain(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rtc0brk01")
+    await store.fold_to_cold_tier("rtc0brk01")
+    await store.pool.execute(
+        "UPDATE soul_lines_cold SET last_hash='deadbeef' WHERE anchor_sid='rtc0brk01'")
+
+    dest = tmp_path / "should-not-exist.jsonl"
+    receipt = await store.rematerialize_to_disk("rtc0brk01", dest=str(dest))
+    assert "error" in receipt
+    assert not dest.exists()
+
+
+async def test_rematerialize_to_disk_upto_seek_reads_through_the_cold_tier(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """`_verified_lines` (the whole-file seek path `upto=` uses) reads through the cold
+    tier too — a seek is a controlled, human-supervised repair operation, but it must
+    still work on a session old enough to have been folded."""
+    lines = _chained_lines(6, seed="coldseek")
+    source = _write_transcript(tmp_path / "s.jsonl", lines)
+    await store.ingest_path(str(source), "rtc0seek1")
+    seek_uuid = _addressable_entries([line.encode() for line in lines])[2][1]
+
+    await store.fold_to_cold_tier("rtc0seek1")
+    dest = tmp_path / "seeked.jsonl"
+    receipt = await store.rematerialize_to_disk("rtc0seek1", dest=str(dest), upto=seek_uuid)
+    assert "error" not in receipt
+    assert receipt["withheld_entries"] == 3
+    assert dest.exists()
+
+
+async def test_verify_round_trip_sample_samples_both_tiers_when_both_exist(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    hot = _write_transcript(tmp_path / "hot.jsonl", _synthetic_lines(3))
+    cold = _write_transcript(tmp_path / "cold.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(hot), "vrts0hot0")
+    await store.ingest_path(str(cold), "vrts0c0ld")
+    await store.fold_to_cold_tier("vrts0c0ld")
+
+    report = await store.verify_round_trip_sample(n=2)
+    assert report.failures == []
+    assert report.skipped_live == 0
+    cold_hit = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines_cold WHERE anchor_sid='vrts0c0ld'")
+    assert cold_hit == 1  # the cold session really was in the sampling pool
+
+
+# --- the daily cron shim (wave 12 item 2, Thoth DM 8378) ═══════════════════════════════════
+
+async def test_soul_cold_tier_heartbeat_is_a_no_op_when_the_flag_is_off(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    import src.config.settings as settings_mod
+    from src.config.settings import Settings
+    from src.workers.arq_worker import soul_cold_tier_heartbeat
+
+    store = SoulStore(actions.pool)
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(2))
+    await store.ingest_path(str(p), "hb1flagof")
+    await _backdate(store, "hb1flagof", days=31)
+
+    monkeypatch.setattr(
+        settings_mod, "get_settings",
+        lambda: Settings(osiris_soul_cold_tier_enabled=False))
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    assert await soul_cold_tier_heartbeat(ctx) == 0
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='hb1flagof'") == 2  # untouched
+
+
+async def test_soul_cold_tier_heartbeat_folds_and_briefs_the_desk(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from typing import Any
+
+    import src.orchestrator.mailbox as mailbox
+    from src.workers.arq_worker import soul_cold_tier_heartbeat
+
+    store = SoulStore(actions.pool)
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(10))
+    await store.ingest_path(str(p), "hb1folded")
+    await _backdate(store, "hb1folded", days=31)
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"sent": 1}
+
+    monkeypatch.setattr(mailbox, "send_message", _fake_send)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    folded = await soul_cold_tier_heartbeat(ctx)
+
+    assert folded == 1
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE anchor_sid='hb1folded'") == 0
+    assert await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines_cold WHERE anchor_sid='hb1folded'") == 1
+    assert captured["to_project"] == "operator"
+    assert captured["desk_kind"] == "fyi"
+    assert "folded" in captured["body"]
+
+
+async def test_soul_cold_tier_heartbeat_is_silent_when_nothing_is_eligible(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from typing import Any
+
+    import src.orchestrator.mailbox as mailbox
+    from src.workers.arq_worker import soul_cold_tier_heartbeat
+
+    store = SoulStore(actions.pool)
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(2))
+    await store.ingest_path(str(p), "hb1fresh0")  # not backdated — not eligible
+
+    calls: list[Any] = []
+
+    async def _fake_send(pool: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"sent": 1}
+
+    monkeypatch.setattr(mailbox, "send_message", _fake_send)
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    assert await soul_cold_tier_heartbeat(ctx) == 0
+    assert calls == []  # nothing to report — no desk noise

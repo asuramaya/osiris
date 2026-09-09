@@ -1073,6 +1073,54 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     return deleted
 
 
+async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE SOUL STORE'S COLD TIER (wave 12 item 2, thread 78efd46d, operator ruling via
+    decision 64ec1905: "memory gets tiers not deletion"): fold a bounded batch of
+    sessions untouched for 30+ days (SoulStore.fold_cold_tier_batch — the acting logic
+    lives entirely there, never duplicated here) into one compressed soul_lines_cold row
+    each. Once a day, same cadence class as retention_heartbeat above (a fold is no more
+    urgent than a prune, and both are cheap no-ops on a quiet day) — a no-op unless
+    osiris_soul_cold_tier_enabled (TRUE BY DEFAULT, a named exception to this file's
+    dark-by-default convention — the operator asked for this to RUN).
+
+    A desk receipt only when something actually folded or errored — unlike retention_
+    heartbeat's own "every run" convention: a fold is much rarer per session (30-day
+    idle window vs. daily prune eligibility), so most ticks are genuinely nothing to
+    report, and a silent-zero receipt every day would be the exact Stage C noise this
+    file's other siblings already refuse to produce.
+
+    A DB hiccup on the whole batch logs and returns 0 — SoulStore.fold_cold_tier_batch
+    already isolates one bad session's own error into the receipt without aborting its
+    siblings, so a hiccup reaching here means something broke before or between
+    sessions, not within one."""
+    from src.config.settings import get_settings
+    from src.ingest.soul_store import SoulStore
+    from src.orchestrator.mailbox import send_message
+
+    if not get_settings().osiris_soul_cold_tier_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    try:
+        report = await SoulStore(pool).fold_cold_tier_batch(idle_days=30, limit=20)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("soul cold tier heartbeat failed: %r", exc)
+        return 0
+    folded = report["folded"]
+    errors = report["errors"]
+    if folded or errors:
+        saved = sum(f["total_bytes"] - f["compressed_bytes"] for f in folded)
+        body = (f"soul cold tier: folded {len(folded)}/{report['candidates']} "
+                f"candidate session(s), {saved} byte(s) saved" + (
+                    f", {len(errors)} error(s)" if errors else ""))
+        with contextlib.suppress(Exception):  # the desk being down must not sink the cron
+            await send_message(
+                pool, from_agent="cron:soul_cold_tier_heartbeat", from_project="osiris",
+                to_project="operator", body=body, desk_kind="fyi", dedup_window_secs=3600)
+        _log.info("soul cold tier heartbeat: %s", report)
+    return len(folded)
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1291,6 +1339,13 @@ class WorkerSettings:
         # wave's own deploy gets its first receipt immediately.
         cron(watched(retention_heartbeat, every=86400), hour={3}, minute={30}, second={0},
              timeout=600, run_at_startup=True),
+        # wave 12 item 2: the soul store's cold tier, once a day (offset from wave 12
+        # item 1's own retention_heartbeat slot at 03:30 so the two never contend for
+        # CPU). TRUE BY DEFAULT on osiris_soul_cold_tier_enabled, per the operator's own
+        # explicit dispatch (Thoth DM 8378) asking for this to run. run_at_startup=True
+        # so this wave's own deploy gets its first fold pass immediately.
+        cron(watched(soul_cold_tier_heartbeat, every=86400), hour={3}, minute={45},
+             second={0}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
