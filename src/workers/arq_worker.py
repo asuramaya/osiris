@@ -1201,6 +1201,26 @@ async def harness_backfill_heartbeat(ctx: dict[str, Any]) -> int:
     return stamped
 
 
+async def graph_layout_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE GRAPH VISUALIZER, wave B item 1 (thread 8839): positions the graph
+    INCREMENTALLY, one bounded batch per tick, off graph_layout.layout_batch -- see that
+    module's own docstring for why this is a LOCAL relaxation anchored on already-placed
+    neighbors, never a global recompute. Read-mostly (the only writes are graph_x/graph_y
+    assertions on objects that had none); one bad batch must not kill the cron, same "log
+    and wait for the next tick" law every other heartbeat here already holds itself to."""
+    from src.orchestrator.graph_layout import layout_batch
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        placed = await layout_batch(actions)
+    except Exception as exc:  # noqa: BLE001 — a DB hiccup or a bad batch must not kill the cron
+        _log.warning("graph layout heartbeat failed: %r", exc)
+        return 0
+    if placed:
+        _log.info("graph layout heartbeat: positioned %d object(s)", placed)
+    return placed
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1444,6 +1464,14 @@ class WorkerSettings:
         # default)". Unconditional — read-only classification, no kill switch.
         cron(watched(harness_backfill_heartbeat, every=900), minute={8, 23, 38, 53},
              second={50}, timeout=600, run_at_startup=True),
+        # WAVE B item 1 (thread 8839): positions the whole graph incrementally, one
+        # bounded batch (1000 objects, local relaxation only) every 5 minutes -- a fresh
+        # graph reaches full coverage in ~41 ticks (~3.5h) without ever paying for a
+        # global recompute; a settled graph's steady-state cost converges toward zero
+        # (unpositioned_batch finds nothing left to do). run_at_startup=True so a
+        # restart doesn't cost this wave's own first batch a 5-minute wait.
+        cron(watched(graph_layout_heartbeat, every=300), minute=set(range(0, 60, 5)),
+             second={5}, timeout=300, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
