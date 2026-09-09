@@ -3692,6 +3692,98 @@ async def test_invalidate_works_in_mcp_wrapper_falls_back_to_the_remaining_edge_
     assert after["project"] == "acc2keep"
 
 
+# ═══ agent(action='invalidate_works_in') — the THIRD-PARTY door (Thoth DM 8697 item 1) ═══
+# The self-scoped seat(action='invalidate_works_in') tested above never exposes agent_id
+# as a parameter at all; these prove the third-party sibling that does, for a mind
+# mechanically repairing someone ELSE's duplicate works_in edge (batch-move residue,
+# hygiene sweeps) without a raw graph write.
+
+async def test_agent_invalidate_works_in_drops_a_third_partys_edge(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    now = datetime.now(UTC)
+    victim = await actions.create_or_find_object("Agent", "agent:tpiwi1victim", "test")
+    stale = await actions.create_or_find_object("SoftwareProject", "repo:tpiwi1stale", "test")
+    keep = await actions.create_or_find_object("SoftwareProject", "repo:tpiwi1keep", "test")
+    await actions.create_link(victim, stale, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(victim, keep, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    caller = AgentIdentity(agent_id="agent:tpiwi1caller", session="tpiwi1", project="osiris",
+                           model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                           model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = caller
+    try:
+        out = await srv._agent_impl(
+            "invalidate_works_in", agent_id="agent:tpiwi1victim", project="repo:tpiwi1stale",
+            because="batch-move residue, confirmed hint per decision 0222fd37", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["invalidated"] == "agent:tpiwi1victim"
+    assert out["was_working_in"] == "repo:tpiwi1stale"
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", victim, stale) is None
+
+
+async def test_agent_invalidate_works_in_refuses_the_callers_own_agent_id(
+    actions: Actions,
+) -> None:
+    """The third-party door refuses to double as the self-scoped one — a caller naming
+    their own agent_id is pointed at seat(action='invalidate_works_in') instead."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ident = AgentIdentity(agent_id="agent:tpiwi2self", session="tpiwi2", project="osiris",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        out = await srv._agent_impl(
+            "invalidate_works_in", agent_id="agent:tpiwi2self", project="repo:whatever",
+            because="test", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "own mounted identity" in out["error"]
+    assert "seat(action='invalidate_works_in')" in out["error"]
+
+
+async def test_agent_invalidate_works_in_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv._agent_impl(
+            "invalidate_works_in", agent_id="agent:tpiwi3", project="repo:whatever",
+            because="test", ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
 async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     actions: Actions,
 ) -> None:
