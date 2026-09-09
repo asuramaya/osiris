@@ -216,3 +216,104 @@ async def entity_dossier(
                 f"{len(rels)} relationship(s) across {len(by_type)} type(s); showing the "
                 "first 10 — pass want_relationships=True for the full list")
     return out
+
+
+def _jsonb(value: Any) -> dict[str, Any]:
+    """asyncpg hands back jsonb as a dict when the pool's own codec is registered, a
+    raw JSON string otherwise (thread 8542ee89's own lesson) — accept either, same
+    defensive check monitor.py's own event reader already uses for this exact
+    object_events.payload column."""
+    if isinstance(value, str):
+        import json
+        return dict(json.loads(value)) if value else {}
+    return dict(value) if value else {}
+
+
+async def object_events(
+    pool: asyncpg.Pool, object_id: uuid.UUID, event_type: str | None = None,
+) -> dict[str, Any]:
+    """Read-only witness surface for one object: every object_events row that
+    touches it, plus every same_as/not_same_as link naming it, plus its own current
+    status/merged_into projection. Filed per thread 085039cc (Thoth DM 2469):
+    dossier() deliberately treats same_as/not_same_as as identity bookkeeping, not
+    the entity's own network (`_HIDDEN_LINK_TYPES` above), and describe() is
+    schema-only — neither could show a caller a LIVE merge/unmerge witness for a real
+    object, which is exactly what blocked independently verifying two production
+    folds' own reversibility (Ruling 4 half (b): "not because they don't exist, but
+    because nothing in the standing read surface can show a live instance of one").
+
+    A merge event's own subject/related columns are ASYMMETRIC with an unmerge's
+    (merge stores object_id=winner/related_id=loser; unmerge stores object_id=loser/
+    related_id=winner, matching Actions.merge_objects/unmerge_objects exactly) — so
+    "everything that ever happened to this object" means checking BOTH columns, never
+    object_id alone. Returns {} if the object does not exist, the same 404-mapping
+    convention entity_dossier already uses."""
+    obj = await pool.fetchrow(
+        "SELECT id, canonical, status, merged_into FROM objects WHERE id=$1", object_id)
+    if obj is None:
+        return {}
+
+    ev_query = (
+        "SELECT e.id, e.event_type, e.object_id, e.related_id, e.payload, e.actor, "
+        "e.case_id, e.created_at, os.canonical AS object_canonical, "
+        "rs.canonical AS related_canonical "
+        "FROM object_events e "
+        "LEFT JOIN objects os ON os.id = e.object_id "
+        "LEFT JOIN objects rs ON rs.id = e.related_id "
+        "WHERE (e.object_id = $1 OR e.related_id = $1)"
+    )
+    params: list[Any] = [object_id]
+    if event_type is not None:
+        params.append(event_type)
+        ev_query += f" AND e.event_type = ${len(params)}"
+    ev_query += " ORDER BY e.created_at ASC"
+    event_rows = await pool.fetch(ev_query, *params)
+
+    link_rows = await pool.fetch(
+        "SELECT l.id, l.from_id, l.to_id, l.type, l.properties, l.source_id, "
+        "l.confidence, l.valid_until, l.created_at, "
+        "f.canonical AS from_canonical, t.canonical AS to_canonical "
+        "FROM links l "
+        "LEFT JOIN objects f ON f.id = l.from_id "
+        "LEFT JOIN objects t ON t.id = l.to_id "
+        "WHERE (l.from_id = $1 OR l.to_id = $1) AND l.type = ANY($2::text[]) "
+        "ORDER BY l.created_at ASC",
+        object_id, list(_HIDDEN_LINK_TYPES))
+
+    return {
+        "object_id": str(object_id),
+        "canonical": obj["canonical"],
+        "object_status": obj["status"],
+        "merged_into": str(obj["merged_into"]) if obj["merged_into"] else None,
+        "events": [
+            {
+                "id": r["id"],
+                "event_type": r["event_type"],
+                "object_id": str(r["object_id"]),
+                "object_canonical": r["object_canonical"],
+                "related_id": str(r["related_id"]) if r["related_id"] else None,
+                "related_canonical": r["related_canonical"],
+                "payload": _jsonb(r["payload"]),
+                "actor": r["actor"],
+                "case_id": str(r["case_id"]) if r["case_id"] else None,
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in event_rows
+        ],
+        "same_as_links": [
+            {
+                "id": r["id"],
+                "type": r["type"],
+                "from_id": str(r["from_id"]),
+                "from_canonical": r["from_canonical"],
+                "to_id": str(r["to_id"]),
+                "to_canonical": r["to_canonical"],
+                "properties": _jsonb(r["properties"]),
+                "source_id": r["source_id"],
+                "confidence": r["confidence"],
+                "valid_until": r["valid_until"].isoformat() if r["valid_until"] else None,
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in link_rows
+        ],
+    }

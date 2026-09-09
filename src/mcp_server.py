@@ -83,6 +83,7 @@ from src.orchestrator.console import set_console as _set_console
 from src.orchestrator.describe import describe_table
 from src.orchestrator.doors import doors as _doors_lookup
 from src.orchestrator.dossier import entity_dossier
+from src.orchestrator.dossier import object_events as _read_object_events
 from src.orchestrator.fleetview import render_fleet_tree
 from src.orchestrator.handoff_compiler import (
     compile_handoff,
@@ -1701,6 +1702,23 @@ async def dossier(object_ref: str, want_relationships: bool = False) -> dict[str
     if not oid:
         return {"error": f"no object {object_ref!r}"}
     return await entity_dossier(pool, oid, want_relationships=want_relationships)
+
+
+@mcp.tool()
+async def object_events(object_ref: str, event_type: str | None = None) -> dict[str, Any]:
+    """The witness surface dossier() hides (thread 085039cc): merge/unmerge/split
+    events plus same_as/not_same_as links for one object, read-only. `object_ref`
+    accepts anything dossier does; `event_type` narrows to one kind, default every
+    kind oldest-first. Answers "did this merge/unmerge really happen" without raw
+    SQL."""
+    pool = await _pool_get()
+    oid = await _resolve(pool, object_ref)
+    if not oid:
+        return {"error": f"no object {object_ref!r}"}
+    out = await _read_object_events(pool, oid, event_type=event_type)
+    if not out:
+        return {"error": f"no object {object_ref!r}"}
+    return out
 
 
 @mcp.tool()

@@ -102,8 +102,17 @@ def _git(path: str, *args: str) -> str:
 
 
 def read_commits(path: str, *, limit: int | None = None) -> list[Commit]:
-    """Read a repo's history, genesis first. `limit` takes the most-recent N (git -n)."""
-    args = ["log", "--reverse", f"--pretty=format:{_FMT}"]
+    """Read a repo's history, genesis first. `limit` takes the most-recent N (git -n).
+
+    `--all` (thread b4297a47/1c8e3907, ingest registration phase 2's own measured
+    constraint 3): a bare `git log` walks only the current checked-out branch (HEAD),
+    so a repo with live topic/worktree branches — 17 live worktree-agent-* branches
+    proved it — never gets every commit ingested even when the repo itself IS
+    tracked. Safe to always include: `follows` links are derived from each commit's
+    own parent SHA (`c.parents` below), never from this log's line order, and every
+    object here is find-or-create on sha/canonical — a commit reachable from two
+    branches is ingested once regardless of how many roots `--all` walks it from."""
+    args = ["log", "--all", "--reverse", f"--pretty=format:{_FMT}"]
     if limit:
         args += ["-n", str(limit)]
     return parse_git_log(_git(path, *args))
