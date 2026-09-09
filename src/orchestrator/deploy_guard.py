@@ -39,6 +39,8 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 import httpx
 
+from src.orchestrator.capture import open_or_annotate_persisting_alarm
+
 if TYPE_CHECKING:
     from src.actions.core import Actions
 
@@ -117,48 +119,6 @@ async def check_schema_drift(pool: asyncpg.Pool) -> str | None:
         return None
 
 
-async def _open_or_annotate_persisting_alarm(
-    actions: Actions, summary: str, *, kind: str, source: str,
-    arc: str | None = None, severity: str | None = None, owner: str | None = None,
-    unlinked_because: str | None = None,
-) -> str:
-    """THE SAME GUARD `agents._report_half_healed_phantom` carries (thread 672972a2's own
-    live finding), generalized for every alarm/audit in THIS module — they share the
-    identical shape: a periodic, source-not-a-human caller, a STABLE summary text (every
-    one of them deliberately keeps a volatile detail like `service`/age/watermark OUT of
-    the summary precisely so `open_thread`'s own dedup converges), re-run on every boot or
-    every deploy. `open_thread` is idempotent on the summary hash — it finds the SAME
-    Thread object regardless of current status and unconditionally re-asserts
-    status='open', so the NEXT boot/deploy that still sees the identical condition
-    silently overrides a human's own resolve (Thoth msg 8175, naming this module's own
-    callers as the same shape after status-regression's widened check caught it live on
-    the half-heal detector).
-
-    If the thread this summary would resolve to already reads status='resolved', this
-    annotates it with the still-present sighting instead of calling `open_thread` at all
-    — the condition being real stays on the record, but re-opening a thread a human
-    already closed is not an automated sweep's call. A never-seen-before or still-open
-    thread behaves exactly as a bare `open_thread` call always has."""
-    from src.orchestrator.capture import _thread_canon, annotate_thread, open_thread
-
-    canon = _thread_canon(summary, None)
-    current_status = await actions.pool.fetchval(
-        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
-        "ON a.object_id=o.id WHERE o.canonical=$1 AND o.type='Thread' AND a.name='status' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", canon)
-    if current_status == "resolved":
-        tid = await annotate_thread(
-            actions, canon,
-            f"still present at {datetime.now(UTC).isoformat()}: this alarm's own "
-            "condition has not cleared. Resolved once already — re-opening it is a "
-            "human's call, not this sweep's.",
-            source=source)
-        return str(tid) if tid is not None else canon
-    return str(await open_thread(
-        actions, summary, kind=kind, arc=arc, severity=severity, owner=owner,
-        source=source, unlinked_because=unlinked_because))
-
-
 async def alarm_schema_drift(pool: asyncpg.Pool, drift: str, *, service: str) -> None:
     """LOUD, never a refusal, and never something that can itself block a boot (callers wrap
     this in their own broad guard too — belt and suspenders on the one rule this whole module
@@ -185,7 +145,7 @@ async def alarm_schema_drift(pool: asyncpg.Pool, drift: str, *, service: str) ->
     # CODE_AHEAD_OF_DB/DB_AHEAD_OF_TREE labels, each carrying its own correct action) — this
     # wrapper no longer hard-codes "run alembic upgrade head", which was actively WRONG
     # advice for the DB_AHEAD_OF_TREE case (decision 8d3f5e2d).
-    await _open_or_annotate_persisting_alarm(
+    await open_or_annotate_persisting_alarm(
         actions, f"SCHEMA DRIFT: {drift}",
         kind="obligation", arc="Fleet-Hygiene", severity="alarm", source=f"boot:{service}",
     )
@@ -388,7 +348,7 @@ async def alarm_unreviewed_boot(
         await resolve_alarms_superseded_by_clean_boot(
             pool, service=service, running_head=running_head, dry_run=False)
     actions = Actions(pool)
-    await _open_or_annotate_persisting_alarm(
+    await open_or_annotate_persisting_alarm(
         actions,
         f"UNREVIEWED BOOT: running HEAD {running_head!r} was never recorded by `osiris "
         "deploy`. A service came up on code that never went through `osiris deploy` — "
@@ -525,7 +485,7 @@ async def alarm_withheld_deploy_record(
 
     _log.critical("deploy record withheld for HEAD %s: %s", running_head, reason)
     actions = Actions(pool)
-    await _open_or_annotate_persisting_alarm(
+    await open_or_annotate_persisting_alarm(
         actions,
         f"DEPLOY RECORD WITHHELD: HEAD {running_head!r} deployed successfully (restarted, "
         "healthy, whisper-probed clean) but `osiris deploy` refused to record it in the "
@@ -1362,7 +1322,7 @@ async def landing_audit(actions: Actions, repo_root: Path) -> dict[str, Any]:
     surface, `capture.open_held_work`, rather than a parallel one — its branch list is the
     'already claimed, not yet a specimen' exemption) plus `audit_graph_merge_claims`,
     minting one typed obligation (`owner='thoth'`, the coordinator) per genuine finding.
-    `_open_or_annotate_persisting_alarm` is idempotent on the summary's own text (same
+    `open_or_annotate_persisting_alarm` is idempotent on the summary's own text (same
     primitive `alarm_schema_drift` uses beside it), so a repeated run never re-pages the
     same specimen twice — this is safe to call on every deploy, unaided. It also never
     silently re-opens a specimen a human already resolved (thread 672972a2): a persisting
@@ -1390,13 +1350,13 @@ async def landing_audit(actions: Actions, repo_root: Path) -> dict[str, Any]:
             # `branch` as a legitimate claim on it — this obligation's own existence would
             # exempt the very branch it is flagging from ever being re-swept, a self-
             # referential blind spot found live by this function's own idempotency test.
-            minted.append(await _open_or_annotate_persisting_alarm(
+            minted.append(await open_or_annotate_persisting_alarm(
                 actions, summary, kind="obligation", owner="thoth",
                 source="landing-auditor"))
     for c in claims:
         summary = f"LANDING AUDIT: {c['canonical']} {c['note']}"
         with contextlib.suppress(Exception):
-            minted.append(await _open_or_annotate_persisting_alarm(
+            minted.append(await open_or_annotate_persisting_alarm(
                 actions, summary, kind="obligation", owner="thoth",
                 source="landing-auditor"))
     return {"stale_unmerged_branches": stale, "graph_claim_mismatches": claims,
