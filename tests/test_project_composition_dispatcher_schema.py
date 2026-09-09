@@ -53,6 +53,7 @@ PROJECT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "retire": {"project": "repo:widget", "because": "dead tree"},
     "identity_evidence": {"seat_id": "seat:abc"},
     "assert_property": {"project": "repo:widget", "name": "some_flag", "value": "true"},
+    "set_tag": {"project": "repo:widget", "tag": "WG", "because": "operator's own code"},
 }
 
 
@@ -61,7 +62,7 @@ async def test_project_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 8, "one branch per project action — update this count and " \
+    assert len(branches) == 9, "one branch per project action — update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(PROJECT_VALID_PAYLOADS), (

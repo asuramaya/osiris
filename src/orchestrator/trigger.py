@@ -2255,8 +2255,8 @@ async def dispatch_dm(
                 office=office, anchor=anchor, handle=handle, agent=bound["agent"],
                 generation=bound["generation"])
             try:
-                window = _window_name(
-                    house, handle, await _governed_project_name(pool, seat_id))
+                window = await _window_name(
+                    pool, house, handle, await _governed_project_name(pool, seat_id))
                 await fresh_spawn(launch_cwd, name=window,
                                   model=st.osiris_wake_model or None, prompt=boot_prompt)
             except OSError as exc:
@@ -2751,25 +2751,57 @@ async def _manager_control(req: dict[str, Any]) -> dict[str, Any]:
     return await manager_call(req)
 
 
-def _house_tag(house: str | None, project: str | None = None) -> str:
-    """The window's [TAG] prefix — the operator's front-door naming ('[OS] Thoth', c8da5a52). A
-    simple short code (osiris→OS); a real house→tag map is a later refinement.
+async def _explicit_window_tag(pool: asyncpg.Pool, label: str) -> str | None:
+    """The persisted `window_tag` override for the SoftwareProject `label` resolves to
+    (task: window-tag-gets-an-owner, decision 26f4f825's corollary) — checked BEFORE
+    `_house_tag`'s derived first-two-letters ever fires. Reuses `_resolve_repo`
+    (capture.py), the same canonical-or-name resolver every other project lookup in this
+    house already shares — no second resolver written for this.
+
+    None (never a raise) when `label` resolves to no SoftwareProject, or the project
+    carries no `window_tag` assertion — both are exactly the cases the derived fallback
+    below exists for. Deliberately NOT the generic `tag` property: `tag` already names a
+    completely different, additive/multi-valued property on arbitrary objects (frontier.
+    py's/dossier.py's case-subject marking, `{"tag": "subject"}`) — reusing that name here
+    would silently collide two unrelated meanings under one property."""
+    from src.orchestrator.capture import _resolve_repo
+    proj_id = await _resolve_repo(pool, label)
+    if proj_id is None:
+        return None
+    value = await pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='window_tag' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
+        proj_id)
+    return str(value) if value else None
+
+
+async def _house_tag(pool: asyncpg.Pool, house: str | None, project: str | None = None) -> str:
+    """The window's [TAG] prefix — the operator's front-door naming ('[OS] Thoth', c8da5a52).
+    An explicit `window_tag` assertion on the resolving SoftwareProject wins when one
+    exists (`set_tag`, project(action='set_tag') — the operator's own declared code, e.g.
+    "MH" for monsterhouse instead of the derived "MO"); otherwise a simple short code
+    (osiris→OS) derived fresh from the label's own first two letters, same as always.
 
     NEVER "OS" AS A FALLBACK (operator 2026-09-06, ruling 860b0306: a house is OPTIONAL — a
     single-repo seat carries none). An empty house used to render as osiris's own tag, so
     "[OS] Lilguy" sat in the agents list beside the real osiris seats. Now: the house's
     code when present, else the governed PROJECT's code, else "" — and `_window_name`
-    drops the brackets entirely when there is no code, so a bare `Lilguy` is honest."""
+    drops the brackets entirely when there is no code, so a bare `Lilguy` is honest.
+
+    ASYNC NOW (was a pure sync function): reading a persisted assertion is a DB read: every
+    caller of `_house_tag`/`_window_name` was updated to await it and pass its pool."""
     for label in (house, project):
         h = (label or "").strip()
         if h:
-            return h[:2].upper()
+            explicit = await _explicit_window_tag(pool, h)
+            return explicit if explicit else h[:2].upper()
     return ""
 
 
-def _window_name(house: str | None, handle: str | None, project: str | None = None) -> str:
+async def _window_name(pool: asyncpg.Pool, house: str | None, handle: str | None,
+                       project: str | None = None) -> str:
     """`[TAG] handle`, or the bare handle when neither house nor project gives a tag."""
-    tag = _house_tag(house, project)
+    tag = await _house_tag(pool, house, project)
     return f"[{tag}] {handle}" if tag else str(handle or "")
 
 
@@ -3354,8 +3386,8 @@ async def _launch_target_setup(
         launch_cwd = tree_cwd
 
     anchor = _launch_anchor(target_seat)
-    name = _window_name(house, handle,
-                        await _governed_project_name(actions.pool, target_seat))
+    name = await _window_name(actions.pool, house, handle,
+                              await _governed_project_name(actions.pool, target_seat))
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "{name}"'}
 
@@ -3433,8 +3465,8 @@ async def launch_seat(
     # whatever osiris_wake_model happened to be that day, silently.
     argv_model, model_source = await _resolve_launch_model(
         actions.pool, target_seat, model=model, facts=facts, settings=st)
-    name = _window_name(house, handle,
-                        await _governed_project_name(actions.pool, target_seat))
+    name = await _window_name(actions.pool, house, handle,
+                              await _governed_project_name(actions.pool, target_seat))
 
     out: dict[str, Any]
     if lane == "pty":

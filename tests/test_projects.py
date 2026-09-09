@@ -22,6 +22,7 @@ from src.orchestrator.projects import (
     remote_url_duplicate_candidates,
     restore_attribution,
     retire_project,
+    set_project_window_tag,
     unfold_project,
 )
 from src.orchestrator.seats import ensure_seat
@@ -237,6 +238,61 @@ async def test_assert_project_property_never_touches_a_seat_of_the_same_name(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='note' WHERE o.canonical=$1", seat["seat_id"])
     assert seat_val is None
+
+
+# ═══ set_project_window_tag (window-tag-gets-an-owner, decision 26f4f825's corollary) —
+# the persisted `[TAG]` override trigger.py's `_house_tag`/`_window_name` read BEFORE
+# ever deriving one from the house/project's own first two letters.
+
+async def test_set_project_window_tag_stamps_window_tag_not_tag(actions: Actions) -> None:
+    """Written under its OWN property name, `window_tag` — never the pre-existing, totally
+    unrelated `tag` property (frontier.py's/dossier.py's additive case-subject marking,
+    `{"tag": "subject"}`). Reusing that name would silently collide two meanings."""
+    await _stub_project(actions, "repo:mhouse1", "mhouse1")
+    out = await set_project_window_tag(actions, project="mhouse1", tag="MH",
+                                       because="operator's own code", actor="agent:test")
+    assert out == {"project": "repo:mhouse1", "window_tag": "MH"}
+    val = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='window_tag' WHERE o.canonical='repo:mhouse1'")
+    assert val == "MH"
+    # never landed under the unrelated `tag` property
+    tag_val = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='tag' WHERE o.canonical='repo:mhouse1'")
+    assert tag_val is None
+
+
+async def test_set_project_window_tag_refuses_a_blank_project(actions: Actions) -> None:
+    out = await set_project_window_tag(actions, project=" ", tag="MH", because="x",
+                                       actor="agent:test")
+    assert "project is required" in out["error"]
+
+
+async def test_set_project_window_tag_refuses_a_blank_because(actions: Actions) -> None:
+    await _stub_project(actions, "repo:mhouse2", "mhouse2")
+    out = await set_project_window_tag(actions, project="mhouse2", tag="MH", because=" ",
+                                       actor="agent:test")
+    assert "because is required" in out["error"]
+
+
+@pytest.mark.parametrize("bad_tag", ["mh", "MHOUSE", "M-H", "M1", " "])
+async def test_set_project_window_tag_refuses_a_malformed_shape(
+    actions: Actions, bad_tag: str,
+) -> None:
+    """1-4 uppercase letters, EXACTLY as given — never silently lowercased, truncated, or
+    uppercased into something the caller never asked for (refuse-don't-guess)."""
+    await _stub_project(actions, "repo:mhouse3", "mhouse3")
+    out = await set_project_window_tag(actions, project="mhouse3", tag=bad_tag,
+                                       because="x", actor="agent:test")
+    assert "error" in out
+    assert "not a legal window tag" in out["error"] or "tag is required" in out["error"]
+
+
+async def test_set_project_window_tag_refuses_an_unresolvable_project(actions: Actions) -> None:
+    out = await set_project_window_tag(actions, project="does-not-exist-either", tag="MH",
+                                       because="x", actor="agent:test")
+    assert "no such SoftwareProject" in out["error"]
 
 
 # ═══ fold_project (task #102's lane 2, Thoth's dispatch DM 2302/2310) — the deliberate,

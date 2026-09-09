@@ -795,8 +795,9 @@ async def _cmd_launch_harness(
               file=sys.stderr)
 
     from src.orchestrator.trigger import _governed_project_name, _window_name
-    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
-        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+    name = await _window_name(pool, facts["house"], facts["handle"],
+                              await _governed_project_name(
+                                  pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
     # BOUND BEFORE SPAWN, THIS DOOR TOO (Thoth dispatch 6713, closing the hole above
     # Khnum's own claim_name backstop, 2c65c6d): THIS IS THE EXACT LIVE SPECIMEN —
@@ -900,8 +901,9 @@ async def _cmd_launch_pty(
     from src.orchestrator.harness_process import claude_pty_argv
     argv = claude_pty_argv(resolved_model)
     from src.orchestrator.trigger import _governed_project_name, _window_name
-    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
-        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+    name = await _window_name(pool, facts["house"], facts["handle"],
+                              await _governed_project_name(
+                                  pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
     child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
     child_env["CLAUDE_JOB_DIR"] = anchor
@@ -1100,8 +1102,9 @@ async def _cmd_resume_harness(
     spawn_cwd = materialized_at or await _resume_office(
         pool, facts["seat_id"], fallback=facts["anchor_cwd"])
     from src.orchestrator.trigger import _governed_project_name, _window_name
-    name = _window_name(facts["house"], facts["handle"], await _governed_project_name(
-        pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
+    name = await _window_name(pool, facts["house"], facts["handle"],
+                              await _governed_project_name(
+                                  pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
     cleared = await clear_stale_record(resumed_session_id[:8])
     await resume_spawn(spawn_cwd, prompt=_DM_RESUME_PROMPT,
                        resume_session=resumed_session_id, name=name, model=resolved_model,
@@ -4964,6 +4967,47 @@ async def cmd_rename_project(
     return 0
 
 
+async def cmd_set_project_tag(
+    project: str, tag: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris set-project-tag <project> <tag> <because> [--actor W] — the console-script
+    door onto orchestrator.projects.set_project_window_tag, the SAME function the
+    project(action='set_tag') MCP verb wraps. Declares the persisted `[TAG]` override
+    trigger.py's `_house_tag`/`_window_name` read BEFORE ever deriving one from the
+    house/project's own first two letters."""
+    from src.actions.core import Actions
+    from src.orchestrator.projects import set_project_window_tag as _set_project_window_tag
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:set-project-tag")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris set-project-tag: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _set_project_window_tag(Actions(pool), project=project, tag=tag,
+                                            because=because, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris set-project-tag: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"{project}: window tag set to [{out['window_tag']}]")
+    return 0
+
+
 async def cmd_retire_project(
     project: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
@@ -5092,7 +5136,8 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
                         rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
-                        create-project, rename-project, retire-project, fork-project
+                        create-project, rename-project, retire-project, fork-project,
+                        set-project-tag
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile, fleet-prune
 
@@ -6075,6 +6120,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help=f"who is performing this act — defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
+    p_set_project_tag = sub.add_parser(
+        "set-project-tag", description=_d(
+            "declare a SoftwareProject's persisted window `[TAG]` override — the "
+            "console-script door onto orchestrator.projects.set_project_window_tag, "
+            "the SAME function the project(action='set_tag') MCP verb wraps. "
+            "trigger.py's _house_tag/_window_name read this BEFORE ever deriving a tag "
+            "from the house/project's own first two letters"),
+        epilog="example: osiris set-project-tag monsterhouse MH \"operator's own code\"")
+    p_set_project_tag.add_argument("project", help="the project's own name/canonical")
+    p_set_project_tag.add_argument("tag", help="1-4 uppercase letters, exactly as wanted")
+    p_set_project_tag.add_argument("because", help="why this tag is being declared")
+    p_set_project_tag.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                   help=f"who is performing this act — defaults to "
+                                        f"{_CONSOLE_ACTOR!r}")
+
     p_retire_project = sub.add_parser(
         "retire-project", description=_d(
             "retire a dead SoftwareProject stub — the console-script door onto "
@@ -6285,6 +6345,9 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_rename_project(
             args.project, args.new_name, args.because, dry_run=not args.apply_,
             merge_into=args.merge_into, actor=args.actor))
+    if args.command == "set-project-tag":
+        return asyncio.run(cmd_set_project_tag(
+            args.project, args.tag, args.because, actor=args.actor))
     if args.command == "retire-project":
         return asyncio.run(cmd_retire_project(args.project, args.because, actor=args.actor))
     if args.command == "fork-project":

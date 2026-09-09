@@ -347,6 +347,11 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # this entry is only the tool-name pointer, nothing in CLI_ONLY_PARAMS/MCP_ONLY_PARAMS/
     # RENAMED_PARAMS needed on top of it.
     "promote": "seat:promote",
+    # `set-project-tag` (window-tag-gets-an-owner, wave 11, decision 26f4f825's
+    # corollary) — a brand-new project dispatcher action, same shape as promote's own
+    # entry above: the CLI door's own params (project, tag, because) already match the
+    # dispatcher branch's own names 1:1.
+    "set-project-tag": "project:set_tag",
 }
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.

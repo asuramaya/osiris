@@ -5085,20 +5085,39 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
     assert spawned == [str(office)]
 
 
-def test_window_tag_never_falls_back_to_osiris() -> None:
+class _NoRows:
+    """A pool double that resolves NO SoftwareProject and asserts NOTHING — every explicit
+    `window_tag` lookup (`_explicit_window_tag`'s own `_resolve_repo` + `current_assertions`
+    reads) comes back empty, so `_house_tag`/`_window_name` fall all the way through to
+    their derived first-two-letters behavior, exactly as before this task's own persisted-
+    override read was added."""
+
+    async def fetch(self, *_a, **_k):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fetchval(self, *_a, **_k):  # type: ignore[no-untyped-def]
+        return None
+
+
+async def test_window_tag_never_falls_back_to_osiris() -> None:
     """Ruling 860b0306 (operator, 2026-09-06): a house is OPTIONAL, and an empty one must
     never render as osiris's own tag — "[OS] Lilguy" sat in the agents list beside the real
     osiris seats. House code when present, else the governed project's code, else no
-    brackets at all."""
+    brackets at all.
+
+    REGRESSION GUARD (window-tag-gets-an-owner): with no explicit `window_tag` assertion
+    anywhere (a pool that resolves nothing), `_house_tag`/`_window_name` — now async, DB-
+    backed reads — must still return EXACTLY what the old pure-derivation functions did."""
     from src.orchestrator.trigger import _house_tag, _window_name
-    assert _house_tag("osiris") == "OS"
-    assert _house_tag("hector-vector") == "HE"
-    assert _house_tag("") == ""
-    assert _house_tag(None) == ""
-    assert _house_tag("", "lilguy") == "LI"
-    assert _window_name("osiris", "Thoth") == "[OS] Thoth"
-    assert _window_name(None, "Lilguy", "lilguy") == "[LI] Lilguy"
-    assert _window_name("", "Lilguy", None) == "Lilguy"
+    pool: Any = _NoRows()
+    assert await _house_tag(pool, "osiris") == "OS"
+    assert await _house_tag(pool, "hector-vector") == "HE"
+    assert await _house_tag(pool, "") == ""
+    assert await _house_tag(pool, None) == ""
+    assert await _house_tag(pool, "", "lilguy") == "LI"
+    assert await _window_name(pool, "osiris", "Thoth") == "[OS] Thoth"
+    assert await _window_name(pool, None, "Lilguy", "lilguy") == "[LI] Lilguy"
+    assert await _window_name(pool, "", "Lilguy", None) == "Lilguy"
 
 
 async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) -> None:
@@ -5110,15 +5129,11 @@ async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) 
 
     (tmp_path / ".osiris").write_text('project = "monsterhouse"\n')
 
-    class _NoRows:
-        async def fetch(self, *_a, **_k):  # type: ignore[no-untyped-def]
-            return []
-
     pool: Any = _NoRows()
     assert await _governed_project_name(pool, "seat:nobody", cwd=str(tmp_path)) == "monsterhouse"
     assert await _governed_project_name(pool, None, cwd=str(tmp_path)) == "monsterhouse"
     assert await _governed_project_name(pool, "seat:nobody") is None
-    assert _window_name(None, "chowder", "monsterhouse") == "[MO] chowder"
+    assert await _window_name(pool, None, "chowder", "monsterhouse") == "[MO] chowder"
 
 
 def test_cli_has_no_private_house_tag_copy() -> None:

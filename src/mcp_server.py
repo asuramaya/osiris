@@ -6417,6 +6417,10 @@ PROJECT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("assert_property"), "project": _s(), "name": _s(),
             "value": _s(),
         }, ["action", "project", "name", "value"]),
+        _dispatcher_action_schema({
+            "action": _action_const("set_tag"), "project": _s(), "tag": _s(),
+            "because": _s(),
+        }, ["action", "project", "tag", "because"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["project"] = PROJECT_INPUT_SCHEMA
@@ -6431,6 +6435,7 @@ _PROJECT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "retire": (["project", "because"], ["project", "because"]),
     "identity_evidence": (["seat_id", "operator_citation"], ["seat_id"]),
     "assert_property": (["project", "name", "value"], ["project", "name", "value"]),
+    "set_tag": (["project", "tag", "because"], ["project", "tag", "because"]),
 }
 
 
@@ -6439,7 +6444,8 @@ async def _project_impl(
     project: str | None = None, name: str | None = None, because: str | None = None,
     dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
     seat_id: str | None = None, operator_citation: str | None = None,
-    value: str | None = None, merge_into: bool = False, ctx: Context | None = None,
+    value: str | None = None, merge_into: bool = False, tag: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `project` and its 7 hidden single-purpose aliases
     (create_project, ingest_project, rename_project, fork_project, unfork_project,
@@ -6583,6 +6589,17 @@ async def _project_impl(
         )
         return await _assert_project_property(Actions(await _pool_get()), project=project,
                                               name=name, value=value, actor=ident.agent_id)
+    if action == "set_tag":
+        assert project is not None and tag is not None and because is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — declaring a window tag is a deliberate act "
+                             "on the record", "why": _anchorless(ctx)}
+        from src.orchestrator.projects import (
+            set_project_window_tag as _set_project_window_tag,
+        )
+        return await _set_project_window_tag(Actions(await _pool_get()), project=project,
+                                             tag=tag, because=because, actor=ident.agent_id)
     raise AssertionError(f"action {action!r} passed validation but has no branch")
 
 
@@ -6591,7 +6608,8 @@ async def project(
     action: str, project: str | None = None, name: str | None = None, because: str = "",
     dry_run: bool = True, new_name: str | None = None, fork_into: str | None = None,
     seat_id: str | None = None, operator_citation: str | None = None,
-    value: str | None = None, merge_into: bool = False, ctx: Context | None = None,
+    value: str | None = None, merge_into: bool = False, tag: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
     door, many actions over SoftwareProject lifecycle. See `describe('project')` for
@@ -6616,13 +6634,20 @@ async def project(
         five tiers — read this BEFORE rename/fork (seat_id)
       assert_property: the sanctioned write for a single project-scoped property
         (project, name, value) — never name='status', that's retire's own path
+      set_tag: declare the persisted `[TAG]` override `_house_tag`/`_window_name`
+        (trigger.py) read BEFORE ever deriving one from first-two-letters — e.g. "MH"
+        for monsterhouse instead of the derived "MO" (project, tag, because). `tag`
+        must be 1-4 uppercase letters exactly as given; refuses rather than silently
+        coercing an unexpected shape. Written as its own `window_tag` property, never
+        the unrelated, additive/multi-valued `tag` property case-tooling already uses
 
     `name` means something different per action: the new project's name on `create`,
     the property name on `assert_property` — never the same slot's value twice."""
     return await _project_impl(
         action, project=project, name=name, because=because, dry_run=dry_run,
         new_name=new_name, fork_into=fork_into, seat_id=seat_id,
-        operator_citation=operator_citation, value=value, merge_into=merge_into, ctx=ctx)
+        operator_citation=operator_citation, value=value, merge_into=merge_into, tag=tag,
+        ctx=ctx)
 
 
 async def _ingest_project_impl(
