@@ -130,6 +130,21 @@ def test_graph_search_and_breadcrumb_markup_exist() -> None:
     assert 'onclick="collapseFocusOneHop()"' in html
 
 
+# --- item 7: Browse tiles carry an edge-count badge ---------------------------------------
+
+def test_edge_counts_are_fetched_in_chunks_after_loading_the_object_set() -> None:
+    console_js = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
+    assert "async function loadEdgeCounts(ids)" in console_js
+    assert "loadEdgeCounts(SET.map(function(o){ return o.id; }))" in console_js
+    assert "/objects/edge_counts?ids=" in console_js
+
+
+def test_browse_tiles_render_the_edge_count_badge() -> None:
+    console_js = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
+    assert "function edgeCountBadge(id)" in console_js
+    assert console_js.count("edgeCountBadge(o.id)") >= 2  # table row AND board card
+
+
 def test_focus_no_longer_forces_a_layout_on_every_click() -> None:
     console_js = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
     assert "(ensureBoard()).layout((ensureBoard()).cy.nodes().length > 1)" not in console_js

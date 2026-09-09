@@ -201,6 +201,28 @@ async function loadObjectSet() {
   // 2000). A failed/slow counts fetch degrades to null, and the toolbar falls back to
   // the old SET-derived count rather than showing nothing.
   TRUE_COUNTS = await fetch(objectCountsUrl()).then(r => r.json()).catch(() => null);
+  loadEdgeCounts(SET.map(function(o){ return o.id; }));
+}
+// WAVE A item 7 (thread 8839): Browse tiles carry an edge-count badge — fetched separately
+// from the object list itself (a per-row COUNT joined into that already-complex query would
+// cost every one of its many callers, not just Browse), batched in chunks small enough to
+// stay a sane query-string length, and rendered as soon as each chunk lands rather than
+// blocking the table/board's own first paint on it.
+var EDGE_COUNTS = {};
+async function loadEdgeCounts(ids) {
+  var CHUNK = 150;
+  for (var i = 0; i < ids.length; i += CHUNK) {
+    var chunk = ids.slice(i, i + CHUNK);
+    try {
+      var counts = await fetch('/objects/edge_counts?ids=' + chunk.join(',')).then(function(r){return r.json();});
+      Object.assign(EDGE_COUNTS, counts);
+      if (ACTIVE_SURFACE === 'browse') renderEntityExplorerStage();
+    } catch(e) {}
+  }
+}
+function edgeCountBadge(id) {
+  var n = EDGE_COUNTS[id];
+  return n ? '<span class="ee-edge-badge" title="' + n + ' link(s)">' + n + '</span>' : '';
 }
 async function loadMoreObjects() {
   if (OBJECTS_LOADING_MORE || !OBJECTS_HAS_MORE || !SET.length) return;
@@ -339,7 +361,7 @@ function renderTableRow(o) {
   var tColor = '#6e7681';
   try { tColor = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
   return '<tr class="ee-row' + (isSel ? ' sel' : '') + (isExp ? ' expanded' : '') + '" onclick="inspectAndToggleRow(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')">' +
-    '<td><span class="ee-type-pill" style="border-color:' + tColor + '40;color:' + tColor + ';background:' + tColor + '18"><span class="dot" style="background:' + tColor + '"></span> ' + esc(o.type) + '</span></td>' +
+    '<td><span class="ee-type-pill" style="border-color:' + tColor + '40;color:' + tColor + ';background:' + tColor + '18"><span class="dot" style="background:' + tColor + '"></span> ' + esc(o.type) + '</span> ' + edgeCountBadge(o.id) + '</td>' +
     '<td>' + renderKey(o) + '</td>' +
     '<td class="ee-summary-cell"><div class="ee-name">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="ee-summary-preview">' + esc(summary) + '</div>' : '') + '</td>' +
     '<td style="color:var(--muted);font-size:11px;font-family:var(--font-mono)">' + esc(dateStr) + '</td>' +
@@ -377,7 +399,7 @@ function renderBoardCard(o) {
   const grade = (p.evidence_class || p.grade || 'self_declared').toLowerCase(), source = p.source_id || p.source_label || p.source || '';
   const isDuty = o.type === 'Thread' && (p.kind === 'obligation' || o.status === 'obligation'), statusLabel = isDuty ? 'duty' : (o.status || 'active');
   var cc = '#6e7681'; try { cc = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
-  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type" style="border-color:' + cc + '40;color:' + cc + ';background:' + cc + '18"><span class="dot" style="background:' + cc + '"></span> ' + esc(o.type) + '</span>' + renderKey(o) + '</div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
+  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type" style="border-color:' + cc + '40;color:' + cc + ';background:' + cc + '18"><span class="dot" style="background:' + cc + '"></span> ' + esc(o.type) + '</span>' + edgeCountBadge(o.id) + renderKey(o) + '</div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
 }
 
 // ── Mailbox ──────────────────────────────────────────────────────────────────

@@ -589,6 +589,42 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             it["display_label"] = disp[str(it["id"])]
         return items
 
+    @app.get("/objects/edge_counts")
+    async def object_edge_counts(
+        ids: str, p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, int]:
+        """WAVE A item 7 (graph visualizer, thread 8839): a batched edge-count lookup for
+        Browse's own tiles (an "N links" badge) — kept as its OWN endpoint rather than a
+        per-row COUNT joined into `list_objects`'s already-complex query, which the browse
+        surface calls for up to 2000 rows at once; this is a second, cheap, opt-in fetch
+        the client makes for whatever page it actually rendered. `ids` is a comma-separated
+        list of object uuids; blank/malformed entries are skipped, never a 400 — a stray
+        bad id in a client-built list shouldn't blank the whole badge row. UNION ALL over
+        both `links_from_idx`/`links_to_idx` (migration 0001) rather than a single OR
+        query, so each half stays index-only."""
+        id_list: list[uuid.UUID] = []
+        for raw in ids.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                id_list.append(uuid.UUID(raw))
+            except ValueError:
+                continue
+        if not id_list:
+            return {}
+        rows = await p.fetch(
+            "SELECT node, count(*) AS n FROM ("
+            "  SELECT from_id AS node FROM links WHERE from_id = ANY($1::uuid[]) "
+            "    AND (valid_until IS NULL OR valid_until > now())"
+            "  UNION ALL"
+            "  SELECT to_id AS node FROM links WHERE to_id = ANY($1::uuid[]) "
+            "    AND (valid_until IS NULL OR valid_until > now())"
+            ") x GROUP BY node",
+            id_list,
+        )
+        return {str(r["node"]): int(r["n"]) for r in rows}
+
     @app.get("/objects/{object_id}")
     async def get_object(
         object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)

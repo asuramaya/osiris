@@ -1071,6 +1071,19 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* WAVE A item 7: Browse's own edge-count badge — small, muted, never louder than the type
+   pill it sits beside (it's a secondary fact, not the row's own identity). */
+.ee-edge-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
 .ee-name {
   font-weight: 550;
   color: var(--text);

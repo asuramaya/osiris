@@ -141,6 +141,30 @@ async def test_objects_list_resolves_labels_via_the_full_chain_and_disambiguates
     assert row["display_label"]
 
 
+async def test_object_edge_counts_batches_by_id(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave A item 7 (thread 8839): Browse's own edge-count badge, as a
+    batched lookup separate from the (already complex) /objects listing query."""
+    hub = await actions.create_or_find_object("Thread", "thread:gv-item7-hub", "test")
+    leaf1 = await actions.create_or_find_object("Agent", "agent:gv-item7-leaf1", "test")
+    leaf2 = await actions.create_or_find_object("Agent", "agent:gv-item7-leaf2", "test")
+    lonely = await actions.create_or_find_object("Thread", "thread:gv-item7-lonely", "test")
+    await actions.create_link(hub, leaf1, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(hub, leaf2, "closed_by", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/edge_counts", params={"ids": f"{hub},{lonely},not-a-uuid,"})
+    body = r.json()
+    assert body[str(hub)] == 2
+    assert str(lonely) not in body  # zero-edge objects carry no row -- absence IS zero
+    assert body == {str(hub): 2}
+
+
+async def test_object_edge_counts_is_empty_for_no_ids(client: httpx.AsyncClient) -> None:
+    r = await client.get("/objects/edge_counts", params={"ids": ""})
+    assert r.json() == {}
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)
