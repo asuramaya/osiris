@@ -2406,12 +2406,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # recipient, so a broadcast legitimately mints no message_recipients row until
     # someone actually reads it; only a DM's own to_agent promises a specific reader.
     # Read-only census, never a repair — resending is a mind's own act, same doctrine
-    # every other check in this function holds to.
-    zero_recip = await pool.fetch(
-        "SELECT fm.id, fm.from_agent, fm.to_agent, fm.created_at FROM fleet_messages fm "
-        "WHERE fm.to_agent IS NOT NULL "
-        "AND NOT EXISTS (SELECT 1 FROM message_recipients mr WHERE mr.message_id=fm.id) "
-        "ORDER BY fm.created_at DESC")
+    # every other check in this function holds to. `zero_recipient_dm_rows` (mailbox.py)
+    # is the ONE place this query lives — the mechanical backlog closer
+    # (scripts/close_zero_recipient_dm_backlog.py, wave 13 item 1) acts on the identical
+    # rows this check itself reports, never a second query that could drift.
+    from src.orchestrator.mailbox import zero_recipient_dm_rows
+
+    zero_recip = await zero_recipient_dm_rows(pool)
     land("zero-recipient-dm", "warn", [
         {"subject": r["to_agent"],
          "detail": f"DM #{r['id']} from {r['from_agent']} to {r['to_agent']} "
