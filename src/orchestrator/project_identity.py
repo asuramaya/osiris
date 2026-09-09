@@ -558,6 +558,7 @@ async def _cascade_governing_seats(
     `correct_pin_value_third_party` already reaches — no sanctioned write door exists
     for it yet) — both named honestly in `could_not_reach`, never silently skipped."""
     from src.orchestrator.boot_compiler import reissue_office
+    from src.orchestrator.capture import _resolve_repo
     from src.orchestrator.charter import charter_of, set_charter
     from src.orchestrator.offices import correct_pin_value_third_party
     from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
@@ -633,13 +634,35 @@ async def _cascade_governing_seats(
             except Exception as exc:  # noqa: BLE001
                 tiers["house"] = {"status": "could-not", "detail": str(exc)}
 
-        # CHARTER — set_charter replaces the WHOLE list; read current, swap the old
-        # label for the new one, write back the full set (never a partial add).
+        # CHARTER — set_charter replaces the WHOLE list; RESOLVE each entry against the
+        # PROJECT'S OWN ID, never a literal string match against old_name/new_name.
+        # `charter_of` derives its entries from live `governs` edges' own canonical —
+        # which is IMMUTABLE (rename_project's docstring: canonical never changes, only
+        # the `name` property does) — so an entry can be the project's mint-time label
+        # from a PRIOR rename, neither this call's old_name nor its new_name, and a bare
+        # string compare silently no-ops exactly when the charter is most stale
+        # (Deckard's/Metron's own specimen, decisions 0afe7d35/76559373: "xxit" never
+        # matches either side of a later handlingtheloop->something rename). `old_name`
+        # is a permanent read alias forever (this house's own convention), so the only
+        # honest test is "does this entry resolve to the SAME project id being renamed"
+        # — the identical write-vs-read-key split idiom PIN/HOUSE above already hold.
+        # Only runs when new_name != old_name — a genuine SELF-rename (renaming X to X,
+        # BUG 2's own shape) is a clean no-op across every tier, never a chance for this
+        # tier to go correcting some unrelated older alias that this particular call was
+        # never asked to touch.
         try:
             current_charter = await charter_of(pool, seat_id)
-            if old_name in current_charter:
-                new_charter = sorted({new_name if r == old_name else r
-                                      for r in current_charter})
+            stale: list[str] = []
+            if new_name != old_name:
+                for entry in current_charter:
+                    if entry == new_name:
+                        continue
+                    resolved = await _resolve_repo(pool, entry)
+                    if resolved is not None and resolved == project_oid:
+                        stale.append(entry)
+            if stale:
+                new_charter = sorted(
+                    ({new_name} | set(current_charter)) - set(stale))
                 if dry_run:
                     tiers["charter"] = {"status": "touched",
                                         "plan": f"{sorted(current_charter)} -> {new_charter}"}
@@ -823,8 +846,9 @@ async def rename_project(
         return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
                 "because": because, "dry_run": True,
                 "collision": (f"{collide['canonical']} (status={collide['status']}) — "
-                              "would proceed only because merge_into=True"
-                              if collide is not None else None),
+                              f"would proceed only because merge_into={merge_into!r}"
+                              if collide is not None and collide["id"] != row["id"]
+                              else None),
                 "manifest": manifest,
                 "note": "preview only — pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
