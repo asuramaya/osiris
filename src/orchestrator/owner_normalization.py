@@ -290,20 +290,33 @@ async def plan_owner_normalization(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def apply_owner_normalization(actions: Actions) -> dict[str, Any]:
+async def apply_owner_normalization(
+    actions: Actions, *, skip_projects: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """Applies `plan_owner_normalization`'s own plan: a compensating owner assertion per
     resolved row, and one folded Thread per project with no resolvable coordinator (never
     one per obligation -- the desk-is-the-pile failure this exists to avoid). Idempotent
     in RESULT (the winning owner value never drifts on a re-run) though not in ROW COUNT
     (assert_property mints a fresh same-value row at a later observed_at each run --
     "confirmed still true at T2" is real information, assert_property's own documented
-    law, never a reason to special-case a skip here)."""
+    law, never a reason to special-case a skip here).
+
+    `skip_projects` (operator ruling via Thoth DM 8650, 2026-09-09: rotten-apple's own
+    peer_of/managed_by data defect between its two governing seats is "that project's own
+    data defect, for the operator, not ours to touch" -- no resolver patch, no --apply on
+    it) drops matching entries from BOTH halves before writing/folding anything for them --
+    a caller-scoped exclusion, never a change to what the resolver itself concludes.
+    `None` (the default) applies the full plan unchanged, exactly as migration 0059's own
+    one-time run and every prior call here already did."""
     from src.orchestrator.capture import open_thread
 
     now = datetime.now(UTC)
     plan = await plan_owner_normalization(actions.pool)
+    skip = skip_projects or frozenset()
     written = []
     for entry in plan["resolved"]:
+        if entry["project"] in skip:
+            continue
         assert entry["new_owner"] is not None
         await actions.assert_property(
             entry["id"], "owner", entry["new_owner"], MIGRATION_SOURCE, now, _CONF,
@@ -311,6 +324,8 @@ async def apply_owner_normalization(actions: Actions) -> dict[str, Any]:
         written.append({"thread": entry["thread"], "new_owner": entry["new_owner"]})
     surfaced = []
     for project, entries in plan["no_coordinator"].items():
+        if project in skip:
+            continue
         label = project or "(no project on record)"
         summary = (f"OWNER NORMALIZATION: no coordinating seat resolves for {label}'s "
                    "open obligations -- migration 0059 could not pick one mechanically, "

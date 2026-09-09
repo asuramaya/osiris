@@ -303,3 +303,61 @@ async def test_apply_does_not_mint_a_second_fold_thread_on_a_second_run(
     id1 = next(s["thread"] for s in out1["surfaced"] if s["project"] == "onown-fold2")
     id2 = next(s["thread"] for s in out2["surfaced"] if s["project"] == "onown-fold2")
     assert id1 == id2                                  # open_thread's own dedup-on-summary
+
+
+# ═══ skip_projects (operator ruling via Thoth DM 8650, 2026-09-09) ═══════════════════
+
+async def test_skip_projects_excludes_a_fold_entirely(actions: Actions) -> None:
+    await _repo(actions, "onown-skip-fold")
+    t = await _obligation(actions, "onown-skip-fold-thread", owner="onown-skip-fold")
+
+    before = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread' AND status='active'")
+    out = await apply_owner_normalization(
+        actions, skip_projects=frozenset({"onown-skip-fold"}))
+    after = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread' AND status='active'")
+
+    assert not any(s["project"] == "onown-skip-fold" for s in out["surfaced"])
+    assert after == before                              # no fold thread minted at all
+    assert t                                            # the original obligation untouched
+
+
+async def test_skip_projects_leaves_a_different_project_folded_normally(
+    actions: Actions,
+) -> None:
+    await _repo(actions, "onown-skip-a")
+    await _repo(actions, "onown-skip-b")
+    await _obligation(actions, "onown-skip-a-thread", owner="onown-skip-a")
+    await _obligation(actions, "onown-skip-b-thread", owner="onown-skip-b")
+
+    out = await apply_owner_normalization(
+        actions, skip_projects=frozenset({"onown-skip-a"}))
+
+    assert not any(s["project"] == "onown-skip-a" for s in out["surfaced"])
+    assert any(s["project"] == "onown-skip-b" for s in out["surfaced"])
+
+
+async def test_skip_projects_also_excludes_a_resolved_write(actions: Actions) -> None:
+    seat_id = await _seat(actions, "OnownSkipResolvedSeat")
+    await set_charter(actions, seat_id, ["onown-skip-resolved"], actor="test")
+    t = await _obligation(actions, "onown-skip-resolved-thread", owner="onown-skip-resolved")
+
+    out = await apply_owner_normalization(
+        actions, skip_projects=frozenset({"onown-skip-resolved"}))
+
+    assert not any(w["thread"] == t for w in out["written"])
+    row = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND name='owner' AND source_id=$2",
+        t, MIGRATION_SOURCE)
+    assert row is None                                  # never written for a skipped project
+
+
+async def test_no_skip_projects_behaves_exactly_as_before(actions: Actions) -> None:
+    await _repo(actions, "onown-noskip")
+    await _obligation(actions, "onown-noskip-thread", owner="onown-noskip")
+
+    out = await apply_owner_normalization(actions)  # skip_projects omitted entirely
+
+    assert any(s["project"] == "onown-noskip" for s in out["surfaced"])
