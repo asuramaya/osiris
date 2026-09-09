@@ -1,8 +1,11 @@
 # Weekly retention-ladder manifest — mails the dry-run prune plan to the operator's desk
-# a day before osiris-prune-apply would act on it (thread 9fac4e0d part 1). DEPLOY-
-# MANAGED (Thoth mail 8437, scripts/install_prune_timers.sh): every `osiris deploy`
-# keeps this installed, current, and enabled without a hand — unlike osiris-manager.
-# service beside it, which stays hand-install-only plumbing.
+# a day before osiris-prune-apply would act on it (thread 9fac4e0d part 1). Covers dump
+# files, base backups, WAL segments, transcript chains, the legacy pre-week-key
+# transcript tarballs, AND the transcript-cache-prune session population (Thoth mail
+# 8441 items 1-2) — one manifest, one dim gate, every population. DEPLOY-MANAGED (Thoth
+# mail 8437, scripts/install_prune_timers.sh): every `osiris deploy` keeps this
+# installed, current, and enabled without a hand — unlike osiris-manager.service
+# beside it, which stays hand-install-only plumbing.
 [Unit]
 Description=Osiris weekly prune-ladder manifest to the operator's desk
 

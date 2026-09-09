@@ -3,12 +3,15 @@ dry-run report and I/O are the CLI's own thin shell, exercised separately."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from scripts.osiris_prune_ladder import (
     DumpFile,
     TranscriptChain,
     WalSegment,
+    _scan_legacy_tarballs,
     plan_prune,
+    plan_prune_legacy_tarballs,
     plan_prune_transcript_chains,
     plan_prune_wal,
 )
@@ -323,3 +326,49 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     assert "vault/wal_archive" in out
     assert "000000010000000000000001" in out
     assert "000000010000000000000002" not in out
+
+
+# ── legacy transcript tarballs (Thoth mail 8441 item 2): pre-week-key files that
+# _scan_transcript_chains never recognized, removed in full, no ladder ─────────────────
+
+def test_plan_prune_legacy_tarballs_removes_everything_given() -> None:
+    files = [DumpFile("a.tar.gz.new", NOW), DumpFile("b.tar.gz", NOW - timedelta(days=40))]
+    plan = plan_prune_legacy_tarballs(files)
+    assert plan["keep"] == []
+    assert set(f.path for f in plan["remove"]) == {"a.tar.gz.new", "b.tar.gz"}
+
+
+def test_scan_legacy_tarballs_finds_new_and_finished_but_not_week_keyed(tmp_path) -> None:  # noqa: ANN001
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "claude-transcripts-20260809.tar.gz").write_bytes(b"x" * 10)  # finished, pre-week-key
+    (vault / "claude-transcripts-20260903.tar.gz.new").write_bytes(b"x" * 10)  # abandoned staging
+    (vault / "claude-transcripts-2026-W37-20260908.tar.gz").write_bytes(b"x" * 10)  # week-keyed
+
+    found = {Path(f.path).name for f in _scan_legacy_tarballs(vault)}
+    assert found == {"claude-transcripts-20260809.tar.gz",
+                     "claude-transcripts-20260903.tar.gz.new"}
+
+
+def test_cli_reports_and_prunes_legacy_tarballs_as_their_own_population(
+    tmp_path, capsys,  # noqa: ANN001
+) -> None:
+    from scripts.osiris_prune_ladder import main
+
+    backups = tmp_path / "backups"
+    vault = tmp_path / "vault"
+    backups.mkdir()
+    vault.mkdir()
+    stray = vault / "claude-transcripts-20260809.tar.gz.new"
+    stray.write_bytes(b"x" * 10)
+
+    rc = main(["--backups", str(backups), "--vault", str(vault)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "vault/legacy-transcripts" in out
+    assert str(stray) in out
+    assert stray.exists(), "no --apply flag given — nothing may be deleted"
+
+    rc = main(["--backups", str(backups), "--vault", str(vault), "--apply"])
+    assert rc == 0
+    assert not stray.exists(), "--apply must actually remove the legacy tarball"

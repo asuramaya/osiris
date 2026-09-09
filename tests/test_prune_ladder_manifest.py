@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import pytest
 import scripts.osiris_prune_ladder as ladder
 from scripts.osiris_prune_ladder import DumpFile, TranscriptChain, build_manifest_body
+from scripts.osiris_transcript_cache_prune import SessionRow
 from src.actions.core import Actions
 from src.orchestrator.mailbox import dim_brief
 
@@ -38,6 +39,25 @@ def test_build_manifest_body_is_empty_safe() -> None:
     body = build_manifest_body(plans, chain_plan)
     assert "0 dump file(s)" in body
     assert "0 transcript chain(s)" in body
+
+
+def test_build_manifest_body_names_legacy_tarballs_and_session_files() -> None:
+    """Thoth mail 8441 items 1 and 2 — both new populations get their own named
+    section and their own count in the manifest's own header, same as every
+    population before them."""
+    empty_plan: dict[str, list[DumpFile]] = {"keep": [], "remove": []}
+    plans = {"backups/": empty_plan, "vault": empty_plan, "vault/basebackups": empty_plan}
+    chain_plan: dict[str, list[TranscriptChain]] = {"keep": [], "remove": []}
+    legacy_plan = {"keep": [], "remove": [DumpFile("stray.tar.gz.new", NOW, size_bytes=1024)]}
+    session_plan = [SessionRow("sid-1", "/tmp/sid-1.jsonl", NOW, NOW)]
+
+    body = build_manifest_body(plans, chain_plan, legacy_plan=legacy_plan,
+                               session_plan=session_plan)
+
+    assert "1 legacy transcript tarball(s)" in body
+    assert "1 transcript cache file(s)" in body
+    assert "stray.tar.gz.new" in body
+    assert "/tmp/sid-1.jsonl" in body
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +122,29 @@ async def test_find_clear_manifest_refuses_a_dimmed_manifest(
     mid, reason = await ladder.find_clear_manifest()
     assert mid is None
     assert "dimmed" in reason
+
+
+async def test_collect_session_prune_plan_delegates_to_the_cache_prune_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_collect_session_prune_plan` (Thoth mail 8441 item 1) must reuse
+    osiris_transcript_cache_prune's own `_collect_sessions`/`find_prunable_sessions`
+    unchanged, never a re-derived query — patching `_collect_sessions` alone (no real
+    DB) proves the wiring, since `find_prunable_sessions` itself is already covered
+    directly in test_transcript_cache_prune.py."""
+    import scripts.osiris_transcript_cache_prune as cache_prune
+
+    dead = SessionRow("dead-sid", "/tmp/dead.jsonl",
+                      datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC))
+    alive = SessionRow("alive-sid", "/tmp/alive.jsonl", NOW, NOW)
+
+    async def _fake_collect_sessions(harness: str = "claude-code") -> list[SessionRow]:
+        return [dead, alive]
+
+    monkeypatch.setattr(cache_prune, "_collect_sessions", _fake_collect_sessions)
+
+    plan = await ladder._collect_session_prune_plan()
+    assert [s.anchor_sid for s in plan] == ["dead-sid"]
 
 
 async def test_find_clear_manifest_only_looks_at_the_newest_manifest(

@@ -3,6 +3,9 @@
 # 20h old and not dimmed (thread 9fac4e0d part 1 — "apply next day unless dimmed").
 # Refuses loudly and deletes nothing when the gate isn't clear (no manifest sent, too
 # young, or dimmed) — see osiris_prune_ladder.py's own find_clear_manifest docstring.
+# Covers dump files, base backups, WAL segments, transcript chains, the legacy
+# pre-week-key transcript tarballs, AND the transcript-cache-prune session population
+# (Thoth mail 8441 items 1-2) — one gate, every population.
 # DEPLOY-MANAGED (Thoth mail 8437, scripts/install_prune_timers.sh): every `osiris
 # deploy` keeps this installed, current, and enabled without a hand — unlike osiris-
 # manager.service beside it, which stays hand-install-only plumbing.

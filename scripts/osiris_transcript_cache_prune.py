@@ -14,10 +14,15 @@ file's mtime is NOT newer than the store's own last_ingested_at, the SAME guard
 here in the opposite direction: never delete a file whose latest bytes the store hasn't
 seen yet. A session failing either test is left alone, never pruned on a guess.
 
-DRY-RUN IS THE ONLY WIRED MODE, same discipline as osiris_prune_ladder.py: `--apply`
-exists so a human can execute the plan once ready, this script itself never calls it,
-and nothing here is wired into a timer — activation is the operator's own word, same
-gate as every other deletion in this lane.
+DRY-RUN IS THE DEFAULT MODE, same discipline as osiris_prune_ladder.py: `--apply`
+exists so a human can execute the plan directly. This script itself never calls
+`--apply` on its own — but `find_prunable_sessions` is now ALSO called by
+osiris_prune_ladder.py's own `_collect_session_prune_plan` (Thoth mail 8441 item 1),
+which wires this population into the weekly prune-manifest/apply-if-clear timer pair
+under the SAME manifest-then-dim gate as every other population there; running this
+script's own CLI by hand remains a second, independent way to reach the identical
+plan and apply it directly, same gate either way — the operator's own word (relayed
+via a manifest or by hand), never an unconditioned timer.
 """
 from __future__ import annotations
 
