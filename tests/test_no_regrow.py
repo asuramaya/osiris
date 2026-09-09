@@ -171,13 +171,15 @@ async def test_execute_never_reclassifies_a_row_still_inside_the_grace_window(
 
 # ═══ the scheduled leg's own kill switch ═════════════════════════════════════════════
 
-async def test_scheduled_tick_is_dark_by_default(actions: Actions) -> None:
+async def test_scheduled_tick_is_on_by_default_and_can_be_darkened(actions: Actions) -> None:
+    """Operator 2026-09-09: "make it 7 days, flip it on" — the default is ON; the kill
+    switch still darkens it."""
     stale_after = NOW - timedelta(days=N_GRACE_DAYS + 1)
     old_touch = stale_after - timedelta(days=1)
     await _mk_obligation(actions, "noregrow-dark-default", owner="agent:nr8",
                          stale_after=stale_after, touched_at=old_touch)
-    settings = Settings()
-    assert settings.osiris_no_regrow_enabled is False
+    assert Settings().osiris_no_regrow_enabled is True
+    settings = Settings(osiris_no_regrow_enabled=False)
     out = await no_regrow_scheduled_tick(actions, settings=settings, now=NOW)
     assert out["enabled"] is False
     assert out["reclassified"] == []

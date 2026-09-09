@@ -478,7 +478,7 @@ class Settings(BaseSettings):
     # receipt on the owner's mail. OFF by default — no explicit "ship it ON" instruction
     # accompanied this dispatch, unlike osiris_obligation_hygiene_enabled/osiris_
     # retention_heartbeat_enabled's own named exceptions above.
-    osiris_no_regrow_enabled: bool = False
+    osiris_no_regrow_enabled: bool = True  # operator 2026-09-09: "make it 7 days, flip it on"
     # THE RETENTION HEARTBEAT'S OWN SWITCH (wave 12 item 1, operator's word via Thoth DM
     # 8378: "put outbox_retention and audit_log_retention ... on the heartbeat"): a daily
     # tick DELETEs (src.orchestrator.retention, execute=True) published outbox rows and

@@ -1,6 +1,6 @@
 """THE NO-REGROW RULE (operator's word via Thoth msg 8606/8618, 2026-09-09, dispatched
 in the same breath as the owner-law residue fix): an open obligation Thread that carries
-a `stale_after` and has drawn NO annotate/owner-change/resolution touch for N=21 days
+a `stale_after` and has drawn NO annotate/owner-change/resolution touch for N=7 days
 PAST that timestamp reclassifies to kind='task' by the heartbeat -- with a receipt on the
 owner's own mail, never silent. NEVER RESOLVED by this sweep: `status` is left exactly as
 it was, only `kind` moves, so the thread drops off the obligation wall's own ranking
@@ -12,7 +12,7 @@ ships and stays exactly as it is. This is a SEPARATE clock, keyed off `stale_aft
 property every open_thread already writes, carrying its own decided window) rather than
 idle-since-creation, and it actually MOVES the thread's own classification once the
 window closes, matching #203's own no-regrow proposal by name ("an obligation with no
-annotate, no owner change and no resolution for 21 days past its stale_after reclassifies
+annotate, no owner change and no resolution for 7 days past its stale_after reclassifies
 to task"). Reuses reclassify_thread (capture.py) for the write -- the SAME sanctioned
 triage verb `thread(action='reclassify')` calls, never a second copy of the kind-mutation
 logic -- and obligation_hygiene.py's own owner-resolution ladder (`resolve_owner_target`/
@@ -41,7 +41,7 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 
-N_GRACE_DAYS = 21
+N_GRACE_DAYS = 7  # operator 2026-09-09: "make it 7 days, flip it on" (was 21)
 
 _SANCTIONED_NO_REGROW_ACTOR = "cron:no_regrow_heartbeat"
 
