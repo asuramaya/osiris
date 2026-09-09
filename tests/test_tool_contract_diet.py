@@ -1392,7 +1392,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # and no way to stop fighting an operator's own hand-rename forever. No new tool, load-
 # bearing growth per this file's own escape valve. Measured exact (115,855), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 116226
+TOOL_CONTRACT_CEILING_CHARS = 116153
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
