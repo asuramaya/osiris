@@ -54,6 +54,19 @@ WHERE clause).
 THE RECEIPT is the final, loud, count-preserving assertion: before = hot+cold at the
 start, after = hot+cold at the end. They must be equal -- this function RAISES if they
 are not, rather than returning a receipt that quietly says otherwise.
+
+RUN-START-SCOPED RECONCILIATION (fixed after a production false positive, wave 12's own
+run: 4,034,150 rows moved correctly across 807 batches, then the final check raised
+anyway because the rest of the live fleet wrote 2,996 brand-new rows into assertions_hot
+during the ~7 minute run): a naive before/after snapshot of `count(hot)+count(cold)`
+cannot distinguish "a row went missing" from "the rest of the world kept writing while
+this ran" -- both move the number. The fix is to count only rows with `created_at` before
+a single `run_start` timestamp captured once at the very top of `apply_migration_0064`,
+on both the before- and after- side. A pre-existing row is counted identically both
+times regardless of whether it moved to cold, stayed in hot, or (if something were
+genuinely wrong) got lost or duplicated -- so a real defect still raises. A row written
+DURING the run has `created_at >= run_start` and is excluded from both counts, so it can
+never move this number and can never trigger a spurious raise.
 """
 from __future__ import annotations
 
@@ -101,6 +114,7 @@ class MoveReceipt:
     before: dict[str, int]
     after: dict[str, int]
     count_preserved: bool
+    vacuum_note: str
     skipped_locked: bool = field(default=False)
 
     def as_dict(self) -> dict[str, Any]:
@@ -114,6 +128,7 @@ class MoveReceipt:
             "before": self.before,
             "after": self.after,
             "count_preserved": self.count_preserved,
+            "vacuum_note": self.vacuum_note,
         }
 
 
@@ -155,10 +170,34 @@ async def apply_migration_0064(
     """Moves every is_current=false row older than `cutoff` from assertions_hot into
     assertions_cold, in bounded batches (see module docstring for the copy-verify-delete
     shape), and returns a count-preserving receipt. Raises ReconciliationError -- loudly,
-    never silently -- if the total row count across both tables changed."""
+    never silently -- if the total row count across both tables changed.
+
+    RECONCILIATION IS RUN-START-SCOPED, deliberately, so a concurrent live fleet writing
+    brand-new rows into assertions_hot during this run can never trip a false positive:
+    `run_start` is captured once, before the before-count is even taken, and both the
+    before- and after-count only count rows with `created_at < run_start`. Every row that
+    existed when the run began has `created_at < run_start` by definition and is counted
+    identically on both sides, whether it stayed in hot, moved to cold, or (if something
+    were genuinely wrong) vanished or duplicated -- a real loss or duplication among that
+    pre-existing population still changes this count and still raises. Every row written
+    by the rest of the fleet DURING the run has `created_at >= run_start` (it did not
+    exist yet when run_start was captured) and is excluded from BOTH counts, so ordinary
+    concurrent traffic can never move this number and can never cause a spurious
+    ReconciliationError -- exactly the false-positive class that fired in production."""
     cutoff = cutoff or default_cutoff()
-    before_hot = cast(int, await pool.fetchval("SELECT count(*) FROM assertions_hot"))
-    before_cold = cast(int, await pool.fetchval("SELECT count(*) FROM assertions_cold"))
+    run_start = datetime.now(UTC)
+    before_hot = cast(
+        int,
+        await pool.fetchval(
+            "SELECT count(*) FROM assertions_hot WHERE created_at < $1", run_start,
+        ),
+    )
+    before_cold = cast(
+        int,
+        await pool.fetchval(
+            "SELECT count(*) FROM assertions_cold WHERE created_at < $1", run_start,
+        ),
+    )
     before_total = before_hot + before_cold
 
     examined = 0
@@ -214,9 +253,42 @@ async def apply_migration_0064(
             moved += len(batch_ids)
             batches += 1
 
-    after_hot = cast(int, await pool.fetchval("SELECT count(*) FROM assertions_hot"))
-    after_cold = cast(int, await pool.fetchval("SELECT count(*) FROM assertions_cold"))
+    after_hot = cast(
+        int,
+        await pool.fetchval(
+            "SELECT count(*) FROM assertions_hot WHERE created_at < $1", run_start,
+        ),
+    )
+    after_cold = cast(
+        int,
+        await pool.fetchval(
+            "SELECT count(*) FROM assertions_cold WHERE created_at < $1", run_start,
+        ),
+    )
     after_total = after_hot + after_cold
+
+    dead_tup = cast(
+        int | None,
+        await pool.fetchval(
+            "SELECT n_dead_tup FROM pg_stat_user_tables WHERE relname='assertions_hot'",
+        ),
+    )
+    if dead_tup is not None:
+        vacuum_note = (
+            f"assertions_hot keeps its old on-disk footprint (~{dead_tup} dead tuples "
+            "pending reclaim by autovacuum) until a VACUUM FULL is run; autovacuum will "
+            "reuse the space for new rows but will not shrink the file. This migration "
+            "does not run VACUUM FULL -- it takes an ACCESS EXCLUSIVE lock, so the shrink "
+            "is the operator's own call."
+        )
+    else:
+        vacuum_note = (
+            "assertions_hot keeps its old on-disk footprint (dead-tuple count not "
+            "available from pg_stat_user_tables) until a VACUUM FULL is run; autovacuum "
+            "will reuse the space for new rows but will not shrink the file. This "
+            "migration does not run VACUUM FULL -- it takes an ACCESS EXCLUSIVE lock, so "
+            "the shrink is the operator's own call."
+        )
 
     receipt = MoveReceipt(
         source=MIGRATION_SOURCE,
@@ -228,6 +300,7 @@ async def apply_migration_0064(
         before={"hot": before_hot, "cold": before_cold, "total": before_total},
         after={"hot": after_hot, "cold": after_cold, "total": after_total},
         count_preserved=before_total == after_total,
+        vacuum_note=vacuum_note,
     )
     if before_total != after_total:
         raise ReconciliationError(
