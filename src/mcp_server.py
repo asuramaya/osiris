@@ -3439,8 +3439,15 @@ async def _seat_impl(
                 # case (mount-cache heal generalization, wave 6, dispatch 7dfc38a5).
                 await _heal_mount_cache_for_seats(pool, {seat_id_})
             return result
-        return {"agent": ident.agent_id, "seat": seat_id_,
-                "charter": await charter_of(pool, seat_id_)}
+        from src.orchestrator.project_identity import charter_display_labels
+
+        governed = await charter_of(pool, seat_id_)
+        # "charter" stays the raw canonical list, unchanged (this house's own machine
+        # contract, forever); "charter_display" adds the name-with-canonical rendering
+        # a human actually reads (Thoth/Deckard, mail 8788) without breaking anyone
+        # already parsing "charter" as bare canonicals.
+        return {"agent": ident.agent_id, "seat": seat_id_, "charter": governed,
+                "charter_display": await charter_display_labels(pool, governed)}
 
     if action == "charter_for":
         assert target is not None and repos is not None  # already validated

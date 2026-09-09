@@ -123,6 +123,7 @@ async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
     yet; a freshly promoted seat with zero workers bonded is not a bug worth a section
     that says nothing."""
     from src.orchestrator.charter import charter_of
+    from src.orchestrator.project_identity import charter_display_labels
     from src.orchestrator.seats import seats_managed_by
 
     workers = await seats_managed_by(pool, manager_seat_id)
@@ -134,7 +135,7 @@ async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
             "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
             "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat_id)
-        repos = await charter_of(pool, worker_seat_id)
+        repos = await charter_display_labels(pool, await charter_of(pool, worker_seat_id))
         repo_text = ", ".join(f"`{r}`" for r in repos) if repos else "no charter yet"
         lines.append(f"- **{handle or worker_seat_id}** ({worker_seat_id}) — governs "
                      f"{repo_text}")
@@ -482,6 +483,7 @@ async def reissue_office(
         return {"error": "because is required — a reissue is testimony, same as a rename"}
     from src.orchestrator.charter import charter_of
     from src.orchestrator.offices import _peer_addendum
+    from src.orchestrator.project_identity import charter_display_labels
     from src.orchestrator.seats import peer_of_seat, seat_facts
 
     row = await actions.pool.fetchrow(
@@ -548,8 +550,12 @@ async def reissue_office(
     # THE CHARTER IS THE SEAT'S (ruling 1db1ff41): `seat_id` is already this call's own
     # parameter — no occupant lookup needed at all, and no lineage-string walk either.
     repos: list[str] = await charter_of(actions.pool, seat_id)
+    # PRESENTATION, NEVER THE GRAPH (Thoth/Deckard, mail 8788): charter_of's own
+    # canonical-only contract is correct forever (5031a74) — a human reading an office
+    # reads the project's live NAME, resolved at render time, canonical alongside it.
+    display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
-        "You govern: " + ", ".join(f"`{r}`" for r in repos) + "." if repos else
+        "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
         "Your charter was never formally declared — it lives only in prose. First "
         "act: `charter(repos=[...])` naming the repos you actually govern. A house "
         "is what a seat GOVERNS, not where it sits.")

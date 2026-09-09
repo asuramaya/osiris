@@ -128,7 +128,7 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
         for r in sorted(by_house[house], key=lambda r: r["handle"] or ""):
             glyph = _OCCUPANCY_GLYPH.get(r["occupancy"], "?")
             holder = f" ({r['holder']})" if r.get("holder") else ""
-            governs = ", ".join(r.get("chartered_repos") or [])
+            governs = ", ".join(r.get("chartered_repos_display") or r.get("chartered_repos") or [])
             tail = f" — governs: {governs}" if governs else ""
             manager = f" -> {r['manager']}" if r.get("manager") else ""
             lines.append(f"  {glyph} {r['handle']}{holder}{tail}{manager}")
