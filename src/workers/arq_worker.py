@@ -818,6 +818,30 @@ async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def no_regrow_heartbeat(ctx: dict[str, Any]) -> int:
+    """The no-regrow rule's scheduled leg (operator's word via Thoth DM 8606/8618,
+    2026-09-09) — a SEPARATE clock from obligation_hygiene_heartbeat above, keyed off
+    `stale_after` rather than idle-since-last-touch. A no-op unless
+    osiris_no_regrow_enabled (the kill switch, OFF by default). The acting logic
+    (no_regrow_scheduled_tick) lives in no_regrow.py so a test can exercise it directly
+    without touching arq. A DB hiccup logs, never sinks the cron."""
+    from src.config.settings import get_settings
+    from src.orchestrator.no_regrow import no_regrow_scheduled_tick
+
+    if not get_settings().osiris_no_regrow_enabled:
+        return 0
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await no_regrow_scheduled_tick(actions)
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("no-regrow heartbeat failed: %r", exc)
+        return 0
+    acted = len(report.get("reclassified") or [])
+    if acted:
+        _log.info("no-regrow heartbeat: %s", report)
+    return acted
+
+
 async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     """THE STALE-WINDOW SWEEP, INSTALLED ON THE FRESH-INSTALL PATH (thread 28fa9e22,
     operator dispatch wave 3/4, #203's own "ships mechanically, never a coordinator's
@@ -1381,6 +1405,16 @@ class WorkerSettings:
         # none contend for CPU at the same wall-clock second.
         cron(watched(obligation_hygiene_heartbeat, every=900), minute={5, 20, 35, 50},
              second={40}, timeout=600, run_at_startup=True),
+        # the no-regrow rule (operator's word via Thoth DM 8606/8618, 2026-09-09): a
+        # SEPARATE clock from obligation_hygiene_heartbeat above, keyed off `stale_after`
+        # rather than idle-since-last-touch — 21+ days past stale_after with no touch
+        # reclassifies kind='task', with a receipt on the owner's mail, never resolves.
+        # Same 15-min cadence class as its eight siblings above — a no-op unless
+        # osiris_no_regrow_enabled (the kill switch, OFF by default — no explicit "ship
+        # it ON" instruction accompanied this dispatch). Offset from all eight so none
+        # contend for CPU at the same wall-clock second.
+        cron(watched(no_regrow_heartbeat, every=900), minute={3, 18, 33, 48},
+             second={5}, timeout=600, run_at_startup=True),
         # thread 28fa9e22: migration 0060's own three classification laws (owner/kind/
         # expiry), re-applied on a fresh install with no coordinator's hand — same
         # 15-min cadence class, offset from all eight siblings above so none contend for
