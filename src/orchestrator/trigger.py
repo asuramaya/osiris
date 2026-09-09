@@ -2041,16 +2041,38 @@ async def dispatch_dm(
                               "mid-turn) — its own turn's end surfaces the DM; no second "
                               "process beside a working mind"}
         # a fresh inode with no fresh TURN is an ASLEEP addressee — fall through and wake
-    doors = {Path(r["job_dir"]).name for r in await pool.fetch(
-        "SELECT job_dir FROM agent_mounts WHERE (agent_id=$1 "
-        "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)}
+    from src.orchestrator.mounts import is_live
+
+    door_rows = await pool.fetch(
+        "SELECT job_dir, last_seen FROM agent_mounts WHERE (agent_id=$1 "
+        "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)
+    doors = {Path(r["job_dir"]).name for r in door_rows}
     # THE DAEMON-REPLY RUNG LEADS — the VISIBLE hop (thread 4261a0d8; the ghost problem,
     # operator-confirmed solved 2026-07-20): the front renders the harness DAEMON's job
     # stream, so a daemon-owned turn is the one push the operator actually SEES. The
     # daemon's own list is also the address book for LIVE jobs (no door-row dependency —
     # bug b6a64207 shrinks to the daemon-dark case). Every failure falls OPEN into
     # poke/resume: undocumented internals never get to strand a message.
-    ids = doors | {d[:8] for d in doors}
+    #
+    # THE FRESHNESS FILTER (thread 962f32e2, Khnum's independent measurement 2c4a82de):
+    # `doors` above stays UNFILTERED — the poke lane below (`_window_for`) also reads it
+    # to match against the harness's own live WINDOW list, which is itself the liveness
+    # signal there (a provisional/spare mount can carry a null last_seen and still name a
+    # genuinely live window, mounts.save_mount's own docstring: "a heartbeat must be
+    # earned by an act, never granted by a greeting" — the window list is that act's own
+    # witness, agent_mounts.last_seen is not the only one). The DAEMON rung is different:
+    # `jobs(ids)` below asks an out-of-band oracle (the harness daemon's own registry)
+    # whether an id is a live job, with no independent liveness witness of its own for
+    # this dispatcher to cross-check — so a long-dead mount row (this agent_id's or an
+    # earlier generation's) handing its job_dir into `ids` risks wrong-body delivery if
+    # the daemon separately still lists a session under that same id (a zombie, a reused
+    # slot, an unrelated body sharing an 8-hex prefix) — the message lands on a body that
+    # is not the addressee's own live one, while a liveness PROBE elsewhere reports null
+    # for the actual head. `is_live()` (mounts.py's own shared liveness window,
+    # LIVENESS_WINDOW_MINUTES) is the same test `agent_liveness`/the launch-twin guard
+    # already trust for exactly this question — reused here, never a second window.
+    live_doors = {Path(r["job_dir"]).name for r in door_rows if is_live(r["last_seen"])}
+    ids = live_doors | {d[:8] for d in live_doors}
     if resume is not None:
         ids |= {resume[0], resume[0][:8]}
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
