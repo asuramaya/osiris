@@ -2845,6 +2845,75 @@ async def invalidate_works_in(
             "still_working_in": remaining, "because": because}
 
 
+async def retire_governs_edges(
+    actions: Actions, agent_id: str, repos: list[str], *, because: str, actor: str,
+) -> dict[str, Any]:
+    """Drop one or more of a THIRD-PARTY agent's own `governs` edges — the toolkit gap
+    named at thread a2d6bd36225f (atlas's 25-entry fragment governs list): a stale/off-
+    head Agent generation can carry live governs edges nobody wants moved forward
+    (`backfill_agent_project_links`'s own MOVE-onto-the-living-head repair is the wrong
+    shape for garbage — it would re-pollute a clean current head with exactly what this
+    retires instead), and `set_charter`/`charter_for` cannot see them at all (Seat-origin
+    only, by design — `invalidate_link(seat_oid, ...)`, never an Agent object). This is
+    the missing per-edge RETIRE, same generic/composable posture as `invalidate_works_in`
+    right above: never moves anything, never guesses which edges are garbage — the caller
+    names them, one call retires a whole batch under one shared `because`, each edge gets
+    its own compensating `invalidate_link` event.
+
+    Refuses LOUDLY on: blank `because`; `agent_id` not resolving to an active Agent; an
+    empty `repos` list. Per-repo, this never aborts the whole batch on one bad name — a
+    `repos` entry that doesn't resolve to a known SoftwareProject, or resolves but the
+    agent carries no live `governs` edge to it, is reported in `not_found`/`no_edge`
+    rather than raising, so the caller sees exactly what happened to every name it gave,
+    same discipline `set_charter`'s own `rejected` list already establishes."""
+    from src.orchestrator.projects import _resolve_project_ref
+
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — retiring a governs edge is a deliberate "
+                         "act on the record"}
+    agent_id = (agent_id or "").strip()
+    if not agent_id:
+        return {"error": "agent_id is required"}
+    agent_row = await actions.pool.fetchrow(
+        "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Agent' "
+        "AND status='active'", agent_id)
+    if agent_row is None:
+        return {"error": f"no such active Agent: {agent_id!r}"}
+    repos = [r.strip() for r in (repos or []) if r and r.strip()]
+    if not repos:
+        return {"error": "repos is required — at least one project name to retire"}
+
+    live = await actions.pool.fetch(
+        "SELECT to_id, t.canonical AS project FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='governs' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_row["id"])
+    live_by_id = {r["to_id"]: r["project"] for r in live}
+
+    now = datetime.now(UTC)
+    retired: list[str] = []
+    retired_ids: set[Any] = set()
+    not_found: list[str] = []
+    no_edge: list[str] = []
+    for name in repos:
+        proj_row, err = await _resolve_project_ref(actions.pool, name, verb="retire_governs")
+        if err or proj_row is None:
+            not_found.append(name)
+            continue
+        if proj_row["id"] not in live_by_id:
+            no_edge.append(name)
+            continue
+        await actions.invalidate_link(agent_row["id"], proj_row["id"], "governs", actor, now)
+        retired.append(str(proj_row["canonical"]))
+        retired_ids.add(proj_row["id"])
+    if retired:
+        await actions.assert_property(agent_row["id"], "governs_retired_because", because,
+                                      actor, now, _CONF, evidence_class=_EC)
+    remaining = sorted(v for k, v in live_by_id.items() if k not in retired_ids)
+    return {"agent": agent_row["canonical"], "retired": retired, "not_found": not_found,
+            "no_edge": no_edge, "still_governs": remaining, "because": because}
+
+
 async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID | None:
     """Find-or-create a SoftwareProject CASE-INSENSITIVELY on its bare label (thread
     69911d0c): both mint_heir and register_agent used to call

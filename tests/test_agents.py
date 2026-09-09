@@ -3386,6 +3386,159 @@ async def test_invalidate_works_in_refuses_the_agents_only_live_edge(
         "AND (valid_until IS NULL OR valid_until > now())", a, only) == 1
 
 
+# ═══ retire_governs_edges (thread a2d6bd36225f, atlas's 25-entry fragment governs list) ═══
+
+async def test_retire_governs_edges_drops_named_edges_and_leaves_the_rest(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import retire_governs_edges
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:rge1aaaaa", "test")
+    garbage1 = await actions.create_or_find_object("SoftwareProject", "repo:rge1garbage1", "test")
+    garbage2 = await actions.create_or_find_object("SoftwareProject", "repo:rge1garbage2", "test")
+    real = await actions.create_or_find_object("SoftwareProject", "repo:rge1real", "test")
+    for p in (garbage1, garbage2, real):
+        await actions.create_link(a, p, "governs", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await retire_governs_edges(
+        actions, "agent:rge1aaaaa", ["rge1garbage1", "rge1garbage2"],
+        because="fragment/backfill garbage, per decision 6ccd60d222d8", actor="test")
+
+    assert sorted(out["retired"]) == ["repo:rge1garbage1", "repo:rge1garbage2"]
+    assert out["not_found"] == [] and out["no_edge"] == []
+    assert out["still_governs"] == ["repo:rge1real"]
+    for p in (garbage1, garbage2):
+        assert await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+            "AND (valid_until IS NULL OR valid_until > now())", a, p) is None
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, real) == 1
+    reason = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
+        "ON a.object_id=o.id AND a.name='governs_retired_because' "
+        "WHERE o.canonical=$1", "agent:rge1aaaaa")
+    assert reason == "fragment/backfill garbage, per decision 6ccd60d222d8"
+
+
+async def test_retire_governs_edges_reports_not_found_and_no_edge_without_aborting(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import retire_governs_edges
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:rge2aaaaa", "test")
+    garbage = await actions.create_or_find_object("SoftwareProject", "repo:rge2garbage", "test")
+    unrelated = await actions.create_or_find_object("SoftwareProject", "repo:rge2unrelated",
+                                                     "test")
+    await actions.create_link(a, garbage, "governs", "test", now, 0.9,
+                              evidence_class="self_declared")
+    _ = unrelated  # never linked to `a` — the "no_edge" case
+
+    out = await retire_governs_edges(
+        actions, "agent:rge2aaaaa",
+        ["rge2garbage", "rge2unrelated", "no-such-project-anywhere"],
+        because="test", actor="test")
+
+    assert out["retired"] == ["repo:rge2garbage"]
+    assert out["no_edge"] == ["rge2unrelated"]
+    assert out["not_found"] == ["no-such-project-anywhere"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, garbage) is None
+
+
+async def test_retire_governs_edges_refuses_blank_because(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_governs_edges
+
+    now = datetime.now(UTC)
+    a = await actions.create_or_find_object("Agent", "agent:rge3aaaaa", "test")
+    p = await actions.create_or_find_object("SoftwareProject", "repo:rge3p", "test")
+    await actions.create_link(a, p, "governs", "test", now, 0.9, evidence_class="self_declared")
+
+    out = await retire_governs_edges(actions, "agent:rge3aaaaa", ["rge3p"], because=" ",
+                                     actor="test")
+    assert "because is required" in out["error"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", a, p) == 1
+
+
+async def test_retire_governs_edges_refuses_an_unknown_agent(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_governs_edges
+
+    out = await retire_governs_edges(actions, "agent:no-such-one", ["whatever"],
+                                     because="test", actor="test")
+    assert "no such active Agent" in out["error"]
+
+
+async def test_retire_governs_edges_refuses_an_empty_repos_list(actions: Actions) -> None:
+    from src.orchestrator.agents import retire_governs_edges
+
+    await actions.create_or_find_object("Agent", "agent:rge4aaaaa", "test")
+    out = await retire_governs_edges(actions, "agent:rge4aaaaa", [], because="test",
+                                     actor="test")
+    assert "repos is required" in out["error"]
+
+
+# ═══ agent(action='retire_governs') — the MCP third-party door ══════════════════════
+
+async def test_agent_retire_governs_drops_a_third_partys_edges(actions: Actions) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    now = datetime.now(UTC)
+    victim = await actions.create_or_find_object("Agent", "agent:rgemcp1victim", "test")
+    garbage = await actions.create_or_find_object(
+        "SoftwareProject", "repo:rgemcp1garbage", "test")
+    real = await actions.create_or_find_object("SoftwareProject", "repo:rgemcp1real", "test")
+    await actions.create_link(victim, garbage, "governs", "test", now, 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(victim, real, "governs", "test", now, 0.9,
+                              evidence_class="self_declared")
+
+    caller = AgentIdentity(agent_id="agent:rgemcp1caller", session="rgemcp1", project="osiris",
+                           model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                           model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = caller
+    try:
+        out = await srv._agent_impl(
+            "retire_governs", agent_id="agent:rgemcp1victim", repos=["rgemcp1garbage"],
+            because="stale off-head fragment, per decision 6ccd60d222d8", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["retired"] == ["repo:rgemcp1garbage"]
+    assert out["still_governs"] == ["repo:rgemcp1real"]
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
+        "AND (valid_until IS NULL OR valid_until > now())", victim, garbage) is None
+
+
+async def test_agent_retire_governs_refuses_before_mount(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv._agent_impl(
+            "retire_governs", agent_id="agent:rgemcp2", repos=["whatever"],
+            because="test", ctx=None)
+    finally:
+        srv._pool = saved_pool
+    assert "mount first" in out["error"]
+
+
 async def test_invalidate_works_in_mcp_wrapper_self_scopes_to_the_caller(
     actions: Actions,
 ) -> None:

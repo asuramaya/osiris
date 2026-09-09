@@ -1392,7 +1392,16 @@ TOOL_CONTRACT_EXPECTED_COUNT = 76
 # and no way to stop fighting an operator's own hand-rename forever. No new tool, load-
 # bearing growth per this file's own escape valve. Measured exact (115,855), not
 # estimated.
-TOOL_CONTRACT_CEILING_CHARS = 116153
+# 116,153 -> 116,969 (2026-09-09, operator's word via Thoth DM 8697 item 2): `agent(
+# action='retire_governs')` — a genuinely new AGENT_INPUT_SCHEMA branch (agent_id/
+# repos/because) plus a one-line ACTION TABLE entry, exposing a THIRD-PARTY per-edge
+# governs retirement (agents.py's retire_governs_edges) that never existed: charter_for/
+# set_charter only ever write Seat-origin governs edges, structurally blind to the
+# Agent-origin ones a stale off-head generation can carry, and
+# backfill_agent_project_links's own off-head repair MOVES edges onto the living head --
+# exactly wrong for garbage. No new tool, load-bearing growth per this file's own
+# escape valve. Measured exact (116,969), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 116969
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
