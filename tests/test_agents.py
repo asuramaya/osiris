@@ -4111,6 +4111,46 @@ async def test_fleet_surfaces_a_live_agents_context_pct_as_a_seam_reading(
     assert "%ctx" not in quiet_line  # no reading ever stamped for this one
 
 
+async def test_fleet_surfaces_a_live_agents_harness_caps(actions: Actions) -> None:
+    """Wave 13 item 3, thread e7f173a6: fleet()'s own tree carries a LIVE node's own
+    stamped harness (mount()'s own new write, _infer_harness) as a trailing
+    'caps: <names>' token — a body with no stamp shows the box's own resolved adapter,
+    marked '(box default)'."""
+    from src import mcp_server as srv
+    from src.orchestrator import mounts
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:capstest", "test")
+    await actions.assert_property(proj, "name", "capstest", "test", datetime.now(UTC), 0.9)
+
+    stamped, unstamped = "agent:capstest1", "agent:capstest2"
+    for a in (stamped, unstamped):
+        obj = await actions.create_or_find_object("Agent", a, a)
+        await actions.assert_property(obj, "project", "capstest", a, datetime.now(UTC), 0.9,
+                                      evidence_class=EvidenceClass.SELF_DECLARED.value)
+        await mounts.save_mount(actions.pool, job_dir=f"/j/{a.replace(':', '_')}", agent_id=a,
+                                project="capstest", cwd="/x", model="claude-fable-5",
+                                session_key=a)
+    stamped_obj = await actions.create_or_find_object("Agent", stamped, stamped)
+    await actions.assert_property(stamped_obj, "harness", "crush", stamped,
+                                  datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+
+    stamped_line = next(line for line in out["tree"].splitlines() if stamped in line)
+    unstamped_line = next(line for line in out["tree"].splitlines() if unstamped in line)
+    assert "caps:" in stamped_line
+    assert "(box default)" not in stamped_line
+    assert "spawn" in stamped_line  # crush's own real capabilities
+    assert "caps:" in unstamped_line
+    assert "(box default)" in unstamped_line
+
+
 async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> None:
     """heinrich's ghost-seat filing (thread 1fe6811c) made visible, PER-IDENTITY (thread #174,
     2026-08-18): 'ghosttown' carries BOTH a false-live row (a mount with no real process behind

@@ -1128,6 +1128,55 @@ async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
     return len(folded)
 
 
+async def harness_backfill_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE HARNESS SIGNAL'S OWN CATCH-UP (wave 13 item 3, thread e7f173a6, Thoth's ruling
+    msg 8544): mount() stamps a `harness` property going forward, but every mind mounted
+    before this wave's own deploy carries no stamp — the fleet render would show every
+    one of them as "(box default)" forever, never true, until a coincidental remount.
+    This sweeps recently-seen `agent_mounts` rows (last_seen within a day — the live
+    fleet's own window, never the whole historical mount table) whose Agent carries no
+    `harness` assertion yet, and stamps one from the SAME `_infer_harness` classifier
+    mount() itself calls — never a second copy of that shape.
+
+    Same "one bad row must not abort the sweep" law as `backfill`'s own per-session
+    try/except, and unconditional (no settings kill switch) — a read-only classification
+    off an anchor's own shape, the same class of mechanical, always-on sweep
+    classification_laws_heartbeat already is, never a write an operator would want to
+    veto."""
+    from datetime import UTC, datetime
+
+    from src.mcp_server import _infer_harness
+
+    actions: Actions = ctx["cascade"].actions
+    pool = actions.pool
+    try:
+        rows = await pool.fetch(
+            "SELECT DISTINCT ON (m.agent_id) o.id AS object_id, m.agent_id, m.cwd, "
+            "m.job_dir FROM agent_mounts m JOIN objects o ON o.canonical = m.agent_id "
+            "AND o.type = 'Agent' WHERE m.last_seen > now() - interval '1 day' "
+            "AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "                WHERE a.object_id = o.id AND a.name = 'harness') "
+            "ORDER BY m.agent_id, m.last_seen DESC")
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("harness backfill heartbeat failed: %r", exc)
+        return 0
+    stamped = 0
+    for row in rows:
+        try:
+            harness = _infer_harness(row["cwd"], row["job_dir"])
+            await actions.assert_property(
+                row["object_id"], "harness", harness, source_id="cron:harness_backfill",
+                observed_at=datetime.now(UTC), confidence=0.7,
+                actor="cron:harness_backfill_heartbeat")
+            stamped += 1
+        except Exception as exc:  # noqa: BLE001 — one bad row must not abort the sweep
+            _log.warning("harness backfill failed for %s: %r", row["agent_id"], exc)
+            continue
+    if stamped:
+        _log.info("harness backfill heartbeat: stamped %d agent(s)", stamped)
+    return stamped
+
+
 def watched(fn: Any, *, every: int) -> Any:
     """THE SEAM WHERE A JOB CANNOT LIE ABOUT ITS OWN HEALTH.
 
@@ -1353,6 +1402,14 @@ class WorkerSettings:
         # so this wave's own deploy gets its first fold pass immediately.
         cron(watched(soul_cold_tier_heartbeat, every=86400), hour={3}, minute={45},
              second={0}, timeout=600, run_at_startup=True),
+        # wave 13 item 3: the harness signal's own catch-up sweep — same 15-min cadence
+        # class as classification_laws_heartbeat/obligation_hygiene_heartbeat, offset
+        # from all nine so none contend for CPU at the same wall-clock second.
+        # run_at_startup=True so this wave's own deploy backfills the live fleet
+        # immediately, not after 15 minutes of every remaining body reading "(box
+        # default)". Unconditional — read-only classification, no kill switch.
+        cron(watched(harness_backfill_heartbeat, every=900), minute={8, 23, 38, 53},
+             second={50}, timeout=600, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

@@ -122,6 +122,7 @@ def _group_order_key(
 def _render_expanded(
     canon: str, indent: int, nodes: dict[str, Node], kids: dict[str | None, list[str]],
     lines: list[str], *, full: bool, context_pct: dict[str, int] | None = None,
+    harness_caps: dict[str, tuple[str, bool]] | None = None,
 ) -> None:
     n = nodes[canon]
     prefix = "  " + "    " * indent + ("└─ " if indent else "")
@@ -136,6 +137,17 @@ def _render_expanded(
         pct = context_pct.get(canon)
         if pct is not None:
             line += f"  {pct}%ctx"
+    # THE HARNESS CAPS (wave 13 item 3, thread e7f173a6): a LIVE node's own adapter
+    # capabilities, same additive-optional shape — `(caps, is_default)` from the
+    # caller's own batched lookup (fleet()'s own harness_caps dict, never re-derived
+    # here). `is_default` names a body with no stamp of its own (mounted before this
+    # wave) so the box's own resolved-adapter fallback reads as a fallback, never
+    # passed off as an observed fact — "(box default)" is plain text, no color.
+    if harness_caps is not None and n.get("live"):
+        entry = harness_caps.get(canon)
+        if entry is not None:
+            caps, is_default = entry
+            line += f"  caps: {caps}" + (" (box default)" if is_default else "")
     lines.append(line.rstrip())
     children = kids.get(canon, [])
     if not children:
@@ -143,7 +155,8 @@ def _render_expanded(
     expand = [c for c in children if full or _any_live(c, nodes, kids)]
     fold = [c for c in children if c not in expand]
     for c in _sort_roots(expand, nodes):
-        _render_expanded(c, indent + 1, nodes, kids, lines, full=full, context_pct=context_pct)
+        _render_expanded(c, indent + 1, nodes, kids, lines, full=full, context_pct=context_pct,
+                         harness_caps=harness_caps)
     if fold:
         folded = [d for c in fold for d in _subtree(c, kids)]
         pad = "  " + "    " * (indent + 1) + "└─ "
@@ -154,6 +167,7 @@ def render_fleet_tree(
     nodes: dict[str, Node], *, full: bool = False, os_bodies: dict[str, int] | None = None,
     ghost_gap: dict[str, dict[str, list[Any]]] | None = None,
     context_pct: dict[str, int] | None = None,
+    harness_caps: dict[str, tuple[str, bool]] | None = None,
 ) -> str:
     """The glanceable fleet: one section per project, live expanded, retired collapsed.
 
@@ -172,6 +186,11 @@ def render_fleet_tree(
     property _co_agents already reads for the mount/orient briefing, never a second copy of
     that query's own shape). A LIVE node carrying a reading grows a trailing "NN%ctx" token;
     everything else about the line is unchanged.
+
+    `harness_caps` (wave 13 item 3, thread e7f173a6) is the SAME additive-optional shape
+    again: canonical -> (space-joined capability names, is_default). A LIVE node carrying
+    an entry grows a trailing "caps: <names>" token, "(box default)" appended when the
+    body carries no stamp of its own — never colored, never a second query shape.
 
     ALWAYS PLAIN TEXT (ruling f6b758fc requirement 3, split from this function after a live
     regression): color is `cli_render.paint_fleet_text`'s own job, applied to this function's
@@ -239,7 +258,8 @@ def render_fleet_tree(
         expand = [r for r in proj_roots if full or _any_live(r, nodes, kids)]
         fold = [r for r in proj_roots if r not in expand]
         for r in expand:
-            _render_expanded(r, 0, nodes, kids, lines, full=full, context_pct=context_pct)
+            _render_expanded(r, 0, nodes, kids, lines, full=full, context_pct=context_pct,
+                             harness_caps=harness_caps)
         if fold:
             latest = _latest(fold, nodes)
             note = f" (latest {_id_label(latest, nodes)})" if latest else ""
