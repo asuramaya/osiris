@@ -879,6 +879,32 @@ def _sane_job_dir(value: str | None) -> str | None:
     return value
 
 
+def _infer_harness(cwd: str | None, job_dir: str | None) -> str:
+    """WHICH PROCESSADAPTER'S CAPABILITIES APPLY TO THIS BODY (wave 13 item 3, thread
+    e7f173a6, Thoth's ruling msg 8544) — read off the anchor's own SHAPE, never asked
+    for or assumed: a job_dir under `~/.claude/jobs/` is Claude Code's own convention
+    (CLAUDE_JOB_DIR); a DSH workspace anchors under `~/.dsh/`; a crush session anchors
+    under a project's (or seat office's) own `.crush/` data dir. Checks `job_dir` first
+    (the more durable anchor when both are given), then `cwd`. Ambiguous or missing —
+    neither string names a known harness's own directory shape — falls back to the
+    box's own resolved adapter (`resolve_process_adapter().name`), the SAME "declared,
+    not guessed" discipline items 1/2 already hold: a body with no legible anchor shape
+    is presumed to run whatever this box's own settings/auto-detection already resolve
+    to, never a finer guess than that."""
+    from src.orchestrator.harness_process import resolve_process_adapter
+
+    for candidate in (job_dir, cwd):
+        if not candidate:
+            continue
+        if "/.claude/jobs/" in candidate:
+            return "claude-code"
+        if "/.dsh/" in candidate:
+            return "dsh"
+        if "/.crush/" in candidate or candidate.rstrip("/").endswith(".crush"):
+            return "crush"
+    return resolve_process_adapter().name
+
+
 def _anchorless(ctx: Context | None) -> str:
     """WHY this call could not be re-attached — the difference between a mystery and a message.
 
@@ -2597,9 +2623,18 @@ async def mount(
     # credentialed act, the first authenticated breath IN a seat's own office.
     registered = bool(lived or viewed is not None or claimed_office is not None)
     if registered:
-        await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
-                             expected_model=await _expected_model(pool, cwd, ident.project),
-                             mint_reason=mount_mint_reason)
+        agent_uuid = await register_agent(
+            Actions(pool), ident, actor=settings.osiris_actor,
+            expected_model=await _expected_model(pool, cwd, ident.project),
+            mint_reason=mount_mint_reason)
+        # THE HARNESS SIGNAL (wave 13 item 3, thread e7f173a6, Thoth's ruling msg 8544):
+        # additive-only, never touching register_agent's own identity/succession
+        # machinery — a fleet render needs to know WHICH ProcessAdapter's capabilities
+        # apply to this body, and until now nothing stamped that fact anywhere.
+        await Actions(pool).assert_property(
+            agent_uuid, "harness", _infer_harness(cwd, job_dir),
+            source_id=ident.agent_id, observed_at=datetime.now(UTC), confidence=0.9,
+            actor=settings.osiris_actor)
     elif not ident.resolved:
         # THE THIRD STATE (Thoth DM 4345): a VISITOR (a real anchor that simply matched no
         # lineage) is a different fact from an UNRESOLVABLE arrival (no anchor at all) —
@@ -5136,6 +5171,35 @@ async def fleet(full: bool = False) -> dict[str, Any]:
             context_pct = {r["agent_id"]: int(r["pct"]) for r in pct_rows if r["pct"] is not None}
     except Exception:  # noqa: BLE001
         pass
+    # THE HARNESS SIGNAL (wave 13 item 3, thread e7f173a6, Thoth's ruling msg 8544): each
+    # LIVE node's own stamped harness (mount()'s own new write — see _infer_harness),
+    # SAME batched-by-canonical shape as context_pct just above, never a second query
+    # pattern. A body carrying no stamp (mounted before this wave) shows the box's own
+    # resolved adapter, explicitly marked as the fallback rather than passed off as
+    # observed — `render_fleet_tree` reads that distinction off the `(caps, is_default)`
+    # tuple this dict holds, never re-deriving it.
+    harness_caps: dict[str, tuple[str, bool]] = {}
+    try:
+        from src.orchestrator.harness_process import _ADAPTER_CLASSES, resolve_process_adapter
+
+        live_canonicals = [c for c, n in nodes.items() if n["live"]]
+        if live_canonicals:
+            harness_rows = await pool.fetch(
+                "SELECT DISTINCT ON (o.canonical) o.canonical AS agent_id, "
+                "a.value #>> '{}' AS harness "
+                "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
+                "WHERE o.canonical = ANY($1::text[]) AND a.name = 'harness' "
+                "ORDER BY o.canonical, a.confidence DESC, a.observed_at DESC",
+                live_canonicals)
+            stamped = {r["agent_id"]: r["harness"] for r in harness_rows if r["harness"]}
+            box_default = resolve_process_adapter().name
+            for canon in live_canonicals:
+                name = stamped.get(canon, box_default)
+                adapter_cls = _ADAPTER_CLASSES.get(name)
+                caps = sorted(adapter_cls().capabilities()) if adapter_cls else []
+                harness_caps[canon] = (" ".join(caps) or "none", canon not in stamped)
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
@@ -5154,7 +5218,8 @@ async def fleet(full: bool = False) -> dict[str, Any]:
         "seats": [{"seat": s["seat_id"], "handle": s["handle"], "house": s["house"],
                    "state": s["state"], "holder": s["holder"]} for s in seats],
         "tree": render_fleet_tree(nodes, full=full, os_bodies=os_bodies, ghost_gap=ghost_gap,
-                                  context_pct=context_pct or None),
+                                  context_pct=context_pct or None,
+                                  harness_caps=harness_caps or None),
         "registered": [
             {"agent": c, "model": n["model"], "project": n["project"], "depth": n["depth"],
              "parent": n["parent"], "live": n["live"], "retired": n["retired"],

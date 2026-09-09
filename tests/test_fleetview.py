@@ -356,6 +356,39 @@ def test_render_fleet_tree_with_no_context_pct_never_appends_anything() -> None:
     assert "%ctx" not in tree
 
 
+# ── the harness signal (thread e7f173a6, wave 13 item 3): harness_caps additive/optional
+# on render_fleet_tree ───────────────────────────────────────────────────────────────────
+
+def test_render_fleet_tree_appends_caps_only_for_a_live_node_given_one() -> None:
+    nodes = {
+        "agent:live1": _n(live=True, ts=T1),
+        "agent:live2": _n(live=True, ts=T1),
+        "agent:old1": _n(ts=T0),  # not live -- folds into a swarm summary
+    }
+    tree = render_fleet_tree(
+        nodes, harness_caps={"agent:live1": ("spawn resume", False),
+                             "agent:old1": ("list_sessions", False)})
+    lines = {line.split("agent:")[1].split(" ")[0]: line for line in tree.splitlines()
+             if "agent:" in line}
+    assert "caps: spawn resume" in lines["live1"]
+    assert "caps:" not in lines["live2"]  # live, but no entry supplied
+    assert "list_sessions" not in tree  # old1's entry is never shown -- not a live node
+
+
+def test_render_fleet_tree_marks_a_box_default_caps_entry() -> None:
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    tree = render_fleet_tree(
+        nodes, harness_caps={"agent:live1": ("spawn resume reply list_sessions stop "
+                                             "materialize", True)})
+    assert "caps: spawn resume reply list_sessions stop materialize (box default)" in tree
+
+
+def test_render_fleet_tree_with_no_harness_caps_never_appends_anything() -> None:
+    nodes = {"agent:live1": _n(live=True, ts=T1)}
+    tree = render_fleet_tree(nodes)
+    assert "caps:" not in tree
+
+
 def test_paint_fleet_text_colors_a_seam_pct_below_whisper_unstyled() -> None:
     text = "  ● agent:live1  fable-5  30%ctx"
     colored = paint_fleet_text(text, Paint(enabled=True))

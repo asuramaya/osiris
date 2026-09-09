@@ -41,6 +41,11 @@ from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
 
 _HARNESS = "claude-code"
+_CRUSH_HARNESS = "crush"
+_CRUSH_ROW_COLUMNS = (
+    "id", "session_id", "role", "parts", "model", "provider",
+    "created_at", "updated_at", "finished_at", "is_summary_message",
+)
 
 # Default adapters for locating session files — tried in order
 _DEFAULT_ADAPTERS: list[HarnessAdapter] | None = None
@@ -230,6 +235,31 @@ def _chain_hash(prev_hash: str | None, raw_line: bytes) -> str:
         h.update(prev_hash.encode("utf-8"))
     h.update(raw_line)
     return h.hexdigest()
+
+
+def _crush_row_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    """One `messages` SQL row (fetched in `_CRUSH_ROW_COLUMNS` order) as a dict — the
+    shape `_crush_line_bytes` canonicalizes."""
+    return dict(zip(_CRUSH_ROW_COLUMNS, row, strict=True))
+
+
+def _crush_line_bytes(row: dict[str, Any]) -> bytes:
+    """The verbatim unit for a SQLite-backed harness (wave 13 item 2, thread 78efd46d
+    closing the gap soul store piece 1 named: "Crush is SQLite-backed... out of scope
+    here on purpose") — the equivalent of one JSONL line for claude-code, where crush
+    has no line-oriented file at all, only `messages` rows in a shared crush.db.
+
+    A CANONICAL, DETERMINISTIC ENCODING, not a copy of any file's bytes (there is no
+    file to be byte-exact to here) — `json.dumps(row, sort_keys=True)` so re-reading
+    the SAME row always re-encodes to the IDENTICAL bytes, which the hash chain's own
+    idempotent-resume law depends on (ingest_crush_session must never re-chain a
+    session differently on a second pass over unchanged rows).
+
+    `parts` (crush's own JSON-in-a-TEXT-column message body) rides as its RAW STORED
+    STRING VALUE, never re-parsed — a malformed `parts` value must never break ingest,
+    and re-parsing valid JSON and re-serializing it is an unnecessary second place this
+    byte shape could silently drift from what the row actually held."""
+    return json.dumps(row, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
 
 def _hash_rows(
@@ -613,6 +643,107 @@ class SoulStore:
             "WHERE harness = $1 AND anchor_sid = $2",
             harness, anchor_sid, source_path,
         )
+
+    async def ingest_crush_session(
+        self, db_path: str, session_id: str, anchor_sid: str,
+    ) -> int:
+        """VERBATIM INGEST FOR CRUSH (wave 13 item 2, thread 78efd46d, "crush sessions
+        become canonical"): closes the gap soul store piece 1 named on day one ("Crush
+        is SQLite-backed... needs its own verbatim strategy, out of scope here on
+        purpose") — this IS that strategy. One `messages` row is the verbatim unit
+        (`_crush_line_bytes`), hash-chained through the SAME `soul_lines` schema and
+        `_hash_rows` every other harness already uses; `harness='crush'` is the only
+        thing that differs from `ingest_path`.
+
+        RESUMABLE THE SAME WAY `ingest_path` IS: `soul_sessions.last_line_idx` tracks
+        how many messages (by `rowid` order, matching `read_turns`'s own ordering) are
+        already ingested for `(harness='crush', anchor_sid)` — only new rows are
+        hashed and inserted, never a full re-chain. `db_path` (crush.db's own path) is
+        recorded as `source_path`; ONE crush.db holds MANY sessions, so it is never
+        sufficient alone to scope a read — `(harness, anchor_sid)` is what actually
+        does that, same as it already must for a spliced multi-file claude-code chain.
+
+        Read via `asyncio.to_thread` (sqlite3 is a blocking C extension; this module
+        already keeps every DB call off the event loop the same way `verify_round_
+        trip_sample`'s own `_hash_file_streamed` call does). Returns the count of NEW
+        messages ingested — 0 both when the session has no new messages and when
+        `db_path`/`session_id` resolve to nothing (a vanished or malformed db is a
+        skip, never a raised exception, matching `backfill`'s own per-session
+        tolerance)."""
+        import asyncio
+        import sqlite3
+
+        def _read_rows() -> list[tuple[Any, ...]]:
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            except sqlite3.Error:
+                return []
+            try:
+                cols = ", ".join(_CRUSH_ROW_COLUMNS)
+                return conn.execute(
+                    f"SELECT {cols} FROM messages WHERE session_id = ? "
+                    "ORDER BY rowid ASC", (session_id,),
+                ).fetchall()
+            except sqlite3.Error:
+                return []
+            finally:
+                conn.close()
+
+        rows = await asyncio.to_thread(_read_rows)
+        if not rows:
+            return 0
+        idx, prev_hash = await self._progress(anchor_sid, harness=_CRUSH_HARNESS)
+        new_rows = rows[idx:]
+        if not new_rows:
+            return 0
+        lines = [_crush_line_bytes(_crush_row_dict(r)) for r in new_rows]
+        hashed, next_idx, next_prev = _hash_rows(
+            _CRUSH_HARNESS, anchor_sid, lines, idx, prev_hash)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(
+                    "INSERT INTO soul_lines "
+                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, "
+                    "    prev_hash) "
+                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                    "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
+                    hashed,
+                )
+                await self._checkpoint(
+                    _CRUSH_HARNESS, anchor_sid, db_path, next_idx, next_prev, conn=conn)
+        return len(new_rows)
+
+    async def backfill_crush(self, *, limit_per_db: int = 0) -> dict[str, int]:
+        """The periodic sweep for crush, mirroring `backfill`'s own claude-code sweep
+        but over `CrushSqliteAdapter.enumerate()`'s session locators instead of files —
+        every crush session this box can discover gets `ingest_crush_session`'d.
+        INCREMENTAL BY CONSTRUCTION (not a stat-gate like `backfill`'s own file-mtime
+        check — one crush.db holds many sessions, so the FILE'S mtime moving says
+        nothing about which session changed): `ingest_crush_session` already resumes
+        from `last_line_idx` and returns 0 new rows on an unchanged session, so a
+        steady-state sweep costs one SQLite query per session, never a full re-chain.
+
+        One bad session must not abort the sweep (`backfill`'s own per-session
+        try/except law). Returns `{db_path: sessions_touched}` — sessions with at
+        least one new message ingested, mirroring `backfill`'s own per-adapter count
+        shape closely enough for a caller summing totals to stay simple."""
+        from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+
+        counts: dict[str, int] = {}
+        per_db: dict[str, int] = {}
+        for locator in CrushSqliteAdapter().enumerate():
+            db_path = locator.source_path
+            if limit_per_db and per_db.get(db_path, 0) >= limit_per_db:
+                continue
+            try:
+                new = await self.ingest_crush_session(
+                    db_path, locator.session_id, locator.anchor_sid)
+            except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
+                continue
+            if new:
+                counts[db_path] = counts.get(db_path, 0) + 1
+                per_db[db_path] = per_db.get(db_path, 0) + 1
+        return counts
 
     async def splice_sources(
         self, anchor_sid: str, source_paths: list[str], *, harness: str | None = None,
@@ -1477,6 +1608,75 @@ class SoulStore:
                                  f"{src_hash[:12]}…",
                     })
         return RoundTripReport(failures=failures, skipped_live=skipped_live)
+
+    async def verify_crush_round_trip_sample(self, *, n: int = 20) -> RoundTripReport:
+        """THE ROUND-TRIP PROOF, CRUSH'S OWN VERSION (wave 13 item 2): `verify_round_
+        trip_sample` above compares a rematerialized FILE against the disk copy it came
+        from — meaningless for crush, where there is no per-session file, only rows in
+        a crush.db shared by many sessions. Here the comparison is LIVE: re-read the
+        session's messages from its own crush.db right now, re-canonicalize each with
+        the SAME `_crush_line_bytes` ingest used, and compare against what soul_lines
+        (or the cold tier) actually stored — proving the store still agrees with the
+        source, not just that it once did.
+
+        `anchor_sid` only ever carries an 8-char PREFIX of crush's own session id
+        (`CrushSqliteAdapter.discover`'s own truncation) — never stored durably as the
+        full id anywhere — so the full id is re-resolved the SAME way `discover` itself
+        does (`id LIKE prefix || '%'`), never guessed or reconstructed a second way.
+
+        A session whose db no longer exists, or whose id no longer resolves (deleted,
+        vacuumed since ingest), is SKIPPED — the same law `verify_round_trip_sample`
+        already holds: absence is item 4's own concern, never proof the store is
+        wrong. `skipped_live` stays 0 here — crush has no observed mtime-vs-ingest
+        staleness signal the way a JSONL file does; a message row is either there or
+        it isn't."""
+        import asyncio
+        import sqlite3
+
+        rows = await self.pool.fetch(
+            "SELECT anchor_sid, source_path FROM soul_sessions WHERE harness=$1 "
+            "ORDER BY random() LIMIT $2", _CRUSH_HARNESS, n)
+        failures: list[dict[str, str]] = []
+        for row in rows:
+            anchor_sid, db_path = row["anchor_sid"], row["source_path"]
+            if not _path_is_file(Path(db_path)):
+                continue
+            stored = await self._all_raw_lines(_CRUSH_HARNESS, anchor_sid)
+            if stored is None:
+                continue
+
+            def _read_live(db_path: str = db_path, anchor_sid: str = anchor_sid,
+                            ) -> list[tuple[Any, ...]] | None:
+                try:
+                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                except sqlite3.Error:
+                    return None
+                try:
+                    full_id = conn.execute(
+                        "SELECT id FROM sessions WHERE id LIKE ? || '%' LIMIT 1",
+                        (anchor_sid,)).fetchone()
+                    if full_id is None:
+                        return None
+                    cols = ", ".join(_CRUSH_ROW_COLUMNS)
+                    return conn.execute(
+                        f"SELECT {cols} FROM messages WHERE session_id = ? "
+                        "ORDER BY rowid ASC", (full_id[0],)).fetchall()
+                except sqlite3.Error:
+                    return None
+                finally:
+                    conn.close()
+
+            live_rows = await asyncio.to_thread(_read_live)
+            if live_rows is None:
+                continue
+            live_lines = [_crush_line_bytes(_crush_row_dict(r)) for r in live_rows]
+            if live_lines != stored:
+                failures.append({
+                    "anchor_sid": anchor_sid,
+                    "error": f"crush live mismatch — {len(stored)} line(s) stored, "
+                             f"{len(live_lines)} live, content diverges",
+                })
+        return RoundTripReport(failures=failures, skipped_live=0)
 
 
 def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:

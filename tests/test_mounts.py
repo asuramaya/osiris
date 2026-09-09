@@ -2356,3 +2356,112 @@ async def test_mount_never_runs_lineage_memory_custody_for_a_genuine_visitor(
 
     assert "visitor" in out
     assert called is False
+
+
+# ═══ wave 13 item 3 (thread e7f173a6): the per-agent harness signal ═════════════════════
+
+def test_infer_harness_reads_the_anchor_shape() -> None:
+    from src.mcp_server import _infer_harness
+
+    assert _infer_harness(None, "/home/x/.claude/jobs/abc123") == "claude-code"
+    assert _infer_harness("/home/x/code/widget", "/home/x/.claude/jobs/abc123") \
+        == "claude-code"
+    assert _infer_harness(None, "/home/x/.dsh/sessions/--home-x-code-widget") == "dsh"
+    assert _infer_harness("/home/x/.osiris/seats/thoth/.crush", None) == "crush"
+    assert _infer_harness("/home/x/code/widget/.crush", None) == "crush"
+
+
+def test_infer_harness_falls_back_to_the_box_resolved_adapter_when_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.mcp_server import _infer_harness
+    from src.orchestrator import harness_process
+
+    class _FakeAdapter:
+        name = "crush"
+
+    monkeypatch.setattr(
+        harness_process, "resolve_process_adapter", lambda *a, **k: _FakeAdapter())
+    assert _infer_harness(None, None) == "crush"
+    assert _infer_harness("/home/x/code/widget", "/tmp/nothing-recognizable") == "crush"
+
+
+async def test_mount_stamps_the_harness_property(actions: Actions, tmp_path: Path) -> None:
+    """A bare/unbound mount is a VISITOR (registry row only, no Agent object minted —
+    see the visitor branch above) — the harness stamp only ever applies to a
+    REGISTERED mount, so this seeds a bound mount first (same precedent as
+    test_mount_tool_honors_a_bound_seat) to reach that branch."""
+    from src import mcp_server as srv
+
+    job_dir = str(tmp_path / ".claude" / "jobs" / "cafe0001")
+    await mounts.save_mount(
+        actions.pool, job_dir=job_dir, agent_id="agent:cafe0001-i",
+        project="osiris", cwd=str(tmp_path / "o"), model=None,
+        session_key="whisper:cafe0001")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=str(tmp_path / "o"), job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+    assert out.get("error") is None
+    assert out["agent"] == "agent:cafe0001-i"
+    harness = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.canonical=$1 AND a.name='harness'",
+        out["agent"])
+    assert harness == "claude-code"
+
+
+async def test_harness_backfill_heartbeat_stamps_an_unstamped_live_mount(
+    actions: Actions,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.workers.arq_worker import harness_backfill_heartbeat
+
+    agent_id = "agent:backfill01"
+    await actions.create_or_find_object("Agent", agent_id, agent_id)
+    job_dir = "/home/x/.claude/jobs/backfill01"
+    await mounts.save_mount(
+        actions.pool, job_dir=job_dir, agent_id=agent_id, project="osiris",
+        cwd="/home/x/code/widget", model=None, session_key="backfill01")
+
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    stamped = await harness_backfill_heartbeat(ctx)
+    assert stamped == 1
+
+    harness = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.canonical=$1 AND a.name='harness'", agent_id)
+    assert harness == "claude-code"
+
+    # a second run finds nothing left to stamp
+    again = await harness_backfill_heartbeat(ctx)
+    assert again == 0
+
+
+async def test_harness_backfill_heartbeat_never_touches_an_already_stamped_agent(
+    actions: Actions,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.parsers.base import EvidenceClass
+    from src.workers.arq_worker import harness_backfill_heartbeat
+
+    agent_id = "agent:backfill02"
+    obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(
+        obj, "harness", "crush", agent_id, datetime.now(UTC), 0.9,
+        evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(
+        actions.pool, job_dir="/home/x/.claude/jobs/backfill02", agent_id=agent_id,
+        project="osiris", cwd="/home/x/code/widget", model=None,
+        session_key="backfill02")
+
+    ctx = {"cascade": SimpleNamespace(actions=actions)}
+    assert await harness_backfill_heartbeat(ctx) == 0
+    harness = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
+        "ON o.id = a.object_id WHERE o.canonical=$1 AND a.name='harness'", agent_id)
+    assert harness == "crush"  # untouched, never overwritten

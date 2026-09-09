@@ -233,7 +233,9 @@ def _format_round_trip_failure(failures: list[dict[str, str]] | None) -> str | N
             "— a backup that's never been restored is a hope, not a backup")
 
 
-async def collect_soul_store_coverage(root: Path | None = None) -> int | None:
+async def collect_soul_store_coverage(
+    root: Path | None = None, *, check_crush: bool = True,
+) -> int | None:
     """THE SOUL STORE'S OWN COVERAGE GUARANTEE (thread 78efd46d, "let osiris eat every
     agent history": "a session on disk and not in the store is a preflight failure,
     never a quiet gap"). Every Claude Code transcript this box can see — the SAME
@@ -241,26 +243,47 @@ async def collect_soul_store_coverage(root: Path | None = None) -> int | None:
     and that sweep can never disagree on what counts as a session — must have a
     soul_sessions row. Returns the count missing, or None when there's nothing to walk
     (no transcripts root configured/present here — not a failure, just nothing to check
-    in this environment)."""
+    in this environment).
+
+    EXTENDED TO CRUSH (wave 13 item 2, "crush sessions become canonical"): the SAME
+    `CrushSqliteAdapter.enumerate()` walk `backfill_crush` already trusts, checked
+    against `harness='crush'` soul_sessions rows — one combined missing-count so this
+    function's contract (an int, or None when nothing to check) never has to change for
+    every caller/test that already reads it that way. `root` only ever scopes the
+    claude-code half — crush's own discovery walks the REAL `projects.json` + seat
+    offices UNCONDITIONALLY (`CrushSqliteAdapter.enumerate` takes no root at all), so
+    unlike the claude-code half this can never be sandboxed by a caller-supplied path.
+
+    `check_crush=False` skips the crush half entirely (only a caller that genuinely
+    wants to isolate the claude-code-only behavior — e.g. a test asserting "nothing to
+    check" against an empty/fake root — should ever pass this; every real preflight
+    run wants both, the default)."""
     from src.ingest.harness.claude_jsonl import ClaudeJsonlAdapter
 
     base = root or Path(os.environ.get("OSIRIS_TRANSCRIPTS")
                         or Path.home() / ".claude" / "projects")
-    if not base.is_dir():
-        return None
-    disk = {loc.anchor_sid for loc in ClaudeJsonlAdapter().enumerate(root=base)}
-    if not disk:
+    claude_disk = {loc.anchor_sid for loc in ClaudeJsonlAdapter().enumerate(root=base)} \
+        if base.is_dir() else set()
+    crush_disk: set[str] = set()
+    if check_crush:
+        from src.ingest.harness.crush_sqlite import CrushSqliteAdapter
+        crush_disk = {loc.anchor_sid for loc in CrushSqliteAdapter().enumerate()}
+    if not claude_disk and not crush_disk:
         return None
     pool = await asyncpg.create_pool(
         DSN, min_size=1, max_size=1,
         server_settings={"application_name": "osiris-script:preflight-soul-coverage"})
     try:
-        rows = await pool.fetch(
+        claude_rows = await pool.fetch(
             "SELECT anchor_sid FROM soul_sessions WHERE harness='claude-code'")
+        crush_rows = await pool.fetch(
+            "SELECT anchor_sid FROM soul_sessions WHERE harness='crush'")
     finally:
         await pool.close()
-    stored = {r["anchor_sid"] for r in rows}
-    return len(find_missing_sessions(disk, stored))
+    claude_stored = {r["anchor_sid"] for r in claude_rows}
+    crush_stored = {r["anchor_sid"] for r in crush_rows}
+    return (len(find_missing_sessions(claude_disk, claude_stored))
+            + len(find_missing_sessions(crush_disk, crush_stored)))
 
 
 def evaluate(m: dict) -> list[str]:
