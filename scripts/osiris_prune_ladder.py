@@ -20,11 +20,20 @@ needs to span one week's own chain -- this prunes whole weekly chains at a time 
 tarball plus the snapshot file sharing one week-key, together, never a partial chain),
 keeping the last 4 weekly chains plus one chain per calendar month beyond that.
 
-DRY-RUN IS THE ONLY WIRED MODE (operator's own word, relayed by Thoth: "do not delete
+DRY-RUN IS THE DEFAULT MODE (operator's own word, relayed by Thoth: "do not delete
 anything until I relay the operator's word on that list"). `--apply` exists so a human
-can actually execute the ladder ONCE that word has been given -- this script itself never
-calls it, and nothing here is wired into a timer/cron; running with `--apply` is a
-deliberate, always-manual act.
+can actually execute the ladder directly, by hand, any time -- this script itself never
+calls `--apply` on its own. `--manifest`/`--apply-if-clear` ARE wired into a weekly
+timer pair (thread 9fac4e0d part 1, deploy-managed per Thoth mail 8437) but stay gated
+the same way: `--apply-if-clear` refuses outright unless the prior day's `--manifest`
+brief is at least 20h old and was never dimmed (find_clear_manifest) -- the operator's
+own word, given in advance by not dimming, not an unconditioned cron.
+
+ALSO COVERS (Thoth mail 8441, both wired into the SAME manifest/apply-if-clear gate as
+everything above): the 35 legacy pre-week-key transcript tarballs (`plan_prune_
+legacy_tarballs`/`_scan_legacy_tarballs`) and the transcript-cache-prune session
+population (`_collect_session_prune_plan`, delegating to
+osiris_transcript_cache_prune.find_prunable_sessions unchanged).
 
 Pure logic (`plan_prune`) is tested directly; the CLI is a thin scan-report-optionally-
 delete shell around it."""
@@ -36,6 +45,12 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+if TYPE_CHECKING:
+    from scripts.osiris_transcript_cache_prune import SessionRow
 
 _NAME_RE = re.compile(r"^osiris-(\d{8})-(\d{6})\.(?:dump|sql)$")
 _BASEBACKUP_RE = re.compile(r"^osiris-basebackup-(\d{8})-(\d{6})\.tar\.gz$")
@@ -230,6 +245,39 @@ def _scan_transcript_chains(directory: Path) -> list[TranscriptChain]:
     return chains
 
 
+def plan_prune_legacy_tarballs(files: list[DumpFile]) -> dict[str, list[DumpFile]]:
+    """The pre-week-key transcript tarballs (thread 78efd46d item 3's own retirement,
+    Thoth mail 8441 item 2): `claude-transcripts-*` files that never reached the
+    finished, week-keyed shape `_scan_transcript_chains`/`_WEEK_RE` recognizes — 32
+    abandoned `.tar.gz.new` staging leftovers (the old archive block wrote to `.new`
+    then renamed on success; these never got that rename) plus 3 finished pre-week-key
+    `.tar.gz` files, 35 total on this box the day this was written. UNLIKE
+    `plan_prune_transcript_chains`'s own keep-4-plus-monthly ladder, this population is
+    REMOVED IN FULL, no ladder, no survivors: the transcript-tarball archive line is
+    retired (soul_lines now carries every byte, proven by the round-trip sweep against
+    the full population) and no restorability concern favors keeping any one of these
+    over another — they are just the last of a superseded scheme, invisible to every
+    prior manifest because nothing before this ever scanned for this shape at all."""
+    return {"keep": [], "remove": list(files)}
+
+
+def _scan_legacy_tarballs(vault: Path) -> list[DumpFile]:
+    """Every `claude-transcripts-*` file in the vault that `_scan_transcript_chains`
+    does NOT already own (i.e. does not match `_WEEK_RE`) — the complement, computed
+    against the SAME regex that function uses, so the two scans can never double-count
+    a single file between them. Matches both extensions on disk: finished `.tar.gz`
+    and abandoned `.tar.gz.new`."""
+    if not vault.is_dir():
+        return []
+    out = []
+    for p in sorted(vault.glob("claude-transcripts-*")):
+        if not p.is_file() or _WEEK_RE.match(p.name):
+            continue
+        out.append(DumpFile(str(p), datetime.fromtimestamp(p.stat().st_mtime, tz=UTC),
+                            p.stat().st_size))
+    return out
+
+
 def _report_chains_text(label: str, plan: dict[str, list[TranscriptChain]]) -> str:
     removed_bytes = sum(c.size_bytes for c in plan["remove"])
     lines = [f"\n{label} transcript chains: {len(plan['keep'])} kept, "
@@ -276,27 +324,56 @@ def _report_wal(plan: dict[str, list[WalSegment]]) -> None:
     print(_report_wal_text(plan))
 
 
+def _report_sessions_text(plan: list[SessionRow]) -> str:
+    """The transcript-cache-prune population (Thoth mail 8441 item 1) — unlike the
+    file-scan populations above, `plan` is already the finished list of prunable
+    sessions (osiris_transcript_cache_prune.find_prunable_sessions has already applied
+    the dead/fully-captured test); there is no separate "keep" side to report here,
+    same as that script's own dry-run print."""
+    lines = [f"\ntranscript cache (dead subagent session file(s)): {len(plan)} "
+             "would be removed"]
+    for s in plan[:10]:
+        lines.append(f"  PRUNE  {s.source_path}  (anchor {s.anchor_sid})")
+    if len(plan) > 10:
+        lines.append(f"  ... and {len(plan) - 10} more")
+    return "\n".join(lines)
+
+
+def _report_sessions(plan: list[SessionRow]) -> None:
+    print(_report_sessions_text(plan))
+
+
 def build_manifest_body(
     plans: dict[str, dict[str, list[DumpFile]]],
     chain_plan: dict[str, list[TranscriptChain]],
     wal_plan: dict[str, list[WalSegment]] | None = None,
+    legacy_plan: dict[str, list[DumpFile]] | None = None,
+    session_plan: list[SessionRow] | None = None,
 ) -> str:
     """Pure: the exact text mailed to the operator's desk (thread 9fac4e0d part 1) —
     the SAME wording the dry-run CLI prints, so a human reading the mail sees exactly
-    what a human running the command by hand would have seen. `wal_plan` optional
-    (thread 9fac4e0d part 2) — omitted callers/tests that predate WAL retention still
+    what a human running the command by hand would have seen. `wal_plan`, `legacy_plan`
+    (thread 9fac4e0d part 2 and Thoth mail 8441 item 2) and `session_plan` (mail 8441
+    item 1) are all optional — omitted callers/tests that predate each addition still
     get a valid manifest, just without that section."""
     total_remove = sum(len(p["remove"]) for p in plans.values())
     total_chains_remove = len(chain_plan["remove"])
     total_wal_remove = len(wal_plan["remove"]) if wal_plan else 0
+    total_legacy_remove = len(legacy_plan["remove"]) if legacy_plan else 0
+    total_session_remove = len(session_plan) if session_plan else 0
     parts = [f"PRUNE LADDER MANIFEST — {total_remove} dump file(s), "
-             f"{total_chains_remove} transcript chain(s), and {total_wal_remove} WAL "
-             "segment(s) are planned for removal tomorrow unless this brief is "
-             "dimmed before then (thread 9fac4e0d)."]
+             f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
+             f"segment(s), {total_legacy_remove} legacy transcript tarball(s), and "
+             f"{total_session_remove} transcript cache file(s) are planned for removal "
+             "tomorrow unless this brief is dimmed before then (thread 9fac4e0d)."]
     parts.extend(_report_text(label, plan) for label, plan in plans.items())
     parts.append(_report_chains_text("vault", chain_plan))
     if wal_plan is not None:
         parts.append(_report_wal_text(wal_plan))
+    if legacy_plan is not None:
+        parts.append(_report_text("vault/legacy-transcripts", legacy_plan))
+    if session_plan is not None:
+        parts.append(_report_sessions_text(session_plan))
     parts.append("\nRun scripts/osiris_prune_ladder.py (no flags) yourself for the "
                  "identical dry-run at any time. To stop tomorrow's apply, dim this "
                  "brief.")
@@ -316,9 +393,14 @@ def _oldest_kept_backup_when(
 def _compute_plans(
     backups: Path, vault: Path,
 ) -> tuple[dict[str, dict[str, list[DumpFile]]], dict[str, list[TranscriptChain]],
-           dict[str, list[WalSegment]]]:
+           dict[str, list[WalSegment]], dict[str, list[DumpFile]]]:
     """The scan-and-plan step, shared by the dry-run CLI, --apply, --manifest, and
-    --apply-if-clear — one computation, never four copies to drift apart."""
+    --apply-if-clear — one computation, never four copies to drift apart. Everything
+    here is a pure file scan (no DB, no network) — the session-cache-prune population
+    (thread 9fac4e0d follow-up, Thoth mail 8441 item 1) is deliberately NOT part of
+    this function since it needs a real DB query; it is gathered separately, only by
+    the --manifest/--apply-if-clear branches, so the plain dry-run/--apply CLI stays
+    usable with no DB at all, exactly as every existing test here already assumes."""
     now = datetime.now(UTC)
     plans = {
         "backups/": plan_prune(_scan(backups), now=now),
@@ -329,7 +411,8 @@ def _compute_plans(
     wal_plan = plan_prune_wal(
         _scan_wal(vault / "wal_archive"),
         oldest_kept_backup_when=_oldest_kept_backup_when(plans["vault/basebackups"]))
-    return plans, chain_plan, wal_plan
+    legacy_plan = plan_prune_legacy_tarballs(_scan_legacy_tarballs(vault))
+    return plans, chain_plan, wal_plan, legacy_plan
 
 
 DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
@@ -337,10 +420,24 @@ _MANIFEST_FROM_AGENT = "system:prune-ladder"
 MANIFEST_MIN_AGE = timedelta(hours=20)
 
 
+async def _collect_session_prune_plan(*, dead_after_days: int = 30) -> list[SessionRow]:
+    """The transcript-cache-prune population, gathered fresh (Thoth mail 8441 item 1):
+    reuses osiris_transcript_cache_prune's own `_collect_sessions`/`find_prunable_
+    sessions` unchanged — a real DB query, which is exactly why this stays its own
+    async step rather than folding into `_compute_plans`'s pure file scans."""
+    from scripts.osiris_transcript_cache_prune import _collect_sessions, find_prunable_sessions
+
+    sessions = await _collect_sessions()
+    return find_prunable_sessions(
+        sessions, now=datetime.now(UTC), dead_after=timedelta(days=dead_after_days))
+
+
 async def mail_manifest(
     plans: dict[str, dict[str, list[DumpFile]]],
     chain_plan: dict[str, list[TranscriptChain]],
     wal_plan: dict[str, list[WalSegment]] | None = None,
+    legacy_plan: dict[str, list[DumpFile]] | None = None,
+    session_plan: list[SessionRow] | None = None,
 ) -> int:
     """Send the dry-run plan to the operator's desk as a decision-band brief (thread
     9fac4e0d part 1) — uses src.db.pool.create_pool, NOT bare asyncpg.create_pool
@@ -350,7 +447,7 @@ async def mail_manifest(
     from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
-    body = build_manifest_body(plans, chain_plan, wal_plan)
+    body = build_manifest_body(plans, chain_plan, wal_plan, legacy_plan, session_plan)
     pool = await create_pool(
         DSN, min_size=1, max_size=1,
         application_name="osiris-script:prune-ladder-manifest")
@@ -401,6 +498,8 @@ def _apply(
     plans: dict[str, dict[str, list[DumpFile]]],
     chain_plan: dict[str, list[TranscriptChain]],
     wal_plan: dict[str, list[WalSegment]] | None = None,
+    legacy_plan: dict[str, list[DumpFile]] | None = None,
+    session_plan: list[SessionRow] | None = None,
 ) -> None:
     for plan in plans.values():
         for f in plan["remove"]:
@@ -411,6 +510,12 @@ def _apply(
     if wal_plan is not None:
         for s in wal_plan["remove"]:
             Path(s.path).unlink(missing_ok=True)
+    if legacy_plan is not None:
+        for f in legacy_plan["remove"]:
+            Path(f.path).unlink(missing_ok=True)
+    if session_plan is not None:
+        for sess in session_plan:
+            Path(sess.source_path).unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -436,8 +541,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.manifest:
-        plans, chain_plan, wal_plan = _compute_plans(args.backups, args.vault)
-        mid = asyncio.run(mail_manifest(plans, chain_plan, wal_plan))
+        plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
+        session_plan = asyncio.run(_collect_session_prune_plan())
+        mid = asyncio.run(mail_manifest(plans, chain_plan, wal_plan, legacy_plan, session_plan))
         print(f"manifest mailed to the operator's desk — message {mid}")
         return 0
 
@@ -446,37 +552,44 @@ def main(argv: list[str] | None = None) -> int:
         if mid is None:
             print(f"REFUSING — {reason}", file=sys.stderr)
             return 1
-        plans, chain_plan, wal_plan = _compute_plans(args.backups, args.vault)
+        plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
+        session_plan = asyncio.run(_collect_session_prune_plan())
         total_remove = sum(len(p["remove"]) for p in plans.values())
         total_chains_remove = len(chain_plan["remove"])
         total_wal_remove = len(wal_plan["remove"])
+        total_legacy_remove = len(legacy_plan["remove"])
+        total_session_remove = len(session_plan)
         print(f"{reason} — applying {total_remove} dump file(s), "
-              f"{total_chains_remove} transcript chain(s), and {total_wal_remove} WAL "
-              "segment(s) now.")
-        _apply(plans, chain_plan, wal_plan)
+              f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
+              f"segment(s), {total_legacy_remove} legacy transcript tarball(s), and "
+              f"{total_session_remove} transcript cache file(s) now.")
+        _apply(plans, chain_plan, wal_plan, legacy_plan, session_plan)
         return 0
 
-    plans, chain_plan, wal_plan = _compute_plans(args.backups, args.vault)
+    plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
     for label, plan in plans.items():
         _report(label, plan)
     # transcript CHAINS live only in the vault (osiris_backup.sh never writes them to
     # backups/) — a distinct population, reported and pruned as whole chains
     _report_chains("vault", chain_plan)
     _report_wal(wal_plan)
+    _report("vault/legacy-transcripts", legacy_plan)
 
     total_remove = sum(len(p["remove"]) for p in plans.values())
     total_chains_remove = len(chain_plan["remove"])
     total_wal_remove = len(wal_plan["remove"])
+    total_legacy_remove = len(legacy_plan["remove"])
     if not args.apply:
         print(f"\nDRY RUN ONLY — {total_remove} dump file(s), {total_chains_remove} "
-              f"transcript chain(s), and {total_wal_remove} WAL segment(s) would be "
-              "removed, none deleted. Re-run with --apply once the operator has ruled "
-              "on this list.")
+              f"transcript chain(s), {total_wal_remove} WAL segment(s), and "
+              f"{total_legacy_remove} legacy transcript tarball(s) would be removed, "
+              "none deleted. Re-run with --apply once the operator has ruled on this "
+              "list.")
         return 0
     print(f"\n--apply given — deleting {total_remove} dump file(s), "
-          f"{total_chains_remove} transcript chain(s), and {total_wal_remove} WAL "
-          "segment(s) now.")
-    _apply(plans, chain_plan, wal_plan)
+          f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
+          f"segment(s), and {total_legacy_remove} legacy transcript tarball(s) now.")
+    _apply(plans, chain_plan, wal_plan, legacy_plan)
     return 0
 
 

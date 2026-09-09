@@ -3324,6 +3324,58 @@ async def test_cmd_deploy_actually_runs_install_commands_sh(
     assert (target / "seat.md").read_text() == "seat doc\n"
 
 
+async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The vault-lane timers (Thoth mail 8437, "have deploy install these three units
+    the way it installs slash commands") get the same real-execution proof as
+    install_commands.sh above: a synthetic repo with the real script and a synthetic
+    deploy/ carrying the three unit pairs, redirected via OSIRIS_SYSTEMD_USER_DIR so
+    this never touches the real machine's systemd user session — the same escape hatch
+    CLAUDE_COMMANDS_DIR gives install_commands.sh, which is exactly why the script is
+    safe to actually run here rather than only being read."""
+    import io
+    import os
+    from contextlib import redirect_stdout
+
+    repo = tmp_path / "repo"
+    (repo / "deploy").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    _git_init(repo)
+    install_script = Path("scripts") / "install_prune_timers.sh"
+    real_install = (Path(__file__).resolve().parent.parent / install_script).read_text()
+    (repo / install_script).write_text(real_install)
+    (repo / install_script).chmod(0o755)
+    for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup"):
+        (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
+        (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
+    target = tmp_path / "target"
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    old_env = os.environ.get("OSIRIS_SYSTEMD_USER_DIR")
+    os.environ["OSIRIS_SYSTEMD_USER_DIR"] = str(target)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            await cmd_deploy(repo_root=repo, git_status=lambda root: [],
+                             restart=_restart,
+                             pool=actions.pool, wait_for_health=_fake_wait_for_health,
+                             wait_for_smoke=_fake_wait_for_smoke,
+                             check_whisper_probe=_fake_check_whisper_ok)
+    finally:
+        if old_env is None:
+            os.environ.pop("OSIRIS_SYSTEMD_USER_DIR", None)
+        else:
+            os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
+
+    out = buf.getvalue()
+    assert "6 installed/updated, 0 already current" in out
+    assert (target / "osiris-prune-manifest.timer").read_text() == "# osiris-prune-manifest timer\n"
+    assert (target / "osiris-base-backup.service").read_text() == "# osiris-base-backup service\n"
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
