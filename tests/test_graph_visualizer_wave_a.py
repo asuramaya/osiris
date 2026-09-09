@@ -34,3 +34,23 @@ def test_edge_labels_show_on_hover_and_on_the_focused_nodes_edges() -> None:
     assert "edge.edge-hover, edge.edge-focus" in _JS
     assert 'cy.on("mouseover", "edge"' in _JS and 'cy.on("mouseout", "edge"' in _JS
     assert "connectedEdges().addClass(\"edge-focus\")" in _JS
+
+
+# --- item 3: hub bundling -- >12 same-type edges off one node collapse into one bundle ----
+
+def test_hub_bundle_threshold_is_twelve() -> None:
+    assert "HUB_BUNDLE_THRESHOLD = 12" in _JS
+
+
+def test_bundle_carries_its_own_count_and_type_as_the_label() -> None:
+    assert "label: `${fresh.length} ${gr.type}`" in _JS
+
+
+def test_a_bundle_node_expands_on_click_instead_of_focusing() -> None:
+    assert 'e.target.data("type") === "bundle"' in _JS
+    assert "expandBundle(e.target.id())" in _JS
+
+
+def test_bundle_expansion_restores_the_withheld_nodes_and_edges() -> None:
+    assert "const expandBundle = (bundleId) =>" in _JS
+    assert "info.nodes.forEach" in _JS and "info.edges.forEach" in _JS

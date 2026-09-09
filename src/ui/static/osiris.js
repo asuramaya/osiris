@@ -208,6 +208,12 @@ const Osiris = (() => {
           "text-background-color": "#0d1219", "text-background-opacity": 0.9, "text-background-padding": 2,
           "text-rotation": "autorotate", "min-zoomed-font-size": 6 } },
         { selector: "edge.edge-hover, edge.edge-focus", style: { label: "data(type)", "line-color": "#4a5a6a" } },
+        // WAVE A item 3: a bundle node ("38 spawned_by") stands in for a hub's own
+        // same-type edge group once it passes HUB_BUNDLE_THRESHOLD — square, dashed, so it
+        // reads as a summary rather than a real object.
+        { selector: "node[type='bundle']", style: {
+          "background-color": "#21262d", shape: "round-rectangle", "border-style": "dashed",
+          "border-color": "#8b949e", width: 44, height: 24, "font-size": 10 } },
       ],
     });
     cy.on("zoom", () => cy.style().update());
@@ -228,22 +234,93 @@ const Osiris = (() => {
       cy.resize();
       cy.fit(undefined, 45);
     };
+    // WAVE A item 3: hub bundling — more than HUB_BUNDLE_THRESHOLD edges of ONE type off ONE
+    // node (the "38 spawned_by" shape) collapse into one bundle node rather than 38 real
+    // ones fighting the layout. Groups by (hub, direction, type); a group past threshold is
+    // withheld from the normal add pass below and replaced with a single synthetic node
+    // whose own data carries what it stands for, so a click can put it all back exactly.
+    const HUB_BUNDLE_THRESHOLD = 12;
+    const expandBundle = (bundleId) => {
+      const node = cy.getElementById(bundleId);
+      if (!node.length) return;
+      const info = node.data("bundleOf");
+      node.connectedEdges().remove();
+      node.remove();
+      if (!info) return;
+      info.nodes.forEach((n) => {
+        if (n && !cy.getElementById(n.id).length) cy.add({ group: "nodes", data: { id: n.id, type: n.type, label: n.label } });
+      });
+      info.edges.forEach((e) => {
+        const id = `${e.source}-${e.type}-${e.target}`;
+        if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
+          cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
+      });
+      layout(true);
+    };
     const mergeGraph = (g) => {
       let added = 0;
+      const claimed = new Set();       // edge keys already spoken for by a bundle
+      const bundledNodeIds = new Set(); // far-node ids hidden behind a bundle
+      const groups = {};
+      g.edges.forEach((e) => {
+        const ok = `${e.source}|out|${e.type}`, ik = `${e.target}|in|${e.type}`;
+        (groups[ok] = groups[ok] || { hub: e.source, dir: "out", type: e.type, edges: [] }).edges.push(e);
+        (groups[ik] = groups[ik] || { hub: e.target, dir: "in", type: e.type, edges: [] }).edges.push(e);
+      });
+      Object.values(groups)
+        .filter((gr) => gr.edges.length > HUB_BUNDLE_THRESHOLD)
+        .sort((a, b) => b.edges.length - a.edges.length)
+        .forEach((gr) => {
+          const fresh = gr.edges.filter((e) => !claimed.has(`${e.source}-${e.type}-${e.target}`));
+          if (fresh.length <= HUB_BUNDLE_THRESHOLD) return; // an earlier, bigger bundle already ate most of it
+          const bundleId = `bundle:${gr.hub}:${gr.dir}:${gr.type}`;
+          if (cy.getElementById(bundleId).length) return; // already bundled from an earlier merge
+          fresh.forEach((e) => claimed.add(`${e.source}-${e.type}-${e.target}`));
+          const far = fresh.map((e) => (gr.dir === "out" ? e.target : e.source));
+          far.forEach((id) => bundledNodeIds.add(id));
+          const farNodes = far.map((id) => g.nodes.find((n) => n.id === id)).filter(Boolean);
+          cy.add({ group: "nodes", data: {
+            id: bundleId, type: "bundle", label: `${fresh.length} ${gr.type}`,
+            bundleOf: { hub: gr.hub, dir: gr.dir, type: gr.type, nodes: farNodes, edges: fresh },
+          } });
+          // the hub itself may not be on the board yet within THIS merge call (e.g. a fresh
+          // placeObjects batch) — plant it now so the bundle edge has both ends to attach to.
+          if (!cy.getElementById(gr.hub).length) {
+            const hubNode = g.nodes.find((n) => n.id === gr.hub);
+            if (hubNode) { cy.add({ group: "nodes", data: { id: hubNode.id, type: hubNode.type, label: hubNode.label } }); added++; }
+          }
+          if (cy.getElementById(gr.hub).length) {
+            cy.add({ group: "edges", data: gr.dir === "out"
+              ? { id: `${bundleId}-e`, source: gr.hub, target: bundleId, type: gr.type }
+              : { id: `${bundleId}-e`, source: bundleId, target: gr.hub, type: gr.type } });
+          }
+          added++;
+        });
       g.nodes.forEach((n) => {
+        if (bundledNodeIds.has(n.id)) return; // hidden behind a bundle — expandBundle() adds it back
         if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: { id: n.id, type: n.type, label: n.label } }); added++; }
       });
       g.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;
+        if (claimed.has(id)) return;
         if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
           cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
       });
       return added;
     };
-    cy.on("tap", "node", (e) => onFocus && onFocus(e.target.id(), false, e.target.data("type")));
-    cy.on("dbltap", "node", (e) => onFocus && onFocus(e.target.id(), true, e.target.data("type")));
+    // a bundle node's own click is EXPAND, not the normal select/focus verb — it isn't a
+    // real object, so onFocus (which fetches /objects/<id>) would 404 on it.
+    cy.on("tap", "node", (e) => {
+      if (e.target.data("type") === "bundle") { expandBundle(e.target.id()); return; }
+      onFocus && onFocus(e.target.id(), false, e.target.data("type"));
+    });
+    cy.on("dbltap", "node", (e) => {
+      if (e.target.data("type") === "bundle") return;
+      onFocus && onFocus(e.target.id(), true, e.target.data("type"));
+    });
     cy.on("cxttap", "node", (e) => {
       if (e.originalEvent) e.originalEvent.preventDefault();
+      if (e.target.data("type") === "bundle") return;
       onCtx && onCtx(e.target.id(), e.target.data("type"), e.originalEvent);
     });
     return {
