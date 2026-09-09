@@ -5296,23 +5296,31 @@ async def roster(repo: str | None = None, want_caveats: bool = False,
 
 
 @mcp.tool()
-async def backlog(all_projects: bool = False, render: str | None = None,
+async def backlog(all_projects: bool = False, fleet: bool = False, render: str | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
     """No-regrow hygiene item 4's own gauge (digest.py's `_obligation_pressure`), as a read
-    verb of its own (thread 68f1bafa, the read triangle) instead of only living inside
-    fleet_digest's fuller payload. Per project: `open` count against its `target` (osiris
-    40, every client 15, `(unfiled)` untargeted), `past_window` (how many are already
-    stale), `oldest_owners` (up to 3, longest-carried first).
+    verb of its own instead of only living inside fleet_digest's fuller payload. Per
+    project: `open` count against its `target` (osiris 40, every client 15, `(unfiled)`
+    untargeted), `past_window` (how many are already stale), `oldest_owners` (up to 3).
 
     SCOPED BY DEFAULT: your own mounted project's row only. `all_projects=True` (or
-    calling unmounted / as the operator) widens to every project. Ordering is always: your
-    own project's row first (when present in scope), then any row with `past_window > 0`,
-    then by `open` descending — never re-sorted by a slash command, so the same call always
-    reads the same regardless of caller.
+    calling unmounted / as the operator) widens to every project. Ordering: your own
+    project's row first (when in scope), then any row with `past_window > 0`, then by
+    `open` descending — never re-sorted by a slash command.
 
-    `render='text'`: returns only {"text": <str>} -- one line per project, capped at
-    `textrender.BACKLOG_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    `fleet=True`: per-seat, not per-project (`by_seat`/`unowned`/`literal_owner`/
+    `fleet_total`); wins over `all_projects`.
+
+    `render='text'`: {"text": <str>} only, capped/remainder-counted."""
     pool = await _pool_get()
+    if fleet:
+        from src.orchestrator.compositions import _fn_obligation_backlog
+
+        result: dict[str, Any] = await _fn_obligation_backlog(pool, None, {})
+        if render == "text":
+            from src.orchestrator.textrender import render_obligation_backlog_text
+            return {"text": render_obligation_backlog_text(result)}
+        return result
     ident = await _ident_for(ctx)
     from src.orchestrator import digest as _digest
     from src.orchestrator.textrender import render_backlog_text

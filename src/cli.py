@@ -1346,11 +1346,11 @@ async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: b
 
 # --- backlog (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
 
-async def cmd_backlog(*, all_projects: bool, as_json: bool = False) -> int:
+async def cmd_backlog(*, all_projects: bool, fleet: bool = False, as_json: bool = False) -> int:
     url = await _mcp_url()
     return await _call_and_emit_text(
-        url, "backlog", {"all_projects": all_projects}, as_json=as_json, title="backlog",
-        error_prefix="osiris backlog")
+        url, "backlog", {"all_projects": all_projects, "fleet": fleet}, as_json=as_json,
+        title="backlog · fleet" if fleet else "backlog", error_prefix="osiris backlog")
 
 
 # --- threads (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
@@ -5287,9 +5287,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "per-project open obligations against target, past-window first, oldest owners — "
         "the same backlog() the MCP tool answers, called over the wire. Scoped to your own "
         "mounted project by default"),
-        epilog="example: osiris backlog\nexample: osiris backlog --all-projects")
+        epilog="example: osiris backlog\nexample: osiris backlog --all-projects"
+               "\nexample: osiris backlog --fleet")
     p_backlog.add_argument("--all-projects", action="store_true", dest="all_projects",
                            help="every project, not just your own mounted one")
+    p_backlog.add_argument("--fleet", action="store_true", dest="fleet",
+                           help="the per-seat crunch view instead of per-project "
+                                "(thread 8608, THE BACKLOG BAND) — who is carrying the "
+                                "backlog fleet-wide, takes priority over --all-projects")
     p_backlog.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
 
@@ -6201,7 +6206,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_roster(repo=args.repo, want_caveats=args.want_caveats,
                                       as_json=args.as_json))
     if args.command == "backlog":
-        return asyncio.run(cmd_backlog(all_projects=args.all_projects, as_json=args.as_json))
+        return asyncio.run(cmd_backlog(all_projects=args.all_projects, fleet=args.fleet,
+                                       as_json=args.as_json))
     if args.command == "threads":
         return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json))
     if args.command == "inbox":

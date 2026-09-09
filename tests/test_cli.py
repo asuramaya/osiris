@@ -473,7 +473,7 @@ async def test_cmd_backlog_human_mode_asks_the_server_for_render_text(
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_backlog(all_projects=False, as_json=False) == 0
-    assert calls == [("backlog", {"all_projects": False, "render": "text"})]
+    assert calls == [("backlog", {"all_projects": False, "fleet": False, "render": "text"})]
     assert "osiris: 3 open" in capsys.readouterr().out
 
 
@@ -486,7 +486,20 @@ async def test_cmd_backlog_json_mode_never_asks_for_render_text(monkeypatch: Any
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_backlog(all_projects=True, as_json=True) == 0
-    assert calls == [("backlog", {"all_projects": True})]  # no render= at all
+    assert calls == [("backlog", {"all_projects": True, "fleet": False})]  # no render= at all
+
+
+async def test_cmd_backlog_fleet_flag_passes_through(monkeypatch: Any, capsys: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"text": "fleet total: 3 open\n  Thoth: 2 open — oldest: abc12345"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_backlog(all_projects=False, fleet=True, as_json=False) == 0
+    assert calls == [("backlog", {"all_projects": False, "fleet": True, "render": "text"})]
+    assert "fleet total: 3 open" in capsys.readouterr().out
 
 
 async def test_cmd_threads_human_mode_paints_the_servers_text(
