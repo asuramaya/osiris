@@ -7349,6 +7349,10 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("file_subagents"), "project": _opt_s(),
             "dry_run": _b(True),
         }, ["action"]),
+        _dispatcher_action_schema({
+            "action": _action_const("retire_governs"), "agent_id": _s(),
+            "repos": _list_s(), "because": _s(),
+        }, ["action", "agent_id", "repos", "because"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
@@ -7366,6 +7370,7 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "fleet_prune": (["execute"], []),
     "file_subagent": (["subagent_id"], ["subagent_id"]),
     "file_subagents": (["project", "dry_run"], []),
+    "retire_governs": (["agent_id", "repos", "because"], ["agent_id", "repos", "because"]),
 }
 
 
@@ -7375,7 +7380,8 @@ async def _agent_impl(
     seat_generation: int | None = None, value: str | None = _UNSET,
     because: str | None = None,
     override_live: bool = False, execute: bool = False, subagent_id: str | None = None,
-    dry_run: bool = True, retract: bool = False, ctx: Context | None = None,
+    dry_run: bool = True, retract: bool = False, repos: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `agent` and its 5 hidden single-purpose aliases (claim_name,
     correct_agent_house, retire_agent, file_subagent, file_subagents — 6 names, one
@@ -7470,6 +7476,15 @@ async def _agent_impl(
         from src.orchestrator.lineage import file_subagents as _file_subagents
         return await _file_subagents(Actions(await _pool_get()), project=project,
                                      dry_run=dry_run, actor=ident.agent_id)
+    if action == "retire_governs":
+        assert agent_id is not None and repos is not None and because is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — retiring a governs edge is a deliberate act "
+                             "on the record", "why": _anchorless(ctx)}
+        from src.orchestrator.agents import retire_governs_edges as _retire_governs_edges
+        return await _retire_governs_edges(Actions(await _pool_get()), agent_id, repos,
+                                           because=because, actor=ident.agent_id)
     raise AssertionError(f"action {action!r} passed validation but has no branch")
 
 
@@ -7479,7 +7494,7 @@ async def agent(
     project: str | None = None, seat_generation: int | None = None,
     value: str | None = _UNSET, because: str | None = None, override_live: bool = False,
     execute: bool = False, subagent_id: str | None = None, dry_run: bool = True,
-    retract: bool = False, ctx: Context | None = None,
+    retract: bool = False, repos: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE AGENT OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
     many actions over Agent identity/lineage. See `describe('agent')` for the full
@@ -7502,6 +7517,12 @@ async def agent(
       file_subagent: file ONE ephemeral subagent under its spawner (subagent_id)
       file_subagents: THE SWEEP — file_subagent's own resolver over every active
         subagent in scope (project=None is fleet-wide; dry run by default)
+      retire_governs: THIRD-PARTY governs-edge retirement (agent_id, repos=[names to
+        drop], because) — never moves anything (unlike backfill_agent_project_links'
+        own off-head repair, the wrong shape for garbage), never guesses which edges are
+        real (the caller names them). Per-repo: a name that doesn't resolve to a known
+        SoftwareProject, or resolves but the agent carries no live governs edge to it,
+        is reported in `not_found`/`no_edge` rather than aborting the whole batch.
 
     Not covered here: self-scoped `retire()` (different auth shape, retires the
     CALLING agent's own session); `walk_in` (already seat(action='walk_in')); merge/
@@ -7510,7 +7531,7 @@ async def agent(
         action, name=name, agent_id=agent_id, project=project,
         seat_generation=seat_generation, value=value, because=because,
         override_live=override_live, execute=execute, subagent_id=subagent_id,
-        dry_run=dry_run, retract=retract, ctx=ctx)
+        dry_run=dry_run, retract=retract, repos=repos, ctx=ctx)
 
 
 @mcp.tool(meta={
