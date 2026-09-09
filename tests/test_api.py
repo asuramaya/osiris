@@ -165,6 +165,63 @@ async def test_object_edge_counts_is_empty_for_no_ids(client: httpx.AsyncClient)
     assert r.json() == {}
 
 
+async def test_object_viewport_returns_only_nodes_inside_the_bounding_box(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave B item 2 (thread 8839): the full-view renderer's own pull,
+    read straight off graph_x/graph_y (wave B item 1's positions)."""
+    inside = await actions.create_or_find_object("Thread", "thread:vp-inside", "test")
+    outside = await actions.create_or_find_object("Thread", "thread:vp-outside", "test")
+    await actions.assert_property(inside, "graph_x", 10.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(inside, "graph_y", 10.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(outside, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(outside, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport",
+                         params={"minx": 0, "maxx": 100, "miny": 0, "maxy": 100})
+    ids = {n["id"] for n in r.json()["nodes"]}
+    assert str(inside) in ids
+    assert str(outside) not in ids
+
+
+async def test_object_viewport_edges_only_among_the_returned_nodes(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Thread", "thread:vp-a", "test")
+    b = await actions.create_or_find_object("Thread", "thread:vp-b", "test")
+    c = await actions.create_or_find_object("Thread", "thread:vp-c", "test")
+    for oid, x in ((a, 5.0), (b, 6.0)):
+        await actions.assert_property(oid, "graph_x", x, "test", datetime.now(UTC), 1.0)
+        await actions.assert_property(oid, "graph_y", 5.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(c, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(c, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.create_link(a, b, "cites", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(a, c, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport",
+                         params={"minx": 0, "maxx": 100, "miny": 0, "maxy": 100})
+    body = r.json()
+    edge_types = [(e["source"], e["target"]) for e in body["edges"]]
+    assert (str(a), str(b)) in edge_types
+    assert not any(str(c) in pair for pair in edge_types)
+
+
+async def test_object_viewport_exclude_skips_ids_the_caller_already_holds(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Thread", "thread:vp-excl-a", "test")
+    b = await actions.create_or_find_object("Thread", "thread:vp-excl-b", "test")
+    for oid in (a, b):
+        await actions.assert_property(oid, "graph_x", 1.0, "test", datetime.now(UTC), 1.0)
+        await actions.assert_property(oid, "graph_y", 1.0, "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport", params={
+        "minx": 0, "maxx": 100, "miny": 0, "maxy": 100, "exclude": str(a)})
+    ids = {n["id"] for n in r.json()["nodes"]}
+    assert str(a) not in ids
+    assert str(b) in ids
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)

@@ -625,6 +625,65 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         return {str(r["node"]): int(r["n"]) for r in rows}
 
+    @app.get("/objects/viewport")
+    async def object_viewport(
+        minx: float, maxx: float, miny: float, maxy: float,
+        exclude: str | None = None,
+        limit: int = Query(2000, le=5000),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, list[dict[str, Any]]]:
+        """WAVE B item 2 (graph visualizer, thread 8839): nodes + edges inside a bounding
+        box, read straight off graph_x/graph_y (wave B item 1's own layout heartbeat) --
+        the full-view renderer's OWN pull, never a client-side force layout over the whole
+        graph. An unpositioned object (the heartbeat hasn't reached it yet) simply isn't
+        visible yet -- it appears once positioned, never guessed at.
+
+        `exclude` (a comma-separated id list, "delta on pan"): skip nodes the caller
+        already holds, so panning a few pixels re-fetches only what's newly exposed at the
+        strip's edge instead of the whole viewport every time. Edges are returned only
+        among the returned node set (both endpoints must be in THIS response, or already
+        on the caller's own side per `exclude` -- an edge to something off-screen is drawn
+        by the caller once that far node itself arrives, never guessed at here)."""
+        excl_ids: list[uuid.UUID] = []
+        if exclude:
+            for raw in exclude.split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    excl_ids.append(uuid.UUID(raw))
+                except ValueError:
+                    continue
+        rows = await p.fetch(
+            "SELECT o.id, o.type, o.canonical, gx.v AS x, gy.v AS y FROM objects o "
+            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+            "      WHERE name='graph_x') gx ON gx.object_id = o.id "
+            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+            "      WHERE name='graph_y') gy ON gy.object_id = o.id "
+            "WHERE o.status NOT IN ('archived','merged','retired') "
+            "  AND gx.v BETWEEN $1 AND $2 AND gy.v BETWEEN $3 AND $4 "
+            "  AND NOT (o.id = ANY($5::uuid[])) "
+            "LIMIT $6",
+            minx, maxx, miny, maxy, excl_ids, limit,
+        )
+        ids = [r["id"] for r in rows]
+        props_by_id = await fetch_label_props(p, ids)
+        nodes = [
+            {"id": str(r["id"]), "type": r["type"],
+             "label": resolve_label(r["type"], props_by_id.get(r["id"], {}),
+                                    r["canonical"]).label,
+             "x": r["x"], "y": r["y"]}
+            for r in rows
+        ]
+        edge_rows = await p.fetch(
+            "SELECT from_id, to_id, type FROM links "
+            "WHERE from_id = ANY($1::uuid[]) AND to_id = ANY($1::uuid[])",
+            ids,
+        ) if ids else []
+        edges = [{"source": str(r["from_id"]), "target": str(r["to_id"]), "type": r["type"]}
+                for r in edge_rows]
+        return {"nodes": nodes, "edges": edges}
+
     @app.get("/objects/{object_id}")
     async def get_object(
         object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
