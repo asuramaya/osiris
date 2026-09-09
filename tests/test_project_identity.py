@@ -656,9 +656,13 @@ async def test_rename_cascade_reports_no_governing_seats_as_an_empty_manifest(
     assert "repo_root_osiris" in out["manifest"]["could_not_reach"]
 
 
-async def test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat(
+async def test_rename_cascade_touches_pin_and_house_reports_charter_already_correct(
     actions: Actions, tmp_path,
 ) -> None:
+    """Charter's own status is fixed at "already-correct" for a first-ever rename too
+    (mail 8749) — pin/house genuinely change (the on-disk pin file, the seat's own
+    house label), but charter_of always reads a project's immutable canonical, and
+    set_charter's own resolve-then-diff can never add or remove anything for it."""
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "cascadeold"\n')
@@ -676,7 +680,9 @@ async def test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat
     dtiers = dry["manifest"]["seats"][seat["seat_id"]]
     assert dtiers["pin"]["status"] == "touched"
     assert dtiers["house"]["status"] == "touched"
-    assert dtiers["charter"]["status"] == "touched"
+    # charter can never actually change on a plain rename (canonical is immutable,
+    # mail 8749) — "already-correct" is the honest answer, not a phantom "touched".
+    assert dtiers["charter"]["status"] == "already-correct"
     # a dry run previews only — nothing on disk or in the graph moved
     assert (office / ".osiris").read_text() == 'project = "cascadeold"\n'
 
@@ -686,7 +692,7 @@ async def test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat
     tiers = out["manifest"]["seats"][seat["seat_id"]]
     assert tiers["pin"]["status"] == "touched"
     assert tiers["house"]["status"] == "touched"
-    assert tiers["charter"]["status"] == "touched"
+    assert tiers["charter"]["status"] == "already-correct"
     assert 'project = "cascadenew"' in (office / ".osiris").read_text()
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import seat_facts
@@ -716,21 +722,20 @@ async def test_rename_cascade_reports_already_correct_on_a_second_run(
 
     # renaming again (a truly free new_name this time): pin/house are keyed on the
     # SEAT's own current declared value, so they correctly settle to already-correct.
-    # CHARTER IS DIFFERENT, and this is CORRECT, not a regression (see the assertion two
-    # tests above: charter_of(...) == ["cascadeold"] after a rename — canonical, never
-    # the display name, by design, forever): charter_of always returns the project's
-    # immutable mint-time canonical, so a charter entry differing from new_name on its
-    # own STRING is the charter tier's only available "does this still need reconciling"
-    # signal, and it fires every time post-rename per Thoth's own instruction (mail
-    # 8678: "every tier still reconciles any stored label that resolves to the
-    # canonical but is not the winning name") — a self-rename is exactly how an operator
-    # re-triggers this heal, so reporting "touched" again here is honest, not a bug.
+    # CHARTER TOO (CORRECTED, mail 8749 — Deckard's real run proved the earlier
+    # "touched again is honest" framing here was itself the phantom-write bug): charter
+    # always returns the project's immutable mint-time canonical, so a charter entry
+    # differing from new_name on its own STRING resolves right back down to that SAME
+    # canonical the moment set_charter tries to write it — nothing ever actually
+    # changes on a plain rename, no matter how many times it's re-triggered. Reporting
+    # "touched" here was the lie set_charter's own diff (added:[], removed:[]) would
+    # have caught; "already-correct" is what plan and apply now both, honestly, agree on.
     dry2 = await rename_project(actions, project="idemnew", new_name="idemnew",
                                 because="x", actor="agent:test", dry_run=True)
     tiers2 = dry2["manifest"]["seats"][seat["seat_id"]]
     assert tiers2["pin"]["status"] == "already-correct"
     assert tiers2["house"]["status"] == "already-correct"
-    assert tiers2["charter"]["status"] == "touched"
+    assert tiers2["charter"]["status"] == "already-correct"
 
 
 async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_literal_string(
@@ -744,8 +749,18 @@ async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_li
     ever seen in the charter, so the pre-fix literal `old_name in current_charter` /
     `new_name in current_charter` compare silently reported a false 'already-correct'
     with the note 'names neither'. The fix resolves "xxit" against the project's OWN id
-    (via `_resolve_repo`, the same resolver `set_charter` itself already uses) and must
-    correctly flag it as stale and plan its swap to the new label."""
+    (via `_resolve_repo`, the same resolver `set_charter` itself already uses) and
+    correctly recognizes it as the entry NAMING this project — the RIGHT verified
+    diagnosis, not the "names neither" lie.
+
+    CORRECTED AGAIN (Thoth/Deckard, mail 8749, Deckard's real run on 7b709ce): the first
+    version of this fix treated that resolved entry as 'stale' and planned to SWAP it
+    for the display name — but `set_charter` itself resolves every candidate back to
+    its own canonical before writing, and "flowrenamed" resolves right back down to
+    "xxit" — the SAME entry already there. Nothing set_charter could ever actually add
+    or remove; the "would swap" plan was a promise the real apply could never honor.
+    'already-correct' is the true, honest answer on BOTH the dry run and the real
+    apply — this is the exact test 'plan and apply share one comparison' now proves."""
     office = tmp_path / "deckard_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="handlingtheloop", handle="Deckardseat",
@@ -767,15 +782,15 @@ async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_li
     dry = await rename_project(actions, project="handlingtheloop", new_name="flowrenamed",
                                because="x", actor="agent:test", dry_run=True)
     dtiers = dry["manifest"]["seats"][seat["seat_id"]]
-    assert dtiers["charter"]["status"] == "touched"
-    assert "xxit" in dtiers["charter"]["plan"] and "flowrenamed" in dtiers["charter"]["plan"]
+    assert dtiers["charter"]["status"] == "already-correct"
 
     out = await rename_project(actions, project="handlingtheloop", new_name="flowrenamed",
                                because="operator ruling: fix drift", actor="agent:test",
                                dry_run=False)
     tiers = out["manifest"]["seats"][seat["seat_id"]]
-    assert tiers["charter"]["status"] == "touched"
+    assert tiers["charter"]["status"] == "already-correct"  # plan and apply now agree
     assert "error" not in tiers["charter"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["xxit"]  # genuinely unchanged
 
 
 async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_shape(
@@ -803,8 +818,11 @@ async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_
     out = await rename_project(actions, project="metroncurrent", new_name="metronfinal",
                                because="x", actor="agent:test", dry_run=False)
     tiers = out["manifest"]["seats"][seat["seat_id"]]
-    assert tiers["charter"]["status"] == "touched"
+    # mail 8749: charter can never actually change on a plain rename (canonical is
+    # immutable) — "already-correct" is the honest, verified answer, not "touched".
+    assert tiers["charter"]["status"] == "already-correct"
     assert "error" not in tiers["charter"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["metronorig"]
 
 
 async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governing_seat(
@@ -817,10 +835,11 @@ async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governin
     practice: every seat this cascade processes was selected BY an active governs edge
     to the project being renamed, so charter_of(seat_id) always contains at least one
     entry whose own canonical resolves to that exact project — it either already equals
-    new_name (already-correct) or lands in `stale` and gets healed (touched). Across a
+    new_name (already-correct) or lands in `stale`, which (mail 8749, Deckard's real
+    run) can never actually change anything set_charter would write either, since
+    canonical is immutable — also 'already-correct', never 'not-evaluated', across a
     single-project seat, a multi-project seat, and a project renamed twice in a row
-    (testing the SAME invariant on a seat that has already been through one heal),
-    'not-evaluated' must never appear."""
+    (testing the SAME invariant on a seat that has already been through one heal)."""
     from src.orchestrator.charter import charter_of
 
     office = tmp_path / "invariant_office"
@@ -841,28 +860,68 @@ async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governin
     out1 = await rename_project(actions, project="invariantorig", new_name="invariantnext",
                                 because="x", actor="agent:test", dry_run=False)
     tiers1 = out1["manifest"]["seats"][seat["seat_id"]]
-    assert tiers1["charter"]["status"] == "touched"
+    assert tiers1["charter"]["status"] == "already-correct"
 
     # renamed a SECOND time (the same seat, already through one heal) — the invariant
     # must hold again, not just on a fresh mint-time specimen
     out2 = await rename_project(actions, project="invariantnext", new_name="invariantfinal",
                                 because="x", actor="agent:test", dry_run=False)
     tiers2 = out2["manifest"]["seats"][seat["seat_id"]]
-    assert tiers2["charter"]["status"] == "touched"
+    assert tiers2["charter"]["status"] == "already-correct"
     assert tiers2["charter"]["status"] != "not-evaluated"
 
 
-async def test_rename_cascade_self_rename_heals_a_stale_alias_deckards_own_re_run(
+async def test_rename_cascade_charter_not_evaluated_actually_renders_on_a_broken_governs_edge(
     actions: Actions, tmp_path,
 ) -> None:
-    """CORRECTION (Thoth's own catch on Deckard's live re-run, mail 8678): a self-rename
-    (old_name == new_name == the project's own winning name) is exactly how this verb's
-    repair population gets invoked — an operator calling rename(X, X) ON PURPOSE to heal
-    a stale alias, never a no-op to protect from healing. The first version of this fix
-    guarded the resolve loop with `if new_name != old_name`, which silently no-op'd the
-    EXACT Deckard/Metron specimen (charter holds "xxit", winning name already
-    "handlingtheloop", Deckard's own rename call renames handlingtheloop -> itself to
-    trigger the heal) — a self-rename must still resolve and swap any stale alias."""
+    """Mail 8749: confirm 'not-evaluated' actually renders — not a crash, not silently
+    something else — on a seat whose charter tier genuinely cannot verify anything.
+    Never reachable through the public `rename_project` verb (which refuses to rename
+    a non-active project, guaranteeing `project_oid` itself is always active) — built
+    directly against `_cascade_governing_seats` by retiring the governed project AFTER
+    its governs edge was minted: `_resolve_repo` filters `status='active'`, so a
+    retired project's own canonical no longer resolves through it even though
+    `charter_of` (no status filter) still lists it."""
+    from src.orchestrator.project_identity import _cascade_governing_seats
+
+    office = tmp_path / "brokenoffice"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="brokencur", handle="Brokenseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:brok0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:brok0001")
+    proj = await _mk_project(actions, "brokenxxit")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", proj)
+
+    manifest = await _cascade_governing_seats(
+        actions.pool, project_oid=proj, old_name="brokenxxit", new_name="brokennew",
+        because="x", actor="agent:test", dry_run=True)
+    tiers = manifest["seats"][seat["seat_id"]]
+    assert tiers["charter"]["status"] == "not-evaluated"
+    assert "note" in tiers["charter"]
+
+
+async def test_rename_cascade_self_rename_reports_already_correct_never_a_phantom_touched(
+    actions: Actions, tmp_path,
+) -> None:
+    """Deckard's own two re-runs, in order. FIRST (Thoth's catch on mail 8678): a
+    self-rename (old_name == new_name == the project's own winning name) is exactly
+    how this verb's own repair population gets invoked — an operator calling
+    rename(X, X) ON PURPOSE to heal a stale alias. The first version of this fix
+    guarded the resolve loop with `if new_name != old_name`, which silently no-op'd
+    this exact specimen (charter holds "xxit", winning name already "handlingtheloop").
+
+    SECOND, CORRECTED AGAIN (mail 8749, Deckard's REAL run on 7b709ce/8711): removing
+    that guard made the tier correctly recognize "xxit" as the entry naming this
+    project — but the fix then treated that as 'stale' and planned to SWAP it for the
+    display name, reporting 'touched'. Deckard's real apply proved that promise false:
+    set_charter's own receipt showed added:[], removed:[] — nothing to swap TO, since
+    "selfstalecur" resolves right back down to the SAME "selfstaleorig" canonical
+    already in the charter. There was never anything to heal; 'already-correct' is the
+    true, honest answer set_charter's own diff would show, and now plan/apply agree."""
     office = tmp_path / "selfstale_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="selfstalecur", handle="Selfstaleseat",
@@ -876,19 +935,21 @@ async def test_rename_cascade_self_rename_heals_a_stale_alias_deckards_own_re_ru
         "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
     await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
 
+    from src.orchestrator.charter import charter_of
+
     dry = await rename_project(actions, project="selfstalecur", new_name="selfstalecur",
                                because="x", actor="agent:test", dry_run=True)
     dtiers = dry["manifest"]["seats"][seat["seat_id"]]
-    assert dtiers["charter"]["status"] == "touched"
-    assert "selfstaleorig" in dtiers["charter"]["plan"]
+    assert dtiers["charter"]["status"] == "already-correct"
     assert dry["collision"] is None
 
     out = await rename_project(actions, project="selfstalecur", new_name="selfstalecur",
                                because="operator ruling: heal drift", actor="agent:test",
                                dry_run=False)
     tiers = out["manifest"]["seats"][seat["seat_id"]]
-    assert tiers["charter"]["status"] == "touched"
+    assert tiers["charter"]["status"] == "already-correct"  # plan and apply now agree
     assert "error" not in tiers["charter"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["selfstaleorig"]
 
 
 async def test_rename_cascade_self_rename_with_no_stale_alias_stays_a_no_op(
@@ -913,6 +974,108 @@ async def test_rename_cascade_self_rename_with_no_stale_alias_stays_a_no_op(
     dtiers = dry["manifest"]["seats"][seat["seat_id"]]
     assert dtiers["charter"]["status"] == "already-correct"
     assert dry["collision"] is None
+
+
+async def test_rename_cascade_charter_plan_and_apply_agree_deckards_live_bug(
+    actions: Actions, tmp_path,
+) -> None:
+    """Thoth's mail 8749, URGENT: Deckard ran the cascade FOR REAL on 7b709ce (8711).
+    The dry run minutes earlier promised plan: ['xxit'] -> ['handlingtheloop']. The
+    real apply's own receipt showed charter {status: touched, detail: {charter:
+    ["xxit"], added: [], removed: []}} — a manifest reporting a write it never made,
+    worse than the honest already-correct it replaced. His hypothesis: plan compares
+    against the display name (change needed), apply compares against the canonical
+    (repo:xxit == repo:xxit, no-op) — the same split now sitting between plan and
+    apply. This is the exact test he named: on this seat, a dry run's plan must equal
+    the real run's detail — both now predict/observe the identical, honest outcome."""
+    office = tmp_path / "planapply_office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="planapplycur", handle="Planapplyseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:pla0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:pla0001")
+    proj = await _mk_project(actions, "planapplyxxit")  # mint-time canonical, forever
+    await actions.assert_property(proj, "name", "planapplycur", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    dry = await rename_project(actions, project="planapplycur", new_name="planapplynext",
+                               because="x", actor="agent:test", dry_run=True)
+    dtiers = dry["manifest"]["seats"][seat["seat_id"]]
+
+    out = await rename_project(actions, project="planapplycur", new_name="planapplynext",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+
+    assert dtiers["charter"]["status"] == tiers["charter"]["status"] == "already-correct"
+
+
+async def test_rename_cascade_office_already_correct_when_nothing_upstream_changed(
+    actions: Actions, tmp_path,
+) -> None:
+    """Thoth's mail 8749, second observation: 'office reports touched on every run even
+    when nothing upstream changed; it should be already-correct when charter and house
+    are verified-equal' — a self-rename with no stale pin/house/charter drift used to
+    still reissue the office file (a real write, a fresh version, byte-identical
+    content) every single call. Office must skip the reissue and report
+    already-correct when pin, house, and charter are ALL already-correct."""
+    office = tmp_path / "noopoffice"
+    office.mkdir()
+    (office / "CLAUDE.md").write_text("# notes\n")
+    seat = await ensure_seat(actions, house="officenoopcur", handle="Officenoopseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:offnoop1")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:offnoop1")
+    proj = await _mk_project(actions, "officenoopcur")  # mint-time name == the only name
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="officenoopcur", new_name="officenoopcur",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["pin"]["status"] == "already-correct"
+    assert tiers["house"]["status"] == "already-correct"
+    assert tiers["charter"]["status"] == "already-correct"
+    assert tiers["office"]["status"] == "already-correct"
+
+
+async def test_rename_cascade_office_still_reissues_when_pin_or_house_genuinely_changes(
+    actions: Actions, tmp_path,
+) -> None:
+    """The complementary case: office's new upstream gate must not turn into a blanket
+    skip — pin and house DO genuinely change on a real rename (unlike charter), and
+    office must still reissue when either of them does."""
+    from src.orchestrator.boot_compiler import reissue_office
+
+    office = tmp_path / "realoffice"
+    office.mkdir()
+    (office / ".osiris").write_text('project = "realofficeold"\n')
+    (office / "CLAUDE.md").write_text("# legacy hand-written orders\n")
+    seat = await ensure_seat(actions, house="realofficeold", handle="Realofficeseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:realoff1")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:realoff1")
+    proj = await _mk_project(actions, "realofficeold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+    # bootstrap a properly marked managed section first — the cascade's own reissue call
+    # never passes adopt=True (a legacy, marker-less file refuses loudly, on purpose;
+    # see boot_compiler's own adopt tests), so this fixture pre-adopts once, matching how
+    # any real office reaches this state before ever meeting the rename cascade.
+    await reissue_office(actions, seat_id=seat["seat_id"], because="test bootstrap",
+                         actor="agent:test", adopt=True)
+
+    out = await rename_project(actions, project="realofficeold", new_name="realofficenew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["pin"]["status"] == "touched"
+    assert tiers["house"]["status"] == "touched"
+    assert tiers["charter"]["status"] == "already-correct"
+    assert tiers["office"]["status"] == "touched"
 
 
 async def test_rename_project_self_rename_collision_receipt_reports_no_op_never_a_false_merge_flag(
@@ -1477,7 +1640,7 @@ async def test_mcp_rename_project_also_heals_a_genuinely_seated_cache_entry_via_
     — a governing seat's own live holder whose cache is ALREADY wrong for some unrelated
     reason would never string-match and so would never heal by that path alone. Set up a
     real governing seat via the cascade's own charter tier (same fixture shape as
-    test_rename_cascade_touches_pin_house_and_charter_for_a_governing_seat above), bind a
+    test_rename_cascade_touches_pin_and_house_reports_charter_already_correct above), bind a
     fake `_agents` cache entry to that seat's holder agent_id, and give it a DELIBERATELY
     DIFFERENT stale project string than old_bare — proving it's the NEW seat-bound heal
     doing the work, not the string-match one (which would have nothing to match)."""
@@ -1682,4 +1845,5 @@ async def test_rename_project_migrates_edges_never_orphans_them(
     resolved_new = await _resolve_software_project(actions.pool, "aftername")
     assert resolved_new is not None
     assert resolved_new["id"] == proj
+
 

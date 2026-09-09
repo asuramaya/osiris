@@ -666,9 +666,51 @@ async def _cascade_governing_seats(
             if stale:
                 new_charter = sorted(
                     ({new_name} | set(current_charter)) - set(stale))
-                if dry_run:
+                # PREDICT set_charter's OWN resolve-then-diff BEFORE trusting `stale` as
+                # proof a write is coming (Thoth/Deckard, mail 8749, Deckard's real run
+                # on 7b709ce: dry run promised plan ['xxit'] -> ['handlingtheloop'], the
+                # real apply's own set_charter detail showed added:[], removed:[] — "the
+                # manifest now reports a write it did not make"). `stale` only tests
+                # "isn't literally new_name," but `new_name` ALWAYS resolves back down
+                # to project_oid's own ETERNAL canonical (rename_project's contract:
+                # canonical never changes, only the mutable `name` property does) — the
+                # exact same canonical `stale`'s own entries already are. Mirroring
+                # set_charter's real resolve-then-diff (charter.py) here, using
+                # project_oid's own canonical directly for the `new_name` candidate
+                # (rather than resolving it — on a dry run the name-property write
+                # hasn't landed yet, so `new_name` cannot resolve to anything), makes
+                # PLAN and APPLY predict the identical outcome regardless of dry_run —
+                # a plan can never again promise a correction set_charter's own diff
+                # then silently no-ops.
+                project_canon = str(await pool.fetchval(
+                    "SELECT canonical FROM objects WHERE id=$1", project_oid)
+                    ).removeprefix("repo:")
+                resolved_canons: set[str] = set()
+                for cand in new_charter:
+                    if cand == new_name:
+                        resolved_canons.add(project_canon)
+                        continue
+                    cand_id = await _resolve_repo(pool, cand)
+                    if cand_id is None:
+                        continue  # mirrors set_charter's own `rejected` — dropped, not kept raw
+                    resolved_canons.add(str(await pool.fetchval(
+                        "SELECT canonical FROM objects WHERE id=$1", cand_id)
+                        ).removeprefix("repo:"))
+                real_added = sorted(resolved_canons - set(current_charter))
+                real_removed = sorted(set(current_charter) - resolved_canons)
+                if not real_added and not real_removed:
+                    # THE PHANTOM-WRITE CASE, NOW HONEST: every entry `stale` flagged
+                    # resolves right back to the SAME canonical it already was — nothing
+                    # set_charter could ever actually add or remove, structurally, for
+                    # a plain rename (never a fold — no second object exists to swap
+                    # to). Reporting "touched" here was the lie; "already-correct" is
+                    # what the graph — and set_charter's own real diff — would show.
+                    tiers["charter"] = {"status": "already-correct"}
+                elif dry_run:
                     tiers["charter"] = {"status": "touched",
-                                        "plan": f"{sorted(current_charter)} -> {new_charter}"}
+                                        "plan": f"{sorted(current_charter)} -> "
+                                                f"{sorted(resolved_canons)}",
+                                        "added": real_added, "removed": real_removed}
                 else:
                     cres = await set_charter(actions, seat_id, new_charter, actor=actor)
                     tiers["charter"] = ({"status": "could-not", "detail": cres["error"]}
@@ -702,11 +744,24 @@ async def _cascade_governing_seats(
             tiers["charter"] = {"status": "could-not", "detail": str(exc)}
 
         # OFFICE RENDER — recompile CLAUDE.md so it reflects whatever charter/house
-        # this same call already corrected above (runs after, on purpose).
+        # this same call already corrected above (runs after, on purpose). GATED ON
+        # UPSTREAM ACTUALLY CHANGING (Thoth/Deckard, mail 8749, second observation:
+        # "office reports touched on every run even when nothing upstream changed; it
+        # should be already-correct when charter and house are verified-equal") — this
+        # used to reissue unconditionally whenever an office file exists, minting a new
+        # version every call even when pin/house/charter all read "already-correct" —
+        # a real write (a fresh version stamp) recompiling byte-identical content,
+        # which is a "touched" every bit as phantom as the charter bug this same
+        # dispatch reported. Skip the reissue entirely when nothing upstream this loop
+        # touched actually changed.
+        upstream_touched = any(
+            tiers.get(tier, {}).get("status") == "touched" for tier in ("pin", "house", "charter"))
         anchor = facts.get("anchor_cwd")
         if not anchor or not (Path(anchor) / "CLAUDE.md").is_file():
             tiers["office"] = {"status": "could-not",
                                "detail": "no office/CLAUDE.md on record for this seat"}
+        elif not upstream_touched:
+            tiers["office"] = {"status": "already-correct"}
         elif dry_run:
             tiers["office"] = {"status": "touched",
                                "plan": "would reissue_office to reflect the updated "
