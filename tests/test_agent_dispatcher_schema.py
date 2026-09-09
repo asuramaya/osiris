@@ -51,6 +51,8 @@ AGENT_VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "file_subagents": {"project": "widget"},
     "retire_governs": {"agent_id": "agent:abc123", "repos": ["fragment-a", "fragment-b"],
                        "because": "off-head backfill garbage, decision 6ccd60d222d8"},
+    "invalidate_works_in": {"agent_id": "agent:abc123", "project": "widget",
+                            "because": "third-party duplicate works_in repair"},
 }
 
 
@@ -59,7 +61,7 @@ async def test_agent_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 9, "one branch per agent action — update this count and " \
+    assert len(branches) == 10, "one branch per agent action — update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert actions == set(AGENT_VALID_PAYLOADS), (

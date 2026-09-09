@@ -1410,7 +1410,15 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # backfill_agent_project_links's own off-head repair MOVES edges onto the living head --
 # exactly wrong for garbage. No new tool, load-bearing growth per this file's own
 # escape valve. Measured exact (116,969), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 117538
+# 116,153 -> 116,943 (2026-09-09, operator's word via Thoth DM 8697 item 1): `agent(
+# action='invalidate_works_in')` — a genuinely new AGENT_INPUT_SCHEMA branch (agent_id/
+# project/because) plus a one-line ACTION TABLE entry, exposing the already-generic
+# invalidate_works_in repair (agents.py) for a THIRD-PARTY agent — the existing
+# seat(action='invalidate_works_in') door only ever acts on the caller's own mounted
+# identity, so nobody could mechanically repair someone ELSE's duplicate works_in edge
+# without a raw graph write. No new tool, load-bearing growth per this file's own
+# escape valve. Measured exact (116,943), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 118328
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

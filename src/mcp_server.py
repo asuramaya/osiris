@@ -7353,6 +7353,10 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("retire_governs"), "agent_id": _s(),
             "repos": _list_s(), "because": _s(),
         }, ["action", "agent_id", "repos", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("invalidate_works_in"), "agent_id": _s(),
+            "project": _s(), "because": _s(),
+        }, ["action", "agent_id", "project", "because"]),
     ],
 }
 _HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
@@ -7371,6 +7375,12 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "file_subagent": (["subagent_id"], ["subagent_id"]),
     "file_subagents": (["project", "dry_run"], []),
     "retire_governs": (["agent_id", "repos", "because"], ["agent_id", "repos", "because"]),
+    # `project` doubles as the STALE project to drop (the same shared-slot convention
+    # `correct_house`'s own `project` already uses above) — third-party, unlike
+    # seat(action='invalidate_works_in')'s self-scoped door, which auto-fills agent_id
+    # from the caller and never exposes it as a parameter at all.
+    "invalidate_works_in": (["agent_id", "project", "because"],
+                            ["agent_id", "project", "because"]),
 }
 
 
@@ -7485,6 +7495,19 @@ async def _agent_impl(
         from src.orchestrator.agents import retire_governs_edges as _retire_governs_edges
         return await _retire_governs_edges(Actions(await _pool_get()), agent_id, repos,
                                            because=because, actor=ident.agent_id)
+    if action == "invalidate_works_in":
+        assert agent_id is not None and project is not None and because is not None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return {"error": "mount first — invalidating a works_in edge is a deliberate "
+                             "act on the record", "why": _anchorless(ctx)}
+        if agent_id == ident.agent_id:
+            return {"error": "agent_id names your own mounted identity — use "
+                             "seat(action='invalidate_works_in') for that, the self-"
+                             "scoped door; this one is for a THIRD-PARTY agent"}
+        from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
+        return await _invalidate_works_in(Actions(await _pool_get()), agent_id, project,
+                                          because=because, actor=ident.agent_id)
     raise AssertionError(f"action {action!r} passed validation but has no branch")
 
 
@@ -7523,6 +7546,12 @@ async def agent(
         real (the caller names them). Per-repo: a name that doesn't resolve to a known
         SoftwareProject, or resolves but the agent carries no live governs edge to it,
         is reported in `not_found`/`no_edge` rather than aborting the whole batch.
+      invalidate_works_in: THIRD-PARTY works_in duplicate repair (agent_id; project=the
+        STALE project to drop, the same shared slot correct_house's own `project` uses
+        above; because) — refuses agent_id naming your own mounted identity (use
+        seat(action='invalidate_works_in') for that, self-scoped and auto-filled). The
+        SAME underlying repair, exposed for a mind acting on someone ELSE's duplicate
+        (a mechanical hygiene sweep, a batch-move cleanup) rather than its own.
 
     Not covered here: self-scoped `retire()` (different auth shape, retires the
     CALLING agent's own session); `walk_in` (already seat(action='walk_in')); merge/
