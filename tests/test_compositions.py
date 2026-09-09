@@ -2506,6 +2506,28 @@ async def test_lint_orphan_marks_an_acknowledged_abstention_differently(
     assert result["orphan_abstained_total"] == 1
 
 
+async def test_lint_orphan_never_counts_a_resolved_abstention_as_live(
+    actions: Actions,
+) -> None:
+    """Khnum's own catch (DM 8855): `derive_or_abstain`'s later successful mint
+    supersedes a live abstention with a `resolved: true` marker — a since-answered
+    abstention must never masquerade as an unresolved one, the same
+    `NOT (value ? 'resolved')` predicate `backfill_lineage_repo_links` already checks."""
+    obj = await actions.create_or_find_object("Thread", "thread:orphan-resolved", "test")
+    await actions.assert_property(
+        obj, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "resolved": True, "resolved_to": "repo:whatever"},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "orphan")
+    assert finding["subject"] == "thread:orphan-resolved"
+    assert "never linked, never abstained" in finding["detail"]
+    assert result["orphan_by_type"] == {"Thread": {"count": 1, "abstained": 0}}
+    assert result["orphan_abstained_total"] == 0
+
+
 async def test_lint_orphan_never_flags_an_object_with_a_live_link(actions: Actions) -> None:
     a = await actions.create_or_find_object("Agent", "agent:orphan-linked", "test")
     proj = await actions.create_or_find_object("SoftwareProject", "repo:orphan-linked", "test")

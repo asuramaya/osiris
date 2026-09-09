@@ -1473,6 +1473,14 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     looked at. Shared by graph_lint's own 'orphan' check and preflight's weekly line —
     one derivation, never two drifting copies of the same query.
 
+    A RESOLVED ABSTENTION IS NOT A LIVE ONE (Khnum's own catch, DM 8855): `derive_or_
+    abstain`'s later successful mint supersedes a live abstention with a `resolved:
+    true` marker via `supersede_assertion` — the same `NOT (value ? 'resolved')`
+    predicate `backfill_lineage_repo_links` already checks for the identical stale-
+    abstention-retirement case, reused here rather than re-derived a third time.
+    Excluded from `abstained` so a since-answered abstention never masquerades as a
+    live one.
+
     DIFFERENT POPULATION FROM `orphan-link` (this same module's own INFO-grade check):
     that one counts LINKS touching a non-active object (consolidation debt under
     resolve-on-read); this counts OBJECTS with no link touching them at all — a
@@ -1483,7 +1491,8 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, o.type, "
         " EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
-        "   AND ca.name LIKE 'derivation_abstained_%') AS abstained "
+        "   AND ca.name LIKE 'derivation_abstained_%' AND NOT (ca.value ? 'resolved')) "
+        "   AS abstained "
         "FROM objects o "
         "WHERE o.status='active' AND o.type <> 'Type' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
