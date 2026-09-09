@@ -180,6 +180,10 @@ const Osiris = (() => {
   // on every zoom tick is what makes the style FUNCTION below re-run; a static mapper is only
   // ever evaluated once per element otherwise.
   const ZOOM_LABEL_THRESHOLD = 0.45;
+  // WAVE A item 4: node size by degree — a floor for isolated nodes, growing with connection
+  // count, capped so one true supernode can't dwarf the board.
+  const NODE_SIZE_MIN = 26, NODE_SIZE_MAX = 68, NODE_SIZE_PER_DEGREE = 3;
+  const nodeSize = (e) => Math.min(NODE_SIZE_MAX, NODE_SIZE_MIN + e.degree() * NODE_SIZE_PER_DEGREE);
 
   // onFocus(id, deep, type): tap = select (deep=false), double-tap = primary action (deep=true).
   // onCtx(id, type, mouseEvent): right-click = the object's contextual action menu.
@@ -191,12 +195,26 @@ const Osiris = (() => {
       style: [
         { selector: "node", style: {
           "background-color": (e) => ty(e.data("type")).c, shape: (e) => ty(e.data("type")).s,
-          width: 32, height: 32, "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
+          // WAVE A item 4: size by degree — a hub reads as a hub at a glance, a leaf as a
+          // leaf, without opening the inspector. Degree changes as edges are added/removed,
+          // so this must be a live style FUNCTION (re-run on cy.style().update()), never a
+          // value baked in at add-time.
+          width: (e) => nodeSize(e), height: (e) => nodeSize(e),
+          "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
           label: (e) => (cy.zoom() < ZOOM_LABEL_THRESHOLD ? "" : truncateLabel(e.data("label"))),
           color: "#f0f6fc", "font-size": 11, "font-weight": 600,
           "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": 120,
           "text-background-color": "#0d1219", "text-background-opacity": 0.88, "text-background-padding": 3,
           "text-background-shape": "roundrectangle", "min-zoomed-font-size": 6 } },
+        // WAVE A item 4: agents painted with the fleet view's own live/idle/dead states
+        // (agent_state, server-supplied — see app.py's object_graph) as a border ring, laid
+        // over the type-coloured fill so BOTH facts stay visible: what kind of object, and
+        // whether it's a body still breathing. Declared BEFORE node.focus so a SELECTED
+        // agent still shows the blue focus ring, not its own liveness color — the
+        // interaction state always wins over the ambient one.
+        { selector: "node[type='Agent'][agent_state='live']", style: { "border-width": 3, "border-color": "#3fb950" } },
+        { selector: "node[type='Agent'][agent_state='idle']", style: { "border-width": 3, "border-color": "#d29922" } },
+        { selector: "node[type='Agent'][agent_state='dead']", style: { "border-width": 2, "border-color": "#6e7681" } },
         { selector: "node.focus", style: { "border-width": 3, "border-color": "#58a6ff" } },
         // WAVE A item 2: edge labels OFF by default (a hairball of "spawned_by"/"in_repo"
         // text under every line was the actual readability problem, not the lines
@@ -219,6 +237,10 @@ const Osiris = (() => {
     cy.on("zoom", () => cy.style().update());
     cy.on("mouseover", "edge", (e) => e.target.addClass("edge-hover"));
     cy.on("mouseout", "edge", (e) => e.target.removeClass("edge-hover"));
+    // degree-based size (item 4) is only correct once every edge for this add batch has
+    // landed — one style().update() per batch is enough; cytoscape coalesces same-tick add
+    // events, so this never fires once per element.
+    cy.on("add remove", "edge", () => cy.style().update());
     const layout = (preserve) => {
       // a DISCONNECTED set (unrelated nodes, no edges — e.g. 5 open threads) force-packs into
       // an overlapping cluster under fcose; a grid spreads them cleanly. Edges → force layout.
@@ -234,6 +256,12 @@ const Osiris = (() => {
       cy.resize();
       cy.fit(undefined, 45);
     };
+    // WAVE A item 4: an Agent node's server-supplied `agent_state` (live/idle/dead, the
+    // fleet view's own window) rides along as node data when present — passed through
+    // wherever a graph-fetched node becomes a cy node, never fabricated client-side.
+    const nodeData = (n) => (n.agent_state
+      ? { id: n.id, type: n.type, label: n.label, agent_state: n.agent_state }
+      : { id: n.id, type: n.type, label: n.label });
     // WAVE A item 3: hub bundling — more than HUB_BUNDLE_THRESHOLD edges of ONE type off ONE
     // node (the "38 spawned_by" shape) collapse into one bundle node rather than 38 real
     // ones fighting the layout. Groups by (hub, direction, type); a group past threshold is
@@ -248,7 +276,7 @@ const Osiris = (() => {
       node.remove();
       if (!info) return;
       info.nodes.forEach((n) => {
-        if (n && !cy.getElementById(n.id).length) cy.add({ group: "nodes", data: { id: n.id, type: n.type, label: n.label } });
+        if (n && !cy.getElementById(n.id).length) cy.add({ group: "nodes", data: nodeData(n) });
       });
       info.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;
@@ -287,7 +315,7 @@ const Osiris = (() => {
           // placeObjects batch) — plant it now so the bundle edge has both ends to attach to.
           if (!cy.getElementById(gr.hub).length) {
             const hubNode = g.nodes.find((n) => n.id === gr.hub);
-            if (hubNode) { cy.add({ group: "nodes", data: { id: hubNode.id, type: hubNode.type, label: hubNode.label } }); added++; }
+            if (hubNode) { cy.add({ group: "nodes", data: nodeData(hubNode) }); added++; }
           }
           if (cy.getElementById(gr.hub).length) {
             cy.add({ group: "edges", data: gr.dir === "out"
@@ -298,7 +326,7 @@ const Osiris = (() => {
         });
       g.nodes.forEach((n) => {
         if (bundledNodeIds.has(n.id)) return; // hidden behind a bundle — expandBundle() adds it back
-        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: { id: n.id, type: n.type, label: n.label } }); added++; }
+        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); added++; }
       });
       g.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;

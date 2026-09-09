@@ -151,6 +151,46 @@ async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None
     assert any(e["type"] == "uses" for e in g["edges"])
 
 
+async def test_object_graph_paints_agent_nodes_with_live_idle_dead_state(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave A item 4 (thread 8839): an Agent node's own graph-endpoint row
+    carries `agent_state`, resolved from agent_mounts.last_seen against the same LIVE_SECS
+    window (900s) seats.py's own occupancy read uses, plus an idle tier (seen in the last
+    day). A non-Agent node never carries the field at all -- it isn't a claim this endpoint
+    can make about a Thread or a Commit."""
+    from src.orchestrator.mounts import save_mount
+
+    live_id = await actions.create_or_find_object("Agent", "agent:gv-live", "test")
+    idle_id = await actions.create_or_find_object("Agent", "agent:gv-idle", "test")
+    dead_id = await actions.create_or_find_object("Agent", "agent:gv-dead", "test")
+    thread_id = await actions.create_or_find_object("Thread", "thread:gv-item4", "test")
+    await actions.create_link(thread_id, live_id, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(thread_id, idle_id, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(thread_id, dead_id, "closed_by", "test", datetime.now(UTC), 1.0)
+
+    await save_mount(actions.pool, job_dir="/test/gv-live", agent_id="agent:gv-live",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await save_mount(actions.pool, job_dir="/test/gv-idle", agent_id="agent:gv-idle",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '6 hours' WHERE agent_id=$1",
+        "agent:gv-idle")
+    await save_mount(actions.pool, job_dir="/test/gv-dead", agent_id="agent:gv-dead",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '3 days' WHERE agent_id=$1",
+        "agent:gv-dead")
+
+    r = await client.get(f"/objects/{thread_id}/graph", params={"hops": 1})
+    g = r.json()
+    by_id = {n["id"]: n for n in g["nodes"]}
+    assert by_id[str(live_id)]["agent_state"] == "live"
+    assert by_id[str(idle_id)]["agent_state"] == "idle"
+    assert by_id[str(dead_id)]["agent_state"] == "dead"
+    assert "agent_state" not in by_id[str(thread_id)]
+
+
 async def test_available_helpers_from_manifest_registry(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:

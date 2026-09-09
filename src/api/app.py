@@ -793,10 +793,38 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             list(seen),
         )
         node_props = await fetch_label_props(p, [r["id"] for r in node_rows])
+        # WAVE A item 4 (graph visualizer, thread 8839): agents painted with the fleet
+        # view's own live/idle/dead states, not a bare type color — the same LIVE_SECS
+        # window seats.py's own occupancy read uses (900s), plus an IDLE tier (seen in the
+        # last day) so a body that stepped away reads differently from one that never will
+        # again. Looked up by CANONICAL (agent:<id>), the same string agent_mounts.agent_id
+        # stores — an Agent object's `id` (uuid) is never what a mount row keys on.
+        agent_ids = [r["canonical"] for r in node_rows if r["type"] == "Agent" and r["canonical"]]
+        agent_state: dict[str, str] = {}
+        if agent_ids:
+            state_rows = await p.fetch(
+                "SELECT agent_id, max(last_seen) AS last_seen FROM agent_mounts "
+                "WHERE agent_id = ANY($1::text[]) GROUP BY agent_id",
+                agent_ids,
+            )
+            now = datetime.now(UTC)
+            for r in state_rows:
+                last_seen = r["last_seen"]
+                if last_seen is None:
+                    state = "dead"
+                elif (now - last_seen).total_seconds() <= 900:
+                    state = "live"
+                elif (now - last_seen).total_seconds() <= 86400:
+                    state = "idle"
+                else:
+                    state = "dead"
+                agent_state[r["agent_id"]] = state
         nodes = [
             {"id": str(r["id"]), "type": r["type"],
              "label": resolve_label(r["type"], node_props.get(r["id"], {}),
-                                    r["canonical"]).label}
+                                    r["canonical"]).label,
+             **({"agent_state": agent_state.get(r["canonical"], "dead")}
+                if r["type"] == "Agent" else {})}
             for r in node_rows
         ]
         edge_rows = await p.fetch(

@@ -54,3 +54,21 @@ def test_a_bundle_node_expands_on_click_instead_of_focusing() -> None:
 def test_bundle_expansion_restores_the_withheld_nodes_and_edges() -> None:
     assert "const expandBundle = (bundleId) =>" in _JS
     assert "info.nodes.forEach" in _JS and "info.edges.forEach" in _JS
+
+
+# --- item 4: node size by degree, colour by type, agents painted live/idle/dead -----------
+
+def test_node_size_is_a_function_of_degree() -> None:
+    assert "const nodeSize = (e) => Math.min(NODE_SIZE_MAX" in _JS
+    assert "e.degree() * NODE_SIZE_PER_DEGREE" in _JS
+    assert "width: (e) => nodeSize(e), height: (e) => nodeSize(e)" in _JS
+
+
+def test_degree_based_style_refreshes_when_edges_change() -> None:
+    assert 'cy.on("add remove", "edge", () => cy.style().update())' in _JS
+
+
+def test_agent_nodes_paint_by_live_idle_dead_state() -> None:
+    for state in ("live", "idle", "dead"):
+        assert f"node[type='Agent'][agent_state='{state}']" in _JS
+    assert "agent_state: n.agent_state" in _JS  # nodeData() passthrough
