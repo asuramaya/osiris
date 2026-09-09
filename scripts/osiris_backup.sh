@@ -45,12 +45,25 @@ else
   # ladder (now on its own weekly timer, part 1) — the vault's retention is that ladder's
   # job alone from here on.
   NEW_DUMP="$VAULT/osiris-$(date +%Y%m%d-%H%M%S).dump"
-  docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$NEW_DUMP"
+  if ! docker exec osiris-pg pg_dump -U osiris -d osiris -Fc > "$NEW_DUMP"; then
+    echo "osiris_backup: pg_dump failed — removing the partial dump, continuing with the rest of this run" >&2
+    rm -f "$NEW_DUMP"
+    NEW_DUMP=""
+  fi
 fi
 
-# the repo bundle: all refs, atomic replace (never a half-written only-copy)
+# the repo bundle: all refs, atomic replace (never a half-written only-copy). `||`-
+# terminated (2026-09-09 fix, Thoth mail 8525 item 2's own investigation): under
+# `set -e` a bare `cmd1 && cmd2` statement that fails aborts the WHOLE script right
+# there, never reaching the hardlink/WAL-pull sections below — exactly the failure
+# mode a still-present transcript-archive `tar` call (since retired) hit live on
+# 2026-09-08 16:30 CDT, leaving 465 WAL segments stuck staged in the container for a
+# full 6-hour tick. A bundle refresh failing today would have been the SAME class of
+# silent, total outage for every duty below it; this line is now the last one in the
+# script that could still cause it, so it gets the identical treatment.
 git -C "$REPO" bundle create "$VAULT/osiris-repo.bundle.new" --all 2>/dev/null \
-  && mv "$VAULT/osiris-repo.bundle.new" "$VAULT/osiris-repo.bundle"
+  && mv "$VAULT/osiris-repo.bundle.new" "$VAULT/osiris-repo.bundle" \
+  || echo "osiris_backup: git bundle refresh failed — leaving the previous bundle in place, continuing" >&2
 
 # backups/ HARDLINKS the vault's own new dump (same filesystem, free — never a second
 # copy of the bytes) purely for fast local access; ITS OWN retention is a fixed, small
