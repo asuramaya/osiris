@@ -1829,6 +1829,18 @@ async def rename_seat(
     no reach into. The honest receipt is "graph renamed; the harness name follows at next
     spawn," never a claim of something this call didn't do.
 
+    SELF-MANAGED SEATS SELF-AUTHORIZE (operator ruling, 2026-09-09, decision 1bad18ad08b7,
+    on henry: "henry is self managed like a handful of other seats, no manager, no house,
+    etc. sounds like a mechanical failure"): a seat with no manager on record is a
+    legitimate shape, not an error state — the missing-manager refusal below used to fire
+    unconditionally, even against that seat's OWN holder, leaving an unmanaged-and-cold
+    seat with no possible actor at all except the literal operator sentinel. Mirrors
+    bind_seat_tree's own carve-out exactly (same thread ae93d2e1 lineage): a holder acting
+    on its OWN seat, with no manager to defer to, is never a wider trust grant than the
+    manager check already allows (a manager may rename ANY seat it manages; this only ever
+    lets a holder rename its OWN) — the receipt CONFESSES it under `authorization` rather
+    than reading identically to a manager-approved write.
+
     Refuses LOUDLY on: a blank `new_handle` or one over 40 chars; a blank `because` (a
     rename is testimony — the reason must be on the record, the same discipline
     set_seat_attended holds); an unknown seat; `new_handle` already claimed by a DIFFERENT
@@ -1840,11 +1852,15 @@ async def rename_seat(
     if not because.strip():
         return {"error": "because is required — a rename is testimony; the reason it "
                          "changed must be on the record"}
+    self_authorized = False
     if actor not in _OPERATOR_ACTORS:
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         manager_seat_id = await manager_of_seat(actions.pool, seat_id)
-        if caller_seat_id is None or caller_seat_id != manager_seat_id:
+        authorized = caller_seat_id is not None and caller_seat_id == manager_seat_id
+        if not authorized and manager_seat_id is None and caller_seat_id == seat_id:
+            authorized, self_authorized = True, True
+        if not authorized:
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
@@ -1874,10 +1890,13 @@ async def rename_seat(
         await actions.assert_property(holder_oid, "handle", new_handle, actor, now, _CONF,
                                       evidence_class=_EC)
         holder_stamped = occ["holder"]
-    return {"seat": seat_id, "old_handle": old_handle, "new_handle": new_handle,
-            "holder_stamped": holder_stamped, "because": because,
-            "note": "graph renamed; the harness window/session display name follows at "
-                    "next spawn, not retroactively"}
+    out = {"seat": seat_id, "old_handle": old_handle, "new_handle": new_handle,
+           "holder_stamped": holder_stamped, "because": because,
+           "note": "graph renamed; the harness window/session display name follows at "
+                   "next spawn, not retroactively"}
+    if self_authorized:
+        out["authorization"] = "self-authorized, no manager on record"
+    return out
 
 
 async def bind_seat_tree(

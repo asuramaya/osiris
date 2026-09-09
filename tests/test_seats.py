@@ -4287,6 +4287,53 @@ async def test_rename_seat_allows_the_target_seats_own_manager(actions: Actions)
     assert await _handle_of(actions, worker) == "Renamed2"
 
 
+async def test_rename_seat_self_authorizes_an_unmanaged_seats_own_holder(
+    actions: Actions,
+) -> None:
+    """SELF-MANAGED SEATS SELF-AUTHORIZE (operator ruling 2026-09-09, decision
+    1bad18ad08b7, the henry specimen): a seat with no manager on record used to have no
+    legal actor at all for its own rename — not even its own holder. Mirrors
+    bind_seat_tree's own carve-out (test_bind_seat_tree_self_authorizes_an_unmanaged_
+    seats_own_holder) exactly."""
+    from src.orchestrator.seats import bind_holder, ensure_seat, rename_seat
+
+    seat = (await ensure_seat(actions, house="demo", handle="SelfManaged",
+                              source="test"))["seat_id"]
+    await bind_holder(actions, seat_id=seat, agent_id="agent:self-managed-holder",
+                      source="test")
+
+    out = await rename_seat(actions, seat_id=seat, new_handle="RenamedSelf",
+                            actor="agent:self-managed-holder",
+                            because="the holder renames its own unmanaged seat")
+    assert out.get("error") is None
+    assert out["new_handle"] == "RenamedSelf"
+    assert out["authorization"] == "self-authorized, no manager on record"
+    assert await _handle_of(actions, seat) == "RenamedSelf"
+
+
+async def test_rename_seat_still_refuses_a_managed_seats_holder_bypassing_its_manager(
+    actions: Actions,
+) -> None:
+    """Self-authorization is scoped to the UNMANAGED case only — a managed seat's own
+    holder must still go through its manager (or the operator), same law bind_seat_tree
+    already enforces."""
+    from src.orchestrator.seats import attach_seat, bind_holder, ensure_seat, rename_seat
+
+    manager = (await ensure_seat(actions, house="demo", handle="RenameMgr3",
+                                 source="test"))["seat_id"]
+    worker = (await ensure_seat(actions, house="demo", handle="RenameWkr3",
+                                source="test"))["seat_id"]
+    await attach_seat(actions, worker, manager, evidence="org chart", actor="test")
+    await bind_holder(actions, seat_id=worker, agent_id="agent:managed-holder-rename",
+                      source="test")
+
+    out = await rename_seat(actions, seat_id=worker, new_handle="ShouldNotLand",
+                            actor="agent:managed-holder-rename",
+                            because="the holder tries to skip its own manager")
+    assert "not authorized" in out["error"]
+    assert await _handle_of(actions, worker) == "RenameWkr3"
+
+
 # ═══ bind_seat_tree (task #103's re-scope, ff3bdc37, Thoth DM 2794 sign-off) ═══
 
 async def test_bind_seat_tree_records_a_distinct_property_from_anchor_cwd(
