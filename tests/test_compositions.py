@@ -2404,6 +2404,58 @@ async def test_lint_unresolvable_owner_never_flags_operator_or_a_real_seat(
     assert result["counts"]["unresolvable-owner"] == 0
 
 
+async def test_lint_zero_recipient_dm_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["zero-recipient-dm"] == 0
+    assert "zero-recipient-dm" in result["clean"]
+
+
+async def test_lint_zero_recipient_dm_flags_a_dm_with_no_recipient_row(
+    actions: Actions,
+) -> None:
+    """Thread 9d1d41c8 (Thoth's follow-up on 24f52959): a DM (to_agent set) that never
+    got a message_recipients row is the exact silent-loss shape that fix closed one
+    cause of — this is the standing tripwire for any other cause."""
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_agent, body) "
+        "VALUES ('agent:sender', 'agent:lost-recipient', 'nobody will ever read this')")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["zero-recipient-dm"] == 1
+    assert "zero-recipient-dm" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "zero-recipient-dm")
+    assert finding["severity"] == "warn"
+    assert finding["subject"] == "agent:lost-recipient"
+    assert "agent:lost-recipient" in finding["detail"]
+
+
+async def test_lint_zero_recipient_dm_never_flags_a_broadcast(actions: Actions) -> None:
+    """A project broadcast (to_agent IS NULL) is not a DM — every agent in the project
+    is its own implicit recipient, so no message_recipients row is expected until one
+    of them actually reads it."""
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_project, body) "
+        "VALUES ('agent:sender', 'widget', 'group chat, everyone sees this')")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["zero-recipient-dm"] == 0
+
+
+async def test_lint_zero_recipient_dm_never_flags_a_dm_with_a_recipient_row(
+    actions: Actions,
+) -> None:
+    row = await actions.pool.fetchrow(
+        "INSERT INTO fleet_messages (from_agent, to_agent, body) "
+        "VALUES ('agent:sender', 'agent:real-recipient', 'this one was delivered') "
+        "RETURNING id")
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at) "
+        "VALUES ($1, 'agent:real-recipient', now())", row["id"])
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["zero-recipient-dm"] == 0
+
+
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
 
 async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions) -> None:
