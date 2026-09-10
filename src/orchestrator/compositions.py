@@ -2892,7 +2892,11 @@ async def open_thread_wall(
             item["kind"] = r["kind"]
         if r["owner"]:  # whose move it is — absent means anyone's
             item["owner"] = r["owner"]
-        if r["arc"]:
+        # ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): the write
+        # gate never strips a legacy off-scope arc a pre-gate write left on a non-osiris
+        # thread (577988ed — additive, never a strip), so this READ surface must not
+        # show one either. capture.ARCS names osiris's own roadmap taxonomy only.
+        if r["arc"] and pname == "osiris":
             item["arc"] = r["arc"]
         if r["is_handoff"]:  # Thoth DM 3090: orient()'s own _cap_text reads this to exempt
             item["is_handoff"] = r["is_handoff"]  # a handoff record from the 160-char cap
@@ -3120,7 +3124,14 @@ async def _fn_roadmap_open(
     assert subject is not None  # the op guard requires a subject (the project)
     wall, _echoes = await open_thread_wall(pool, subject)
     ranked, more = rank_open_threads(wall)
-    arcs = await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
+    # ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): only look up
+    # (and so only ever show) a real arc value when this roadmap's own subject IS osiris
+    # — a client project's roadmap must never surface a legacy off-scope arc a pre-gate
+    # write left behind (577988ed — additive, never a strip on the write side).
+    pname = await pool.fetchval(
+        "SELECT replace(canonical, 'repo:', '') FROM objects WHERE id=$1", subject)
+    arcs = (await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
+            if pname == "osiris" else {})
     items = [{"id": str(t["id"])[:8], "summary": t["summary"], "kind": t.get("kind"),
              "arc": arcs.get(str(t["id"])[:8]) or "unsorted",
              "owner": t.get("owner") or "unowned"} for t in ranked]
