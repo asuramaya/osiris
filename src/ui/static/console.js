@@ -115,6 +115,7 @@ async function switchRoom(id) {
   const collect = !!(room && room.config && room.config.collect);
   document.querySelectorAll('.collect-only').forEach(el => el.style.display = collect ? '' : 'none');
   if (ACTIVE_SURFACE === 'browse') { SET = []; await loadObjectSet(); renderEntityExplorer(); }
+  await loadCompositions();
 }
 async function newRoom() {
   const name = prompt('Name this stance / perspective:'); if (!name) return;
@@ -750,11 +751,92 @@ const POWER_TOOLS = [
   { label: 'The Wall', hint: 'Obligations wall', run: () => runTool('the-wall') },
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
-  
+  { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
 ];
 
-async function runTool(name) {
-  try { setStatus('Running ' + name + '...'); const res = await fetch('/compositions/' + encodeURIComponent(name) + '/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ subject: FOCUS }) }).then(r => r.json()); if (res.error) { setStatus(res.error); return; } const container = $('result'); showPanel(); $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none'; container.innerHTML = '<div style="padding:8px 16px"><button class="iconbtn" onclick="switchSurface(\'browse\')">\u2190 Back to Browse</button></div><pre style="padding:16px;font-size:12px;line-height:1.6;white-space:pre-wrap;color:var(--text);max-height:70vh;overflow-y:auto">' + esc(JSON.stringify(res, null, 2)) + '</pre>'; setStatus('Ran ' + name + '.'); } catch(e) { setStatus('Could not run: ' + name); }
+// THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
+// "POST /compositions/{name}/run and dump the raw JSON in a <pre>" \u2014 every saved composition
+// paid for osiris.js's generic renderer (P4, commit 9c5e923) without ever reaching it. Now it
+// runs through Osiris.renderResult exactly like piece 1's mailbox did, so a table composition
+// gets a real table, an objects composition gets the board, row_action buttons work, and
+// "run:<function>" drill-ins dispatch through the same scoped listener pattern.
+let LAST_COMPOSITION_RUN = null; // {name, spec} of whatever's on screen \u2014 Fork's own source
+async function runTool(name) { await runComposition(name, {}, FOCUS); }
+
+async function runComposition(name, args, subject) {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
+  try {
+    setStatus('Running ' + name + '...');
+    const isFunctionDrill = args && Object.keys(args).length > 0;
+    const res = isFunctionDrill
+      ? await fetch('/compositions/run-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: { op: 'function', name: name, args: args }, name: name }) }).then(r => r.json())
+      : await fetch('/compositions/' + encodeURIComponent(name) + '/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ subject: subject || null }) }).then(r => r.json());
+    if (res.error) { setStatus(res.error); container.innerHTML = '<div class="o-empty" style="padding:40px">' + esc(res.error) + '</div>'; return; }
+    LAST_COMPOSITION_RUN = isFunctionDrill ? null : { name: res.composition || name, spec: res.spec };
+    const panel = document.createElement('div'); panel.style.padding = '16px';
+    await Osiris.renderResult(res, { board: null, panel: panel }, Osiris.defaultView(res), null, null, null);
+    container.innerHTML = '<div style="padding:8px 16px;display:flex;gap:8px">' +
+      '<button class="iconbtn" onclick="switchSurface(\'browse\')">\u2190 Back to Browse</button>' +
+      (LAST_COMPOSITION_RUN ? '<button class="iconbtn" onclick="forkComposition()">\u2942 Fork (save as)\u2026</button>' : '') +
+      '</div>';
+    container.appendChild(panel);
+    setStatus('Ran ' + name + ' \u2014 ' + res.count + (res.count === 1 ? ' item' : ' items') + '.');
+  } catch(e) { console.error('runComposition failed', name, args, e); setStatus('Could not run: ' + name); container.innerHTML = '<div class="o-empty" style="padding:40px">Could not run: ' + esc(name) + '</div>'; }
+}
+
+// osiris.js's click delegate dispatches this for any row's "run:<function>" action (built for
+// exactly this navigation, task #90/#91 \u2014 see osiris.js's own comment on the click delegate).
+// The mailbox surface has its own narrower-scoped listener (piece 1); this one is the general
+// composer-shell catch-all for every OTHER surface, so a "run:" button on any saved
+// composition's row (not just mail's) has somewhere to land.
+document.addEventListener('osiris:run', function(e) {
+  if (ACTIVE_SURFACE === 'mailbox') return; // owned by renderMailbox's own listener
+  runComposition(e.detail.name, e.detail.args || {}, FOCUS);
+});
+
+// AUTHOR (the channel Claude composes over MCP already has; this is the human's own door,
+// same "friendly form OR raw spec" split P5's original design called for \u2014 kept to the raw
+// spec half, since a friendly builder is its own real UI and not what this piece needs to
+// prove: that a human can put a saved composition on the graph at all, room-scoped, from the
+// shell, without touching MCP).
+async function authorComposition() {
+  const name = prompt('Name this composition:'); if (!name) return;
+  const specText = prompt('Op-tree spec (JSON) \u2014 e.g. {"op":"function","name":"mail_overview"}:');
+  if (!specText) return;
+  let spec; try { spec = JSON.parse(specText); } catch(e) { setStatus('Invalid JSON spec.'); return; }
+  try {
+    const preview = await fetch('/compositions/run-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: spec, subject: FOCUS, name: name }) }).then(r => r.json());
+    if (preview.error) { setStatus('Spec failed: ' + preview.error); return; }
+  } catch(e) { setStatus('Could not preview spec.'); return; }
+  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: spec, room_id: ROOM || null }) }).then(r => r.json());
+  await loadCompositions();
+  setStatus('Saved composition: ' + (saved.name || name));
+  await runComposition(name, {}, FOCUS);
+}
+
+// FORK \u2014 save the composition currently on screen under a new name (a real fork: the spec
+// copies, the two compositions diverge independently from here on, same as `git branch`).
+async function forkComposition() {
+  if (!LAST_COMPOSITION_RUN) return;
+  const name = prompt('Fork "' + LAST_COMPOSITION_RUN.name + '" as:'); if (!name) return;
+  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: LAST_COMPOSITION_RUN.spec, room_id: ROOM || null }) }).then(r => r.json());
+  await loadCompositions();
+  setStatus('Forked as: ' + (saved.name || name));
+  await runComposition(name, {}, FOCUS);
+}
+
+// PICK \u2014 every saved composition, room-scoped exactly like the object set already is
+// (switchRoom's own filter), loaded once per room switch rather than per keystroke: unlike
+// /search (piece #196's addition to the palette, debounced because the graph is too large to
+// hold client-side) a room's saved compositions are few and already local, same shape POWER_
+// TOOLS has always been.
+let SAVED_COMPOSITIONS = [];
+async function loadCompositions() {
+  try {
+    const url = '/compositions' + (ROOM ? ('?room=' + encodeURIComponent(ROOM)) : '');
+    SAVED_COMPOSITIONS = await fetch(url).then(r => r.json());
+  } catch(e) { SAVED_COMPOSITIONS = []; }
 }
 
 function expandSearchInput() { $('global-search-box').classList.add('expanded'); setTimeout(() => $('search').focus(), 50); }
@@ -768,7 +850,13 @@ function runOmniSearch(q) {
   dd.style.display = 'flex';
   const ql = q.toLowerCase();
   const toolHits = POWER_TOOLS.filter(t => t.label.toLowerCase().includes(ql) || (t.hint || '').toLowerCase().includes(ql)).slice(0, 8);
-  OMNI_ITEMS = toolHits;
+  // saved compositions — the room-scoped PICK half of "pick a room, run/author/fork
+  // compositions" (Thoth dispatch 9257 piece 2). Already loaded client-side (loadCompositions,
+  // called on boot and on every room switch), so this filters synchronously same as POWER_
+  // TOOLS rather than round-tripping per keystroke the way /search's graph hits do below.
+  const compHits = SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql)).slice(0, 8)
+    .map(c => ({ label: c.name, hint: c.description || c.kind, cat: 'Compositions', run: () => runTool(c.name) }));
+  OMNI_ITEMS = toolHits.concat(compHits);
   OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1);
   renderOmniList(q);
   // Search is an ADDITION to enumeration, never a replacement (ruling 7a1a5517) — this
@@ -789,7 +877,7 @@ function runOmniSearch(q) {
       hint: h.type || '', cat: 'Graph',
       run: () => { switchSurface('browse'); focus(h.id); },
     }));
-    OMNI_ITEMS = toolHits.concat(graphHits).slice(0, 16);
+    OMNI_ITEMS = toolHits.concat(compHits, graphHits).slice(0, 16);
     OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1);
     renderOmniList(q);
   }, 200);
