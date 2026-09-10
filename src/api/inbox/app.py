@@ -1,7 +1,9 @@
-"""THE INBOX'S ROUTES (task #71) — GET / (shell), GET /stream (SSE), POST /inbox/{id}/
-{action}. Mounted into the existing :8011 process via create_app()'s own include_router()
-(a separate cutover commit, per Thoth's sequencing, msg 1818) — this module never starts
-its own uvicorn process; :8011 stays one process, one port.
+"""THE INBOX'S ROUTES (task #71) — GET / now just redirects to /ui (the operator's own
+front-door consolidation, 2026-09-10; the standalone shell ruling 0b3dd431 minted is
+dead). GET /stream (SSE) and POST /inbox/{id}/{action} are left as-is here, out of this
+redirect-only fix's scope. Mounted into the existing :8011 process via create_app()'s
+own include_router() (a separate cutover commit, per Thoth's sequencing, msg 1818) —
+this module never starts its own uvicorn process; :8011 stays one process, one port.
 
 Every route here is a THIN adapter: inbox.py builds the Block tree, render.py turns it
 into HTML, and POST actions dispatch through the SAME closed ACTION_VERBS registry /act
@@ -16,33 +18,24 @@ from datastar_py.fastapi import DatastarResponse
 from datastar_py.fastapi import ServerSentEventGenerator as SSE
 from datastar_py.sse import DatastarEvent
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 
 from src.api.app import get_pool
-from src.api.inbox.blocks import Page, Region
 from src.api.inbox.inbox import build_inbox
-from src.api.inbox.render import render_block, render_page
+from src.api.inbox.render import render_block
 
 router = APIRouter()
 
 _STREAM_INTERVAL_SECS = 5
 
 
-async def _build_page(pool: asyncpg.Pool) -> Page:
-    inbox_list = await build_inbox(pool)
-    return Page(title="Inbox", regions=[
-        Region(name="masthead", children=[]),
-        Region(name="main", children=[inbox_list]),
-        Region(name="aside", children=[]),
-        Region(name="footer", children=[]),
-    ])
-
-
-@router.get("/", response_class=HTMLResponse)
-async def inbox_shell(pool: asyncpg.Pool = Depends(get_pool)) -> str:
-    """THE INBOX, whole — replaces the membrane as :8011's front door (ruling 0b3dd431).
-    Read-only: building the page never advances any watermark or lease."""
-    return render_page(await _build_page(pool))
+@router.get("/")
+async def inbox_shell() -> RedirectResponse:
+    """:8011's front door is /ui (the consolidation the operator named live, 2026-09-10) —
+    the standalone Inbox shell this route used to render (ruling 0b3dd431) is dead; this
+    redirect is the fix, not a rebuild, per Thoth's own framing of the same ask. /stream
+    and the POST /inbox/{id}/{action} actions stay put, untouched by this route alone."""
+    return RedirectResponse(url="/ui/")
 
 
 async def _stream_events(request: Request) -> AsyncIterator[DatastarEvent]:

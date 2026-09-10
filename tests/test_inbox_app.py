@@ -23,16 +23,12 @@ async def client(actions: Actions) -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-async def test_inbox_shell_route_renders_a_live_empty_desk(client: httpx.AsyncClient,
-                                                           actions: Actions) -> None:
-    from src.orchestrator.compositions import LIVE_DESK, save_composition
-
-    await save_composition(actions.pool, "live-desk", LIVE_DESK)
-
-    r = await client.get("/")
-    assert r.status_code == 200
-    assert "<!doctype html>" in r.text.lower()
-    assert "Inbox clear." in r.text
+async def test_inbox_shell_route_redirects_to_the_console(client: httpx.AsyncClient) -> None:
+    """The standalone Inbox shell (ruling 0b3dd431) is dead — :8011's front door is /ui,
+    the operator's own consolidation (2026-09-10); GET / just redirects there now."""
+    r = await client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/ui/"
 
 
 async def test_inbox_action_route_dispatches_through_the_real_registry(

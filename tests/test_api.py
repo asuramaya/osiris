@@ -58,11 +58,12 @@ async def test_inbox_route_wires_the_real_app_live(client: httpx.AsyncClient) ->
     """The one live-route test for THE INBOX at the real create_app() level (pure
     builder/render coverage lives in test_inbox_blocks.py/test_inbox_catalog.py/
     test_inbox_app.py) — this is the wiring check those can't cover on their own: the
-    router is actually include_router()'d, and the static mount actually serves the
+    router is actually include_router()'d (GET / redirects to /ui, the operator's own
+    front-door consolidation, 2026-09-10), and the static mount still serves the
     vendored assets, from the SAME app real deploys boot."""
-    r = await client.get("/")
-    assert r.status_code == 200
-    assert "<!doctype html>" in r.text.lower()
+    r = await client.get("/", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/ui/"
     css = await client.get("/static/app.css")
     assert css.status_code == 200
     js = await client.get("/static/datastar.js")
