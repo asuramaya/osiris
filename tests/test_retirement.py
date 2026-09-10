@@ -14,6 +14,7 @@ from src.orchestrator.retirement import (
     list_assertions,
     repair_stale_current_flags,
     retire_assertion,
+    retire_link,
     stale_current_flags,
 )
 
@@ -335,3 +336,114 @@ async def test_the_repair_mcp_tool_allows_an_unmounted_dry_run(actions: Actions)
         srv._pool = saved_pool
     assert "error" not in out
     assert out["dry_run"] is True
+
+
+# --- retire_link (thread badb4040) --------------------------------------------------
+
+
+async def test_retire_link_requires_because(actions: Actions) -> None:
+    a = await actions.create_or_find_object("Agent", "agent:linka", "test")
+    b = await actions.create_or_find_object("Agent", "agent:linkb", "test")
+    await actions.create_link(a, b, "works_in", "test", NOW, 0.9, evidence_class="self_declared")
+    out = await retire_link(actions, from_ref="agent:linka", to_ref="agent:linkb",
+                            link_type="works_in", because="  ", actor="test")
+    assert "error" in out
+
+
+async def test_retire_link_requires_link_type(actions: Actions) -> None:
+    await actions.create_or_find_object("Agent", "agent:linkc", "test")
+    await actions.create_or_find_object("Agent", "agent:linkd", "test")
+    out = await retire_link(actions, from_ref="agent:linkc", to_ref="agent:linkd",
+                            link_type="  ", because="oops", actor="test")
+    assert "error" in out
+
+
+async def test_retire_link_unresolved_refs_are_honest_errors(actions: Actions) -> None:
+    await actions.create_or_find_object("Agent", "agent:linke", "test")
+    out = await retire_link(actions, from_ref="agent:linke", to_ref="agent:does-not-exist",
+                            link_type="works_in", because="oops", actor="test")
+    assert "error" in out
+    out2 = await retire_link(actions, from_ref="agent:does-not-exist", to_ref="agent:linke",
+                             link_type="works_in", because="oops", actor="test")
+    assert "error" in out2
+
+
+async def test_retire_link_no_active_link_refuses_rather_than_silent_success(
+    actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Agent", "agent:linkf", "test")
+    b = await actions.create_or_find_object("Agent", "agent:linkg", "test")
+    # a real link exists, but of a DIFFERENT type than the one being retired
+    await actions.create_link(a, b, "works_in", "test", NOW, 0.9, evidence_class="self_declared")
+    out = await retire_link(actions, from_ref="agent:linkf", to_ref="agent:linkg",
+                            link_type="governs", because="wrong type entirely", actor="test")
+    assert "error" in out
+    assert "nothing to retire" in out["error"]
+
+
+async def test_retire_link_deactivates_never_deletes(actions: Actions) -> None:
+    """THE LIVE INCIDENT this thread was opened for: a fuzzy-substring resolves= mis-
+    citation minted a spurious `answers` link — this closes it cleanly, event-sourced,
+    the row still there just no longer current."""
+    thread_obj = await actions.create_or_find_object("Thread", "thread:spurious1", "test")
+    decision_obj = await actions.create_or_find_object("Decision", "decision:spurious1", "test")
+    await actions.create_link(thread_obj, decision_obj, "answers", "test", NOW, 0.9,
+                              evidence_class="self_declared")
+
+    out = await retire_link(actions, from_ref="thread:spurious1", to_ref="decision:spurious1",
+                            link_type="answers", because="fuzzy-substring mis-citation, "
+                            "unrelated thread", actor="agent:fixer")
+
+    assert out["retired"]["count"] == 1
+    assert out["because"] == "fuzzy-substring mis-citation, unrelated thread"
+    live = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers' "
+        "AND valid_until IS NULL", thread_obj, decision_obj)
+    assert live == 0
+    # NEVER A DELETE: the row is still there, just no longer current
+    total = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='answers'",
+        thread_obj, decision_obj)
+    assert total == 1
+    # THE COMPENSATING EVENT carries the reason
+    audit_reason = await actions.pool.fetchval(
+        "SELECT payload->>'reason' FROM audit_log WHERE action='invalidate_link' "
+        "ORDER BY id DESC LIMIT 1")
+    assert audit_reason == "fuzzy-substring mis-citation, unrelated thread"
+    outbox_reason = await actions.pool.fetchval(
+        "SELECT payload->>'reason' FROM outbox WHERE event_type='link_invalidated' "
+        "ORDER BY id DESC LIMIT 1")
+    assert outbox_reason == "fuzzy-substring mis-citation, unrelated thread"
+
+
+async def test_retire_link_is_idempotent_a_second_call_finds_nothing_active(
+    actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Agent", "agent:linkh", "test")
+    b = await actions.create_or_find_object("Agent", "agent:linki", "test")
+    await actions.create_link(a, b, "works_in", "test", NOW, 0.9, evidence_class="self_declared")
+
+    first = await retire_link(actions, from_ref="agent:linkh", to_ref="agent:linki",
+                              link_type="works_in", because="test cleanup", actor="test")
+    assert first["retired"]["count"] == 1
+    second = await retire_link(actions, from_ref="agent:linkh", to_ref="agent:linki",
+                               link_type="works_in", because="already gone", actor="test")
+    assert "error" in second  # nothing currently active left to retire
+
+
+async def test_retire_link_mcp_tool_refuses_when_unmounted(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    a = await actions.create_or_find_object("Agent", "agent:linkj", "test")
+    b = await actions.create_or_find_object("Agent", "agent:linkk", "test")
+    await actions.create_link(a, b, "works_in", "test", NOW, 0.9, evidence_class="self_declared")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.retire_link(from_ref="agent:linkj", to_ref="agent:linkk",
+                                    link_type="works_in", because="test")
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert "mount first" in out["error"]

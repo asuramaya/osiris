@@ -168,3 +168,52 @@ async def retire_assertion(
         "now_current": {"id": new_id, "value": value, "source": actor},
         "because": because,
     }
+
+
+async def retire_link(
+    actions: Actions, *, from_ref: str, to_ref: str, link_type: str, because: str, actor: str,
+) -> dict[str, Any]:
+    """THE MISSING VERB (thread badb4040 — three independent live specimens: a
+    fuzzy-substring `resolves=` mis-citation, a `resolves=` mis-fire that closed the
+    wrong Thread, and this thread's own original case): `retire_assertion` above covers
+    the property-assertion half of "retract a wrongly-minted X" (confirmed already
+    general to any property, not just `name`, per this thread's own note); it has no
+    path to a LINK at all. `Actions.invalidate_link` already exists at the kernel level
+    — event-sourced (an audit row + an outbox `link_invalidated` event), idempotent,
+    NEVER a delete (`valid_until` stamped, the row stays exactly where it was created,
+    in whose name, and why) — but reaching it directly from a caller would be exactly
+    the raw-mutation shortcut house law forbids. This is that door: agent/thread-
+    agnostic (any (from, to, type) triple, on ANY object types — the per-type doors,
+    thread(action='resolve')'s own `resolved_by` edges, record_decision's own answers/
+    grounded_by, etc., keep working unchanged, this is the general escape hatch for
+    when THOSE mint the wrong edge).
+
+    `because` is REQUIRED, same law `retire_assertion` already holds itself to — this
+    now rides in `invalidate_link`'s own audit/outbox payload, the compensating event
+    itself, never a second write nobody derives from the first. Refuses loudly (an
+    error dict, nothing written) when: `because` is blank; `from_ref`/`to_ref` doesn't
+    resolve; the triple has no currently-active link of the named type to retire
+    (idempotent from `invalidate_link`'s own side, but a caller here almost certainly
+    meant a REAL edge — silently returning success on a no-op would hide a typo'd
+    ref/type the same way a silent drop would)."""
+    because = (because or "").strip()
+    if not because:
+        return {"error": "because is required — retiring a link crosses the same "
+                         "accountability line retire_assertion's own because already does"}
+    link_type = (link_type or "").strip()
+    if not link_type:
+        return {"error": "link_type is required"}
+    pool = actions.pool
+    from_id = await resolve_ref(pool, from_ref)
+    if from_id is None:
+        return {"error": f"no object matches from_ref={from_ref!r}"}
+    to_id = await resolve_ref(pool, to_ref)
+    if to_id is None:
+        return {"error": f"no object matches to_ref={to_ref!r}"}
+    now = datetime.now(UTC)
+    n = await actions.invalidate_link(from_id, to_id, link_type, actor, now, reason=because)
+    if n == 0:
+        return {"error": f"no currently-active {link_type!r} link from {from_ref!r} to "
+                         f"{to_ref!r} — nothing to retire (check the refs and the type)"}
+    return {"retired": {"from": from_ref, "to": to_ref, "type": link_type, "count": n},
+           "because": because}

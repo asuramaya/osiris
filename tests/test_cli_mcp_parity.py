@@ -1418,6 +1418,14 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # design choice (identity bookkeeping vs. the entity's own network); this reads
     # exactly the population dossier() excludes, not a mode switch on the same call.
     "object_events": {"binding_verb": False},
+    # retire_link — thread badb4040, Thoth mail 9122 item 4, wave 16: retire_assertion's
+    # own sibling for the link-retraction half of "retract a wrongly-minted X". Not a
+    # binding-mover (acts on any (from, to, type) triple on any object types, never
+    # specifically seat/office/project state). Not a parameterization of retire_
+    # assertion — genuinely different underlying primitives (Actions.supersede_
+    # assertion vs. Actions.invalidate_link), disjoint signatures (name/superseded_id/
+    # value vs. from_ref/to_ref/link_type), no shared call either could have ridden on.
+    "retire_link": {"binding_verb": False},
 }
 
 
