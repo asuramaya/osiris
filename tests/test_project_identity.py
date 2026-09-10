@@ -653,7 +653,9 @@ async def test_rename_cascade_reports_no_governing_seats_as_an_empty_manifest(
                                because="x", actor="agent:test", dry_run=False)
     assert out["manifest"]["seats"] == {}
     assert "folder_path" in out["manifest"]["could_not_reach"]
-    assert "repo_root_osiris" in out["manifest"]["could_not_reach"]
+    # repo_root_osiris moved OUT of could_not_reach (Thoth mail 9122 item 5, wave 16)
+    # — it's a real per-seat tier now, not a static non-answer.
+    assert "repo_root_osiris" not in out["manifest"]["could_not_reach"]
 
 
 async def test_rename_cascade_touches_pin_and_house_reports_charter_already_correct(
@@ -1213,6 +1215,115 @@ async def test_rename_cascade_never_writes_or_infers_tree_binding(
     from src.orchestrator.seats import seat_facts
     # unchanged — this cascade never rebinds a tree on its own
     assert (await seat_facts(actions.pool, seat["seat_id"]))["tree_cwd"] == str(old_tree)
+
+
+async def test_rename_cascade_writes_the_repo_root_osiris_pin(
+    actions: Actions, tmp_path,
+) -> None:
+    """Thoth mail 9122 item 5, wave 16: repo_root_osiris used to be permanently
+    could_not_reach — now a real write, the same correct_pin_value primitive the
+    seat's own office/anchor/workspace pins already use, resolved off tree_cwd."""
+    tree = tmp_path / "code" / "rootold"
+    tree.mkdir(parents=True)
+    (tree / ".osiris").write_text('project = "rootold"\n')
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Rootseat",
+                             anchor_cwd=str(office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     seat["seat_id"])),
+        "tree_cwd", str(tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:root0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:root0001")
+    proj = await _mk_project(actions, "rootold")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="rootold", new_name="rootnew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["repo_root_osiris"]["status"] == "touched"
+    assert 'project = "rootnew"' in (tree / ".osiris").read_text()
+
+
+async def test_rename_cascade_repo_root_osiris_dry_run_never_writes(
+    actions: Actions, tmp_path,
+) -> None:
+    tree = tmp_path / "code" / "rootold2"
+    tree.mkdir(parents=True)
+    (tree / ".osiris").write_text('project = "rootold2"\n')
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Rootseat2",
+                             anchor_cwd=str(office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     seat["seat_id"])),
+        "tree_cwd", str(tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:root0002")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:root0002")
+    proj = await _mk_project(actions, "rootold2")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="rootold2", new_name="rootnew2",
+                               because="x", actor="agent:test")  # dry_run=True default
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["repo_root_osiris"]["status"] == "touched"
+    assert "plan" in tiers["repo_root_osiris"]
+    assert 'project = "rootold2"' in (tree / ".osiris").read_text()  # unchanged
+
+
+async def test_rename_cascade_repo_root_osiris_could_not_with_no_osiris_file(
+    actions: Actions, tmp_path,
+) -> None:
+    tree = tmp_path / "code" / "bareroot"
+    tree.mkdir(parents=True)  # no .osiris file at all
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Bareseat",
+                             anchor_cwd=str(office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     seat["seat_id"])),
+        "tree_cwd", str(tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:bare0001")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bare0001")
+    proj = await _mk_project(actions, "bareroot")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="bareroot", new_name="barerootnew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["repo_root_osiris"]["status"] == "could-not"
+
+
+async def test_rename_cascade_repo_root_osiris_could_not_with_no_tree_cwd(
+    actions: Actions, tmp_path,
+) -> None:
+    office = tmp_path / "office"
+    office.mkdir()
+    seat = await ensure_seat(actions, house="osiris", handle="Notreeseat",
+                             anchor_cwd=str(office), source="test")
+    await _mk_agent(actions, "agent:notree01")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:notree01")
+    proj = await _mk_project(actions, "notreeproj")
+    seat_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
+
+    out = await rename_project(actions, project="notreeproj", new_name="notreeprojnew",
+                               because="x", actor="agent:test", dry_run=False)
+    tiers = out["manifest"]["seats"][seat["seat_id"]]
+    assert tiers["repo_root_osiris"]["status"] == "could-not"
 
 
 async def test_rename_cascade_office_reports_could_not_with_no_claude_md(
