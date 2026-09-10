@@ -7835,6 +7835,33 @@ async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, 
                                    actor=ident.agent_id)
 
 
+@mcp.tool()
+async def retire_link(from_ref: str, to_ref: str, link_type: str, because: str,
+                      ctx: Context | None = None) -> dict[str, Any]:
+    """THE GENERIC LINK RETRACTION (thread badb4040) — `retire_assertion`'s own sibling
+    for the OTHER half of "retract a wrongly-minted X": a link, not a property. Agent/
+    thread-agnostic, any (from, to, type) triple on any object types — record_decision's
+    own answers=/grounded_by=, thread(action='resolve')'s own resolved_by, and every
+    other per-type door keep minting links exactly as before; this is the general door
+    for when one of THOSE mints the wrong edge (a fuzzy-substring resolves= mis-citation
+    hitting an unrelated Thread is the exact live case that opened this thread).
+
+    NEVER A DELETE: `Actions.invalidate_link` stamps `valid_until`, event-sourced (an
+    audit row + an outbox `link_invalidated` event carrying `because` as `reason`, the
+    compensating record itself) — the row stays exactly where it was created, in whose
+    name, and why. `because` is required. Refuses loudly: either ref unresolved, or no
+    currently-active link of `link_type` exists on that exact triple (never a silent
+    no-op — a caller here almost certainly meant a real edge, so a mismatched ref/type
+    surfaces as a refusal, not a quiet success)."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — a retirement is a mind's act, and the graph must "
+                         "know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.retirement import retire_link as _retire_link
+    return await _retire_link(Actions(await _pool_get()), from_ref=from_ref, to_ref=to_ref,
+                              link_type=link_type, because=because, actor=ident.agent_id)
+
+
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='set_attended')",

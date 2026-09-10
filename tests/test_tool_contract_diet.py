@@ -889,7 +889,16 @@ def _tool_chars(t: Any) -> int:
 # 77 -> 78 (2026-09-10, Imhotep, decision ac892cd9, "miners as last resort" item 2):
 # proposal — one door, three actions (propose/accept/reject) over a NEW Proposal
 # object type. Genuinely new capability, no existing tool it could parameterize.
-TOOL_CONTRACT_EXPECTED_COUNT = 78
+# 78 -> 79 (2026-09-10, Khnum, thread badb4040, Thoth mail 9122 item 4, wave 16):
+# retire_link — retire_assertion's own sibling for the OTHER half of "retract a
+# wrongly-minted X": a link, not a property. Agent/thread-agnostic, any (from, to,
+# type) triple; the per-type doors (record_decision's answers=/grounded_by=,
+# thread(action='resolve')'s resolved_by, etc.) keep minting links unchanged — this is
+# the general escape hatch for when one of THOSE mints the wrong edge. Genuinely new
+# capability (Actions.invalidate_link already existed at the kernel level but had no
+# MCP door — reaching it directly would be the raw-mutation shortcut house law
+# forbids), not a mode of any existing tool.
+TOOL_CONTRACT_EXPECTED_COUNT = 79
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1441,7 +1450,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 78
 # 116153 -> 118254 (2026-09-10, Imhotep, decision ac892cd9): the new `proposal` tool
 # (2,101 chars) — miners as last resort, item 2. A genuinely new door, not prose growth
 # on an existing one; raised deliberately, measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 121931
+# 121931 -> 123377 (2026-09-10, Khnum, thread badb4040, Thoth mail 9122 item 4, wave
+# 16): the new `retire_link` tool (1,446 chars) — retire_assertion's own sibling for
+# the link-retraction half of "retract a wrongly-minted X". A genuinely new door
+# (Actions.invalidate_link already existed at the kernel level, but reaching it
+# directly from a caller would be the raw-mutation shortcut house law forbids — this
+# is the MCP-facing door onto it), not prose growth on an existing one; raised
+# deliberately, measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 123377
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

@@ -541,13 +541,20 @@ class Actions:
         when: datetime,
         *,
         case_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> int:
         """Deactivate every currently-active link on this (from, to, type) triple by stamping
         `valid_until` — the column the schema has reserved since Phase 0 for exactly this
         ('explicit deactivation, never delete') but that nothing had yet written to. A healed
         link is never gone: it stops counting as current (readers filter on `valid_until IS
         NULL OR valid_until > now()`), and its row stays exactly where it was created, in whose
-        name, and why. Idempotent — a triple with nothing active returns 0."""
+        name, and why. Idempotent — a triple with nothing active returns 0.
+
+        `reason` (thread badb4040, the generic retire_link door) rides in the SAME audit/
+        outbox payload this call already writes on a real deactivation — no second write,
+        no second table. Optional here at the kernel layer (most internal callers heal a
+        link as routine bookkeeping, no narrative owed); `retire_link`'s own MCP door makes
+        it mandatory, the same way `retire_assertion` already requires `because`."""
         async with self._tx() as conn:
             # this transaction's own connection — see create_or_find_object's identical note
             await check_link_type(conn, type_, actions=Actions(self.pool, conn=conn),
@@ -562,16 +569,15 @@ class Actions:
             )
             n = int(tag.rsplit(" ", 1)[-1])
             if n:
-                await self._audit(
-                    conn,
-                    "invalidate_link",
-                    actor,
-                    case_id,
-                    {"from_id": str(from_id), "to_id": str(to_id), "type": type_},
-                )
+                audit_payload: dict[str, Any] = {
+                    "from_id": str(from_id), "to_id": str(to_id), "type": type_}
+                outbox_payload: dict[str, Any] = {"to_id": str(to_id), "type": type_}
+                if reason:
+                    audit_payload["reason"] = reason
+                    outbox_payload["reason"] = reason
+                await self._audit(conn, "invalidate_link", actor, case_id, audit_payload)
                 await self._outbox(
-                    conn, "link_invalidated", from_id, case_id,
-                    {"to_id": str(to_id), "type": type_},
+                    conn, "link_invalidated", from_id, case_id, outbox_payload,
                 )
             return n
 
