@@ -943,7 +943,7 @@ async def establish_office(
     is skipped entirely (it is Agent-only by construction — nothing to deed an office to
     until someone actually claims this seat by launching in it)."""
     from src.orchestrator.agents import project_of, resolve_handle
-    from src.orchestrator.seats import held_seat
+    from src.orchestrator.seats import held_seat, seat_occupancy
 
     seat_or_agent = (seat_or_agent or "").strip()
     agent_id = await resolve_handle(actions, seat_or_agent) if seat_or_agent else None
@@ -962,6 +962,20 @@ async def establish_office(
     if agent_id is None and direct_seat_id is None:
         return {"error": f"no such seat or agent: {seat_or_agent!r} — an office ceremony "
                          "never invents its occupant"}
+    if agent_id is None and direct_seat_id is not None:
+        # THE OCCUPANCY GAP (Deckard's live run, thread 8833/msg 8835): `resolve_handle`
+        # and the direct-Agent-canonical check above both only ever match a bare HANDLE
+        # string or a literal `agent:<id>` — called with a SEAT canonical (or a seat
+        # matched only by its `handle` property above, never actually tried as a name)
+        # whose holder is COLD (claimed, just not live this instant), neither one ever
+        # finds it, and this ceremony fell to the PURE SEAT PATH claiming "no agent has
+        # ever claimed this seat" for a seat that plainly has one. `seat_occupancy` reads
+        # the SAME `holds` graph link `identify_agent`/`doors()` uses for a `seat:` ref
+        # (never a cache column) — a real holder here, live or cold, means this is NOT
+        # the pure-seat shape at all.
+        occ = await seat_occupancy(actions.pool, direct_seat_id)
+        if occ.get("holder"):
+            agent_id = str(occ["holder"])
     if agent_id is None:
         # direct_seat_id is guaranteed set here (the refusal above already ruled out both
         # being None) — mirrors rebind_seat's own PURE SEAT PATH assert exactly.

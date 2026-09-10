@@ -375,6 +375,54 @@ async def test_establish_office_no_longer_refuses_on_a_fresh_but_bodiless_seat(
     assert "error" not in out
 
 
+async def test_establish_office_by_seat_canonical_resolves_a_cold_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE OCCUPANCY GAP (Deckard's live run, thread 8833/msg 8835): `resolve_handle` and
+    the direct-Agent-canonical check both only ever match a bare handle string or a
+    literal `agent:<id>` — called with the SEAT's own canonical (Deckard's real shape,
+    seat:51da7e71) for a COLD (claimed, not live right now) holder, neither ever found
+    it, and the ceremony fell to the PURE SEAT PATH claiming "no agent has ever claimed
+    this seat" for a seat that plainly has one — then, because that path recomputes
+    `office` from the SEAT's own handle rather than reusing the office this lineage
+    already established, it also re-"wrote" CLAUDE.md whose mtime/size never actually
+    changed. Fixed: `seat_occupancy` (the SAME `holds`-link resolver identify_agent uses,
+    never a cache column) is checked before falling to the pure-seat path."""
+    agent = await _seat_fixture(actions, tmp_path, handle="Coldseat")
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="coldhouse", handle="Coldseat", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent)
+
+    # first call, by the AGENT id — establishes the real, on-disk office
+    first = await establish_office(
+        actions, seat_or_agent=agent, actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+    assert "error" not in first
+    assert first["standing_orders"] == "written"
+    office = Path(first["office"])
+    before_mtime = (office / "CLAUDE.md").stat().st_mtime
+    before_size = (office / "CLAUDE.md").stat().st_size
+
+    # the seat goes cold (no fresh mount) — then a SECOND call by the SEAT's own
+    # canonical, Deckard's exact call shape
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' WHERE agent_id=$1",
+        agent)
+    again = await establish_office(
+        actions, seat_or_agent=seat["seat_id"], actor="agent:test",
+        office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
+        claude_json=tmp_path / "cj.json")
+
+    assert "error" not in again
+    assert again["seat"] == seat["seat_id"]
+    assert again["office_deed"] != "n/a — no claimed occupant yet to deed an office to"
+    assert again["standing_orders"].startswith("left in place")
+    assert (office / "CLAUDE.md").stat().st_mtime == before_mtime
+    assert (office / "CLAUDE.md").stat().st_size == before_size
+
+
 # ═══ plan_pin_migration (ruling 719ed5b1's five-key schema — DRY RUN, never writes) ═══
 
 async def _seat_with_office(

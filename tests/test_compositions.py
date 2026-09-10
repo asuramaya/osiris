@@ -2456,6 +2456,102 @@ async def test_lint_zero_recipient_dm_never_flags_a_dm_with_a_recipient_row(
     assert result["counts"]["zero-recipient-dm"] == 0
 
 
+# --- ORPHAN (THE ORPHAN LAWS item 1, operator's word wave 15, Thoth DM 8841) ------------
+
+async def test_lint_orphan_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 0
+    assert "orphan" in result["clean"]
+    assert result["orphan_by_type"] == {}
+    assert result["orphan_abstained_total"] == 0
+
+
+async def test_lint_orphan_flags_a_fully_disconnected_object(actions: Actions) -> None:
+    """No incoming link, no outgoing link, no abstention on record — the genuinely
+    unexamined shape this check exists to surface."""
+    await actions.create_or_find_object("SoftwareProject", "repo:orphan-fresh", "test")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 1
+    assert "orphan" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "orphan")
+    assert finding["severity"] == "warn"
+    assert finding["subject"] == "repo:orphan-fresh"
+    assert "type=SoftwareProject" in finding["detail"]
+    assert "never linked, never abstained" in finding["detail"]
+    assert result["orphan_by_type"] == {"SoftwareProject": {"count": 1, "abstained": 0}}
+    assert result["orphan_abstained_total"] == 0
+
+
+async def test_lint_orphan_marks_an_acknowledged_abstention_differently(
+    actions: Actions,
+) -> None:
+    """A live `derivation_abstained_<link_type>` record on an otherwise-unlinked object
+    is a mind (or a miner) having already looked and found nothing — a materially
+    different fact from one nobody has ever examined, per Thoth's own ask ('the
+    abstention count beside it')."""
+    obj = await actions.create_or_find_object("Thread", "thread:orphan-abstained", "test")
+    await actions.assert_property(
+        obj, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "candidate_count": 0, "reason": "no candidate found",
+         "candidates": []},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "orphan")
+    assert finding["subject"] == "thread:orphan-abstained"
+    assert "derivation_abstained record already explains this" in finding["detail"]
+    assert result["orphan_by_type"] == {"Thread": {"count": 1, "abstained": 1}}
+    assert result["orphan_abstained_total"] == 1
+
+
+async def test_lint_orphan_never_counts_a_resolved_abstention_as_live(
+    actions: Actions,
+) -> None:
+    """Khnum's own catch (DM 8855): `derive_or_abstain`'s later successful mint
+    supersedes a live abstention with a `resolved: true` marker — a since-answered
+    abstention must never masquerade as an unresolved one, the same
+    `NOT (value ? 'resolved')` predicate `backfill_lineage_repo_links` already checks."""
+    obj = await actions.create_or_find_object("Thread", "thread:orphan-resolved", "test")
+    await actions.assert_property(
+        obj, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "resolved": True, "resolved_to": "repo:whatever"},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "orphan")
+    assert finding["subject"] == "thread:orphan-resolved"
+    assert "never linked, never abstained" in finding["detail"]
+    assert result["orphan_by_type"] == {"Thread": {"count": 1, "abstained": 0}}
+    assert result["orphan_abstained_total"] == 0
+
+
+async def test_lint_orphan_never_flags_an_object_with_a_live_link(actions: Actions) -> None:
+    a = await actions.create_or_find_object("Agent", "agent:orphan-linked", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:orphan-linked", "test")
+    await actions.create_link(a, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 0
+    assert "agent:orphan-linked" not in {f["subject"] for f in result["findings"]
+                                        if f["check"] == "orphan"}
+    assert "repo:orphan-linked" not in {f["subject"] for f in result["findings"]
+                                       if f["check"] == "orphan"}
+
+
+async def test_lint_orphan_excludes_type_nodes(actions: Actions) -> None:
+    """A Type object is a taxonomy entry, never meant to carry an edge of its own —
+    excluded outright, never counted as an unexamined disconnection."""
+    await actions.create_or_find_object("Type", "type:orphan-taxonomy-entry", "test")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["orphan"] == 0
+    assert "Type" not in result["orphan_by_type"]
+
+
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
 
 async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions) -> None:

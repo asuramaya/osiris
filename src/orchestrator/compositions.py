@@ -1462,6 +1462,57 @@ async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                      "'seat_property_contradictions', 'cohort'"}
 
 
+async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
+    """THE ORPHAN LAWS, item 1 (operator's word, wave 15, Thoth DM 8841): every ACTIVE
+    object with NO LIVE LINK AT ALL — neither incoming nor outgoing — grouped by type,
+    Type nodes excluded (a Type is a taxonomy entry, never meant to carry an edge of its
+    own), with how many already carry a durable `derivation_abstained_<link_type>`
+    record (capture.py's `derive_or_abstain`) counted alongside the raw total — an
+    ACKNOWLEDGED disconnection (a mind or a miner tried to link it, found nothing, and
+    said so on the record) is a materially different fact from one nobody has ever
+    looked at. Shared by graph_lint's own 'orphan' check and preflight's weekly line —
+    one derivation, never two drifting copies of the same query.
+
+    A RESOLVED ABSTENTION IS NOT A LIVE ONE (Khnum's own catch, DM 8855): `derive_or_
+    abstain`'s later successful mint supersedes a live abstention with a `resolved:
+    true` marker via `supersede_assertion` — the same `NOT (value ? 'resolved')`
+    predicate `backfill_lineage_repo_links` already checks for the identical stale-
+    abstention-retirement case, reused here rather than re-derived a third time.
+    Excluded from `abstained` so a since-answered abstention never masquerades as a
+    live one.
+
+    DIFFERENT POPULATION FROM `orphan-link` (this same module's own INFO-grade check):
+    that one counts LINKS touching a non-active object (consolidation debt under
+    resolve-on-read); this counts OBJECTS with no link touching them at all — a
+    reachability question, not a status one. A merged/retired object can carry
+    orphan-link findings forever and never appear here; an active object with a real
+    live edge never appears here even if that edge's OTHER end is long since merged
+    away."""
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, o.type, "
+        " EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+        "   AND ca.name LIKE 'derivation_abstained_%' AND NOT (ca.value ? 'resolved')) "
+        "   AS abstained "
+        "FROM objects o "
+        "WHERE o.status='active' AND o.type <> 'Type' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now())) "
+        "ORDER BY o.type, o.canonical")
+    by_type: dict[str, dict[str, int]] = {}
+    for r in rows:
+        bucket = by_type.setdefault(r["type"], {"count": 0, "abstained": 0})
+        bucket["count"] += 1
+        if r["abstained"]:
+            bucket["abstained"] += 1
+    return {
+        "rows": [{"id": r["id"], "canonical": r["canonical"], "type": r["type"],
+                 "abstained": bool(r["abstained"])} for r in rows],
+        "by_type": by_type,
+        "total": len(rows),
+        "abstained_total": sum(1 for r in rows if r["abstained"]),
+    }
+
+
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
@@ -1511,7 +1562,15 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     existing stock with), ZERO-RECIPIENT-DM (warn: a DM — fleet_messages.to_agent IS NOT
     NULL — with no message_recipients row at all, thread 9d1d41c8, Thoth's follow-up on
     24f52959 — nobody was ever registered to read it; a project broadcast is excluded,
-    since every agent in the project is its own implicit recipient).
+    since every agent in the project is its own implicit recipient), ORPHAN (warn: an
+    active object — Type nodes excluded — with NO live link at all, neither incoming nor
+    outgoing, operator's word wave 15/Thoth DM 8841; a DIFFERENT population from
+    orphan-link's own edges-on-non-active-objects, this is a reachability question over
+    active objects. `orphan_by_type`/`orphan_abstained_total`, alongside the usual
+    findings/counts, carry the by-type rollup — an object already carrying a durable
+    `derivation_abstained_*` record names an ACKNOWLEDGED disconnection, distinct from
+    one nobody has ever examined; `orphan_census` is the shared derivation preflight's
+    own weekly line reads too, never a second copy).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -2421,6 +2480,22 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                    "still matters"}
         for r in zero_recip])
 
+    # ORPHAN — THE ORPHAN LAWS item 1 (operator's word, wave 15, Thoth DM 8841): every
+    # active object with no live link at all, Type nodes excluded, an ACKNOWLEDGED
+    # disconnection (a live `derivation_abstained_*` record) named on each finding rather
+    # than left indistinguishable from one nobody has ever looked at. `orphan_by_type`/
+    # `orphan_abstained_total` carry the by-type rollup this check's own findings can't
+    # (one row per OBJECT, same shape every other check here already uses) — the exact
+    # numbers preflight's own weekly line reads, one derivation shared, not two.
+    orphans = await orphan_census(pool)
+    land("orphan", "warn", [
+        {"subject": r["canonical"],
+         "detail": f"type={r['type']}, no live link at all" + (
+             " (a derivation_abstained record already explains this — expected, not "
+             "unexamined)" if r["abstained"] else " — never linked, never abstained; "
+             "genuinely unexamined")}
+        for r in orphans["rows"]])
+
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
         # a per-check ask paginates ONE check's full set — "capped" now names how much of
@@ -2456,6 +2531,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "counts_by_severity": counts_by_severity,
         "clean": sorted(c for c, n in counts.items() if n == 0),
         **({"capped": capped, "note": note} if capped else {}),
+        "orphan_by_type": orphans["by_type"],
+        "orphan_abstained_total": orphans["abstained_total"],
         "ran_at": now.isoformat(),
         "discipline": "report-only — the lint never writes (rule #7); "
                       "findings are testimony, not verdicts",
