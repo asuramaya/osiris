@@ -1411,7 +1411,8 @@ _LINT_CHECK_NAMES = [
     "rot-candidate-unscoped", "edgeless-closure-growth", "attribution", "phantom-twin",
     "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
     "stale-off-head-link", "stale-current-flag", "kindless-open-thread",
-    "unresolvable-owner", "zero-recipient-dm", "orphan", "contested-summary",
+    "unresolvable-owner", "zero-recipient-dm", "orphan", "untraceable-output",
+    "contested-summary",
 ]
 
 
@@ -1544,6 +1545,138 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
+    """THE TRACEABILITY INVARIANT (Graph-Engineering, operator decision f47d14a7, thread
+    7f547426) — the acceptance test for THE WORK-LINEAGE build: every ACTIVE Artifact or
+    Commit (the traceable "output" class) must trace to its RUN, its PLAN/OBJECTIVE, its
+    SOURCE, and its EVALUATOR. Four legs, each satisfied by a real live edge OR a live
+    (non-resolved) `derivation_abstained_<link_type>`/`unlinked_because` confession —
+    unlike `orphan_census` above (where a confession only ANNOTATES an otherwise-still-
+    orphaned row), here a confession genuinely SATISFIES its own leg: "acceptance is zero
+    rows after confession" (f47d14a7's own wording) means a fully-confessed output
+    disappears from this census entirely, the same way `_enforce_required_links`
+    (capture.py) treats `unlinked_because=` as satisfying its gate outright, not as a
+    flagged-but-still-failing state.
+
+    THE FOUR LEGS:
+      run      — an incoming `produced` edge from some AgentRun, or a confession on
+                 THIS object under `derivation_abstained_produced`.
+      plan     — the PRODUCING RUN's own outgoing `authorized_by` edge to a Decision or
+                 Thread, or a confession on THAT RUN (not this object) under
+                 `derivation_abstained_authorized_by`. With no producing run at all
+                 (the `run` leg itself missing), `plan` is unconditionally missing too —
+                 there is no run whose plan could ever be checked or confessed.
+      source   — an outgoing `derived_from` edge from this object, or a confession under
+                 `derivation_abstained_derived_from`.
+      evaluator — an outgoing `evaluated_by` edge from this object, or a confession under
+                 `derivation_abstained_evaluated_by`.
+
+    A RESOLVED CONFESSION DOES NOT SATISFY A LEG (same predicate Khnum's own catch
+    established for `orphan_census`, DM 8855): `derive_or_abstain`'s later successful
+    mint supersedes a live abstention with a `resolved: true` marker meaning "answered
+    elsewhere" — the leg's own real edge is what must exist now, never the stale marker
+    on trust. `NOT (value ? 'resolved')` gates every confession check below, exactly as
+    it gates `orphan_census`'s own `abstained` flag.
+
+    A row is included ONLY when at least one leg is genuinely missing (neither a live
+    edge nor a live confession) — `missing_legs` names which; `confessed_legs` names any
+    OTHER leg that IS missing-by-edge but explained by a live confession (informational:
+    it does not block the row, since a confessed leg is already satisfied — this exists
+    so a reader can see partial acknowledgement, e.g. run+plan+evaluator all confessed
+    but source genuinely unexamined, distinct from a row where nothing has ever been
+    looked at). Shared by graph_lint's own 'untraceable-output' check and preflight's
+    weekly line — one derivation, never two drifting copies of the same four-leg query."""
+    outputs = await pool.fetch(
+        "SELECT o.id, o.canonical, o.type FROM objects o "
+        "WHERE o.status='active' AND o.type IN ('Artifact', 'Commit') "
+        "ORDER BY o.type, o.canonical")
+    if not outputs:
+        return {"rows": [], "by_type": {}, "total": 0}
+
+    ids = [r["id"] for r in outputs]
+    run_rows = await pool.fetch(
+        "SELECT DISTINCT ON (l.to_id) l.to_id AS artifact_id, l.from_id AS run_id "
+        "FROM links l WHERE l.to_id = ANY($1::uuid[]) AND l.type='produced' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "ORDER BY l.to_id, l.created_at DESC",
+        ids)
+    run_of: dict[Any, Any] = {r["artifact_id"]: r["run_id"] for r in run_rows}
+    run_ids = [rid for rid in run_of.values() if rid is not None]
+
+    async def _confessed(object_ids: list[Any], link_type: str) -> set[Any]:
+        if not object_ids:
+            return set()
+        rows = await pool.fetch(
+            "SELECT DISTINCT ca.object_id FROM current_assertions ca "
+            "WHERE ca.object_id = ANY($1::uuid[]) "
+            "AND ca.name = $2 AND NOT (ca.value ? 'resolved')",
+            object_ids, f"derivation_abstained_{link_type}")
+        return {r["object_id"] for r in rows}
+
+    async def _edged_from(object_ids: list[Any], link_type: str) -> set[Any]:
+        if not object_ids:
+            return set()
+        rows = await pool.fetch(
+            "SELECT DISTINCT l.from_id FROM links l "
+            "WHERE l.from_id = ANY($1::uuid[]) AND l.type=$2 "
+            "AND (l.valid_until IS NULL OR l.valid_until > now())",
+            object_ids, link_type)
+        return {r["from_id"] for r in rows}
+
+    run_confessed = await _confessed(ids, "produced")
+    plan_edged = await _edged_from(run_ids, "authorized_by")
+    plan_confessed = await _confessed(run_ids, "authorized_by")
+    source_edged = await _edged_from(ids, "derived_from")
+    source_confessed = await _confessed(ids, "derived_from")
+    evaluator_edged = await _edged_from(ids, "evaluated_by")
+    evaluator_confessed = await _confessed(ids, "evaluated_by")
+
+    rows_out: list[dict[str, Any]] = []
+    by_type: dict[str, dict[str, int]] = {}
+    for r in outputs:
+        oid, run_id = r["id"], run_of.get(r["id"])
+        missing: list[str] = []
+        confessed_legs: list[str] = []
+
+        if run_id is not None:
+            pass  # run leg satisfied by a real edge
+        elif oid in run_confessed:
+            confessed_legs.append("run")
+        else:
+            missing.append("run")
+
+        if run_id is None:
+            missing.append("plan")  # no run at all: nothing to check or confess
+        elif run_id in plan_edged:
+            pass
+        elif run_id in plan_confessed:
+            confessed_legs.append("plan")
+        else:
+            missing.append("plan")
+
+        if oid in source_edged:
+            pass
+        elif oid in source_confessed:
+            confessed_legs.append("source")
+        else:
+            missing.append("source")
+
+        if oid in evaluator_edged:
+            pass
+        elif oid in evaluator_confessed:
+            confessed_legs.append("evaluator")
+        else:
+            missing.append("evaluator")
+
+        if missing:
+            rows_out.append({"id": oid, "canonical": r["canonical"], "type": r["type"],
+                             "missing_legs": missing, "confessed_legs": confessed_legs})
+            bucket = by_type.setdefault(r["type"], {"count": 0})
+            bucket["count"] += 1
+
+    return {"rows": rows_out, "by_type": by_type, "total": len(rows_out)}
+
+
 async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
     """FIX (e), METRON'S MECHANISM REPORT (mail 8890/8921/8922): the fleet-wide number
     the report itself asked for — "an audit for 'threads whose newest note post-dates
@@ -1623,7 +1756,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     fleet has already disproved on the record but not yet fixed; fix (e), Metron's
     mechanism report, mail 8890/8921/8922 — `contested_summary_audit` is the shared
     query this check and `CONTESTED_SQL` (capture.py) both anchor on, never a second
-    derivation of "which summary wins, and is it stale").
+    derivation of "which summary wins, and is it stale"), UNTRACEABLE-OUTPUT (warn: an
+    active Artifact or Commit missing at least one of the traceability invariant's four
+    legs — run/plan/source/evaluator — after confession, Graph-Engineering, operator
+    decision f47d14a7/thread 7f547426; `untraceable_by_type` carries the by-type rollup
+    alongside the usual findings/counts; a leg satisfied only by a RESOLVED confession
+    still counts as missing (the same `NOT (value ? 'resolved')` discipline `orphan`'s
+    own abstained flag uses) — `traceability_census` is the shared derivation preflight's
+    own weekly line reads too, never a second copy).
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -1670,6 +1810,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     # (the final return) without these; a check that runs for real overwrites them.
     now = datetime.now(UTC)
     orphan_census_result: dict[str, Any] = {"by_type": {}, "abstained_total": 0}
+    traceability_census_result: dict[str, Any] = {"by_type": {}}
 
     def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
         counts[check] = len(rows)
@@ -2565,6 +2706,20 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                  "genuinely unexamined")}
             for r in orphan_census_result["rows"]])
 
+        # UNTRACEABLE-OUTPUT — Graph-Engineering (operator decision f47d14a7, thread
+        # 7f547426): every active Artifact/Commit missing at least one of the
+        # traceability invariant's four legs (run/plan/source/evaluator) after
+        # confession — "acceptance is zero rows after confession" is this check's own
+        # stated acceptance test. `missing_legs` names what still blocks it;
+        # `confessed_legs` names any OTHER leg already explained.
+        traceability_census_result = await traceability_census(pool)
+        land("untraceable-output", "warn", [
+            {"subject": r["canonical"],
+             "detail": f"type={r['type']}, missing: {', '.join(r['missing_legs'])}" + (
+                 f" (already confessed: {', '.join(r['confessed_legs'])})"
+                 if r["confessed_legs"] else "")}
+            for r in traceability_census_result["rows"]])
+
         # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
         # active Thread whose newest note post-dates its own last summary touch — a false
         # headline the fleet has already disproved but not yet corrected on the record.
@@ -2625,6 +2780,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         **({"capped": capped, "note": note} if capped else {}),
         "orphan_by_type": orphan_census_result["by_type"],
         "orphan_abstained_total": orphan_census_result["abstained_total"],
+        "untraceable_by_type": traceability_census_result["by_type"],
         "ran_at": now.isoformat(),
         "discipline": "report-only — the lint never writes (rule #7); "
                       "findings are testimony, not verdicts",

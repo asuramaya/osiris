@@ -8,6 +8,8 @@ graph in the SAME shape the miner produces, so it renders in the real `decision-
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -5335,6 +5337,197 @@ async def test_amend_practice_refuses_a_refuted_practice(actions: Actions) -> No
     with pytest.raises(ValueError, match="refuted"):
         await amend_practice(actions, str(p), "one more thought on the old lesson")
     assert await practice_amendments(actions.pool, p) == []
+
+
+async def test_record_evaluation_refuses_a_blank_rubric(actions: Actions) -> None:
+    """rubric is mandatory and non-blank — refused at the door (Graph-Engineering arc,
+    thread 7f547426/decision fba38e62)."""
+    import pytest
+    from src.orchestrator.capture import record_evaluation
+
+    with pytest.raises(ValueError, match="rubric"):
+        await record_evaluation(actions, "")
+    with pytest.raises(ValueError, match="rubric"):
+        await record_evaluation(actions, "   ")
+
+
+async def test_record_evaluation_mints_with_metric_properties_and_no_subject(
+    actions: Actions,
+) -> None:
+    """value/unit are Metric's own shape, stored as PROPERTIES on the Evaluation object
+    itself — there is no separate Metric ObjectType (the operator's own ruling, DM
+    9136)."""
+    from src.orchestrator.capture import record_evaluation
+
+    e = await record_evaluation(
+        actions, "pytest full suite", verdict="pass", value=3708, unit="tests_passed")
+    row = await actions.pool.fetchrow("SELECT type, canonical, status FROM objects WHERE id=$1", e)
+    assert row["type"] == "Evaluation"
+    assert row["canonical"].startswith("evaluation:")
+    assert row["status"] == "active"
+    props = await _props(actions.pool, e)
+    assert props["rubric"] == "pytest full suite"
+    assert props["verdict"] == "pass"
+    assert props["value"] == "3708"  # _props reads text-extracted JSONB, not the raw int
+    assert props["unit"] == "tests_passed"
+
+
+async def test_record_evaluation_with_subject_mints_evaluated_by(actions: Actions) -> None:
+    """`subject` mints the evaluated_by edge in the same call — the traceability
+    invariant's own EVALUATOR leg."""
+    from src.orchestrator.capture import ensure_artifact, record_evaluation
+
+    art = await ensure_artifact(actions, "deploy-42")
+    e = await record_evaluation(actions, "code review", verdict="approved", subject=art)
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='evaluated_by'",
+        art, e)
+    assert row is not None
+
+
+async def test_record_evaluation_same_rubric_twice_mints_two_distinct_objects(
+    actions: Actions,
+) -> None:
+    """A re-run after a fix is TWO verdicts, never deduped — unlike Practice's own
+    statement-keyed idempotency."""
+    from src.orchestrator.capture import record_evaluation
+
+    e1 = await record_evaluation(actions, "gate_hook", verdict="fail")
+    e2 = await record_evaluation(actions, "gate_hook", verdict="pass")
+    assert e1 != e2
+
+
+async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
+    """produced/derived_from/authorized_by/revises each report whether a NEW link was
+    minted, the same idempotent shape mint_implements/mint_rediscovers already use."""
+    from src.orchestrator.capture import (
+        ensure_agent_run,
+        ensure_artifact,
+        mint_authorized_by,
+        mint_derived_from,
+        mint_produced,
+        mint_revises,
+        record_decision,
+    )
+
+    run = await ensure_agent_run(actions, "soul-session-abc123")
+    art_v1 = await ensure_artifact(actions, "report-v1")
+    art_v2 = await ensure_artifact(actions, "report-v2")
+    src_art = await ensure_artifact(actions, "raw-data")
+    plan = await record_decision(actions, "dispatch this run")
+
+    assert await mint_produced(actions, run, art_v1) is True
+    assert await mint_produced(actions, run, art_v1) is False  # idempotent
+    assert await mint_derived_from(actions, art_v1, src_art) is True
+    assert await mint_authorized_by(actions, run, plan) is True
+    assert await mint_revises(actions, art_v2, art_v1) is True
+
+    # lazy re-mint of the same soul_session finds, never twins
+    run_again = await ensure_agent_run(actions, "soul-session-abc123")
+    assert run_again == run
+
+
+async def test_record_artifact_mints_freely_while_required_link_kinds_unarmed(
+    actions: Actions,
+) -> None:
+    """Artifact's own required_link_kinds stays dark by default (the same convention
+    Practice's own gate already follows) — this door mints with NO authoring_run and NO
+    unlinked_because, and does not refuse, until a caller arms the Type."""
+    from src.orchestrator.capture import record_artifact
+
+    art = await record_artifact(actions, "unarmed-build-1")
+    row = await actions.pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", art)
+    assert row["type"] == "Artifact"
+    assert row["canonical"] == "artifact:unarmed-build-1"
+
+
+@asynccontextmanager
+async def _artifact_gate_armed(actions: Actions) -> AsyncIterator[None]:
+    """Arms Artifact's required_link_kinds=["authoring_run"] for the DURATION of one
+    test only — the Type catalog is the ONE table the `actions` fixture's own per-test
+    reset deliberately spares (conftest.py, "the catalog survives the reset"), so an
+    arming write here would otherwise outlive this test and reach every later test in
+    the same worker's session. Two things make that safe: (1) `actor="system:catalog-
+    seed"` — the SAME source seed_catalog() itself used to write the original `[]` —
+    so this is a SAME-SOURCE supersession (one current value, never a coin-flip
+    CONTRADICTION against a different-source near-tie, the exact bug a first draft of
+    this test hit against tests/test_lap_lint.py's own fleet-wide `lint` scan, which
+    reads the Type catalog too); (2) the `finally` below, which always restores `[]`
+    before the test's own actions fixture closes, so the NEXT test's shared session
+    inherits a clean, unarmed catalog regardless of how this one exits."""
+    from src.ontology.catalog import ensure_type
+
+    await ensure_type(actions, name="Artifact", kind="object", actor="system:catalog-seed",
+                      required_link_kinds=["authoring_run"])
+    try:
+        yield
+    finally:
+        await ensure_type(actions, name="Artifact", kind="object",
+                          actor="system:catalog-seed", required_link_kinds=[])
+
+
+async def test_record_artifact_refuses_without_authoring_run_once_armed(
+    actions: Actions,
+) -> None:
+    """Once Artifact's required_link_kinds includes "authoring_run", the incoming-
+    direction check (_REQUIRED_LINK_KIND_TABLE's new "to" entry) actually refuses a
+    mint with neither a producing run nor a confessed reason — artifact-has-
+    authoring-run-plus-version, operator ruling f47d14a7."""
+    from src.orchestrator.capture import record_artifact
+
+    async with _artifact_gate_armed(actions):
+        with pytest.raises(ValueError, match="Artifact refused"):
+            await record_artifact(actions, "armed-build-no-run")
+
+
+async def test_record_artifact_with_authoring_run_satisfies_the_armed_gate(
+    actions: Actions,
+) -> None:
+    """`authoring_run=` lazily mints the AgentRun and its `produced` edge in the SAME
+    transaction, satisfying the gate before it runs — the incoming-direction check
+    reads `to_id=art` (the run points AT the artifact, never the reverse)."""
+    from src.orchestrator.capture import record_artifact
+
+    async with _artifact_gate_armed(actions):
+        art = await record_artifact(actions, "armed-build-with-run", authoring_run="soul-xyz")
+        row = await actions.pool.fetchrow(
+            "SELECT f.type AS run_type FROM links l JOIN objects f ON f.id = l.from_id "
+            "WHERE l.to_id=$1 AND l.type='produced'", art)
+        assert row is not None
+        assert row["run_type"] == "AgentRun"
+
+
+async def test_record_artifact_unlinked_because_satisfies_the_armed_gate_and_dual_writes(
+    actions: Actions,
+) -> None:
+    """The hatch still works for the new incoming-direction kind exactly as it does for
+    every outgoing one — unlinked_because satisfies the gate and _confess_abstention
+    writes derivation_abstained_produced (never derivation_abstained_authoring_run —
+    the abstention is keyed on the real LINK TYPE, not the door-side kind word)."""
+    from src.orchestrator.capture import record_artifact
+
+    async with _artifact_gate_armed(actions):
+        art = await record_artifact(
+            actions, "armed-build-hatch", unlinked_because="ad-hoc report, no run tracked")
+        props = await _props(actions.pool, art)
+        assert props["unlinked_because"] == "ad-hoc report, no run tracked"
+        assert "derivation_abstained_produced" in props
+
+
+async def test_enforce_required_links_existing_outgoing_kinds_unchanged(
+    actions: Actions,
+) -> None:
+    """Zero regression on the four pre-existing callers: record_decision's own "repo"
+    kind still reads as an OUTGOING check (from_id=obj) after the direction extension —
+    a Decision with a real in_repo link still satisfies the gate with no hatch."""
+    from src.orchestrator.capture import record_decision
+
+    d = await record_decision(actions, "unaffected by the direction extension",
+                              repo="osiris")
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='unlinked_because'",
+        d)
+    assert row is None  # satisfied by the real link, never fell to the hatch
 
 
 async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_testimony() -> None:

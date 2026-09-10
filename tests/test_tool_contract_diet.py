@@ -898,7 +898,18 @@ def _tool_chars(t: Any) -> int:
 # capability (Actions.invalidate_link already existed at the kernel level but had no
 # MCP door — reaching it directly would be the raw-mutation shortcut house law
 # forbids), not a mode of any existing tool.
-TOOL_CONTRACT_EXPECTED_COUNT = 79
+# 79 -> 80 (2026-09-10, Sekhmet, thread 7f547426/decision fba38e62, Thoth DM 9136,
+# Graph-Engineering arc item 1): record_evaluation — the mint door for a NEW
+# Evaluation object type (a run/artifact's own verdict — test result, review finding,
+# gate result), single-action like ingest_reference rather than a dispatcher (there is
+# only one write shape today). Genuinely new capability, no existing tool it could
+# parameterize.
+# 80 -> 81 (2026-09-10, Sekhmet, thread 7f547426/decision f47d14a7, Graph-Engineering
+# arc item 2/3): record_artifact — the mint door for a NEW Artifact object type,
+# gated by _enforce_required_links' new incoming direction (artifact-has-authoring-
+# run-plus-version). Same shape as record_evaluation just above. Genuinely new
+# capability, no existing tool it could parameterize.
+TOOL_CONTRACT_EXPECTED_COUNT = 81
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1457,7 +1468,21 @@ TOOL_CONTRACT_EXPECTED_COUNT = 79
 # directly from a caller would be the raw-mutation shortcut house law forbids — this
 # is the MCP-facing door onto it), not prose growth on an existing one; raised
 # deliberately, measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 123373
+# 121931 -> 123464 (2026-09-10, Sekhmet, thread 7f547426/decision fba38e62, Thoth DM
+# 9136, Graph-Engineering arc item 1): the new `record_evaluation` tool — the mint
+# door for the new Evaluation object type. A genuinely new door, not prose growth on
+# an existing one; raised deliberately, measured exact.
+# 123464 -> 124664 (2026-09-10, Sekhmet, thread 7f547426/decision f47d14a7,
+# Graph-Engineering arc item 2/3): the new `record_artifact` tool — the mint door for
+# the new Artifact object type, gated by _enforce_required_links' new incoming
+# direction. A genuinely new door, not prose growth on an existing one; raised
+# deliberately, measured exact.
+# RECONCILED AT REBASE (2026-09-10, scripts/reconcile_tool_contract_ceiling.py, sekhmet-
+# work-lineage onto 8ad6d66): this branch's own 124664 (retire_link's parallel 123377
+# never included) additively combined with main's own 123377 (retire_link) against the
+# shared c6665b8 baseline of 121931 -> 126106 — never the smaller of the two independent
+# raises, so neither door's own measured cost is silently dropped by the rebase.
+TOOL_CONTRACT_CEILING_CHARS = 126106
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
