@@ -9352,6 +9352,46 @@ async def ingest_reference(
 
 
 @mcp.tool()
+async def record_evaluation(
+    rubric: str, verdict: str | None = None, subject: str | None = None,
+    value: float | int | str | None = None, unit: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Capture a VERDICT against an AgentRun or Artifact — a test suite result, a code
+    review finding, a gate_hook pass/fail (Graph-Engineering arc, thread 7f547426,
+    decision fba38e62, Thoth DM 9136). `rubric` (which standard/check was applied) is
+    MANDATORY and non-blank — refused clean (an {"error": ...} receipt, never a
+    traceback) rather than minting an unverifiable verdict. `subject` (a UUID/short-id/
+    canonical ref to an already-minted AgentRun or Artifact) mints the `evaluated_by`
+    edge in the same call — a miss is reported, never fatal. `value`/`unit` are
+    Metric's own shape (with `measured_at` stamped as this call's own observed time),
+    stored as PROPERTIES on this SAME Evaluation object, never a linked child node.
+    Each call mints a fresh object — the same rubric run twice is two distinct
+    verdicts, never deduped."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    subject_id: uuid.UUID | None = None
+    subject_note: dict[str, str] | None = None
+    if subject:
+        subject_id = await _resolve(pool, subject)
+        if subject_id is None:
+            subject_note = {"ref": subject, "matched": "false",
+                            "note": "matched no object — quote its UUID or 8-char short "
+                                    "id; the Evaluation still minted without evaluated_by"}
+    try:
+        e = await capture.record_evaluation(
+            Actions(pool), rubric, verdict=verdict, subject=subject_id, value=value,
+            unit=unit, source=actor)
+    except ValueError as err:
+        return {"error": str(err)}
+    out: dict[str, Any] = {"id": str(e), "rubric": rubric.strip()}
+    if subject_note:
+        out["subject_resolution"] = subject_note
+    return out
+
+
+@mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,

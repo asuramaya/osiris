@@ -5337,6 +5337,94 @@ async def test_amend_practice_refuses_a_refuted_practice(actions: Actions) -> No
     assert await practice_amendments(actions.pool, p) == []
 
 
+async def test_record_evaluation_refuses_a_blank_rubric(actions: Actions) -> None:
+    """rubric is mandatory and non-blank — refused at the door (Graph-Engineering arc,
+    thread 7f547426/decision fba38e62)."""
+    import pytest
+    from src.orchestrator.capture import record_evaluation
+
+    with pytest.raises(ValueError, match="rubric"):
+        await record_evaluation(actions, "")
+    with pytest.raises(ValueError, match="rubric"):
+        await record_evaluation(actions, "   ")
+
+
+async def test_record_evaluation_mints_with_metric_properties_and_no_subject(
+    actions: Actions,
+) -> None:
+    """value/unit are Metric's own shape, stored as PROPERTIES on the Evaluation object
+    itself — there is no separate Metric ObjectType (the operator's own ruling, DM
+    9136)."""
+    from src.orchestrator.capture import record_evaluation
+
+    e = await record_evaluation(
+        actions, "pytest full suite", verdict="pass", value=3708, unit="tests_passed")
+    row = await actions.pool.fetchrow("SELECT type, canonical, status FROM objects WHERE id=$1", e)
+    assert row["type"] == "Evaluation"
+    assert row["canonical"].startswith("evaluation:")
+    assert row["status"] == "active"
+    props = await _props(actions.pool, e)
+    assert props["rubric"] == "pytest full suite"
+    assert props["verdict"] == "pass"
+    assert props["value"] == "3708"  # _props reads text-extracted JSONB, not the raw int
+    assert props["unit"] == "tests_passed"
+
+
+async def test_record_evaluation_with_subject_mints_evaluated_by(actions: Actions) -> None:
+    """`subject` mints the evaluated_by edge in the same call — the traceability
+    invariant's own EVALUATOR leg."""
+    from src.orchestrator.capture import ensure_artifact, record_evaluation
+
+    art = await ensure_artifact(actions, "deploy-42")
+    e = await record_evaluation(actions, "code review", verdict="approved", subject=art)
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='evaluated_by'",
+        art, e)
+    assert row is not None
+
+
+async def test_record_evaluation_same_rubric_twice_mints_two_distinct_objects(
+    actions: Actions,
+) -> None:
+    """A re-run after a fix is TWO verdicts, never deduped — unlike Practice's own
+    statement-keyed idempotency."""
+    from src.orchestrator.capture import record_evaluation
+
+    e1 = await record_evaluation(actions, "gate_hook", verdict="fail")
+    e2 = await record_evaluation(actions, "gate_hook", verdict="pass")
+    assert e1 != e2
+
+
+async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
+    """produced/derived_from/authorized_by/revises each report whether a NEW link was
+    minted, the same idempotent shape mint_implements/mint_rediscovers already use."""
+    from src.orchestrator.capture import (
+        ensure_agent_run,
+        ensure_artifact,
+        mint_authorized_by,
+        mint_derived_from,
+        mint_produced,
+        mint_revises,
+        record_decision,
+    )
+
+    run = await ensure_agent_run(actions, "soul-session-abc123")
+    art_v1 = await ensure_artifact(actions, "report-v1")
+    art_v2 = await ensure_artifact(actions, "report-v2")
+    src_art = await ensure_artifact(actions, "raw-data")
+    plan = await record_decision(actions, "dispatch this run")
+
+    assert await mint_produced(actions, run, art_v1) is True
+    assert await mint_produced(actions, run, art_v1) is False  # idempotent
+    assert await mint_derived_from(actions, art_v1, src_art) is True
+    assert await mint_authorized_by(actions, run, plan) is True
+    assert await mint_revises(actions, art_v2, art_v1) is True
+
+    # lazy re-mint of the same soul_session finds, never twins
+    run_again = await ensure_agent_run(actions, "soul-session-abc123")
+    assert run_again == run
+
+
 async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_testimony() -> None:
     """kinds= is the plug Imhotep's own decision 5640f234 flagged as deliberately left
     open — default stays Decision-only (existing callers unchanged); UNIFIED_PRIOR_ART_

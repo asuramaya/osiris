@@ -1257,6 +1257,13 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # a seat/office/project binding-mover; not a parameterization of any existing
     # tool — a genuinely new capability, no prior verb it could have ridden on.
     "proposal": {"binding_verb": False},
+    # record_evaluation — Graph-Engineering arc item 1 (thread 7f547426, decision
+    # fba38e62, Thoth DM 9136): the mint door for the NEW Evaluation object type (a
+    # run/artifact's own verdict). Not a seat/office/project binding-mover; single
+    # write shape today (unlike practice/proposal, which dispatch multiple actions),
+    # so shaped like ingest_reference rather than folded onto an existing tool — no
+    # existing door names a different object type's verdict as one of its own params.
+    "record_evaluation": {"binding_verb": False},
     # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.

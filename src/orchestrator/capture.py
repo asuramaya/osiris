@@ -3047,7 +3047,7 @@ async def find_near_duplicate_decision(
 # rather than accepting a drifting label. roadmap.py imports this SAME constant for its
 # section order — one taxonomy, never two copies that quietly disagree.
 ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token-Cost",
-        "Surfaces-Roadmap-Docs", "Fleet-Hygiene", "Security")
+        "Surfaces-Roadmap-Docs", "Fleet-Hygiene", "Security", "Graph-Engineering")
 
 # ONE LINE PER ARC (Thoth's follow-on ask, msg 4566, decision <this build>): three separate
 # "the taxonomy is broken" findings this week — Sekhmet's own dual-fits, Imhotep's
@@ -3096,6 +3096,14 @@ ARC_DEFINITIONS: dict[str, str] = {
         "Vulnerabilities, credential handling, and PII/secret exposure. Rare by design "
         "in an internal coordination tool, not proven dead weight — no evidence either "
         "way yet (decision 42433f6e/608b0e14)."
+    ),
+    "Graph-Engineering": (
+        "First-class work-lineage node/edge types (AgentRun, Artifact, Evaluation, "
+        "Metric; produced/derived_from/evaluated_by/revises) and the write- and "
+        "read-invariants that keep every output traceable to its run, plan, source and "
+        "evaluator. NOT the knowledge-lineage machinery itself (Decision/Thread/"
+        "supersedes — ordinary graph work) and NOT a lint check's own correctness bug "
+        "once these types exist (that's Fleet-Hygiene)."
     ),
 }
 for _arc_name in ARCS:
@@ -4212,6 +4220,172 @@ async def record_practice(
             unlinked_because=unlinked_because, source=source, observed=observed,
             unlinked_because_kind=unlinked_because_kind)
     return p
+
+
+# WORK-LINEAGE (Graph-Engineering arc, thread 7f547426, decision fba38e62, operator
+# ruling recorded on 7f547426, Thoth DM 9136) — item 1 of 3: the types/edges exist and
+# are mintable. Items 2 (the incoming-direction declare-or-refuse gate for
+# artifact-has-authoring-run-plus-version) and 3 (traceability_census + graph_lint
+# 'untraceable-output' + the weekly desk line) are separate, later commits.
+async def ensure_agent_run(
+    actions: Actions, soul_session_id: str, source: str = _SOURCE,
+) -> uuid.UUID:
+    """Find-or-mint the AgentRun pointer for a soul_session — LAZY, the first time
+    something needs to link to it (a `produced`/`authorized_by` edge), never a
+    wholesale backfill of every historical session. The soul_session itself (alembic/
+    0050_soul_store.py) stays the detail store of record outside the graph; this is
+    only the graph-facing pointer, canonical run:<soul_session_id>."""
+    return await actions.create_or_find_object("AgentRun", f"run:{soul_session_id}", source)
+
+
+async def ensure_artifact(actions: Actions, key: str, source: str = _SOURCE) -> uuid.UUID:
+    """Find-or-mint an Artifact — a build/deploy/document output Commit does not
+    already cover (Commit stays its own type, never aliased). `key` is the caller's
+    own identifying string (a build id, deploy tag, or report path), canonicalized as
+    artifact:<key>."""
+    return await actions.create_or_find_object("Artifact", f"artifact:{key}", source)
+
+
+async def mint_produced(
+    actions: Actions, run_id: uuid.UUID, output_id: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """The run's own output — the traceability invariant's RUN leg. Idempotent: returns
+    whether a NEW link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='produced'",
+        run_id, output_id)
+    if exists:
+        return False
+    await actions.create_link(run_id, output_id, "produced", source, datetime.now(UTC),
+                              _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_derived_from(
+    actions: Actions, artifact_id: uuid.UUID, source_id: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """An Artifact's own SOURCE material — the traceability invariant's SOURCE leg.
+    Artifact-to-source ONLY (never a run's plan/objective — that's `mint_authorized_by`
+    below). Idempotent: returns whether a NEW link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='derived_from'",
+        artifact_id, source_id)
+    if exists:
+        return False
+    await actions.create_link(artifact_id, source_id, "derived_from", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_authorized_by(
+    actions: Actions, run_id: uuid.UUID, plan_id: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """The run's own authorizing Decision or Thread — the traceability invariant's
+    PLAN/OBJECTIVE leg (the operator's own chosen split over overloading derived_from,
+    DM 9136). Idempotent: returns whether a NEW link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='authorized_by'",
+        run_id, plan_id)
+    if exists:
+        return False
+    await actions.create_link(run_id, plan_id, "authorized_by", source, datetime.now(UTC),
+                              _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_evaluated_by(
+    actions: Actions, subject_id: uuid.UUID, evaluation_id: uuid.UUID, source: str = _SOURCE,
+) -> bool:
+    """An AgentRun/Artifact pointing AT the Evaluation that judged it — the
+    traceability invariant's EVALUATOR leg. Idempotent: returns whether a NEW link was
+    minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='evaluated_by'",
+        subject_id, evaluation_id)
+    if exists:
+        return False
+    await actions.create_link(subject_id, evaluation_id, "evaluated_by", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def mint_revises(
+    actions: Actions, new_artifact_id: uuid.UUID, old_artifact_id: uuid.UUID,
+    source: str = _SOURCE,
+) -> bool:
+    """A later Artifact version supersedes an earlier one — the version DAG, same
+    self-referential shape as Commit's own `follows` edge. Idempotent: returns whether
+    a NEW link was minted."""
+    exists = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='revises'",
+        new_artifact_id, old_artifact_id)
+    if exists:
+        return False
+    await actions.create_link(new_artifact_id, old_artifact_id, "revises", source,
+                              datetime.now(UTC), _CONF, evidence_class=_EC)
+    return True
+
+
+async def record_evaluation(
+    actions: Actions, rubric: str, *, verdict: str | None = None,
+    subject: uuid.UUID | None = None, value: float | int | str | None = None,
+    unit: str | None = None, measured_at: datetime | None = None,
+    source: str = _SOURCE,
+) -> uuid.UUID:
+    """Capture a VERDICT against an AgentRun or Artifact — a test suite result, a code
+    review finding, a gate_hook pass/fail — none of which were minted as objects
+    before this Graph-Engineering arc (they lived only as commit-message prose).
+    Distinct from Practice's own `witnesses` links (record_decision(confirms=…)/
+    record_practice(witnesses=…)): that mechanism answers 'is this RULE still true',
+    this answers 'did THIS run/artifact pass'.
+
+    `rubric` (which standard/check was applied) is MANDATORY and non-blank — refused
+    at the door (ValueError, never a silent default): an Evaluation with no named
+    rubric is unverifiable prose wearing a graph object's shape. This is a plain
+    property validation, NOT the declare-or-refuse link-kind gate `_enforce_required_
+    links` implements elsewhere (that machinery is a separate, later commit — item 2 of
+    this same arc).
+
+    `value`/`unit`/`measured_at` are Metric's own shape, stored as PROPERTIES on this
+    SAME object (the operator's own ruling, DM 9136, over an earlier draft design's
+    separate Metric node) — there is no Metric ObjectType.
+
+    `subject`, when given, mints the `evaluated_by` edge FROM the AgentRun/Artifact
+    being judged TO this Evaluation (the traceability invariant's own EVALUATOR leg) in
+    the same transaction. Omitted, the Evaluation still mints — a caller who evaluates
+    before the subject exists can link it later via `mint_evaluated_by`.
+
+    EACH CALL MINTS A FRESH OBJECT, DELIBERATELY NOT IDEMPOTENT ON `rubric` ALONE
+    (unlike Practice's own statement-keyed dedup): the same rubric run twice against
+    the same subject is two distinct verdicts (a re-run after a fix), not one fact
+    re-asserted — the canonical id embeds a fresh random component so two calls never
+    collide."""
+    if not rubric or not rubric.strip():
+        raise ValueError(
+            "Evaluation refused: rubric is mandatory (Graph-Engineering arc, thread "
+            "7f547426) — name the standard/check being applied, never a blank verdict.")
+    observed = measured_at or datetime.now(UTC)
+    canon = _canon("evaluation", f"{subject}:{rubric}:{uuid.uuid4().hex}")
+    async with actions.atomic() as a:
+        e = await a.create_or_find_object("Evaluation", canon, source)
+        await a.assert_property(e, "rubric", rubric.strip(), source, observed, _CONF,
+                                evidence_class=_EC)
+        if verdict:
+            await a.assert_property(e, "verdict", verdict, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if value is not None:
+            await a.assert_property(e, "value", value, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if unit:
+            await a.assert_property(e, "unit", unit, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if measured_at:
+            await a.assert_property(e, "measured_at", measured_at.isoformat(), source,
+                                    observed, _CONF, evidence_class=_EC)
+        if subject is not None:
+            await a.create_link(subject, e, "evaluated_by", source, observed, _CONF,
+                                evidence_class=_EC)
+    return e
 
 
 async def mint_implements(
