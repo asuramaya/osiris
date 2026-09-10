@@ -153,6 +153,16 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     ObjectType("Decision", "Software", "#d2a8ff", "octagon",
                "An architectural/design decision mined from the project's own commit "
                "rationale — the 'why', as queryable institutional memory.", ("decision:",)),
+    ObjectType("Proposal", "Software", "#8b949e", "hexagon",
+               "MINERS AS LAST RESORT (wave 15, operator's word, decision ac892cd9): a "
+               "miner's guess at a candidate object/link, never itself a graph write — "
+               "only ever minted against an existing, unresolved derivation_abstained_ "
+               "property (write-time laws refuse first, mechanical sweeps derive-or-"
+               "abstain second, a miner only ever looks at what's left). A mind accepts "
+               "or rejects it explicitly; nothing here is ever silently promoted. "
+               "Deliberately invisible to orient/backlog/desk counts (never allowlisted "
+               "in any of their queries) — a Proposal is not a duty, only a suggestion "
+               "awaiting judgment.", ("proposal:",)),
     ObjectType("File", "Software", "#6cb6ff", "round-rectangle",
                "A tracked file in a repository (metadata only — content stays in git, "
                "read on demand). Its `role` lets analogous files be compared across repos.",
