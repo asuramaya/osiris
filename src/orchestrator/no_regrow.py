@@ -30,7 +30,13 @@ definition of "touched."
 Same mirrored plan/execute split as obligation_hygiene.py and phantom_fold_reap.py: a
 pure `plan_no_regrow` dry-run report, then a separately-gated `apply_no_regrow`. A row's
 own mail hiccup on the receipt is caught and reported inline on that row -- never aborts
-the batch, same law as its siblings."""
+the batch, same law as its siblings.
+
+CONTESTED IS EXCLUDED, fix (d) (Metron's mechanism report, mail 8890/8921/8922): a
+thread whose newest note disputes its own summary never reclassifies here, even past
+the grace window -- doing so would drop a false headline off the obligation wall right
+when it most needs a human's eye, backwards from the rule's own purpose. The exclusion
+lifts once the summary is corrected or the thread resolves, same as the marker itself."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -69,7 +75,14 @@ _STALE_AFTER_SQL = (
 async def _candidate_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every OPEN kind='obligation' Thread carrying a `stale_after`, with `owner` and
     `last_touched` (the freshest self_declared write's own observed_at, or the thread's
-    own creation time when never touched at all)."""
+    own creation time when never touched at all).
+
+    `contested` (fix (d), Metron's mechanism report, mail 8890/8921/8922): present so
+    `plan_no_regrow` can EXCLUDE a disputed thread from reclassification — reclassifying
+    away from 'obligation' would let a false headline drop off the obligation wall right
+    when a note has just proven it wrong, exactly backwards from what should happen."""
+    from src.orchestrator.capture import CONTESTED_SQL
+
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         f" {_SUMMARY_SQL} AS summary, "
@@ -78,7 +91,8 @@ async def _candidate_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS owner, "
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
-        "   AND sa.evidence_class='self_declared') AS last_touched "
+        "   AND sa.evidence_class='self_declared') AS last_touched, "
+        f" {CONTESTED_SQL} AS contested "
         "FROM objects o "
         f"WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         f"  AND {_STATUS_SQL}='open' AND {_KIND_SQL}='obligation' "
@@ -113,6 +127,15 @@ async def plan_no_regrow(
         }
         if last_touched is not None and last_touched > stale_after:
             no_action.append({**item, "reason": "touched since going stale — window reset"})
+            continue
+        if r["contested"]:
+            # fix (d), mail 8890/8921/8922: a note has disputed this summary and nothing
+            # has corrected it yet — reclassifying away from 'obligation' now would drop
+            # a false headline off the wall right when it most needs a human's eye, the
+            # exact opposite of what this rule exists to do.
+            no_action.append({**item, "reason": "CONTESTED — a newer note disputes this "
+                                                "summary; correct it or resolve it "
+                                                "before this reclassifies"})
             continue
         if now - stale_after >= timedelta(days=N_GRACE_DAYS):
             would_reclassify.append(item)
