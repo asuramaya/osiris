@@ -1008,6 +1008,29 @@ async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     return acted
 
 
+async def abstention_miner_heartbeat(ctx: dict[str, Any]) -> int:
+    """THE FIRST MINER's own scheduled leg (wave 16, decision 4d622aee, operator
+    2026-09-10: "yes, build and wire it") — same thin-shim shape as
+    closure_miner_heartbeat: the flag gate (osiris_abstention_miner_enabled) and the
+    acting logic both live in abstention_miner.abstention_miner_tick, never here.
+    guarded_miner_tick (proposals.py, wave 15 item 4) writes a durable failure receipt
+    BEFORE any exception is allowed to propagate; this try/except is the belt to that
+    wrapper's own suspenders — a DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.abstention_miner import abstention_miner_tick
+    from src.orchestrator.proposals import guarded_miner_tick
+
+    actions: Actions = ctx["cascade"].actions
+    try:
+        report = await guarded_miner_tick(
+            actions, "abstention", lambda: abstention_miner_tick(actions))
+    except Exception as exc:  # a DB hiccup (or an unrecoverable tick) must not kill the cron
+        _log.warning("abstention miner heartbeat failed: %r", exc)
+        return 0
+    if report.get("action") == "proposed":
+        _log.info("abstention miner heartbeat: %s", report)
+    return 1 if report.get("action") == "proposed" else 0
+
+
 async def backfill_decided_in_heartbeat(ctx: dict[str, Any]) -> int:
     """Task #101's own periodic retry (Thoth's grant, DM 2271, riding behind the one-off
     sweep in decisions c6d1598c/e73c1453): the live path (record_decision) only ever
@@ -1398,6 +1421,12 @@ class WorkerSettings:
         # so none of them contend for CPU at the same wall-clock second.
         cron(watched(closure_miner_heartbeat, every=900), minute={10, 25, 40, 55},
              second={5}, timeout=600, run_at_startup=True),
+        # THE FIRST MINER's own scheduled leg (wave 16, decision 4d622aee) —
+        # osiris_abstention_miner_enabled (the kill switch). Same 15-min cadence class as
+        # closure_miner_heartbeat, offset from it and from every other 900s job's own
+        # minute/second grid so none of them contend for CPU at the same wall-clock tick.
+        cron(watched(abstention_miner_heartbeat, every=900), minute={12, 27, 42, 57},
+             second={35}, run_at_startup=True),
         # the phantom-heal sweep's scheduled leg (decision ee012ebc, operator ruling
         # 7d6815bb): fold FRESH zero-turn phantoms fleet-wide, on the same 15-min cadence
         # class as reap_orphans/fleet_reconcile_heartbeat/closure_miner_heartbeat — a

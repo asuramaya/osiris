@@ -46,6 +46,7 @@ meets a live surface.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -412,7 +413,14 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
     transition time, not the mint time) in the window; `expired` is a live snapshot —
     still `status='proposed'` but past its own `expires_at` — since nothing sweeps a
     Proposal to a real 'expired' status yet. No dollar figure here: see the module
-    docstring's PROPOSALS note."""
+    docstring's PROPOSALS note.
+
+    `by_lane` (wave 16, decision 4d622aee, "the weekly desk line reports proposals and
+    acceptance per lane"): a lane is `<abstained object's own type>:<link_type>` — read
+    off each Proposal's own `evidence_pointer` (from_id/link_type), never a new column,
+    since the abstention miner's own lane table is keyed by exactly this pair already.
+    Generic on purpose (not abstention-miner-specific): ANY future propose() caller whose
+    evidence_pointer resolves cleanly gets grouped the same way, for free."""
     rows = await actions.pool.fetch(
         "SELECT "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -432,15 +440,21 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
         "   AS status_at, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS expires_at "
+        "   AS expires_at, "
+        "  (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='evidence_pointer' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS evidence_pointer "
         "FROM objects o WHERE o.type='Proposal'")
     now = datetime.now(UTC)
-    by_pair: dict[tuple[str, str], dict[str, int]] = {}
-    for r in rows:
-        if r["miner"] is None or r["owner"] is None:
-            continue
-        agg = by_pair.setdefault((r["miner"], r["owner"]),
-                                 {"made": 0, "accepted": 0, "rejected": 0, "expired": 0})
+    from_ids = {uuid.UUID(r["evidence_pointer"]["from_id"]) for r in rows
+               if r["evidence_pointer"] and r["evidence_pointer"].get("from_id")}
+    type_by_id: dict[uuid.UUID, str] = {}
+    if from_ids:
+        type_rows = await actions.pool.fetch(
+            "SELECT id, type FROM objects WHERE id = ANY($1::uuid[])", list(from_ids))
+        type_by_id = {r["id"]: r["type"] for r in type_rows}
+
+    def _bump(agg: dict[str, int], r: Any) -> None:
         if r["made_at"] is not None and r["made_at"] >= since:
             agg["made"] += 1
         if r["status"] in ("accepted", "rejected") and r["status_at"] is not None \
@@ -449,9 +463,24 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
         if r["status"] == "proposed" and r["expires_at"] is not None \
                 and datetime.fromisoformat(r["expires_at"]) < now:
             agg["expired"] += 1
+
+    by_pair: dict[tuple[str, str], dict[str, int]] = {}
+    by_lane: dict[str, dict[str, int]] = {}
+    for r in rows:
+        if r["miner"] is not None and r["owner"] is not None:
+            _bump(by_pair.setdefault((r["miner"], r["owner"]),
+                                     {"made": 0, "accepted": 0, "rejected": 0, "expired": 0}), r)
+        ep = r["evidence_pointer"]
+        if ep and ep.get("from_id") and ep.get("link_type"):
+            from_type = type_by_id.get(uuid.UUID(ep["from_id"]))
+            if from_type:
+                lane = f"{from_type}:{ep['link_type']}"
+                _bump(by_lane.setdefault(
+                    lane, {"made": 0, "accepted": 0, "rejected": 0, "expired": 0}), r)
     by = [{"miner": miner, "owner": owner, **agg}
           for (miner, owner), agg in sorted(by_pair.items())]
-    return {"by_pair": by,
+    by_lane_out = [{"lane": lane, **agg} for lane, agg in sorted(by_lane.items())]
+    return {"by_pair": by, "by_lane": by_lane_out,
             "made": sum(a["made"] for a in by_pair.values()),
             "accepted": sum(a["accepted"] for a in by_pair.values()),
             "rejected": sum(a["rejected"] for a in by_pair.values()),
