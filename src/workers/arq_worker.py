@@ -884,8 +884,19 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     derived, never a guess) re-applied on the same cadence — "so a stranger's install
     self-heals" (the dispatch's own words), never a coordinator re-running a backfill
     script by hand. One lane failing is reported under its own key, never sinks its
-    siblings — same discipline this cron already gives its other four sub-sweeps."""
-    from src.orchestrator.boot_compiler import sweep_stacked_office_headers
+    siblings — same discipline this cron already gives its other four sub-sweeps.
+
+    AND THE BOOT DRIFT NUDGE (thread f37aaf1b, v1.1 follow-up piece 1, `apply_boot_
+    drift_nudge_sweep` in boot_compiler.py): every active seat whose compiled CLAUDE.md
+    carries an older `boot_compiled_version` than the template's current hash gets an
+    `open_thread(kind='obligation')` naming `reissue_office(adopt=True)` as the fix —
+    nothing read that drift proactively before this; a stale seat only ever got
+    recompiled on an explicit reissue call. Idempotent on open_thread's own summary-hash
+    dedup, so this never re-nudges the same (stamped, current) gap twice."""
+    from src.orchestrator.boot_compiler import (
+        apply_boot_drift_nudge_sweep,
+        sweep_stacked_office_headers,
+    )
     from src.orchestrator.capture import apply_provenance_sweep_heartbeat
     from src.orchestrator.fleet_prune import prune_execute
     from src.orchestrator.house_hygiene import apply_ghost_house_sweep
@@ -952,8 +963,18 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     if provenance_minted or any(k.endswith("_error") for k in provenance.get("lanes", {})):
         _log.info("provenance sweep heartbeat: %s", provenance)
 
+    try:
+        drift = await apply_boot_drift_nudge_sweep(
+            actions, actor="cron:classification_laws_heartbeat")
+    except Exception as exc:  # a DB/mail hiccup must not kill the cron
+        _log.warning("boot drift nudge sweep failed: %r", exc)
+        drift = {}
+    drift_nudged = len(drift.get("nudged", []))
+    if drift_nudged or drift.get("errors"):
+        _log.info("boot drift nudge sweep: %s", drift)
+
     return (acted + retired + ghosts_retired + dropped + bound + healed_offices
-           + provenance_minted)
+           + provenance_minted + drift_nudged)
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
