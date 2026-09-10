@@ -6354,6 +6354,52 @@ async def test_record_decision_obsoletes_kills_a_superstition_verified_against_t
     assert killed_by == out["id"]
 
 
+async def test_record_decision_flags_obsoletion_when_obsoletes_names_the_matched_practice(
+    actions: Actions,
+) -> None:
+    """Wave 16 item 3 (thread 51233089): obsoletes= gets the SAME overturning treatment
+    refutes= already has — a decision that obsoletes a workaround whose own words match
+    a standing Practice the prior-art search actually surfaces gets a message naming the
+    obsoletion, never the generic re-derivation/contradiction-cues wording (the disease
+    named on the thread: mcp_server.py's overturning check used to read only refute_id,
+    never any obsoletes-derived id)."""
+    import src.mcp_server as srv
+    from src.mcp_server import _agents, _conn_key
+    from src.mcp_server import record_decision as rd_tool
+    from src.mcp_server import record_practice as rp_tool
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            session = object()
+
+    ctx = _Ctx()
+    _agents[_conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:obsprac1", session="obsprac1", project="obs-prac-land",
+        model=None, cwd=None)
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        practice = await rp_tool(
+            "route every dispatch through the DM lane, not a broadcast reply", ctx=ctx)
+        out = await rd_tool(
+            "route every dispatch through the DM lane, not a broadcast reply — this "
+            "workaround is wrong now, broadcast replies are fine for dispatch after all",
+            kind="decision",
+            rationale=f"obsoleting the workaround practice {practice['id']} names",
+            obsoletes=["route every dispatch through the DM lane, not a broadcast reply"],
+            ctx=ctx)
+        assert out["prior_art_polarity"] == "obsolete"
+        assert "OBSOLETES" in out["prior_art_flag"]
+        assert practice["id"][:8] in out["prior_art_flag"]
+        # the generic contradiction-cues/re-derivation wording never fires alongside it
+        assert "re-derivation" not in out["prior_art_flag"]
+        assert "CONTRADICT" not in out["prior_art_flag"]
+    finally:
+        srv._pool = saved_pool
+        _agents.pop(_conn_key(ctx), None)
+
+
 async def test_practices_composition_filters_by_surface_and_shows_confirmed_count(
     actions: Actions,
 ) -> None:
