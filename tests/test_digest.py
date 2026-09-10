@@ -6,6 +6,7 @@ that must be excluded), and a relay/origin co-assertion — and asserts the dige
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -358,6 +359,43 @@ async def test_miner_telemetry_is_bounded_and_absent_is_quiet(actions: Actions) 
     blob = await miner_health(actions.pool)
     assert len(blob["ticks"]) == _MINER_KEEP
     assert blob["ticks"][-1]["secs"] == float(_MINER_KEEP + 4)  # newest kept, oldest dropped
+
+
+async def test_proposal_telemetry_counts_per_miner_owner_pair(actions: Actions) -> None:
+    """Item 4 (decision ac892cd9): made/accepted/rejected/expired-in-effect per (miner,
+    owner) pair, off the Proposal objects items 1-3 mint. Fabricated directly here
+    (never through propose(), which needs a live abstention and would trip item 3's own
+    daily budget) since only the properties `_proposal_telemetry`'s own queries read
+    matter."""
+    async def _mint(status: str, *, miner: str = "m1", owner: str = "operator",
+                    expires_at: datetime | None = None) -> None:
+        pid = await actions.create_or_find_object(
+            "Proposal", f"proposal:{uuid.uuid4()}", miner)
+        await _prop(actions, pid, "miner", miner, miner, "derived")
+        await _prop(actions, pid, "owner", owner, miner, "derived")
+        await _prop(actions, pid, "status", status, miner, "derived")
+        # NOW (2026-07-07) is a fixed point well in the past of real wall-clock time --
+        # "not expired" must be measured against datetime.now(UTC), which is what
+        # _proposal_telemetry itself compares expires_at against, never against NOW.
+        default_expiry = datetime.now(UTC) + timedelta(days=14)
+        await _prop(actions, pid, "expires_at",
+                    (expires_at or default_expiry).isoformat(), miner, "derived")
+
+    await _mint("accepted")
+    await _mint("rejected")
+    await _mint("proposed", expires_at=NOW - timedelta(days=1))  # expired in effect
+    await _mint("proposed", miner="m2")  # live, not expired
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    p = dg["proposals"]
+    assert p["made"] == 4
+    assert p["accepted"] == 1 and p["rejected"] == 1 and p["expired"] == 1
+    pair = next(r for r in p["by_pair"] if r["miner"] == "m1" and r["owner"] == "operator")
+    assert pair["accepted"] == 1 and pair["rejected"] == 1 and pair["expired"] == 1
+    assert dg["summary"]["proposals_made"] == 4
+    assert dg["summary"]["proposals_accepted"] == 1
+    assert dg["summary"]["proposals_rejected"] == 1
+    assert dg["summary"]["proposals_expired"] == 1
 
 
 async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(

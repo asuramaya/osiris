@@ -55,12 +55,21 @@ count that triggered it. `open_thread`'s own idempotency-on-summary-hash is the 
 the receipt's summary embeds the day, so it fires at most once per (miner, owner, day)
 without a second piece of state to track it.
 
-DELIBERATELY NOT BUILT HERE (Thoth's "one commit per item"): telemetry (item 4) and
-any miner wiring — existing miners stay off, unwired, exactly as before this module
-existed."""
+ITEM 4 (this pass), TELEMETRY: made/accepted/rejected/expired-in-effect per (miner,
+owner) lives in digest.py's own `_proposal_telemetry` (the per-project/per-seat
+summary convention `fleet_digest` already holds), not here — this module carries only
+`guarded_miner_tick`, the "a miner tick that raises writes a failure receipt first"
+discipline (decision ac892cd9) a future miner's own periodic tick wraps itself in.
+Dollar cost is deliberately NOT re-derived per pair — digest.py's own `costs` stream
+already reads `ceiling()`'s measured vendor figure, and llm_usage carries no owner
+dimension to split it by pair.
+
+DELIBERATELY NOT BUILT HERE (Thoth's "one commit per item"): any miner wiring —
+existing miners stay off, unwired, exactly as before this module existed."""
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -400,3 +409,30 @@ async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
             {"proposal": r["proposal"], "expires_at": r["expires_at"]})
     return {"count": len(live),
            "by_owner": {owner: rows[:3] for owner, rows in by_owner.items()}}
+
+
+async def guarded_miner_tick(
+    actions: Actions, miner: str, fn: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Item 4's own tick discipline (decision ac892cd9): "a miner tick that raises
+    writes a failure receipt first" — before the exception is allowed to propagate or
+    the tick is otherwise abandoned, so a crashed tick is a durable, queryable fact,
+    never silent. Reuses `open_or_annotate_persisting_alarm` (capture.py) rather than a
+    new alarm shape — the same door deploy_guard's own boot-drift alarm and
+    fleet_reconcile's own blind-tick alarm already use, converging on the same live-
+    desk `drift_alarms` filter for free. `fn` is a zero-arg async callable (never an
+    already-created coroutine — this house's own footgun a coroutine can only be
+    awaited once would otherwise invite) so a caller can retry the SAME tick through
+    this guard more than once.
+
+    No existing miner calls this yet — existing miners stay off, unwired, exactly as
+    every other item in this wave — this is the primitive future miner wiring adopts."""
+    from src.orchestrator.capture import open_or_annotate_persisting_alarm
+
+    try:
+        return await fn()
+    except Exception as exc:
+        await open_or_annotate_persisting_alarm(
+            actions, f"miner {miner}'s tick raised {type(exc).__name__}",
+            kind="obligation", severity="alarm", source=f"miner:{miner}")
+        raise

@@ -3,18 +3,23 @@ propose() write door, with the last-resort law wired against derive_or_abstain's
 abstention shape. Item 2: accept()/reject() and the read-only proposals_band(). Item
 3: the daily budget per (miner, owner) pair, scaled by the trailing 30-day acceptance
 rate, hard-stopped to zero on a 7-day window of rejections with no acceptances (with a
-receipt Thread to the owner). No telemetry, no miner wiring here — those are their
-own, later commits, per Thoth's "one commit per item" instruction."""
+receipt Thread to the owner). Item 4: guarded_miner_tick, the failure-receipt-first
+tick discipline (per-pair telemetry itself lives in test_digest.py, beside the rest of
+fleet_digest's own streams). No miner wiring here — that's its own, later commit, per
+Thoth's "one commit per item" instruction."""
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from src.actions.core import Actions
 from src.orchestrator import capture
+from src.orchestrator.capture import _thread_canon
 from src.orchestrator.proposals import (
     _NEW_PAIR_STARTER_BUDGET,
     accept,
+    guarded_miner_tick,
     proposals_band,
     propose,
     reject,
@@ -333,8 +338,6 @@ async def test_propose_scales_the_budget_up_with_a_good_trailing_acceptance_rate
 async def test_propose_hard_stops_to_zero_on_a_7_day_rejection_only_window(
     actions: Actions,
 ) -> None:
-    from src.orchestrator.capture import _thread_canon
-
     # an old good record that a naive 30-day rate alone would still trust...
     twenty_days_ago = datetime.now(UTC) - timedelta(days=20)
     for _ in range(4):
@@ -378,6 +381,36 @@ async def test_propose_hard_stops_to_zero_on_a_7_day_rejection_only_window(
         "SELECT count(*) FROM objects WHERE type='Thread' AND canonical=$1",
         _thread_canon(summary, None))
     assert n == 1
+
+
+async def test_guarded_miner_tick_writes_a_receipt_before_the_exception_propagates(
+    actions: Actions,
+) -> None:
+    async def _raising() -> None:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await guarded_miner_tick(actions, "flaky-miner", _raising)
+
+    thread_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Thread' AND canonical=$1",
+        _thread_canon("miner flaky-miner's tick raised RuntimeError", None))
+    assert thread_id is not None
+    severity = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='severity'", thread_id)
+    assert severity == "alarm"
+
+
+async def test_guarded_miner_tick_returns_the_result_when_nothing_raises(
+    actions: Actions,
+) -> None:
+    out = await guarded_miner_tick(actions, "clean-miner", lambda: _return(42))
+    assert out == 42
+
+
+async def _return(value: int) -> int:
+    return value
 
 
 async def test_proposals_band_excludes_a_resolved_proposal(actions: Actions) -> None:
