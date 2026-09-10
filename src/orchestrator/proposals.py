@@ -30,8 +30,9 @@ surfaces' own queries allowlist 'Proposal' — a caller extending any of them to
 object type must do so explicitly, so this type never appears anywhere except the
 read-only proposals band this same wave adds deliberately (item 2's own desk surface).
 
-ITEM 2 (this pass): accept()/reject() — accept() mints the REAL object/link named by
-the Proposal's own `candidate`, verbatim, under the ACCEPTING actor's own self_declared
+ITEM 2 (already landed, commit 8e44e78): accept()/reject() — accept() mints the REAL
+object/link named by the Proposal's own `candidate`, verbatim, under the ACCEPTING
+actor's own self_declared
 testimony (never re-using the miner's derived grade), citing the Proposal back on the
 minted thing itself (a link's own `properties.accepted_from`, or an object's own
 `accepted_from_proposal` property — this kernel's only two provenance-carrying slots,
@@ -40,9 +41,23 @@ mandatory reason, written back where the SAME miner can read it on its next tick
 rolling signal item 3's budget-throttle will read). Both refuse on anything but
 status='proposed', and refuse an expired Proposal even before any sweep marks it so.
 
-DELIBERATELY NOT BUILT HERE (Thoth's "one commit per item"): the daily budget/trailing
-acceptance rate (the rest of item 3), telemetry (item 4), and any miner wiring —
-existing miners stay off, unwired, exactly as before this module existed."""
+ITEM 3 (this pass), THE BUDGET (decision ac892cd9, Thoth mail 8920 confirming the two
+window lengths): a daily budget per (miner, owner) PAIR that scales with that pair's
+own trailing 30-day acceptance rate (accepted / (accepted+rejected) of resolved
+Proposals in the window) — `_DAILY_BUDGET_BASE` proposals/day at a perfect record,
+scaling down linearly, `_NEW_PAIR_STARTER_BUDGET` for a pair with no resolved history
+yet (neither the full trust of a proven record nor the total silence of zero). A
+7-day window with rejections but ZERO acceptances (Thoth's own explicit number) hard-
+stops the budget to zero regardless of the 30-day rate — a pair actively producing
+nothing but rejections right now doesn't get to coast on an old good record — and
+fires a RECEIPT (a Thread, kind='fyi', owner=the Proposal owner) naming the rejection
+count that triggered it. `open_thread`'s own idempotency-on-summary-hash is the dedup:
+the receipt's summary embeds the day, so it fires at most once per (miner, owner, day)
+without a second piece of state to track it.
+
+DELIBERATELY NOT BUILT HERE (Thoth's "one commit per item"): telemetry (item 4) and
+any miner wiring — existing miners stay off, unwired, exactly as before this module
+existed."""
 from __future__ import annotations
 
 import uuid
@@ -52,6 +67,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.orchestrator.capture import open_thread
 from src.orchestrator.owner_normalization import resolve_owner_seat
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
@@ -60,6 +76,10 @@ _EC = EvidenceClass.DERIVED.value
 _CONFIDENCE_CAP = confidence_for(EvidenceClass.DERIVED)
 _EXPIRY_DAYS = 14
 _LEGAL_CANDIDATE_KINDS = ("link", "object")
+_DAILY_BUDGET_BASE = 5
+_NEW_PAIR_STARTER_BUDGET = 1
+_TRAILING_WINDOW_DAYS = 30
+_ZERO_ACCEPTANCE_WINDOW_DAYS = 7
 
 
 def _validate_candidate(candidate: dict[str, Any]) -> str | None:
@@ -99,6 +119,80 @@ async def _live_abstention_exists(
     return row is not None
 
 
+async def _resolved_count_since(
+    pool: asyncpg.Pool, miner: str, owner: str, status: str, since: datetime,
+) -> int:
+    """How many Proposals for this (miner, owner) pair reached `status` at or after
+    `since` — the raw count `_throttle_status` combines into a rate, kept as its own
+    query (never a Python-side filter of a wider fetch) so the window is the DATABASE's
+    own comparison, matching this house's existing trailing-window convention
+    (settle.py, digest.py: `observed_at >= $n` in the query itself)."""
+    count = await pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Proposal' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='miner' AND a.value #>> '{}' = $1) "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='owner' AND a.value #>> '{}' = $2) "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $3 "
+        "AND (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) >= $4",
+        miner, owner, status, since,
+    )
+    return int(count or 0)
+
+
+async def _proposals_made_since(
+    pool: asyncpg.Pool, miner: str, owner: str, since: datetime,
+) -> int:
+    """How many Proposals this (miner, owner) pair has MINTED (any status) since
+    `since` — the daily budget's own spend counter. Mint time is the `miner` property's
+    own `observed_at` (asserted once at propose(), never resuperseded), never the
+    Proposal object's `created_at` (this kernel's own append-only convention keeps that
+    off every read path — `object_events`, not a mutable column, is the only truth for
+    "when")."""
+    count = await pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Proposal' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='owner' AND a.value #>> '{}' = $2) "
+        "AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) = $1 "
+        "AND (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) >= $3",
+        miner, owner, since,
+    )
+    return int(count or 0)
+
+
+async def _throttle_status(
+    pool: asyncpg.Pool, miner: str, owner: str,
+) -> dict[str, Any]:
+    """The daily budget for this (miner, owner) pair, right now. Scales
+    `_DAILY_BUDGET_BASE` linearly by the pair's own trailing 30-day acceptance rate
+    (accepted / (accepted+rejected) of RESOLVED Proposals in the window); a pair with
+    no resolved history yet gets `_NEW_PAIR_STARTER_BUDGET`, neither a proven record's
+    full trust nor a bad one's zero. Overrides that entirely to budget=0, `throttled`
+    True, when the trailing 7-day window holds at least one rejection and zero
+    acceptances (Thoth's own explicit number, mail 8920) — a pair producing nothing but
+    rejections right now doesn't coast on an old good rate."""
+    now = datetime.now(UTC)
+    window_30 = now - timedelta(days=_TRAILING_WINDOW_DAYS)
+    window_7 = now - timedelta(days=_ZERO_ACCEPTANCE_WINDOW_DAYS)
+    accepted_30 = await _resolved_count_since(pool, miner, owner, "accepted", window_30)
+    rejected_30 = await _resolved_count_since(pool, miner, owner, "rejected", window_30)
+    accepted_7 = await _resolved_count_since(pool, miner, owner, "accepted", window_7)
+    rejected_7 = await _resolved_count_since(pool, miner, owner, "rejected", window_7)
+    total_30 = accepted_30 + rejected_30
+    acceptance_rate = (accepted_30 / total_30) if total_30 else None
+    if rejected_7 > 0 and accepted_7 == 0:
+        return {"budget": 0, "throttled": True, "rejected_7d": rejected_7,
+               "acceptance_rate": acceptance_rate}
+    budget = (_NEW_PAIR_STARTER_BUDGET if acceptance_rate is None
+             else round(_DAILY_BUDGET_BASE * acceptance_rate))
+    return {"budget": budget, "throttled": False, "rejected_7d": rejected_7,
+           "acceptance_rate": acceptance_rate}
+
+
 async def propose(
     actions: Actions, *, from_id: uuid.UUID, link_type: str, candidate: dict[str, Any],
     confidence: float, owner: str, miner: str, actor: str,
@@ -110,7 +204,11 @@ async def propose(
       (2) `owner` does not resolve via `resolve_owner_seat` to an active Seat or the
           literal 'operator' (the one owner law, applied here exactly as it is on
           every other durable object this house mints);
-      (3) `candidate` is not one of the two legal shapes (`kind`: 'link' or 'object').
+      (3) `candidate` is not one of the two legal shapes (`kind`: 'link' or 'object');
+      (4) the (miner, owner) pair's own daily budget is spent (item 3's throttle,
+          `_throttle_status` — scales with the pair's trailing 30-day acceptance rate,
+          hard-stopped to zero on a 7-day window of rejections with no acceptances,
+          which also fires a receipt Thread to the owner naming why).
     `confidence` is capped at the DERIVED tier (0.4) regardless of what's passed — a
     miner's own guess is never graded above what a mechanical sweep already earns.
     Returns `{"error": ...}` on any refusal, naming which law refused it; otherwise
@@ -127,6 +225,27 @@ async def propose(
         return {"error": f"owner {owner!r} does not resolve to an active seat or "
                          "'operator' — a Proposal is never minted ownerless"}
     now = datetime.now(UTC)
+    throttle = await _throttle_status(actions.pool, miner, resolved_owner)
+    if throttle["throttled"]:
+        today = now.date().isoformat()
+        await open_thread(
+            actions,
+            f"Miner {miner} throttled to zero proposals for {resolved_owner}: "
+            f"{throttle['rejected_7d']} rejection(s) in the trailing "
+            f"{_ZERO_ACCEPTANCE_WINDOW_DAYS} days with zero acceptances (as of {today})",
+            kind="fyi", owner=resolved_owner, source=miner)
+        return {"error": f"{miner} is throttled to zero proposals for {resolved_owner} "
+                         f"— {throttle['rejected_7d']} rejection(s) in the trailing "
+                         f"{_ZERO_ACCEPTANCE_WINDOW_DAYS} days with zero acceptances "
+                         "(the last-resort budget's own hard stop); a receipt Thread "
+                         "was opened for the owner"}
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    spent_today = await _proposals_made_since(actions.pool, miner, resolved_owner, day_start)
+    if spent_today >= throttle["budget"]:
+        return {"error": f"{miner}'s daily budget for {resolved_owner} is "
+                         f"{throttle['budget']} and {spent_today} proposal(s) already "
+                         "made today (trailing 30-day acceptance rate "
+                         f"{throttle['acceptance_rate']!r}) — try again tomorrow"}
     capped_confidence = min(confidence, _CONFIDENCE_CAP)
     expires_at = (now + timedelta(days=_EXPIRY_DAYS)).isoformat()
     canonical = f"proposal:{uuid.uuid4()}"
