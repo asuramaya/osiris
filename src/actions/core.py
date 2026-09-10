@@ -215,30 +215,56 @@ class Actions:
                 "SELECT pg_advisory_xact_lock(hashtext($1))",
                 f"{object_id}:{name}:{source_id}",
             )
+            # The (object,name,source)-scoped "current" row IS is_current=true for that
+            # triple (supersession is same-source-only, so at most one row per triple ever
+            # carries the flag — migration 0047's own invariant). Reading it this way is one
+            # indexed lookup on assertions_is_current_idx (object_id,name) WHERE is_current,
+            # filtered by source_id — O(1), never the anti-join's O(history-depth) scan the
+            # old `NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=a.id)` form paid
+            # on every single write (thread 2a280e07: measured live, 42 (object,name,source)
+            # triples over 1000 rows deep, 24.9% of assertions_hot, four unbounded-reassertion
+            # sources — the write path never needed to re-derive "not superseded", the very
+            # thing is_current already tracks for it).
             prior_row = await conn.fetchrow(
                 "SELECT a.id, a.value, a.observed_at, a.confidence, a.evidence_class "
                 "FROM assertions a "
-                "WHERE a.object_id=$1 AND a.name=$2 AND a.source_id=$3 "
-                "  AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=a.id) "
-                "ORDER BY a.observed_at DESC, a.created_at DESC LIMIT 1",
+                "WHERE a.object_id=$1 AND a.name=$2 AND a.source_id=$3 AND a.is_current "
+                "LIMIT 1",
                 object_id,
                 name,
                 source_id,
             )
             prior = prior_row["id"] if prior_row else None
-            # A byte-identical re-assertion carries ZERO information — same source re-observing
-            # the same value at the same instant (a re-ingest of an unchanged commit re-asserts
-            # with the identical authored-date clock). Skip it, or a 600s cron stacks unbounded
-            # supersession chains (live: one commit's summary reached 286 rows). A same-value
-            # assertion at a NEW observed_at still lands — "confirmed still true at T2" is real
-            # information. No audit/outbox on skip: nothing happened.
+            # WRITE-SIDE NO-OP GUARD (operator ruling on thread 2a280e07, mail 9240: "both —
+            # kernel guard and fix the sources"): same source, same VALUE, CONFIDENCE, and
+            # EVIDENCE_CLASS as its own current row → no NEW row, ever — that triple is what
+            # actually repeats identically on every tick for the four measured sources (git
+            # ingest, the mount-heartbeat self-assert, disk-census, half-heal-detect), all of
+            # which hold value/confidence/evidence_class constant and only advance observed_at.
+            # observed_at is DELIBERATELY excluded from the growth decision (that clock is
+            # exactly what a reassertion cron always advances) but NOT thrown away: a genuinely
+            # NEWER observation bumps the existing row's own observed_at in place (one indexed
+            # UPDATE by primary key, same cost class as the is_current flip below) rather than
+            # forking a new supersession link — so "confirmed still true at T2" still moves
+            # last_touched/recency reads (compositions.py's open_thread_wall, ruling a4bd555c)
+            # forward, with zero row growth. A genuine CONFIDENCE or EVIDENCE_CLASS change,
+            # even at an unchanged value, is real information (test_lap_lint's coin-flip
+            # specimen: the same "Berlin" reasserted at 0.99 must still break a 0.9/0.9 tie)
+            # and always falls through to a real new row below, same as a changed value would.
+            # `confidence` is stored `real` (Postgres float4) — an exact Python-float
+            # equality after the round trip fails for ordinary decimals (0.9 comes back
+            # 0.8999999761581421), which would have silently defeated even the OLD narrower
+            # guard's own confidence check every time it ran. abs-tolerance comparison
+            # matches float4's own ~7-significant-digit precision.
             if (
                 prior_row is not None
                 and prior_row["value"] == value
-                and prior_row["observed_at"] == observed_at
-                and float(prior_row["confidence"]) == float(confidence)
+                and abs(float(prior_row["confidence"]) - float(confidence)) < 1e-6
                 and prior_row["evidence_class"] == evidence_class
             ):
+                if observed_at > prior_row["observed_at"]:
+                    await conn.execute(
+                        "UPDATE assertions SET observed_at=$2 WHERE id=$1", prior, observed_at)
                 return cast(int, prior_row["id"])
             new_id = cast(
                 int,

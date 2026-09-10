@@ -436,9 +436,10 @@ async def test_repair_stale_pile_corrects_the_summary_when_the_pile_partially_dr
 
 
 async def test_repair_stale_pile_never_double_corrects_on_a_rerun(actions: Actions) -> None:
-    """assert_property's own within-source supersede makes this genuinely idempotent, not
-    just claimed: a second run against an unchanged live count re-asserts the SAME
-    corrected_summary rather than growing a pile of duplicates."""
+    """assert_property's own write-side no-op guard (operator ruling, thread 2a280e07,
+    mail 9240) makes this genuinely idempotent: a second run against an unchanged live
+    count reasserts the SAME corrected_summary at the SAME confidence/evidence_class, so
+    it writes no new row at all — not even a second, immediately-superseded one."""
     t = await _mint_pile_thread(actions, "rerunproj", 38)
     for i in range(27):
         await _mined(actions, f"thread:rerun-cand-{i}", f"real loose end {i}",
@@ -449,11 +450,11 @@ async def test_repair_stale_pile_never_double_corrects_on_a_rerun(actions: Actio
         actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='corrected_summary'", t)
-    assert n == 2  # two writes landed (event-sourced, never a delete)...
+    assert n == 1  # the rerun's own identical correction never grew a second row
     current = await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
         "AND name='corrected_summary'", t)
-    assert current == 1  # ...but exactly one is CURRENT — the second superseded the first
+    assert current == 1
 
 
 async def test_repair_stale_pile_never_touches_a_hand_written_thread(actions: Actions) -> None:
