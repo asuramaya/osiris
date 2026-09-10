@@ -84,6 +84,48 @@ async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='works_in'", a) == 1
 
 
+async def test_register_agent_remount_does_not_regrow_its_own_assertions(
+    actions: Actions,
+) -> None:
+    """Ruling 0623995e (thread 2a280e07): register_agent runs on EVERY mount() — a
+    long-lived heartbeat-style agent re-mounts every tick with an unchanged
+    name/session/identity_resolved/cwd. assert_property's own kernel byte-dup guard
+    compares `observed_at` too, so a fresh wall-clock `now` on every call defeats it —
+    two consecutive re-mounts must still not grow this agent's own assertion history
+    for a value that never actually changed."""
+    ident = resolve_identity(cwd="/w/heartbeat-proj", session="hb-sess", model="claude-fable-5")
+    a = await register_agent(actions, ident, actor="analyst:operator")
+
+    def count(name: str) -> Any:
+        return actions.pool.fetchval(
+            "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2", a, name)
+
+    before = {n: await count(n) for n in ("name", "session", "identity_resolved", "cwd")}
+    assert before["name"] == 1 and before["identity_resolved"] == 1 and before["cwd"] == 1
+
+    await register_agent(actions, ident, actor="analyst:operator")  # identical re-mount
+    after = {n: await count(n) for n in ("name", "session", "identity_resolved", "cwd")}
+    assert after == before, f"unchanged identity regrew on re-mount: {before} -> {after}"
+
+
+async def test_register_agent_remount_with_a_real_cwd_change_still_writes(
+    actions: Actions,
+) -> None:
+    """The no-op guard must never suppress a REAL change — a re-mount from a genuinely
+    different cwd still records the new value."""
+    first = resolve_identity(cwd="/w/proj-a", session="hb-sess2", model="claude-fable-5")
+    a = await register_agent(actions, first, actor="analyst:operator")
+    second = resolve_identity(cwd="/w/proj-b", session="hb-sess2", model="claude-fable-5")
+    a2 = await register_agent(actions, second, actor="analyst:operator")
+    assert a2 == a
+    cwd_rows = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='cwd'", a)
+    assert cwd_rows == 2, "a genuine cwd change must still be written"
+    current_cwd = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='cwd'", a)
+    assert current_cwd == "/w/proj-b"
+
+
 # --- _resolve_or_mint_project refuses a degenerate bare label (thread 05793d4a — repo:?,
 # minted 2026-07-18, 18 live links, no genuine identity: task #107's own capture.py
 # _validate_repo_name was never actually wired into this path). ------------------------
@@ -5589,6 +5631,51 @@ async def test_a_half_healed_phantom_report_is_idempotent(actions: Actions) -> N
         "    AND a.name='summary' AND a.value #>> '{}' ILIKE $1) LIMIT 1)",
         f"%HALF-HEALED PHANTOM: {phantom}%")
     assert count == 1, "open_thread's own idempotency must collapse repeat sightings to one"
+
+
+async def test_a_still_open_half_healed_phantom_does_not_regrow_status_on_resweep(
+    actions: Actions,
+) -> None:
+    """Ruling 0623995e (thread 2a280e07): open_thread is idempotent on the summary hash
+    but UNCONDITIONALLY re-asserts status='open' on a dedup hit — so a still-present,
+    still-OPEN sighting used to call open_thread again on every 15-minute sweep, re-writing
+    the identical status forever (~1,092 rows for this one triple, live). A resweep of a
+    condition that is still open (never resolved) must not grow the Thread's own
+    status/summary assertion history — the sighting is recorded via annotation instead,
+    same as the already-resolved branch."""
+    from src.orchestrator.agents import (
+        _DEBOUNCE_SRC,
+        EvidenceClass,
+        confidence_for,
+        fold_existing_zero_turn_phantoms,
+        mint_heir,
+    )
+
+    root = await actions.create_or_find_object("Agent", "agent:hh0004", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:hh0004", root, because="live-swap",
+                                           succession="a → b")
+    now = datetime.now(UTC)
+    do = EvidenceClass.DIRECT_OBSERVATION
+    conf = confidence_for(do)
+    for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC)):
+        await actions.assert_property(phantom_oid, k, v, _DEBOUNCE_SRC, now, conf,
+                                      evidence_class=do.value)
+
+    await fold_existing_zero_turn_phantoms(actions)
+    thread_id = await actions.pool.fetchval(
+        "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
+        "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE $1",
+        f"%HALF-HEALED PHANTOM: {phantom}%")
+    assert thread_id is not None
+    status_rows_before = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='status'", thread_id)
+    assert status_rows_before == 1
+
+    await fold_existing_zero_turn_phantoms(actions)  # still open, resweep
+    status_rows_after = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='status'", thread_id)
+    assert status_rows_after == status_rows_before, \
+        "a still-open sighting re-asserted its own unchanged status on resweep"
 
 
 async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_resweep(

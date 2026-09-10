@@ -154,39 +154,25 @@ async def ingest_repo(
                                   case_id=case_id, evidence_class=_EC)
         existing.add((frm, to, typ))
 
-    devs: set[str] = set()
+    # A DEV'S NAME/EMAIL IS ONE VALUE FOR THE WHOLE RUN (operator ruling, thread 2a280e07,
+    # mail 9240 — "fix the sources"): the naive per-commit assert reasserted both on EVERY
+    # commit by the same author, live-measured at 166,786/166,782 rows for one Person — this
+    # repo's own git history is exactly the 8-12-minute-cron source Thoth's dispatch named.
+    # CHECKED ONCE PER DEV PER RUN, USING THE DEV'S LAST (most recent) COMMIT IN THIS WALK,
+    # NEVER THE FIRST — `commits` is oldest-first (`--reverse`), so a dev renamed partway
+    # through history has an earlier name at first sighting and the real, current one only
+    # at their LAST commit; a "first commit wins" check (the bug this replaces) locks onto
+    # the stale name forever once seen once, and a genuine rename never lands on re-ingest.
+    # `dev_latest` is overwritten on every commit for that dev, so after the full walk it
+    # holds each dev's most recent commit's own name/email — the ONE value checked against
+    # the graph, and written only if it actually differs.
+    dev_latest: dict[str, tuple[uuid.UUID, str, str | None, datetime]] = {}
     for c in commits:
         observed = datetime.fromisoformat(c.date)
         short = c.sha[:12]
 
         dev = await actions.create_or_find_object("Person", _dev_canonical(c), source_id, case_id)
-        # A DEV'S NAME/EMAIL IS ONE VALUE FOR THE WHOLE RUN (operator ruling, thread
-        # 2a280e07, mail 9240 — "fix the sources"): the naive per-commit assert reasserted
-        # both on EVERY commit by the same author, live-measured at 166,786/166,782 rows
-        # for one Person — this repo's own git history is exactly the 8-12-minute-cron
-        # source Thoth's dispatch named. Checked once per dev per run (the `devs` set
-        # already tracked this — reused, not duplicated) against the CURRENT graph value
-        # rather than this run's own prior commit, so a genuine rename across runs still
-        # lands and a rerun of an unchanged history writes nothing at all.
-        canon = _dev_canonical(c)
-        if canon not in devs:
-            devs.add(canon)
-            current_name = await actions.pool.fetchval(
-                "SELECT a.value #>> '{}' FROM current_assertions a "
-                "WHERE a.object_id=$1 AND a.name='name' AND a.source_id=$2 LIMIT 1",
-                dev, source_id)
-            if current_name != c.author_name:
-                await actions.assert_property(dev, "name", c.author_name, source_id, observed,
-                                              _CONF, case_id=case_id, evidence_class=_EC)
-            if c.author_email:
-                current_email = await actions.pool.fetchval(
-                    "SELECT a.value #>> '{}' FROM current_assertions a "
-                    "WHERE a.object_id=$1 AND a.name='email' AND a.source_id=$2 LIMIT 1",
-                    dev, source_id)
-                if current_email != c.author_email:
-                    await actions.assert_property(
-                        dev, "email", c.author_email, source_id, observed, _CONF,
-                        case_id=case_id, evidence_class=_EC)
+        dev_latest[_dev_canonical(c)] = (dev, c.author_name, c.author_email, observed)
 
         cm = await actions.create_or_find_object("Commit", f"commit:{short}", source_id, case_id)
         await actions.assert_property(cm, "subject", c.subject, source_id, observed, _CONF,
@@ -214,7 +200,25 @@ async def ingest_repo(
             )
             await _link(cm, par, "follows", observed)
 
-    return {"repo": name, "commits": len(commits), "developers": len(devs)}
+    for dev, author_name, author_email, observed in dev_latest.values():
+        current_name = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='name' AND a.source_id=$2 LIMIT 1",
+            dev, source_id)
+        if current_name != author_name:
+            await actions.assert_property(dev, "name", author_name, source_id, observed,
+                                          _CONF, case_id=case_id, evidence_class=_EC)
+        if author_email:
+            current_email = await actions.pool.fetchval(
+                "SELECT a.value #>> '{}' FROM current_assertions a "
+                "WHERE a.object_id=$1 AND a.name='email' AND a.source_id=$2 LIMIT 1",
+                dev, source_id)
+            if current_email != author_email:
+                await actions.assert_property(
+                    dev, "email", author_email, source_id, observed, _CONF,
+                    case_id=case_id, evidence_class=_EC)
+
+    return {"repo": name, "commits": len(commits), "developers": len(dev_latest)}
 
 
 def main() -> None:  # pragma: no cover - CLI
