@@ -1866,7 +1866,10 @@ async def dispatch_dm(
       resumed            — the addressee's own session was continued with the mail as its
                            next turn (the fallback push when the daemon doesn't hold it)
       poked              — typed into the addressee's manager-hosted OPEN window (rare now)
-      delivered          — the addressee is MID-TURN; its own turn's end surfaces the DM
+      mid-turn           — the addressee is MID-TURN; its own turn's end surfaces the DM
+                           (renamed from the old, misleading "delivered" — 5af93c89: the
+                           addressee has NOT read it yet, and the word must never claim
+                           otherwise)
       queued-fyi         — grade='fyi' never wakes: the grammar's loop terminator (an ack at
                            the addressee's next natural turn settles it, no turn minted)
       queued-paused      — an explicit pause holds the seat; mail waits in the box
@@ -2045,7 +2048,7 @@ async def dispatch_dm(
             else Path.home() / ".claude" / "projects"
         if await asyncio.to_thread(
                 _turn_fresh_sync, root, resume[0], st.osiris_dm_active_secs, resume[3]):
-            return {"mode": "delivered",
+            return {"mode": "mid-turn",
                     "detail": "the addressee's transcript is moving right now (genuinely "
                               "mid-turn) — its own turn's end surfaces the DM; no second "
                               "process beside a working mind"}
@@ -2609,7 +2612,12 @@ _WAKE_STATUS = {
     # unreachable (ruling 94c2e7e8, dispatch 5398 leg 1) — the fresh body's first turn
     # is its own inbox() read, the same "next turn" framing "resumed" already carries.
     "fresh-heir": "delivered",
-    "delivered": "mid-turn",  # dispatch_dm's own word for this means mid-turn, never delivered
+    # wave 16 item 2 (5af93c89): dispatch_dm's own raw mode is named "mid-turn" directly
+    # now (it used to be the literal word "delivered", which lied about an unread DM) —
+    # this entry is the identity mapping, kept explicit rather than falling through to
+    # the dict's own "queued" default, since "mid-turn" is its own distinct external
+    # status, not a queue state.
+    "mid-turn": "mid-turn",
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",
     "never-mounted": "no-live-body",
@@ -4898,7 +4906,7 @@ async def trigger_mail_tick(
         elif mode == "poked":
             report["poked"] += 1
             report["woke"] += 1
-        elif mode == "delivered":
+        elif mode == "mid-turn":
             report["owner_live"] += 1
         elif mode == "window-busy":
             report["window_busy"] += 1
