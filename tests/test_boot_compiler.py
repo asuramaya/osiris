@@ -15,6 +15,8 @@ from src.orchestrator.boot_compiler import (
     _armed_practices,
     _has_any_markers,
     _practice_block,
+    apply_boot_drift_nudge_sweep,
+    boot_drift_gaps,
     boot_rollout_gap_notes,
     boot_rollout_gaps,
     compile_managed_body,
@@ -33,6 +35,7 @@ from src.orchestrator.capture import (
     record_practice,
     refute_practice,
 )
+from src.orchestrator.compositions import _props
 from src.orchestrator.mintseat import mint_seat
 from src.orchestrator.seats import bind_seat_tree, ensure_seat, peer_seats
 
@@ -697,6 +700,103 @@ def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
 
 def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:
     assert boot_rollout_gap_notes([]) == []
+
+
+# ═══ THE DRIFT CHECK (thread f37aaf1b, v1.1 follow-up piece 1) ══════════════════════════
+
+
+async def test_boot_drift_gaps_flags_a_seat_stamped_with_an_older_version(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="drifthouse", handle="Drifted",
+                             anchor_cwd=str(tmp_path / "drifted"), source="test")
+    obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.assert_property(obj, "boot_compiled_version", "stale-hash-000000",
+                                  "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    gaps = await boot_drift_gaps(actions.pool)
+    mine = [g for g in gaps if g["seat_id"] == seat["seat_id"]]
+    assert len(mine) == 1
+    assert mine[0]["stamped_version"] == "stale-hash-000000"
+    assert mine[0]["current_version"] == template_version()
+
+
+async def test_boot_drift_gaps_silent_when_stamped_matches_current(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="drifthouse", handle="Current",
+                             anchor_cwd=str(tmp_path / "current"), source="test")
+    obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.assert_property(obj, "boot_compiled_version", template_version(),
+                                  "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    gaps = await boot_drift_gaps(actions.pool)
+    assert seat["seat_id"] not in {g["seat_id"] for g in gaps}
+
+
+async def test_boot_drift_gaps_silent_when_no_testimony_at_all(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No `boot_compiled_version` yet (never reissued since this property started being
+    written, or still mid-rollout) is boot_rollout_gaps' own population — NOT a drift
+    gap, kept distinct rather than double-counted under a fix that wouldn't address it."""
+    seat = await ensure_seat(actions, house="drifthouse", handle="NeverReissued",
+                             anchor_cwd=str(tmp_path / "never_reissued"), source="test")
+    gaps = await boot_drift_gaps(actions.pool)
+    assert seat["seat_id"] not in {g["seat_id"] for g in gaps}
+
+
+async def test_boot_drift_nudge_sweep_opens_an_obligation_naming_the_fix(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    seat = await ensure_seat(actions, house="drifthouse", handle="Nudgeme",
+                             anchor_cwd=str(tmp_path / "nudgeme"), source="test")
+    obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.assert_property(obj, "boot_compiled_version", "stale-hash-111111",
+                                  "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert out["nudged"] == [seat["seat_id"]]
+    assert out["errors"] == []
+    # canonical is a summary hash, not seat-addressable — find via owner instead
+    row = await actions.pool.fetchrow(
+        "SELECT ca.object_id FROM current_assertions ca "
+        "WHERE ca.name='owner' AND ca.value #>> '{}' = $1", seat["seat_id"])
+    assert row is not None
+    props = await _props(actions.pool, row["object_id"])
+    assert props["kind"] == "obligation"
+    assert "reissue_office(adopt=True)" in props["summary"]
+    assert props["arc"] == "Fleet-Hygiene"
+
+
+async def test_boot_drift_nudge_sweep_is_idempotent_on_repeat_ticks(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """open_thread's own summary-hash dedup means a second sweep over the SAME
+    (stamped, current) pair mints nothing new — the natural no-repeat-nudge behavior,
+    no separate 'already nudged' marker needed."""
+    seat = await ensure_seat(actions, house="drifthouse", handle="Nudgetwice",
+                             anchor_cwd=str(tmp_path / "nudgetwice"), source="test")
+    obj = await actions.create_or_find_object("Seat", seat["seat_id"], "test")
+    await actions.assert_property(obj, "boot_compiled_version", "stale-hash-222222",
+                                  "test", datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
+    await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    after_first = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'")
+    await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    after_second = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Thread'")
+    assert after_first == before + 1
+    assert after_second == after_first
+
+
+async def test_boot_drift_nudge_sweep_silent_when_nothing_is_stale(
+    actions: Actions,
+) -> None:
+    out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
+    assert out == {"gaps": 0, "nudged": [], "errors": []}
 
 
 # ═══ THE CHARTER RENDERS TRUE AFTER A REISSUE (thread fba386dc item 4) ══════════════════

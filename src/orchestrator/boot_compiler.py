@@ -682,6 +682,87 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
             for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"]))]
 
 
+# ═══════════ THE DRIFT CHECK (thread f37aaf1b, v1.1 follow-up piece 1) ═══════════
+# boot_rollout_gaps above finds a seat with NO compiled section; this finds the OTHER
+# gap v1.1 shipped without — a seat that HAS one, compiled against an OLDER
+# template_version() than the one live today, that nothing proactively surfaces
+# ("nothing reads it proactively yet, a stale seat only gets recompiled on an explicit
+# reissue_office call" — the thread's own words). reissue_office's own testimony write
+# (line ~604 above: `boot_compiled_version` on the Seat object) is exactly the durable
+# read-back that comment already anticipated — never a re-parse of the file's own marker.
+
+
+async def boot_drift_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
+    """Every active Seat whose durable `boot_compiled_version` testimony (asserted by
+    reissue_office, never re-derived from the file) names an OLDER template_version()
+    than the one live right now. A seat with NO testimony yet (never reissued since this
+    property started being written, or still mid-rollout per boot_rollout_gaps above) is
+    NOT a drift gap — that population is boot_rollout_gaps' own, kept distinct rather than
+    folded in, same "only count what a fix actually addresses" discipline that function's
+    own docstring already states. Read-only."""
+    from src.orchestrator.seats import seat_facts
+
+    current = template_version()
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical AS seat_id FROM objects o WHERE o.type='Seat' "
+        "AND o.status='active' ORDER BY o.canonical")
+    gaps: list[dict[str, str]] = []
+    for row in rows:
+        seat_id = row["seat_id"]
+        facts = await seat_facts(pool, seat_id)
+        handle, house = facts.get("handle"), facts.get("house")
+        if not handle:
+            continue
+        stamped = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='boot_compiled_version' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", row["id"])
+        if stamped and stamped != current:
+            gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
+                        "stamped_version": stamped, "current_version": current})
+    return gaps
+
+
+async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[str, Any]:
+    """Nudges each drifted seat's own holder with an `open_thread(kind='obligation')` —
+    naming reissue_office(adopt=True) as the fix, same as boot_rollout_gap_notes' own
+    never_compiled line above. Deliberately a NUDGE, never an auto-reissue: reissue_office
+    is a deliberate act with its own `because` testimony and its own refusal law for a
+    damaged marker span (msg 1819) — a cron silently recompiling every stale office on a
+    schedule would fire that refusal unattended, and would remint every reissue's own
+    `because` under a synthetic cron reason no future reader could trust the way a real
+    seat's own hand-typed `because` reads. `open_thread` is idempotent on its own summary
+    hash (docstring, capture.py), so a call with the SAME (stamped, current) pair every
+    900s mints nothing new after the first — the natural dedup, no separate 'already
+    nudged' marker to invent or go stale itself; a fresh template bump or a seat's own
+    reissue changes the pair, which is exactly when a FRESH nudge is correct."""
+    from src.orchestrator.capture import open_thread
+
+    gaps = await boot_drift_gaps(actions.pool)
+    nudged: list[str] = []
+    errors: list[dict[str, str]] = []
+    for g in gaps:
+        summary = (
+            f"{g['handle']}'s boot orders are stale — compiled against template "
+            f"v{g['stamped_version']}, current is v{g['current_version']}. "
+            "reissue_office(adopt=True) would refresh the managed section.")
+        try:
+            # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (thread b5ae6773's
+            # owner law, capture.py's own open_thread comment ~3264: "an owner is a seat
+            # id or 'operator', never a bare handle" — the stored value must already
+            # satisfy the law itself, not just look plausible; a bare handle would only
+            # get canonicalized LATER by migration_0060's own normalization pass, so
+            # stamping the canonical directly here is correct on the first write, not a
+            # style choice).
+            await open_thread(
+                actions, summary, kind="obligation", owner=g["seat_id"],
+                arc="Fleet-Hygiene", source=actor)
+            nudged.append(g["seat_id"])
+        except Exception as exc:  # a mail/graph hiccup must not sink a sibling seat's nudge
+            errors.append({"seat_id": g["seat_id"], "error": f"{type(exc).__name__}: {exc}"})
+    return {"gaps": len(gaps), "nudged": nudged, "errors": errors}
+
+
 async def sweep_stacked_office_headers(
     actions: Actions, *, actor: str,
     because: str = "classification_laws_heartbeat: stacked-header office self-heal "
