@@ -953,6 +953,79 @@ async def resolve_reference_orphans(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def resolve_practice_orphans(
+    actions: Actions, *, actor: str = "provenance-sweep:agent",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """PROVENANCE SWEEP, WAVE 15, PRACTICE LANE (mail 8840): links every Practice with no
+    live `in_repo` edge of its own to its project, resolved from the DISTINCT projects its
+    own live `witnesses` edges already name — "the decisions that confirm or refute it"
+    (mail 8840's own words), one hop, never a guess.
+
+    SCOPED TO in_repo, NOT "zero links at all" (unlike the Agent/Reference lanes above): a
+    Practice with no `witnesses` edge is barely a Practice (`record_practice`'s own
+    contract mints one on `witnesses=`), so the true "zero-link" population would be
+    empty by construction — the actual orphan shape here is "has evidence, was never
+    itself attached to a project". `witnesses` targets are Decision/Commit/Thread by
+    schema (ontology/schema.py) but a live one can also name a Practice (chained evidence,
+    measured live) — that target simply carries no `in_repo` of its own and contributes no
+    candidate, same as a target of any type with no project link yet.
+
+    LIVE-MEASURED (2026-09-09): 49 zero-in_repo Practices out of 95 total. Walking each
+    one's own witnesses set and taking the distinct in_repo projects those targets already
+    carry resolves the clean majority (a single project named, sometimes several times over)
+    and correctly abstains the rest — some genuinely multi-project (evidence drawn from two
+    or more repos), some whose witnesses themselves have no project yet either (zero
+    candidates, nothing to derive).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once an object is linked."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical FROM objects o WHERE o.type='Practice' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        proj_rows = await pool.fetch(
+            "SELECT DISTINCT p.id, p.canonical FROM links w "
+            "JOIN links l ON l.from_id=w.to_id AND l.type='in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "WHERE w.from_id=$1 AND w.type='witnesses' "
+            "AND (w.valid_until IS NULL OR w.valid_until > now())", row["id"])
+        # DISTINCT p.id in the query above already dedups — one row per project id.
+        projects = sorted({p["canonical"].removeprefix("repo:") for p in proj_rows})
+        candidate_ids = [p["id"] for p in proj_rows]
+        reason: str | None = None
+        if len(candidate_ids) != 1:
+            reason = (
+                f"{len(projects)} distinct projects across this Practice's own witnesses "
+                f"({', '.join(projects)}) — not a unique lookup, never guessed"
+                if projects else
+                "no project found among any of this Practice's own witnesses")
+        if len(candidate_ids) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidate_ids[0])}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": reason,
+                     "candidate_count": len(candidate_ids)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                    why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
     """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
     name this codebase's own generic listing/describe queries already key on across
