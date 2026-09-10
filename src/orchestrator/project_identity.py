@@ -589,16 +589,24 @@ async def _cascade_governing_seats(
     when a seat's `tree_cwd` still names the old label and whether a same-shaped new-
     named path exists on disk, but never calls `bind_seat_tree` itself; inferring and
     rebinding a code checkout's location is a deliberate act a human confirms, not
-    something a name-property write should trigger sight-unseen. Same law for the two
-    tiers this cascade can never reach at all: the project's own on-disk folder (never
-    moved by any Osiris verb, ff3bdc37) and the repo's own root `.osiris` file (a
-    third, distinct copy from any of a seat's own office/anchor/workspace pins that
-    `correct_pin_value_third_party` already reaches — no sanctioned write door exists
-    for it yet) — both named honestly in `could_not_reach`, never silently skipped."""
+    something a name-property write should trigger sight-unseen — the project's own
+    on-disk folder stays permanently out of scope by this same law (ff3bdc37), named
+    honestly in the manifest's own `could_not_reach`, never silently skipped.
+
+    THE REPO-ROOT `.osiris` FILE — a THIRD, distinct pin copy from any of a seat's own
+    office/anchor/workspace pins `correct_pin_value_third_party` already reaches — IS
+    now reached (Thoth mail 9122 item 5, wave 16): a real per-seat tier, resolved off
+    the SAME `tree_cwd` the tree-binding check above already trusts, via the identical
+    `correct_pin_value` primitive the other three copies already use. Touched when a
+    real, existing `tree_cwd` carries a `.osiris` declaring `project`; an honest
+    could-not otherwise (no tree_cwd, a vanished directory, no `.osiris` there, or no
+    `project` key declared) — never a guess at a path this cascade has no other
+    evidence for."""
     from src.orchestrator.boot_compiler import reissue_office
     from src.orchestrator.capture import _resolve_repo
     from src.orchestrator.charter import charter_of, set_charter
-    from src.orchestrator.offices import correct_pin_value_third_party
+    from src.orchestrator.offices import correct_pin_value, correct_pin_value_third_party
+    from src.orchestrator.projects import _peek_pin_value
     from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
 
     seat_rows = await pool.fetch(
@@ -833,18 +841,91 @@ async def _cascade_governing_seats(
         else:
             tiers["tree"] = {"status": "already-correct"}
 
+        # REPO-ROOT .OSIRIS (Thoth mail 9122 item 5, wave 16): named in the dispatch as
+        # a THIRD, distinct pin copy from a seat's own office/anchor/workspace pins —
+        # this cascade's docstring used to call it permanently unreachable ("no
+        # sanctioned write door exists for it yet"). NOT AS DISTINCT AS THE DISPATCH
+        # ASSUMED, discovered while landing this tier: `correct_own_pin_value`'s own
+        # "workspace" copy already resolves off `tree_cwd` when one is declared (the
+        # 2026-09-05 Marquee tree_cwd fix, seat_facts) — the SAME on-disk file this
+        # tier targets, written by the "pin" tier just above, in the same loop
+        # iteration, before this tier ever runs. So for the common case (a seat with a
+        # real tree_cwd on record) this tier's own `correct_pin_value` call would only
+        # ever find the value the pin tier already wrote — a redundant no-op, not a
+        # second real write. Rather than attempt one anyway, this tier credits the pin
+        # tier's own workspace copy when that's what actually moved the file (see the
+        # `via_pin` check below), and only reaches for its OWN `correct_pin_value` call
+        # in the genuine remainder: a `tree_cwd` whose resolved workspace path was
+        # excluded from the pin tier's own targets (identical to office/anchor, so
+        # workspace never appears in its plan) yet the repo-root file itself still
+        # names the old label. `correct_pin_value`/`_peek_pin_value` refuse on a
+        # missing file, invalid TOML, or a missing `project` key — a repo whose root
+        # carries no `.osiris` at all, or one that never declared `project`, reports an
+        # honest could-not naming why, never a silent skip. NEVER GUESSES A PATH: no
+        # `tree_cwd` on record, or one that doesn't exist on disk (the exact "tree"
+        # tier finding just above), is itself an honest could-not here too.
+        if not tree_cwd or not _dir_exists(tree_cwd):
+            tiers["repo_root_osiris"] = {
+                "status": "could-not",
+                "detail": "no real tree_cwd on record for this seat — nothing to "
+                         "check a repo-root .osiris pin against (see the tree tier "
+                         "above)"}
+        else:
+            peek = _peek_pin_value(tree_cwd, "project")
+            if not peek["ok"]:
+                tiers["repo_root_osiris"] = {"status": "could-not", "detail": peek["error"]}
+            elif peek["value"] == new_name:
+                # SAME FILE THE PIN TIER'S OWN "workspace" COPY JUST WROTE, NOT A
+                # SEPARATE ALREADY-CORRECT STATE: correct_own_pin_value's workspace
+                # copy already resolves off this identical tree_cwd (the 2026-09-05
+                # Marquee-blind-spot fix, seat_facts) and runs BEFORE this tier in the
+                # loop above — so a real rename that just wrote it here reads back as
+                # "no correction needed" unless the pin tier's own write is credited.
+                # Telling the two apart (rather than a second redundant write attempt,
+                # which would only ever find this exact same value already in place)
+                # keeps the manifest honest about which copy actually moved.
+                pin_detail = tiers["pin"].get("detail")
+                via_pin = (
+                    tiers["pin"].get("status") == "touched"
+                    and isinstance(pin_detail, dict)
+                    and isinstance(pin_detail.get("workspace"), dict)
+                    and pin_detail["workspace"].get("written")
+                    and pin_detail["workspace"].get("path") == str(Path(tree_cwd) / ".osiris"))
+                tiers["repo_root_osiris"] = (
+                    {"status": "touched",
+                     "detail": "corrected via the pin tier's own workspace copy — "
+                              "same tree_cwd path, one write not two"}
+                    if via_pin else {"status": "already-correct"})
+            elif dry_run:
+                tiers["repo_root_osiris"] = {
+                    "status": "touched",
+                    "plan": f"{tree_cwd}/.osiris: project {peek['value']!r} -> "
+                            f"{new_name!r}"}
+            else:
+                real = correct_pin_value(tree_cwd, "project", new_name, reason=because)
+                tiers["repo_root_osiris"] = (
+                    {"status": "could-not", "detail": real["error"]}
+                    if real.get("error") else {"status": "touched", "detail": real})
+
         seats_out[seat_id] = tiers
 
     return {
         "seats": seats_out,
+        # THE REMAINDER (Thoth mail 9122 item 5, wave 16): `repo_root_osiris` moved
+        # OUT of this dict — it is now a real per-seat tier (`tiers["repo_root_osiris"]`
+        # above), touched/already-correct/could-not the same as every other copy this
+        # cascade reaches, never a static non-answer. `folder_path` stays here, by
+        # DESIGN, not by gap: this cascade never moves or infers a directory rename —
+        # see each seat's own "tree" tier for the real, evidence-based detection (does
+        # a same-shaped renamed path already exist on disk) this exact question already
+        # gets, per seat; this entry is the one honest, permanent statement of scope
+        # the per-seat tiers don't already carry on their own.
         "could_not_reach": {
-            "folder_path": "the project's on-disk directory is never moved by this "
-                           "verb — mv it yourself first if the rename should follow "
-                           "the code",
-            "repo_root_osiris": "a repo's own .osiris pin file at its root (distinct "
-                                "from any seat's own office/anchor/workspace pin "
-                                "copies) has no sanctioned write door yet — correct "
-                                "it by hand",
+            "folder_path": "the project's on-disk directory is never moved or inferred "
+                           "by this verb, by design — see each seat's own 'tree' tier "
+                           "for the real per-seat detection of whether a renamed path "
+                           "already exists; mv it yourself first if the rename should "
+                           "follow the code",
         },
     }
 
@@ -878,11 +959,15 @@ async def rename_project(
     way Deckard's/Metron's own specimens did (decisions 0afe7d35/76559373). The
     receipt's `manifest` names every tier `touched`/`already-correct`/`could-not`, per
     seat, so a partial cascade hands back the exact remainder rather than silence.
-    OUT OF SCOPE STILL, named honestly rather than silently skipped (the same
-    discipline rename_seat holds for the harness window title it cannot reach): the
-    project's own on-disk folder (never moved by any Osiris verb) and the repo's own
-    ROOT `.osiris` file (a third copy, distinct from any seat's own office/anchor/
-    workspace pins) — both named in the manifest's own `could_not_reach`.
+    OUT OF SCOPE, named honestly rather than silently skipped (the same discipline
+    rename_seat holds for the harness window title it cannot reach): the project's own
+    on-disk folder is never moved by any Osiris verb — named in the manifest's own
+    `could_not_reach`, though each governing seat's own `tree` tier still detects
+    whether a renamed path already exists. The repo's own ROOT `.osiris` file (a
+    third copy, distinct from any seat's own office/anchor/workspace pins) is NO
+    LONGER out of scope (Thoth mail 9122 item 5, wave 16) — a real per-seat tier,
+    `repo_root_osiris`, reaches it via the same `correct_pin_value` primitive the
+    other three copies already use.
 
     THE CALLER DECLARES; THIS FUNCTION NEVER INFERS (ruling 1db1ff41, verbatim:
     "declared, all roads lead to explicit"). `because` is mandatory — a rename is
@@ -987,9 +1072,10 @@ async def rename_project(
            "mounts_moved": mounts_moved, "because": because,
            "note": f"{row['canonical']}'s canonical id never changes; edges already "
                    "pointing at it are unaffected; every GOVERNING SEAT's own pin/"
-                   "house/charter/office is cascaded (see manifest) — the project's "
-                   "own on-disk folder and its repo-root .osiris are not (manifest's "
-                   "own could_not_reach names both)",
+                   "house/charter/office/repo-root-.osiris is cascaded (see manifest) "
+                   "— the project's own on-disk folder is not (manifest's own "
+                   "could_not_reach names why; each seat's own 'tree' tier still "
+                   "detects whether a renamed path already exists)",
            "possibly_stale_seats": stale,
            **prior_art_bits}
 
