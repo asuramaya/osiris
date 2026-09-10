@@ -779,6 +779,38 @@ async def test_an_unrelated_decision_summary_is_never_a_false_merge(
     assert hit is None
 
 
+async def test_shared_state_of_the_board_boilerplate_never_merges_distinct_decisions(
+    actions: Actions,
+) -> None:
+    """Wave 16 item 4 (task ed9f73ce): two decisions that share ONLY a convention's own
+    fixed "STATE OF THE BOARD" header — never their actual substance — must not merge.
+    Verified this is a genuine regression test, not a coincidence: the UNSTRIPPED ratio
+    for this exact pair is 0.794 (above _DEDUP_SIM's 0.60 bar — a false merge without the
+    fix), the boilerplate-stripped ratio is 0.480 (correctly below it)."""
+    d = await record_decision(actions, "STATE OF THE BOARD, main is clean", repo="dedupproj")
+    hit = await find_near_duplicate_decision(
+        actions.pool, "STATE OF THE BOARD, wave is done", repo="dedupproj")
+    assert hit is None
+    assert hit != d
+
+
+async def test_state_of_the_board_reword_still_dedups_after_stripping(
+    actions: Actions,
+) -> None:
+    """The fix's OTHER half: stripping boilerplate must not blind the guard to a genuine
+    near-duplicate that happens to carry the SAME header — a one-word reword of the
+    actual substance, both opening with "STATE OF THE BOARD", still resolves to the
+    first decision's id."""
+    d = await record_decision(
+        actions, "STATE OF THE BOARD — order is load-bearing, never reorder the steps",
+        repo="dedupproj")
+    hit = await find_near_duplicate_decision(
+        actions.pool,
+        "STATE OF THE BOARD — order is load-bearing, never reorder these steps",
+        repo="dedupproj")
+    assert hit == d
+
+
 async def test_decision_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
     """No `repo` (or a DIFFERENT one) is no safe scope to dedup against — an exact
     restatement filed under a different project, or with none at all, must still mint."""

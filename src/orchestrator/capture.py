@@ -2863,6 +2863,35 @@ def _normalize_for_dedup(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
 
 
+# WAVE 16 ITEM 4 (task ed9f73ce, thread ed9f73ce): recurring SCAFFOLDING a Decision's own
+# summary opens with — measured live against the real corpus (2026-09-10): 363 of 7,498
+# decisions (4.8%) open with "STATE OF THE BOARD", the single largest cluster, each one a
+# different agent/reign's own substance riding an identical fixed header that would
+# otherwise dominate find_near_duplicate_decision's own trigram/ratio comparison between
+# two decisions that share nothing else. Scoped to decisions only (find_near_duplicate_
+# open_thread never carries this convention) and kept SHORT on purpose — the measured,
+# unambiguous cases, not a speculative taxonomy of every phrase ever typed.
+_DEDUP_BOILERPLATE_PREFIXES = (
+    "state of the board",
+    "operator ruling",
+    "correction to my",
+    "correction to the",
+)
+
+
+def _strip_dedup_boilerplate(text: str) -> str:
+    """Drop ONE recognized boilerplate opener (case-insensitive, plus any immediately
+    following punctuation/dash/colon) from the FRONT of `text` — never mid-summary, where
+    the same words are real content, not scaffolding. Used only as the similarity
+    comparison's own working copy; the stored summary is never touched."""
+    stripped = text.lstrip()
+    lowered = stripped.lower()
+    for prefix in _DEDUP_BOILERPLATE_PREFIXES:
+        if lowered.startswith(prefix):
+            return stripped[len(prefix):].lstrip(" \t—-:,.")
+    return text
+
+
 async def _pg_trgm_enabled(pool: asyncpg.Pool) -> bool:
     """Is pg_trgm actually installed on THIS database? CHECK, don't assume: sessions.py's own
     comment ('pg_trgm is not installed, so there is no trigram similarity to lean on') went
@@ -2938,6 +2967,14 @@ async def find_near_duplicate_decision(
     `supersedes`/`resolves` in full regardless of a hit, so a structural side effect a
     retry depends on is never swallowed by the dedup — only the OBJECT ITSELF is reused.
 
+    BOILERPLATE STRIPPED FIRST (wave 16 item 4, task ed9f73ce): `_strip_dedup_boilerplate`
+    drops a recognized scaffolding opener (measured live: "STATE OF THE BOARD" alone opens
+    4.8% of the whole corpus) from both `summary` and each candidate's own text before
+    either comparison runs, so two decisions sharing only a convention's own fixed header —
+    never their actual substance — no longer merge. The disclosed-merge receipt this
+    function's own hit still drives (`record_decision`'s own "reused an existing decision"
+    wording) is untouched — this only changes what counts as similar enough to reach it.
+
     `exclude` (Thoth's catch, msg 1903, thread af77073a): the decision named by THIS call's
     own `supersedes` must never itself be a dedup candidate. A correction restates its
     subject BY NATURE — that is what makes it a correction — so it is systematically MORE
@@ -2971,22 +3008,27 @@ async def find_near_duplicate_decision(
     candidates = [(r["id"], r["summary"]) for r in rows if r["summary"]]
     if not candidates:
         return None
-    norm_new = _normalize_for_dedup(summary)
+    # boilerplate stripped from the COMPARISON's own working copy only (wave 16 item 4,
+    # task ed9f73ce) — the stored `summary`/`cand` strings are never touched, only what
+    # normalize/similarity below actually compares.
+    stripped_new = _strip_dedup_boilerplate(summary)
+    norm_new = _normalize_for_dedup(stripped_new)
     for did, cand in candidates:
-        if _normalize_for_dedup(cand) == norm_new:
+        if _normalize_for_dedup(_strip_dedup_boilerplate(cand)) == norm_new:
             return uuid.UUID(str(did))
     if await _pg_trgm_enabled(pool):
         ids = [did for did, _ in candidates]
-        bodies = [cand for _, cand in candidates]
+        bodies = [_strip_dedup_boilerplate(cand) for _, cand in candidates]
         hit = await pool.fetchval(
             "WITH b AS (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS body) "
             "SELECT id FROM b WHERE similarity(body, $3) > $4 "
             "ORDER BY similarity(body, $3) DESC LIMIT 1",
-            ids, bodies, summary, _DEDUP_SIM)
+            ids, bodies, stripped_new, _DEDUP_SIM)
         return uuid.UUID(str(hit)) if hit is not None else None
     best_id, best_ratio = None, 0.0
     for did, cand in candidates:
-        ratio = SequenceMatcher(None, norm_new, _normalize_for_dedup(cand)).ratio()
+        ratio = SequenceMatcher(
+            None, norm_new, _normalize_for_dedup(_strip_dedup_boilerplate(cand))).ratio()
         if ratio > best_ratio:
             best_id, best_ratio = did, ratio
     return uuid.UUID(str(best_id)) if best_id is not None and best_ratio > _DEDUP_SIM else None
