@@ -621,6 +621,76 @@ async def brief_orphan_weekly(m: dict[str, Any]) -> None:
         await pool.close()
 
 
+# THE TRACEABILITY BAND, beside the orphan band (Graph-Engineering, operator decision
+# f47d14a7, thread 7f547426, item 3/3): the SAME weekly-cursor shape as the orphan band
+# just above, reusing `compositions.traceability_census` rather than a second hand-rolled
+# query.
+_TRACEABILITY_WEEKLY_CURSOR_KEY = "preflight:traceability_weekly_total"
+
+
+def _traceability_delta(total: int, prior: str | None) -> int | None:
+    """Pure, same law as `_orphan_delta`/`_backlog_delta`: `None` on the very first run,
+    never coerced to 0 — "nothing to compare yet" and "no change" are different facts."""
+    return total - int(prior) if prior is not None else None
+
+
+def _format_traceability_weekly_line(m: dict[str, Any]) -> str:
+    """Pure message formatting for the traceability band's weekly line — shared by
+    `main()`'s own unconditional print and `brief_traceability_weekly`'s desk post, same
+    convention `_format_orphan_weekly_line` already set."""
+    delta = m["delta"]
+    delta_text = ("first run, no prior week to compare" if delta is None else
+                  f"{'+' if delta >= 0 else ''}{delta} since last week")
+    top_types = ", ".join(f"{t}:{c['count']}" for t, c in
+                          sorted(m["by_type"].items(), key=lambda kv: -kv[1]["count"])[:5]
+                          ) or "none"
+    return (f"TRACEABILITY BAND — {m['total']} output(s) fleet-wide missing at least one "
+            f"of run/plan/source/evaluator after confession ({delta_text}). "
+            f"Top types: {top_types}.")
+
+
+async def collect_traceability_weekly() -> dict[str, Any]:
+    """THE TRACEABILITY BAND: fleet total untraceable-output count, the by-type
+    breakdown, and the delta since the last time this ran — reuses
+    `compositions.traceability_census` (item 3) rather than a second hand-rolled query,
+    the same "one derivation, not two" law `collect_orphan_weekly` already holds itself
+    to. Read-mostly: the only write is advancing this collector's own cursor."""
+    from src.db.pool import create_pool
+    from src.orchestrator.compositions import traceability_census
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-traceability-weekly")
+    try:
+        result = await traceability_census(pool)
+        total = int(result["total"])
+        prior = await get_cursor(pool, _TRACEABILITY_WEEKLY_CURSOR_KEY)
+        delta = _traceability_delta(total, prior)
+        await set_cursor(pool, _TRACEABILITY_WEEKLY_CURSOR_KEY, str(total))
+        return {"total": total, "by_type": result["by_type"], "delta": delta}
+    finally:
+        await pool.close()
+
+
+async def brief_traceability_weekly(m: dict[str, Any]) -> None:
+    """Post the traceability band's weekly line to the operator's desk — informational
+    (`desk_kind='fyi'`), never a regression alarm, same cadence `brief_orphan_weekly`
+    already runs at."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mailbox import send_message
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-traceability-brief")
+    try:
+        await send_message(pool, from_agent="system:preflight", from_project="osiris",
+                           to_project="operator", body=_format_traceability_weekly_line(m),
+                           desk_kind="fyi", grade="fyi")
+    finally:
+        await pool.close()
+
+
 # THE WEEKLY ABSTENTION DIGEST, beside the orphan band (Thoth mail 8960 item 2, msg
 # 9071): the SAME weekly-cursor shape the backlog and orphan bands above already
 # established, a third lever pulled the same way rather than a fourth hand-rolled
@@ -913,6 +983,17 @@ def main() -> int:
                 print(f"(could not post the orphan band brief: {e})")
         if orphan_broken:
             fails.append(orphan_broken)
+    if "--drill" in sys.argv:
+        traceability_weekly, traceability_broken = _run_check(
+            "collect_traceability_weekly", collect_traceability_weekly())
+        if traceability_weekly is not None:
+            print(_format_traceability_weekly_line(traceability_weekly))
+            try:
+                asyncio.run(brief_traceability_weekly(traceability_weekly))
+            except Exception as e:  # noqa: BLE001 — the desk being down is itself printed
+                print(f"(could not post the traceability band brief: {e})")
+        if traceability_broken:
+            fails.append(traceability_broken)
     if "--drill" in sys.argv:
         abstention_weekly, abstention_broken = _run_check(
             "collect_abstention_weekly", collect_abstention_weekly())

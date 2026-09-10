@@ -2755,6 +2755,113 @@ async def test_lint_isolates_one_broken_check_from_every_other(
     assert result["orphan_by_type"] == {}
 
 
+# --- _fn_lint: untraceable-output, THE TRACEABILITY INVARIANT (Graph-Engineering, ---------
+# operator decision f47d14a7, thread 7f547426, item 3/3) --------------------------------
+
+async def test_lint_untraceable_output_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["untraceable-output"] == 0
+    assert "untraceable-output" in result["clean"]
+    assert result["untraceable_by_type"] == {}
+
+
+async def test_lint_untraceable_output_flags_all_four_legs_missing(actions: Actions) -> None:
+    """No producing run, no source, no evaluator — the genuinely unexamined shape."""
+    await actions.create_or_find_object("Artifact", "artifact:untraceable-fresh", "test")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["untraceable-output"] == 1
+    assert "untraceable-output" not in result["clean"]
+    finding = next(f for f in result["findings"] if f["check"] == "untraceable-output")
+    assert finding["severity"] == "warn"
+    assert finding["subject"] == "artifact:untraceable-fresh"
+    assert "type=Artifact" in finding["detail"]
+    for leg in ("run", "plan", "source", "evaluator"):
+        assert leg in finding["detail"]
+    assert "already confessed" not in finding["detail"]
+    assert result["untraceable_by_type"] == {"Artifact": {"count": 1}}
+
+
+async def test_lint_untraceable_output_run_and_plan_satisfied_via_live_edges(
+    actions: Actions,
+) -> None:
+    """A real `produced` edge from an AgentRun, and that run's own `authorized_by` edge
+    to a Decision, satisfy the run and plan legs without any confession — source and
+    evaluator remain genuinely missing."""
+    art = await actions.create_or_find_object("Artifact", "artifact:untraceable-partial",
+                                               "test")
+    run = await actions.create_or_find_object("AgentRun", "run:untraceable-partial", "test")
+    plan = await actions.create_or_find_object("Decision", "decision:untraceable-plan", "test")
+    await actions.create_link(run, art, "produced", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    await actions.create_link(run, plan, "authorized_by", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    result = await _fn_lint(actions.pool, None, {})
+    finding = next(f for f in result["findings"] if f["check"] == "untraceable-output"
+                  and f["subject"] == "artifact:untraceable-partial")
+    assert "missing: source, evaluator" in finding["detail"]
+    assert "already confessed" not in finding["detail"]
+
+
+async def test_lint_untraceable_output_a_confession_on_every_leg_excludes_the_row(
+    actions: Actions,
+) -> None:
+    """A live confession on EVERY leg fully satisfies the invariant — the row disappears
+    from findings entirely, matching the operator's own 'acceptance is zero rows after
+    confession' wording (f47d14a7)."""
+    art = await actions.create_or_find_object("Artifact", "artifact:untraceable-confessed",
+                                               "test")
+    run = await actions.create_or_find_object("AgentRun", "run:untraceable-confessed", "test")
+    await actions.create_link(run, art, "produced", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    for obj_id, link_type in ((run, "authorized_by"), (art, "derived_from"),
+                              (art, "evaluated_by")):
+        await actions.assert_property(
+            obj_id, f"derivation_abstained_{link_type}",
+            {"link_type": link_type, "candidate_count": 0, "reason": "no candidate found",
+             "candidates": []},
+            "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["untraceable-output"] == 0
+    assert "artifact:untraceable-confessed" not in {
+        f["subject"] for f in result["findings"] if f["check"] == "untraceable-output"}
+
+
+async def test_lint_untraceable_output_a_resolved_confession_still_counts_as_missing(
+    actions: Actions,
+) -> None:
+    """Khnum's own catch (DM 8855), reused here: a `resolved: true` marker means the run
+    was FOUND elsewhere — the leg's own real edge must exist now, never the stale marker
+    on trust. A resolved-only confession does NOT excuse the leg."""
+    art = await actions.create_or_find_object("Artifact", "artifact:untraceable-resolved",
+                                               "test")
+    await actions.assert_property(
+        art, "derivation_abstained_produced",
+        {"link_type": "produced", "resolved": True, "resolved_to": "run:whatever"},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    result = await _fn_lint(actions.pool, None, {})
+    finding = next(f for f in result["findings"] if f["check"] == "untraceable-output"
+                  and f["subject"] == "artifact:untraceable-resolved")
+    assert "run" in finding["detail"]
+
+
+async def test_lint_untraceable_output_missing_run_makes_plan_missing_too(
+    actions: Actions,
+) -> None:
+    """With no producing run at all, there is no run whose `authorized_by` edge could
+    ever be checked or confessed — plan is unconditionally missing alongside run."""
+    await actions.create_or_find_object("Artifact", "artifact:untraceable-no-run", "test")
+
+    result = await _fn_lint(actions.pool, None, {})
+    finding = next(f for f in result["findings"] if f["check"] == "untraceable-output"
+                  and f["subject"] == "artifact:untraceable-no-run")
+    assert "run" in finding["detail"]
+    assert "plan" in finding["detail"]
+
+
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
 
 async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions) -> None:

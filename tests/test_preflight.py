@@ -446,6 +446,58 @@ def test_format_orphan_weekly_line_shows_the_five_biggest_types_only() -> None:
     assert "Type2:2" not in line and "Type1:1" not in line
 
 
+# THE TRACEABILITY BAND, beside the orphan band (Graph-Engineering, operator decision
+# f47d14a7, thread 7f547426, item 3/3) ------------------------------------------------------
+
+def test_traceability_delta_is_none_on_the_first_run() -> None:
+    from scripts.osiris_preflight import _traceability_delta
+
+    assert _traceability_delta(7, None) is None
+
+
+def test_traceability_delta_is_the_arithmetic_difference() -> None:
+    from scripts.osiris_preflight import _traceability_delta
+
+    assert _traceability_delta(10, "7") == 3
+    assert _traceability_delta(4, "9") == -5
+    assert _traceability_delta(5, "5") == 0
+
+
+def test_format_traceability_weekly_line_names_first_run() -> None:
+    from scripts.osiris_preflight import _format_traceability_weekly_line
+
+    line = _format_traceability_weekly_line(
+        {"total": 12, "delta": None, "by_type": {"Artifact": {"count": 12}}})
+    assert "12 output(s) fleet-wide" in line
+    assert "first run, no prior week to compare" in line
+    assert "Artifact:12" in line
+
+
+def test_format_traceability_weekly_line_signs_a_positive_and_negative_delta() -> None:
+    from scripts.osiris_preflight import _format_traceability_weekly_line
+
+    up = _format_traceability_weekly_line({"total": 12, "delta": 3, "by_type": {}})
+    down = _format_traceability_weekly_line({"total": 9, "delta": -3, "by_type": {}})
+    assert "+3 since last week" in up
+    assert "-3 since last week" in down
+
+
+def test_format_traceability_weekly_line_names_no_types_when_empty() -> None:
+    from scripts.osiris_preflight import _format_traceability_weekly_line
+
+    line = _format_traceability_weekly_line({"total": 0, "delta": 0, "by_type": {}})
+    assert "Top types: none." in line
+
+
+def test_format_traceability_weekly_line_shows_the_five_biggest_types_only() -> None:
+    from scripts.osiris_preflight import _format_traceability_weekly_line
+
+    by_type = {f"Type{i}": {"count": i} for i in range(1, 8)}
+    line = _format_traceability_weekly_line({"total": 28, "delta": 0, "by_type": by_type})
+    assert "Type7:7" in line and "Type3:3" in line
+    assert "Type2:2" not in line and "Type1:1" not in line
+
+
 # THE WEEKLY ABSTENTION DIGEST, beside the orphan band (Thoth mail 8960 item 2, msg 9071) ---
 
 def test_abstention_delta_is_none_on_the_first_run() -> None:
