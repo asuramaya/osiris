@@ -5587,7 +5587,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             out["redirect"] = res["redirect"]
         # THE IMMEDIATE LEG (the background-session adapter, ruling 6c4d0b62): a DM's wake
         # fires ON ARRIVAL, never on a clock — this very call dispatches it, and the receipt
-        # below is the PER-HOP truth (resumed / delivered / queued-* / pull-only), not a
+        # below is the PER-HOP truth (resumed / mid-turn / queued-* / pull-only), not a
         # guess about what some future sweep might do. The worker tick stays as the backstop
         # that drains gated mail. A dispatch failure must never fail the send: the message
         # is already committed, the sweep will retry, and the receipt says so honestly.

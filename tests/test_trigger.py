@@ -3136,12 +3136,12 @@ async def test_self_branch_busy_holder_is_never_nudged_or_resumed(
                           settings=_settings(enabled=True, sense=str(sense)),
                           spawn=_boom, windows=_no_windows, jobs=_no_job, nudge=_boom,
                           agents_json=_agents_json)
-    # caught by the EARLIER mid-turn gate ("delivered") in this specimen, before ever
+    # caught by the EARLIER mid-turn gate ("mid-turn") in this specimen, before ever
     # reaching the self-branch at all — confirmed live rather than assumed. The self-
     # branch's own busy check (this fix) is the second line of defense for the case where
     # `wake_target`'s own mount-based candidate diverges from graph_resume's own, never
     # the only one; either way the observable contract holds: no nudge, no fork.
-    assert d["mode"] == "delivered"
+    assert d["mode"] == "mid-turn"
     assert await actions.pool.fetchval("SELECT count(*) FROM agent_wakes") == 0
 
 
@@ -3280,8 +3280,8 @@ async def test_178_acceptance_replays_the_incident_shape_neither_door_mints_a_st
 # ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
 # wake() adds ONE thing dispatch_dm doesn't have: the managed_by authority gate. These tests
 # pin the gate (both directions authorize, peers/unbound/seatless refuse, nothing is sent on
-# a refusal) and the honest vocabulary (dispatch_dm's own "delivered" — genuinely mid-turn,
-# unread — must never surface as wake()'s "delivered").
+# a refusal) and the honest vocabulary (dispatch_dm's own "mid-turn" — genuinely unread,
+# renamed from its old misleading "delivered" — must never surface as wake()'s "delivered").
 
 
 async def _managed_pair(actions: Actions, *, worker_agent: str, manager_agent: str,
@@ -3647,20 +3647,22 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
 async def test_wake_never_calls_mid_turn_delivered(
     actions: Actions, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """THE WHOLE POINT: dispatch_dm's own mode literally named "delivered" means the
-    addressee is mid-turn and has NOT read the message. wake() must translate it to
-    "mid-turn", never let the lying word reach the caller."""
+    """THE WHOLE POINT (wave 16 item 2, 5af93c89): dispatch_dm's own mode used to be
+    literally named "delivered" though it means the addressee is mid-turn and has NOT
+    read the message — renamed at the source to "mid-turn" so the receipt is honest from
+    the first hop, never a translation patching over a lying word. wake() still surfaces
+    both the raw mode and the (now identical) external status."""
     worker_seat, manager_seat = await _managed_pair(
         actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
 
     async def _fake_dispatch(*a: Any, **kw: Any) -> dict[str, Any]:
-        return {"mode": "delivered", "detail": "genuinely mid-turn, unread"}
+        return {"mode": "mid-turn", "detail": "genuinely mid-turn, unread"}
 
     monkeypatch.setattr(trigger_module, "dispatch_dm", _fake_dispatch)
     d = await wake_worker(actions, caller="agent:sender", target=manager_seat,
                           message="hey", settings=_settings(enabled=True))
     assert d["status"] == "mid-turn"
-    assert d["raw_mode"] == "delivered"  # the raw truth stays visible for anyone who reads it
+    assert d["raw_mode"] == "mid-turn"  # the raw truth was never a lie to begin with now
 
 
 async def test_wake_translates_pull_only_and_refused_budget(
