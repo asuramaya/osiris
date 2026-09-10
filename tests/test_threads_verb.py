@@ -84,6 +84,40 @@ async def test_threads_matches_a_handle_owner_not_just_the_literal_agent_id(
     assert out["threads"][0]["summary"] == "owned by the bare handle"
 
 
+async def test_threads_marks_a_contested_thread_in_both_json_and_text(
+    actions: Actions,
+) -> None:
+    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): a thread whose newest
+    note disputes its own summary carries contested=True in the JSON row and a leading
+    `!` in the text render."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import annotate_thread
+
+    t = await open_thread(actions, "nothing renders the gain reduction", kind="obligation",
+                          owner="agent:th-contested", repo="thprojcontested",
+                          source="agent:th-contested")
+    await annotate_thread(actions, str(t), "checked: MasterBand.tsx DOES render it")
+    await _mount(actions.pool, agent_id="agent:th-contested", project="thprojcontested",
+                session="thcontested")
+
+    ctx = _Ctx()
+    saved = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:th-contested", session="thcontested", project="thprojcontested",
+        model=None, cwd=None)
+    try:
+        out = await srv.threads(ctx=ctx)
+        text_out = await srv.threads(ctx=ctx, render="text")
+    finally:
+        srv._pool = saved
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert out["threads"][0]["contested"] is True
+    assert text_out["text"].startswith("! ")
+
+
 async def test_threads_render_text_returns_only_a_text_field_capped_with_remainder(
     actions: Actions,
 ) -> None:

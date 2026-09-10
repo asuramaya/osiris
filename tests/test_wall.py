@@ -488,6 +488,69 @@ async def test_wall_items_carry_arc_only_when_declared(actions: Actions) -> None
     assert "arc" not in by_summary["a thread with no arc at all"]
 
 
+async def test_wall_marks_a_thread_whose_note_disputes_its_own_summary(
+    actions: Actions,
+) -> None:
+    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): a note that postdates
+    the thread's own last summary touch marks it CONTESTED — the specimen's exact shape,
+    a note proving the headline false with no correction to match."""
+    from src.orchestrator.capture import annotate_thread
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:contested1",
+                                                "session")
+    t = await open_thread(
+        actions, "the master limiter's gain reduction is exposed but nothing renders it",
+        repo="contested1", source="agent:me")
+    await annotate_thread(actions, str(t), "checked: MasterBand.tsx DOES render it")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    [item] = [w for w in wall if w["id"] == str(t)[:8]]
+    assert item.get("contested") is True
+
+
+async def test_wall_never_marks_a_thread_fixed_in_the_same_annotate_call(
+    actions: Actions,
+) -> None:
+    """Fix (a) closes the gap fix (b) watches for: a note and its OWN corrected_summary,
+    landed in one call, share the identical observed_at — the note can never postdate a
+    correction it arrived beside, so this is never contested."""
+    from src.orchestrator.capture import annotate_thread
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:contested2",
+                                                "session")
+    t = await open_thread(
+        actions, "the master limiter's gain reduction is exposed but nothing renders it",
+        repo="contested2", source="agent:me")
+    await annotate_thread(
+        actions, str(t), "checked: MasterBand.tsx DOES render it",
+        corrected_summary="MasterBand.tsx renders the gain reduction via .mband-gr")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    [item] = [w for w in wall if w["id"] == str(t)[:8]]
+    assert "contested" not in item
+
+
+async def test_wall_uncontests_once_the_summary_is_corrected_after_the_note(
+    actions: Actions,
+) -> None:
+    """Correcting the headline AFTER the disputing note clears the marker — the fix
+    resolves it, exactly as fix (d) requires for the no-regrow exclusion to ever lift."""
+    from src.orchestrator.capture import annotate_thread, correct_thread_summary
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:contested3",
+                                                "session")
+    t = await open_thread(
+        actions, "the master limiter's gain reduction is exposed but nothing renders it",
+        repo="contested3", source="agent:me")
+    await annotate_thread(actions, str(t), "checked: MasterBand.tsx DOES render it")
+    await correct_thread_summary(
+        actions, str(t), "MasterBand.tsx renders the gain reduction via .mband-gr")
+
+    wall, _echoes = await open_thread_wall(actions.pool, proj)
+    [item] = [w for w in wall if w["id"] == str(t)[:8]]
+    assert "contested" not in item
+
+
 # --- reader_identity_set: the seat-handle gap in whose_move (#185 leg (a)) ------------------
 # orient() and automount()/whisper each hand-rolled `{agent_id, project}` as the ranking
 # reader's identity — never the seat's own HANDLE. A charter obligation filed

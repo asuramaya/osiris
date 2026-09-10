@@ -1424,7 +1424,11 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # correct_summary is a separate verb (the exact affordance gap the report named). No
 # new tool, load-bearing growth per this file's own escape valve. Measured exact
 # (118,628), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 118628
+# 118,628 -> 118,856 (2026-09-10, Thoth mail 8921/8922, Metron's mechanism report, fix
+# (b)): threads()'s own docstring gains one paragraph naming the new `contested` field
+# and its `!` marker. No new tool, load-bearing growth per this file's own escape valve.
+# Measured exact (118,856), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 118856
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

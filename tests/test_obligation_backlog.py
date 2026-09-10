@@ -84,6 +84,22 @@ async def test_obligation_backlog_past_window_and_oldest_ride_along_per_seat(
     row = next(r for r in out["by_seat"] if r["seat"] == "Staleford")
     assert row["past_window"] == 1
     assert row["oldest"][0]["summary"] == "a stale duty"
+    assert "contested" not in row["oldest"][0]
+
+
+async def test_obligation_backlog_marks_a_contested_oldest_item(actions: Actions) -> None:
+    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): the backlog band's own
+    per-seat oldest-three list marks a thread whose newest note disputes its summary."""
+    from src.orchestrator.capture import annotate_thread
+
+    await ensure_seat(actions, house="obhouse", handle="Contestford", source="test")
+    t = await open_thread(actions, "nothing renders the gain reduction", kind="obligation",
+                          owner="Contestford", repo="obproj5", source="agent:seed-ob7")
+    await annotate_thread(actions, str(t), "checked: MasterBand.tsx DOES render it")
+
+    out = await _fn_obligation_backlog(actions.pool, None, {})
+    row = next(r for r in out["by_seat"] if r["seat"] == "Contestford")
+    assert row["oldest"][0]["contested"] is True
 
 
 async def test_obligation_backlog_fleet_total_accounts_for_every_bucket(

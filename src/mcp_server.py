@@ -5379,13 +5379,17 @@ async def threads(project: str | None = None, render: str | None = None,
     point; call again with an explicit `project` for another repo you govern.
 
     `render='text'`: returns only {"text": <str>} -- one line per thread, capped at
-    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered.
+
+    `contested` (fix (b), Metron's mechanism report, mail 8890): present and `True` when
+    a newer note has disputed this summary and nobody has corrected it yet — marked with
+    a leading `!` in both the JSON row and the text render."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     if ident is None or proj is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
-    from src.orchestrator.capture import _resolve_repo
+    from src.orchestrator.capture import CONTESTED_SQL, _resolve_repo
     proj_id = await _resolve_repo(pool, proj)
     if proj_id is None:
         return {"error": f"no project {proj!r}", "threads": []}
@@ -5403,7 +5407,8 @@ async def threads(project: str | None = None, render: str | None = None,
         "     AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
         "    AS summary, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        f"  {CONTESTED_SQL} AS contested "
         "FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
         "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -5417,7 +5422,8 @@ async def threads(project: str | None = None, render: str | None = None,
         "    '')) = ANY($2::text[]) "
         "ORDER BY o.created_at ASC",
         proj_id, owners)
-    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"],
+             **({"contested": True} if r["contested"] else {})}
            for r in rows]
     if render == "text":
         return {"text": render_threads_text(mine)}

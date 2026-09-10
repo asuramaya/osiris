@@ -486,7 +486,13 @@ async def _open_obligation_rows(actions: Actions) -> list[dict[str, Any]]:
     `summary` (corrected_summary over summary, same COALESCE convention obligation_hygiene.py
     and stophook_logic.py already use). The single shared query behind `_obligation_pressure`
     (per-project) and `obligation_backlog` (per-project AND per-seat, thread 8608) — extracted
-    so the two never hand-roll two copies of the same WHERE clause to drift apart."""
+    so the two never hand-roll two copies of the same WHERE clause to drift apart.
+
+    `contested` (fix (b), Metron's mechanism report, mail 8890/8921/8922): present and
+    `True` when a note newer than this row's own `summary` disputes it — the backlog
+    band's own consumer marks this rather than quoting a disputed headline as settled."""
+    from src.orchestrator.capture import CONTESTED_SQL
+
     rows = await actions.pool.fetch(
         "SELECT o.id, COALESCE(p.canonical, '(unfiled)') AS project, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -501,7 +507,8 @@ async def _open_obligation_rows(actions: Actions) -> list[dict[str, Any]]:
         "    DESC LIMIT 1), "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
-        "   AS summary "
+        "   AS summary, "
+        f" {CONTESTED_SQL} AS contested "
         "FROM objects o "
         "LEFT JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
         "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -515,7 +522,8 @@ async def _open_obligation_rows(actions: Actions) -> list[dict[str, Any]]:
         "    ='obligation' "
         "ORDER BY project, o.created_at ASC")
     return [{"id": r["id"], "project": r["project"], "created_at": r["created_at"],
-             "owner": r["owner"], "stale_after": r["stale_after"], "summary": r["summary"]}
+             "owner": r["owner"], "stale_after": r["stale_after"], "summary": r["summary"],
+             "contested": bool(r["contested"])}
             for r in rows]
 
 

@@ -4380,6 +4380,36 @@ async def open_or_annotate_persisting_alarm(
         source=source, unlinked_because=unlinked_because))
 
 
+# THE CONTESTED-SUMMARY LAW, fixes (b)/(c)/(d) (Metron's mechanism report, mail 8890,
+# Thoth dispatch 8921/8922): a thread's own `summary` can be proven false by a LATER
+# note, yet nothing anywhere marks the disagreement before a reader decides whether to
+# open it — a false headline survived a week, through a stale-sweep nudge and a full
+# obligation crunch, because two annotations discharged the hygiene duty without ever
+# fixing it. A thread is CONTESTED when its newest `note:*` annotation post-dates the
+# LAST summary touch (`corrected_summary` if one exists, else the original `summary`).
+#
+# ONE SHARED SQL FRAGMENT, never re-derived per surface (the exact failure this whole
+# report is about, one level up: five near-identical COALESCE copies already exist for
+# "which summary wins" alone — no_regrow.py, obligation_hygiene.py, compositions.py,
+# digest.py, mcp_server.py's threads() — a sixth hand-rolled boolean would be the same
+# mistake at a higher stakes table). Every consumer (threads(render='text'), the
+# backlog band, orient's wall, the stale nudge, no_regrow's own exclusion, the fleet
+# audit) imports this rather than writing its own. ASSUMES the calling query aliases
+# the Thread object as `o` — the same convention every COALESCE fragment above already
+# assumes.
+LAST_SUMMARY_TOUCH_SQL = (
+    "COALESCE("
+    "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+)
+CONTESTED_SQL = (
+    "EXISTS (SELECT 1 FROM current_assertions n WHERE n.object_id=o.id "
+    "AND n.name LIKE 'note:%' AND n.observed_at > " + LAST_SUMMARY_TOUCH_SQL + ")"
+)
+
+
 async def correct_thread_summary(
     actions: Actions, ref: str, corrected_summary: str, *, because: str | None = None,
     source: str = _SOURCE,
