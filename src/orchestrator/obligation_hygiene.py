@@ -77,7 +77,15 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every OPEN kind='obligation' Thread fleet-wide, with `owner`, `last_touched` (the
     freshest self_declared assertion's observed_at — open_thread_wall's own clock), and
     this sweep's own prior markers read back (`hygiene_stage`/`hygiene_nudged_at`) so a
-    tick is idempotent against its own last tick."""
+    tick is idempotent against its own last tick.
+
+    `contested`/`summary_age_days` (fix (c), Metron's mechanism report, mail 8890/8921/
+    8922): the nudge that quotes `summary` back at the owner must never present a
+    disputed headline as settled fact — `contested` names the dispute, `summary_age_days`
+    (how long the CURRENT summary text has stood, from its own last touch to now) lets
+    the nudge say "unchanged for N days" instead of implying it was just observed."""
+    from src.orchestrator.capture import CONTESTED_SQL, LAST_SUMMARY_TOUCH_SQL
+
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         f" {_SUMMARY_SQL} AS summary, "
@@ -91,7 +99,9 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "   AS hygiene_stage, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='hygiene_nudged_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS hygiene_nudged_at "
+        "   AS hygiene_nudged_at, "
+        f" {CONTESTED_SQL} AS contested, "
+        f" {LAST_SUMMARY_TOUCH_SQL} AS last_summary_touch "
         "FROM objects o "
         f"WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         f"  AND {_STATUS_SQL}='open' AND {_KIND_SQL}='obligation'")
@@ -116,6 +126,20 @@ def _parse_dt(value: Any) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _quote_summary(item: dict[str, Any]) -> str:
+    """Fix (c), Metron's mechanism report (mail 8890/8921/8922): the nudge quotes a
+    summary WITH its age and, when disputed, says so — never as though it were current,
+    unverified fact. `summary_age_days` is None only when the thread's own created_at
+    (this function's last-resort clock) is somehow absent; the quote degrades gracefully
+    rather than raising."""
+    age = item.get("summary_age_days")
+    aged = f"{item['summary']!r}, unchanged for {age} day(s)" if age is not None \
+        else f"{item['summary']!r}"
+    if item.get("contested"):
+        return f"{aged} — CONTESTED: a newer note disputes this summary, unresolved"
+    return aged
+
+
 async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) -> dict[str, Any]:
     """THE REPORT — every open obligation Thread, bucketed into would_nudge /
     would_stale_candidate / no_action with the reason named. Writes NOTHING."""
@@ -130,10 +154,12 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
         owner = (r["owner"] or "").strip() or None
         stage = r["hygiene_stage"]
         nudged_at = _parse_dt(r["hygiene_nudged_at"])
+        summary_touch = r["last_summary_touch"] or r["created_at"]
         item: dict[str, Any] = {
             "thread_id": str(r["id"]), "owner": owner, "summary": r["summary"],
             "last_touched": last_touched.isoformat() if last_touched else None,
-            "stage": stage,
+            "stage": stage, "contested": bool(r["contested"]),
+            "summary_age_days": (now - summary_touch).days if summary_touch else None,
         }
 
         if stage == "stale_candidate":
@@ -453,7 +479,7 @@ async def hygiene_execute(
         tid = uuid.UUID(item["thread_id"])
         body = (
             f"OBLIGATION HYGIENE NUDGE — thread {item['thread_id'][:8]} has been idle "
-            f"{N1_IDLE_DAYS}+ days ({item['summary']!r}). Touch it (annotate/resolve/"
+            f"{N1_IDLE_DAYS}+ days ({_quote_summary(item)}). Touch it (annotate/resolve/"
             f"reclassify) or it becomes a STALE-CANDIDATE on the operator's desk after "
             f"{N2_SILENCE_DAYS} more days of silence. Never auto-resolved.")
         try:
@@ -475,7 +501,7 @@ async def hygiene_execute(
             evidence_class=_HYGIENE_EC)
         body = (
             f"OBLIGATION STALE-CANDIDATE — thread {item['thread_id'][:8]} "
-            f"(owner={item['owner']!r}, {item['summary']!r}) drew a nudge and "
+            f"(owner={item['owner']!r}, {_quote_summary(item)}) drew a nudge and "
             f"{N2_SILENCE_DAYS}+ more days of silence since. NEVER auto-resolved — a "
             f"human call on whether it's still real.")
         try:

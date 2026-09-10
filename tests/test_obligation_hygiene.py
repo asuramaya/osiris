@@ -210,6 +210,51 @@ async def test_an_unowned_obligation_nudges_the_operator_desk(actions: Actions) 
     assert _find(out["buckets"]["would_nudge"], t) is not None
 
 
+# ═══ fix (c), Metron's mechanism report (mail 8890/8921/8922): the nudge quotes the
+# summary with its age, and never as settled fact when a note disputes it ══════════════
+
+async def test_a_contested_obligation_carries_the_marker_and_age_into_the_row(
+    actions: Actions,
+) -> None:
+    """The note must postdate the summary (to be contested) while `last_touched` stays
+    idle relative to `now=NOW` (to still land in would_nudge) — `annotate_thread`'s own
+    real wall-clock write can't hit that window in a test keyed on a fixed NOW, so the
+    note is asserted directly, dated inside the one valid slice."""
+    stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
+    note_touch = stale + timedelta(hours=12)  # after the summary, still idle at NOW
+    t = await _mk_obligation(actions, "hyg-contested-1", owner="agent:hyg-contested",
+                             touched_at=stale)
+    await actions.assert_property(t, "note:1", "checked: this is no longer true", _SRC,
+                                  note_touch, 0.9, evidence_class="self_declared")
+
+    out = await hygiene_dry_run(actions.pool, now=NOW)
+    row = _find(out["buckets"]["would_nudge"], t)
+    assert row is not None
+    assert row["contested"] is True
+    assert isinstance(row["summary_age_days"], int)
+
+
+async def test_an_uncontested_obligation_carries_no_dispute_marker(actions: Actions) -> None:
+    stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
+    t = await _mk_obligation(actions, "hyg-uncontested-1", owner="agent:hyg-plain",
+                             touched_at=stale)
+    out = await hygiene_dry_run(actions.pool, now=NOW)
+    row = _find(out["buckets"]["would_nudge"], t)
+    assert row is not None
+    assert row["contested"] is False
+
+
+async def test_quote_summary_names_the_age_and_the_dispute() -> None:
+    from src.orchestrator.obligation_hygiene import _quote_summary
+
+    plain = _quote_summary({"summary": "a headline", "summary_age_days": 12,
+                            "contested": False})
+    assert plain == "'a headline', unchanged for 12 day(s)"
+    disputed = _quote_summary({"summary": "a false headline", "summary_age_days": 12,
+                               "contested": True})
+    assert "CONTESTED" in disputed and "unchanged for 12 day(s)" in disputed
+
+
 # ═══ hygiene_status ═══════════════════════════════════════════════════════════════════
 
 async def test_hygiene_status_counts_by_stage(actions: Actions) -> None:
