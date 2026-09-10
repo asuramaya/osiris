@@ -997,6 +997,58 @@ async def test_fn_wall_orient_surface_shows_the_corrected_summary_by_default(
     assert out["wall"][0]["summary"] == "the census undercounts, not the pulse"
 
 
+async def test_fn_wall_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_project(
+    actions: Actions,
+) -> None:
+    """ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): the write gate
+    (open_thread/reclassify_thread) never SET an arc on a non-osiris thread going forward,
+    but it also never STRIPS one a pre-gate write already left ("additive, never a strip",
+    577988ed — the 219 legacy rows). A read surface must still not display an osiris arc
+    label on a client project's own wall, so simulate one of those legacy rows directly
+    (bypassing the write gate, exactly like the pre-existing data would) and prove it never
+    surfaces."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import _fn_wall
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:clientco", "test")
+    await actions.assert_property(proj, "name", "clientco", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "clientco's own duty, no arc taxonomy here",
+                            repo="clientco", owner="agent:x", source="agent:me")
+    # a legacy off-scope stamp, pre-dating the write gate — asserted directly, the write
+    # door would refuse to create this today
+    await actions.assert_property(tid, "arc", "Fleet-Hygiene", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await _fn_wall(actions.pool, proj, {})
+    assert "arc" not in out["wall"][0]
+
+
+async def test_roadmap_open_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_project(
+    actions: Actions,
+) -> None:
+    """Same law, the roadmap's own OPEN section (`_fn_roadmap_open`'s separate `_arc_map`
+    lookup, not `open_thread_wall`'s own arc column) — a distinct leak point, proven
+    separately rather than assumed covered by the `_fn_wall` fix above."""
+    from src.orchestrator.capture import open_thread
+    from src.orchestrator.compositions import ROADMAP
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:clientco2", "test")
+    await actions.assert_property(proj, "name", "clientco2", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+    tid = await open_thread(actions, "clientco2's own duty, no arc taxonomy here",
+                            repo="clientco2", owner="agent:x", source="agent:me")
+    await actions.assert_property(tid, "arc", "Token-Cost", "test", NOW, 0.9,
+                                  evidence_class="self_declared")
+
+    await save_composition(actions.pool, "roadmap", ROADMAP)
+    res = await run_composition(actions.pool, "roadmap", proj)
+    open_data = res["items"]["open"]
+    assert "Token-Cost" not in open_data
+    assert list(open_data["unsorted"]["agent:x"])[0]["summary"] == \
+        "clientco2's own duty, no arc taxonomy here"
+
+
 async def test_open_thread_wall_never_double_counts_a_thread_with_a_retracted_in_repo_link(
     actions: Actions,
 ) -> None:
