@@ -23,7 +23,7 @@ async def test_runs_every_lane_and_totals_a_real_mint(actions: Actions) -> None:
 
     assert set(out["lanes"]) == {
         "agent", "decision_thread", "decision_thread_at_write_time",
-        "reference", "practice", "superstition", "seat",
+        "reference", "practice", "superstition", "seat", "project",
     }
     assert out["total_minted"] >= 1
     assert out["lanes"]["superstition"]["to_mint"] >= 1
@@ -43,9 +43,25 @@ async def test_a_single_lane_failure_never_sinks_the_others(
     assert "simulated DB hiccup" in out["lanes"]["agent_error"]
     # every OTHER lane still ran to completion
     for key in ("decision_thread", "decision_thread_at_write_time", "reference",
-               "practice", "superstition", "seat"):
+               "practice", "superstition", "seat", "project"):
         assert key in out["lanes"]
         assert "to_mint" in out["lanes"][key]
+
+
+async def test_the_project_lane_confesses_a_friendless_software_project(
+    actions: Actions,
+) -> None:
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:heartbeatorphanproj", "fleet-observer")
+
+    out = await apply_provenance_sweep_heartbeat(actions)
+
+    assert out["lanes"]["project"]["to_mint"] == 0
+    assert out["lanes"]["project"]["to_abstain"] >= 1
+    hatch = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", proj)
+    assert hatch is not None
 
 
 async def test_is_idempotent_a_second_run_finds_nothing_left(actions: Actions) -> None:
