@@ -290,6 +290,54 @@ async def test_graph_supernodes_unfiled_bucket_counts_projectless_objects(
     assert r.json()["unfiled"]["count"] >= 1
 
 
+async def test_graph_supernodes_unfiled_is_positioned_and_id_matches_the_sentinel(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Thoth DM 9019: unfiled carries its own `id` (the sentinel /graph/clusters?project=
+    reads back), sized and placed by the SAME heartbeat-stored positions as a project
+    supernode — the centroid of whichever of its members the heartbeat already placed,
+    never a bespoke layout of its own."""
+    positioned = await actions.create_or_find_object("Thread", "thread:gv-unfiled-pos", "test")
+    await actions.assert_property(positioned, "graph_x", 12.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(positioned, "graph_y", -4.0, "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    unfiled = r.json()["unfiled"]
+    assert unfiled["id"] == "unfiled"
+    assert unfiled["x"] is not None and unfiled["y"] is not None
+
+
+async def test_graph_supernodes_unfiled_abstained_matches_the_census_predicate(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """`abstained` mirrors compositions.orphan_census's own live-`derivation_abstained_*`
+    predicate exactly (Khnum's stale-abstention catch, DM 8855): an acknowledged
+    disconnection counts, an unexamined one doesn't, and a RESOLVED abstention (a later
+    successful mint superseded it) never masquerades as a live one. Measured as a DELTA
+    against the endpoint's own before/after reading — the test DB already carries other
+    fixtures' orphans, so only the shift this test itself causes is a safe assertion."""
+    before = (await client.get("/graph/supernodes")).json()["unfiled"]
+
+    acknowledged = await actions.create_or_find_object(
+        "Thread", "thread:gv-unfiled-abstained", "test")
+    await actions.assert_property(
+        acknowledged, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "candidate_count": 0, "reason": "no candidate found",
+         "candidates": []},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+    await actions.create_or_find_object("Thread", "thread:gv-unfiled-unexamined", "test")
+    resolved = await actions.create_or_find_object(
+        "Thread", "thread:gv-unfiled-resolved-abstention", "test")
+    await actions.assert_property(
+        resolved, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "resolved": True, "resolved_to": "repo:whatever"},
+        "test", datetime.now(UTC), 0.6, evidence_class="derived")
+
+    after = (await client.get("/graph/supernodes")).json()["unfiled"]
+    assert after["orphans"] - before["orphans"] == 3   # none of the three carries a real link
+    assert after["abstained"] - before["abstained"] == 1  # only the acknowledged one
+
+
 async def test_graph_clusters_groups_by_type_inside_one_project(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
@@ -316,6 +364,27 @@ async def test_graph_clusters_resolves_a_bare_project_name(
     r = await client.get("/graph/clusters", params={"project": "gv-bare"})
     clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
     assert clusters.get("Thread") == 1
+
+
+async def test_graph_clusters_unfiled_sentinel_groups_the_last_resort_bucket_by_type(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The Atlas's unfiled supernode (Thoth DM 9019) drills into its own members by type
+    the SAME way a real project's clusters do — `project="unfiled"` (graph_supernodes's
+    own `unfiled.id`) is the sentinel, never a real project's canonical, so it never
+    collides with an actual repo named "unfiled"."""
+    await actions.create_or_find_object("Thread", "thread:gv-unfiled-cl-1", "test")
+    await actions.create_or_find_object("Thread", "thread:gv-unfiled-cl-2", "test")
+    await actions.create_or_find_object("Commit", "commit:gv-unfiled-cl-1", "test")
+    # a filed member must never leak into the unfiled clusters
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-unfiled-cl", "test")
+    filed = await actions.create_or_find_object("Thread", "thread:gv-unfiled-cl-filed", "test")
+    await actions.create_link(filed, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/clusters", params={"project": "unfiled"})
+    clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
+    assert clusters.get("Thread") == 2
+    assert clusters.get("Commit") == 1
 
 
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:

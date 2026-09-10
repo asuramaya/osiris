@@ -499,6 +499,18 @@ const Osiris = (() => {
       return orphans ? `${base} (${orphans} orphan${orphans === 1 ? "" : "s"})` : base;
     }
 
+    // the true orphan population can never live inside a project supernode (membership
+    // itself requires an in_repo edge — the structural finding on decision 7175ef92) —
+    // unfiled is where it concentrates, so its label carries BOTH counts the census
+    // tracks: raw orphans and how many already carry a live derivation_abstained_*
+    // record (an acknowledged disconnection, not an unexamined one).
+    const UNFILED_COLOR = "#c9762c";
+    function unfiledLabel(u) {
+      if (!u.orphans) return "Unfiled";
+      const abstainedPart = u.abstained ? `, ${u.abstained} abstained` : "";
+      return `Unfiled (${u.orphans} orphan${u.orphans === 1 ? "" : "s"}${abstainedPart})`;
+    }
+
     async function loadSupernodes() {
       clear();
       level = "supernodes"; currentProject = null;
@@ -514,6 +526,17 @@ const Osiris = (() => {
         if (graph.hasNode(e.source) && graph.hasNode(e.target) && !graph.hasEdge(e.source, e.target))
           graph.addEdge(e.source, e.target, { size: Math.min(6, 1 + Math.log2(e.weight + 1)) });
       });
+      // unfiled always renders, even before the heartbeat has positioned any of its
+      // members — it falls back to the origin rather than being dropped the way an
+      // unpositioned project is, since this is the ONE place the eye should always find
+      // the last-resort population (never merely absent because nothing landed yet).
+      if (g.unfiled && g.unfiled.count > 0) {
+        graph.addNode(g.unfiled.id, {
+          label: unfiledLabel(g.unfiled), size: sizeForCount(g.unfiled.count),
+          x: g.unfiled.x != null ? g.unfiled.x : 0, y: g.unfiled.y != null ? g.unfiled.y : 0,
+          color: UNFILED_COLOR, kind: "project", raw: { ...g.unfiled, label: "unfiled" },
+        });
+      }
       renderer.refresh();
     }
 

@@ -75,3 +75,27 @@ def test_atlas_markup_and_nav_item_exist() -> None:
     assert 'id="sigma-atlas"' in _INDEX_HTML
     assert 'data-surface="atlas"' in _INDEX_HTML
     assert 'onclick="atlasZoomOut()"' in _INDEX_HTML
+
+
+def test_atlas_renders_the_unfiled_supernode_with_both_census_counts() -> None:
+    """Thoth DM 9019: the true orphan population can never live inside a project
+    supernode (membership itself requires an in_repo edge — decision 7175ef92's own
+    structural finding) — unfiled must always render, carrying orphan AND abstention
+    counts from the census, sized/placed like a project, never dropped as a bare stat."""
+    atlas_start = _OSIRIS_JS.index("function makeAtlas(")
+    atlas_end = _OSIRIS_JS.index("// ---- THE GENERIC RENDERER")
+    atlas_body = _OSIRIS_JS[atlas_start:atlas_end]
+    assert "function unfiledLabel(u)" in atlas_body
+    assert "u.abstained" in atlas_body
+    assert "g.unfiled" in atlas_body
+    assert "sizeForCount(g.unfiled.count)" in atlas_body
+
+
+def test_atlas_unfiled_drills_down_through_the_same_cluster_path_as_a_project() -> None:
+    """No bespoke drill-down: unfiled is added with `kind: "project"` and `raw.label:
+    "unfiled"` so the EXISTING clickNode -> loadClusters path fires unchanged, hitting
+    the backend's own `project=unfiled` sentinel branch."""
+    atlas_start = _OSIRIS_JS.index("function makeAtlas(")
+    atlas_end = _OSIRIS_JS.index("// ---- THE GENERIC RENDERER")
+    atlas_body = _OSIRIS_JS[atlas_start:atlas_end]
+    assert 'kind: "project", raw: { ...g.unfiled, label: "unfiled" }' in atlas_body
