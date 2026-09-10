@@ -716,8 +716,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         position -- the centroid of its already-positioned members, so a supernode lands
         somewhere real rather than an arbitrary layout of its own), plus the weighted
         inter-project edges (how many live links cross from one project's members to
-        another's) and an `unfiled` bucket (objects with no in_repo link to any project) --
-        orphans distinct at EVERY level, never folded into a bare total."""
+        another's) and an `unfiled` bucket (objects with no in_repo link to any project),
+        positioned and sized the SAME way as a project supernode -- carrying its own
+        orphan count plus an `abstained` count (compositions.orphan_census's own
+        `derivation_abstained_%`-without-`resolved` predicate) so the client never
+        drifts from graph_lint's own reading. Orphans distinct at EVERY level, never
+        folded into a bare total."""
         rows = await p.fetch(
             f"WITH lc AS {_LIVE_LINK_COUNTS}, "
             "proj_members AS ("
@@ -765,18 +769,36 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             {"source": str(r["p1"]), "target": str(r["p2"]), "weight": int(r["weight"])}
             for r in edge_rows
         ]
+        # UNFILED, positioned and reconciled against the census (the design note on
+        # 7175ef92, built per Thoth DM 9019): a project MEMBER can never itself be
+        # orphan (membership requires an in_repo edge), so the true orphan population
+        # graph_lint's own census measures necessarily concentrates entirely here --
+        # this is the one place on the Atlas the eye should go. `abstained` mirrors
+        # compositions.orphan_census's own `derivation_abstained_%`-without-`resolved`
+        # predicate (Khnum's stale-abstention catch, DM 8855) so the count matches the
+        # census exactly, never a second drifting definition. Centroid position comes
+        # from the SAME heartbeat-stored graph_x/graph_y as every project supernode --
+        # sized and placed like a project, never a bespoke layout of its own.
         unfiled = await p.fetchrow(
             f"WITH lc AS {_LIVE_LINK_COUNTS} "
             "SELECT count(*) AS n, "
-            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans "
-            "FROM objects o LEFT JOIN lc ON lc.node = o.id "
+            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans, "
+            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0 AND EXISTS ("
+            "    SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+            "    AND ca.name LIKE 'derivation_abstained_%' "
+            "    AND NOT (ca.value ? 'resolved'))) AS abstained, "
+            "  avg(gx.v) AS x, avg(gy.v) AS y "
+            f"FROM objects o LEFT JOIN lc ON lc.node = o.id {_GRAPH_POS_JOIN}"
             "WHERE o.status NOT IN ('archived','merged','retired') "
             "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
             "    AND l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()))"
         )
         return {
             "supernodes": supernodes, "project_edges": project_edges,
-            "unfiled": {"count": int(unfiled["n"]), "orphans": int(unfiled["orphans"])},
+            "unfiled": {
+                "id": "unfiled", "count": int(unfiled["n"]), "orphans": int(unfiled["orphans"]),
+                "abstained": int(unfiled["abstained"]), "x": unfiled["x"], "y": unfiled["y"],
+            },
         }
 
     @app.get("/graph/clusters")
@@ -786,7 +808,27 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         """LOD level 1: one cluster per object TYPE inside one project (count, orphan
         count, centroid position) -- the zoomed-IN half of the same two-tier law
         graph_supernodes serves for level 0. `project` is the project's own canonical
-        (e.g. "repo:osiris" or bare "osiris" -- both resolve)."""
+        (e.g. "repo:osiris" or bare "osiris" -- both resolve) OR the sentinel "unfiled"
+        (graph_supernodes's own `unfiled.id`), which drills the last-resort bucket into
+        its members by type instead -- the same LOD shape, a different membership test
+        (no in_repo link at all, rather than one to a specific project)."""
+        if project == "unfiled":
+            rows = await p.fetch(
+                f"WITH lc AS {_LIVE_LINK_COUNTS} "
+                "SELECT o.type, count(*) AS n, "
+                "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans, "
+                "  avg(gx.v) AS x, avg(gy.v) AS y "
+                f"FROM objects o LEFT JOIN lc ON lc.node = o.id {_GRAPH_POS_JOIN}"
+                "WHERE o.status NOT IN ('archived','merged','retired') "
+                "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+                "    AND l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now())) "
+                "GROUP BY o.type"
+            )
+            return {"clusters": [
+                {"type": r["type"], "count": int(r["n"]), "orphans": int(r["orphans"]),
+                 "x": r["x"], "y": r["y"]}
+                for r in rows
+            ]}
         canon = project if ":" in project else f"repo:{project}"
         rows = await p.fetch(
             f"WITH lc AS {_LIVE_LINK_COUNTS} "
