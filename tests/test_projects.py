@@ -395,6 +395,56 @@ async def test_fold_project_carries_the_original_writers_attribution_forward(
     assert row["evidence_class"] is None  # the original edge never carried one either
 
 
+async def test_fold_project_preserves_a_distinct_source_id_per_link_type(
+    actions: Actions,
+) -> None:
+    """Ruling 4fd979a0 (ATTRIBUTION SURVIVES A FOLD, operator 2026-09-10): the single-type
+    specimen above proves in_repo alone; this is the scratch pair the ruling itself asks
+    for — one edge of EVERY _PROJECT_ESTATE_LINK_TYPES kind, each from a DIFFERENT
+    source, so a fold that accidentally shared a hardcoded actor across link types would
+    still be caught. The fold's own actor lands only on the object_event (the mover),
+    never on any of the four edges (the original writer)."""
+    await _stub_project(actions, "repo:dupe1c", "dupe1c")
+    await _stub_project(actions, "repo:into1c", "into1c")
+    dupe_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:dupe1c'")
+    into_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:into1c'")
+
+    commit = await actions.create_or_find_object("Commit", "commit:foldc1c", "test")
+    await actions.create_link(commit, dupe_id, "in_repo", "agent:writer-in-repo", NOW, 0.6)
+    agent = await actions.create_or_find_object("Agent", "agent:foldworker1c", "test")
+    await actions.create_link(agent, dupe_id, "works_in", "agent:writer-works-in", NOW, 0.7)
+    await actions.create_link(agent, dupe_id, "governs", "agent:writer-governs", NOW, 0.8)
+    ref = await actions.create_or_find_object("Reference", "ref:foldref1c", "test")
+    await actions.create_link(ref, dupe_id, "informs", "agent:writer-informs", NOW, 0.5)
+
+    out = await fold_project(actions, dupe="dupe1c", into="into1c",
+                             evidence="both mint the same repo, confirmed by the operator",
+                             actor="agent:fold-executor-1c")
+    assert out["edges_moved"] == {"in_repo": 1, "works_in": 1, "governs": 1, "informs": 1}
+
+    expected = {
+        (commit, "in_repo"): "agent:writer-in-repo",
+        (agent, "works_in"): "agent:writer-works-in",
+        (agent, "governs"): "agent:writer-governs",
+        (ref, "informs"): "agent:writer-informs",
+    }
+    for (from_id, link_type), original_source in expected.items():
+        row = await actions.pool.fetchrow(
+            "SELECT source_id FROM links WHERE from_id=$1 AND to_id=$2 AND type=$3 "
+            "AND (valid_until IS NULL OR valid_until > now())", from_id, into_id, link_type)
+        assert row is not None, f"{link_type} edge never landed on into"
+        assert row["source_id"] == original_source, (
+            f"{link_type}'s original writer was lost — got {row['source_id']!r}")
+
+    # the mover belongs on the fold event, never on any edge
+    fold_event = await actions.pool.fetchrow(
+        "SELECT actor FROM object_events WHERE event_type='merge' AND related_id=$1 "
+        "ORDER BY created_at DESC LIMIT 1", dupe_id)
+    assert fold_event["actor"] == "agent:fold-executor-1c"
+
+
 async def test_fold_project_is_idempotent_on_an_edge_already_live_to_into(
     actions: Actions,
 ) -> None:
