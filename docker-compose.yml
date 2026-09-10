@@ -1,6 +1,18 @@
 # Self-hosted runtime — single machine, single operator. All services bind to
 # 127.0.0.1 only (no public ingress; this box IS prod). The AGE graph extension
 # is added when the projection is populated (post-Phase-1); vanilla postgres:16 for now.
+#
+# COMPOSE DRIFT FIX (Thoth mail 9122 item 2, wave 16): the volume below is pinned to the
+# REAL box's own `osiris-pg-data` name (confirmed via `docker inspect osiris-pg`), never
+# a compose-project-prefixed anonymous one — `docker compose up` used to create/attach a
+# DIFFERENT volume than the live data, which `docker volume ls` already shows sitting
+# there as dead weight (osiris_pgdata/osiris_redisdata) from exactly that mistake once
+# made. archive_mode/archive_command/wal_level are the structural facts a recreate would
+# otherwise silently drop forever — nothing else rederives them; see
+# scripts/osiris_archive_wal.sh's own header for the bind-mount reasoning. Tuning flags
+# (shared_buffers etc.) are deliberately NOT set here — see deploy/up.sh's own comment;
+# scripts/osiris_pg_autotune.py owns them post-boot, and a hardcoded value here would
+# silently down-tune a recreated box back to whatever number was checked in years ago.
 services:
   postgres:
     image: postgres:16
@@ -12,11 +24,21 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./scripts/osiris_archive_wal.sh:/var/lib/postgresql/data/osiris_archive_wal.sh:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U osiris -d osiris"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7
@@ -30,7 +52,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
 volumes:
   pgdata:
+    name: osiris-pg-data
   redisdata:
+    name: osiris-redis-data
