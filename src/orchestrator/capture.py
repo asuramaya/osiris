@@ -1859,8 +1859,20 @@ async def link_repo(
 # of its own to name), so it needs the same "kind == link_type" shape the other two use,
 # not the existing "repo"->"in_repo" entry (that one's KEY is the door-side kind word
 # record_decision's callers pass, never the bare link type this lane already has in hand).
-_REQUIRED_LINK_KIND_TABLE = {
-    "repo": "in_repo", "grounds": "grounded_by", "resolves": "answers",
+#
+# DIRECTION (Graph-Engineering arc, thread 7f547426, decision f47d14a7, item 2/3): every
+# entry above checks an OUTGOING link — `WHERE from_id=obj_id`, the object being minted
+# pointing AT its own repo/grounds/holder. "authoring_run" below is the first INCOMING
+# entry: an Artifact does not point at its own producing AgentRun, the RUN points at the
+# ARTIFACT (`produced`, run -> artifact) — so satisfying this kind means `WHERE
+# to_id=obj_id`. Reuses confirm_or_confess_link's own "from"/"to" vocabulary (that
+# function already needed both directions for the post-mint invariant above) rather than
+# inventing a second one — one direction word, two callers.
+_REQUIRED_LINK_KIND_TABLE: dict[str, tuple[str, str]] = {
+    "repo": ("in_repo", "from"), "grounds": ("grounded_by", "from"),
+    "resolves": ("answers", "from"), "holds": ("holds", "from"),
+    "works_in": ("works_in", "from"), "in_repo": ("in_repo", "from"),
+    "authoring_run": ("produced", "to"),
 }
 # WAVE 16 ITEM 5's own fold-in (thread f2c9c4f2, Thoth mail 9078's in_repo KeyError caught
 # during the w121->w122 rebase, c601833): this used to ALSO carry "holds": "holds",
@@ -1897,7 +1909,10 @@ async def _confess_abstention(
     a caller confessing a gap is a declaration, not a deterministic join over facts the
     graph already asserts."""
     for kind in kinds_in_scope:
-        link_type = _REQUIRED_LINK_KIND_TABLE.get(kind, kind)
+        if kind in _REQUIRED_LINK_KIND_TABLE:
+            link_type, _direction = _REQUIRED_LINK_KIND_TABLE[kind]
+        else:
+            link_type = kind
         await a.assert_property(
             obj_id, f"derivation_abstained_{link_type}",
             {"link_type": link_type, "candidate_count": 0, "reason": unlinked_because,
@@ -1999,7 +2014,14 @@ async def _enforce_required_links(
     fire (both branches below) also writes `derivation_abstained_<link_type>` for each kind
     in `kinds_in_scope`, via `_confess_abstention` — see its own docstring. `unlinked_because`
     /`unlinked_because_kind` themselves are UNCHANGED, still the metric adoption_meter
-    reads; this is an addition, never a replacement, no wholesale rename."""
+    reads; this is an addition, never a replacement, no wholesale rename.
+
+    DIRECTION (Graph-Engineering arc, thread 7f547426, decision f47d14a7, item 2/3): the
+    satisfied-check below reads each kind's own direction from `_REQUIRED_LINK_KIND_TABLE`
+    ("from" — obj_id is the link's source, the shape every kind used before this arc — or
+    "to" — obj_id is the link's target, e.g. "authoring_run": an Artifact never points at
+    its own producing AgentRun, the run points at the artifact). Purely additive: every
+    pre-existing kind stays "from", byte-for-byte the same query it always ran."""
     # ONE bound connection for this WHOLE call, catalog read included — a.pool.
     # object_type/fetchval would acquire a DIFFERENT connection from the SAME pool while
     # this atomic() caller's own connection is still held open, and under concurrent
@@ -2048,9 +2070,13 @@ async def _enforce_required_links(
         # unlinked_because would take the hatch branch anyway — POISONING the hatch
         # count, the arc's only metric, with writes that never needed it.
         for kind in required:
-            link_type = _REQUIRED_LINK_KIND_TABLE.get(kind, kind)
+            if kind in _REQUIRED_LINK_KIND_TABLE:
+                link_type, direction = _REQUIRED_LINK_KIND_TABLE[kind]
+            else:
+                link_type, direction = kind, "from"
+            col = "from_id" if direction == "from" else "to_id"
             satisfied = await conn.fetchval(
-                "SELECT 1 FROM links WHERE from_id=$1 AND type=$2 AND evidence_class=$3 "
+                f"SELECT 1 FROM links WHERE {col}=$1 AND type=$2 AND evidence_class=$3 "
                 "LIMIT 1", obj_id, link_type, EvidenceClass.SELF_DECLARED.value)
             if satisfied:
                 return
@@ -4386,6 +4412,53 @@ async def record_evaluation(
             await a.create_link(subject, e, "evaluated_by", source, observed, _CONF,
                                 evidence_class=_EC)
     return e
+
+
+async def record_artifact(
+    actions: Actions, key: str, *, authoring_run: str | None = None,
+    source: str = _SOURCE, unlinked_because: str | None = None,
+) -> uuid.UUID:
+    """Mint an Artifact — a build/deploy/document output Commit does not already cover
+    (Graph-Engineering arc, thread 7f547426, decision f47d14a7, item 2/3). Refuses (or
+    confesses) at the door unless it carries its authoring AgentRun's own `produced`
+    edge — artifact-has-authoring-run-plus-version, the operator's own ruling — via
+    `_enforce_required_links`' new INCOMING direction (`"authoring_run"` above), the
+    same declare-or-refuse discipline record_decision/open_thread/ingest_reference/
+    record_practice already use, extended for the first time to a kind this door
+    can only ever see as a link pointing AT it, never one it asserts itself.
+
+    `authoring_run`, when given, is a soul_session_id (never a resolved UUID — the
+    AgentRun pointer is lazily minted right here, `ensure_agent_run`'s own canonical
+    scheme, inside this SAME atomic block, so the `produced` edge it mints satisfies
+    the gate before the gate ever runs). Omitted, the gate falls straight to its
+    `unlinked_because` hatch or refuses — the same two-branch shape every other door
+    already has.
+
+    "PLUS-VERSION": a first version legitimately has no predecessor — `revises` is
+    never itself gated here, only ever optional (thread 7f547426 annotation 1/5: "an
+    outgoing revises edge to its predecessor, or none if it's the first version").
+    Version-ness is expressed by ABSENCE, not a second positive requirement; a caller
+    who does have a predecessor links it separately via `mint_revises` after this call
+    returns (the predecessor's own id is not knowable to this door in general — it
+    mints AFTER the predecessor, not necessarily in the same breath).
+
+    Artifact's own `required_link_kinds` is UNARMED by default (the same "dark until a
+    real caller arms it" convention Practice's own gate already follows, decision
+    b8a81e9) — this door's gate machinery is real and load-bearing the moment the Type
+    catalog's `required_link_kinds` for Artifact includes `"authoring_run"`, but until
+    then every Artifact mints freely, same as before this arc existed."""
+    observed = datetime.now(UTC)
+    canon = f"artifact:{key}"
+    async with actions.atomic() as a:
+        art = await a.create_or_find_object("Artifact", canon, source)
+        if authoring_run:
+            run_id = await ensure_agent_run(a, authoring_run, source)
+            await a.create_link(run_id, art, "produced", source, observed, _CONF,
+                                evidence_class=_EC)
+        await _enforce_required_links(
+            a, art, "Artifact", kinds_in_scope=("authoring_run",),
+            unlinked_because=unlinked_because, source=source, observed=observed)
+    return art
 
 
 async def mint_implements(

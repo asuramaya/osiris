@@ -9392,6 +9392,32 @@ async def record_evaluation(
 
 
 @mcp.tool()
+async def record_artifact(
+    key: str, authoring_run: str | None = None, unlinked_because: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Mint an Artifact — a build/deploy/document output Commit does not already cover
+    (Graph-Engineering arc, thread 7f547426, decision f47d14a7). Refuses at the door
+    (an `{"error": ...}` receipt, never a traceback) unless it carries its authoring
+    AgentRun's own `produced` edge OR `unlinked_because=<reason>` is given — artifact-
+    has-authoring-run-plus-version. `authoring_run` is a soul_session_id (never a
+    resolved id): the AgentRun pointer mints lazily, in the same transaction, so its
+    `produced` edge satisfies the gate before the gate runs. `revises` (linking a
+    predecessor version) is a separate call, `mint_revises`, after this one returns —
+    a first version legitimately has none."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    try:
+        art = await capture.record_artifact(
+            Actions(pool), key, authoring_run=authoring_run, source=actor,
+            unlinked_because=unlinked_because)
+    except ValueError as err:
+        return {"error": str(err)}
+    return {"id": str(art), "key": key}
+
+
+@mcp.tool()
 async def open_thread(
     summary: str, repo: str | None = None, kind: str | None = None,
     owner: str | None = None, assignee: str | None = None, arc: str | None = None,
