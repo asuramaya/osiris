@@ -542,3 +542,94 @@ def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) 
     assert out.returncode == 0
     assert "ModuleNotFoundError" not in out.stderr
     assert "usage:" in out.stdout
+
+
+# --- THE MCP SERVER'S OWN LIVENESS ACROSS TIME (thread 007bfd6b, msg 9123 item 4) --------
+
+def test_no_mcp_liveness_key_is_quiet() -> None:
+    """Absent (the collector genuinely couldn't run — already reported separately as a
+    broken check) is silence here, same as every other None-shaped field in this matrix."""
+    assert evaluate(_green()) == []
+
+
+def test_mcp_liveness_clean_is_quiet() -> None:
+    m = _green()
+    m["mcp_liveness"] = {"nrestarts": 3, "nrestarts_delta": 0, "kill_events": []}
+    assert evaluate(m) == []
+
+
+def test_mcp_liveness_first_run_with_no_kills_is_quiet() -> None:
+    """delta=None (nothing to compare on the very first run) must never be treated as
+    truthy/alarming — same "None is not 0, but also not a failure" law _backlog_delta's
+    own first-run behavior establishes."""
+    m = _green()
+    m["mcp_liveness"] = {"nrestarts": 3, "nrestarts_delta": None, "kill_events": []}
+    assert evaluate(m) == []
+
+
+def test_mcp_liveness_a_new_restart_is_named_loudly() -> None:
+    m = _green()
+    m["mcp_liveness"] = {"nrestarts": 6, "nrestarts_delta": 2, "kill_events": []}
+    fails = "\n".join(evaluate(m))
+    assert "MCP LIVENESS" in fails
+    assert "+2 since last run" in fails
+    assert "journalctl --user -u osiris-mcp" in fails
+
+
+def test_mcp_liveness_a_kill_event_with_no_restart_delta_is_still_named() -> None:
+    """systemd can restart faster than the delta gets sampled, or the kill line can land
+    in a window the NRestarts read already rolled past — either symptom alone is real."""
+    m = _green()
+    m["mcp_liveness"] = {"nrestarts": 3, "nrestarts_delta": 0,
+                         "kill_events": ["Sep 10 04:12:03 host osiris-mcp[1]: Killed"]}
+    fails = "\n".join(evaluate(m))
+    assert "MCP LIVENESS" in fails
+    assert "1 kill/OOM journal line(s)" in fails
+
+
+def test_format_mcp_liveness_line_names_first_run() -> None:
+    from scripts.osiris_preflight import _format_mcp_liveness_line
+
+    line = _format_mcp_liveness_line(
+        {"nrestarts": 0, "nrestarts_delta": None, "kill_events": []})
+    assert "first run, no prior read to compare" in line
+    assert "0 kill/OOM journal line(s)" in line
+
+
+def test_format_mcp_liveness_line_names_no_change() -> None:
+    from scripts.osiris_preflight import _format_mcp_liveness_line
+
+    line = _format_mcp_liveness_line(
+        {"nrestarts": 5, "nrestarts_delta": 0, "kill_events": []})
+    assert "no change" in line
+
+
+def test_format_mcp_liveness_line_signs_a_positive_delta() -> None:
+    from scripts.osiris_preflight import _format_mcp_liveness_line
+
+    line = _format_mcp_liveness_line(
+        {"nrestarts": 8, "nrestarts_delta": 3, "kill_events": ["x", "y"]})
+    assert "+3 since last run" in line
+    assert "2 kill/OOM journal line(s)" in line
+
+
+def test_mcp_nrestarts_reads_the_real_unit_or_degrades_quietly() -> None:
+    """Live against whatever this box actually has — osiris-mcp exists here (the dev
+    instance), but the function must degrade to None rather than raise on a box without
+    it (a fresh checkout, CI), same discipline _tmp_inode_pct/_disk_free_pct already hold
+    themselves to."""
+    from scripts.osiris_preflight import _mcp_nrestarts
+
+    result = _mcp_nrestarts()
+    assert result is None or isinstance(result, int)
+
+
+def test_mcp_journal_kill_events_reads_the_real_journal_or_degrades_quietly() -> None:
+    from scripts.osiris_preflight import _mcp_journal_kill_events
+
+    result = _mcp_journal_kill_events(None)
+    assert isinstance(result, list)
+    assert all(isinstance(ln, str) for ln in result)
+    # confirmed live on this exact box: journalctl inserts its own boundary markers
+    # between boots regardless of -g, and those must never count as a kill event
+    assert not any(ln.startswith("-- ") for ln in result)

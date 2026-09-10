@@ -361,6 +361,19 @@ def evaluate(m: dict) -> list[str]:
     drift = m.get("schema_drift")
     if drift:
         fails.append(f"SCHEMA DRIFT: {drift} — run `alembic upgrade head` against the real DB")
+    # THE MCP SERVER'S OWN LIVENESS ACROSS TIME (thread 007bfd6b, msg 9123 item 4): either
+    # symptom alone is real damage — a NEW restart since last run, or a kill/OOM line in
+    # the journal in that same window (systemd sometimes restarts silently faster than a
+    # kill line lands, so both are checked rather than treating one as a subset of other).
+    liveness = m.get("mcp_liveness")
+    if liveness:
+        delta = liveness["nrestarts_delta"]
+        n_kills = len(liveness["kill_events"])
+        if delta or n_kills:
+            fails.append(
+                f"MCP LIVENESS: {_format_mcp_liveness_line(liveness)} — "
+                "osiris-mcp restarted or was killed since the last preflight run; "
+                "journalctl --user -u osiris-mcp for the reason")
     return fails
 
 
@@ -693,6 +706,111 @@ async def brief_abstention_weekly(m: dict[str, Any]) -> None:
         await pool.close()
 
 
+# THE MCP SERVER'S OWN LIVENESS ACROSS TIME (thread 007bfd6b, Thoth dispatch msg 9123
+# item 4): "smoke passes in the gaps between OOM kills, and NRestarts read 5 for hours
+# with no surface reading it — a presence check mistaken for a health check." A RAW
+# NRestarts read is a point-in-time counter systemd only ever resets on its own terms
+# (a daemon-reload or `systemctl reset-failed`), never on a schedule this script
+# controls — so this tracks the DELTA since the LAST preflight run (a per-run cursor,
+# unlike the weekly bands above), the same shape the earlier dated plan named
+# ("NRestarts-delta-over-time rather than a point read"). The journal's own killed/OOM
+# lines are read the same way, since-last-run, never the unit's whole lifetime (a
+# restart from three weeks ago must not alarm forever). Runs on EVERY invocation, not
+# --drill-gated — an alarm-driving check, not a weekly digest; the weekly line under
+# --drill reuses this SAME per-run read rather than a second cumulative-total tracker,
+# since NRestarts is already its own natural delta.
+_MCP_LIVENESS_NRESTARTS_CURSOR_KEY = "preflight:mcp_liveness_nrestarts"
+_MCP_LIVENESS_JOURNAL_CURSOR_KEY = "preflight:mcp_liveness_journal_since"
+_MCP_LIVENESS_UNIT = "osiris-mcp"
+_MCP_KILL_PATTERN = "killed|Out of memory|oom-kill|segfault"
+
+
+def _mcp_nrestarts() -> int | None:
+    """Current NRestarts off systemd's own `show -p` — None when the unit or the
+    property can't be read (a genuine can't-answer, never a false 0)."""
+    out = _run(["systemctl", "--user", "show", _MCP_LIVENESS_UNIT, "-p", "NRestarts"])
+    if not out.startswith("NRestarts="):
+        return None
+    try:
+        return int(out.split("=", 1)[1])
+    except ValueError:
+        return None
+
+
+def _mcp_journal_kill_events(since_utc: str | None) -> list[str]:
+    """Journal lines since `since_utc` (None = the unit's whole retained history, the
+    first-ever run) naming a kill/OOM/segfault — `--utc` on both the read and the
+    stored cursor so the comparison never drifts across a host timezone change.
+
+    journalctl inserts its OWN "-- Boot <id> --" boundary markers between boots in the
+    output regardless of the `-g` grep filter (confirmed live, 10 lines back for 3 real
+    kill lines) — these are journalctl's own formatting, never a real log line, and are
+    filtered out here so a boot boundary alone can never be counted as a kill event."""
+    cmd = ["journalctl", "--user", "-u", _MCP_LIVENESS_UNIT, "--utc",
+           "-g", _MCP_KILL_PATTERN]
+    if since_utc:
+        cmd += ["--since", since_utc]
+    out = _run(cmd)
+    return [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("-- ")]
+
+
+def _format_mcp_liveness_line(m: dict[str, Any]) -> str:
+    """Pure message formatting — shared by `main()`'s own unconditional weekly print and
+    `evaluate()`'s alarm text, same convention the weekly bands above already set."""
+    delta = m["nrestarts_delta"]
+    delta_text = ("first run, no prior read to compare" if delta is None
+                  else f"+{delta} since last run" if delta > 0 else "no change")
+    n_kills = len(m["kill_events"])
+    return (f"MCP LIVENESS — NRestarts {delta_text}, {n_kills} kill/OOM journal "
+            f"line(s) since the last run")
+
+
+async def collect_mcp_liveness() -> dict[str, Any]:
+    """NRestarts-delta and journal kill/OOM events since the last preflight run —
+    see the section comment above for why this is a per-run cursor, not a weekly one."""
+    from datetime import UTC, datetime
+
+    from src.db.pool import create_pool
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-mcp-liveness")
+    try:
+        nrestarts = _mcp_nrestarts()
+        prior_nrestarts = await get_cursor(pool, _MCP_LIVENESS_NRESTARTS_CURSOR_KEY)
+        delta = (nrestarts - int(prior_nrestarts)) if (
+            nrestarts is not None and prior_nrestarts is not None) else None
+        if nrestarts is not None:
+            await set_cursor(pool, _MCP_LIVENESS_NRESTARTS_CURSOR_KEY, str(nrestarts))
+
+        since = await get_cursor(pool, _MCP_LIVENESS_JOURNAL_CURSOR_KEY)
+        kill_events = _mcp_journal_kill_events(since)
+        now_utc = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        await set_cursor(pool, _MCP_LIVENESS_JOURNAL_CURSOR_KEY, now_utc)
+        return {"nrestarts": nrestarts, "nrestarts_delta": delta, "kill_events": kill_events}
+    finally:
+        await pool.close()
+
+
+async def brief_mcp_liveness_weekly(m: dict[str, Any]) -> None:
+    """Post the MCP liveness line to the operator's desk — informational (`desk_kind=
+    'fyi'`), same weekly cadence the backlog/orphan/abstention bands already run at, even
+    when clean: a standing 'still watching, nothing found' is worth more here than
+    silence, since this check's whole point is that nobody was reading NRestarts before."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mailbox import send_message
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1, application_name="osiris-script:preflight-mcp-liveness-brief")
+    try:
+        await send_message(pool, from_agent="system:preflight", from_project="osiris",
+                           to_project="operator", body=_format_mcp_liveness_line(m),
+                           desk_kind="fyi", grade="fyi")
+    finally:
+        await pool.close()
+
+
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe).
 
@@ -746,8 +864,10 @@ def main() -> int:
     m["schema_drift"], drift_broken = _run_check("collect_schema_drift", collect_schema_drift())
     m["soul_store_missing"], soul_broken = _run_check(
         "collect_soul_store_coverage", collect_soul_store_coverage())
+    m["mcp_liveness"], mcp_liveness_broken = _run_check(
+        "collect_mcp_liveness", collect_mcp_liveness())
     fails = evaluate(m)
-    fails.extend(b for b in (miner_broken, drift_broken, soul_broken) if b)
+    fails.extend(b for b in (miner_broken, drift_broken, soul_broken, mcp_liveness_broken) if b)
     if "--drill" in sys.argv and m.get("newest_dump"):
         d = drill(m["newest_dump"])
         if d:
@@ -804,6 +924,15 @@ def main() -> int:
                 print(f"(could not post the abstention digest brief: {e})")
         if abstention_broken:
             fails.append(abstention_broken)
+    if "--drill" in sys.argv and m.get("mcp_liveness") is not None:
+        # reuses THIS run's own already-collected read (m["mcp_liveness"], above) rather
+        # than a second cumulative-total tracker — NRestarts-delta is already a per-run
+        # count, unlike the lifetime-totals the backlog/orphan/abstention bands track.
+        print(_format_mcp_liveness_line(m["mcp_liveness"]))
+        try:
+            asyncio.run(brief_mcp_liveness_weekly(m["mcp_liveness"]))
+        except Exception as e:  # noqa: BLE001 — the desk being down is itself printed
+            print(f"(could not post the MCP liveness brief: {e})")
     if not fails:
         print("preflight: all green"
               f" (backup {m['backup_age_h']:.1f}h, vault {m['vault_age_d']:.1f}d,"
