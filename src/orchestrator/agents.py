@@ -1048,6 +1048,19 @@ async def claim_name(
             seat_id = seat_world["seat_id"]
     if seat_id:
         await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=source)
+        # THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004): ensure_seat and
+        # bind_holder are two separate calls, not one actions.atomic() block, so #189's
+        # own gate can't refuse-and-rollback across the gap between them. This never
+        # refuses — bind_holder just wrote the holds link a line above, so in the healthy
+        # path this is a no-op; it only ever confesses for a Seat this same call somehow
+        # left unlinked. The heartbeat sub-sweep (seats.py's post_mint_orphan_sweep) is
+        # what actually catches a mint that crashed between the two calls.
+        from src.orchestrator.capture import confirm_or_confess_link
+        seat_oid = await actions.create_or_find_object("Seat", seat_id, source)
+        await confirm_or_confess_link(
+            actions, seat_oid, "holds", direction="to",
+            reason="no live holder observed when claim_name's post-mint invariant ran",
+            source=source, observed=now)
     # 60bc15db: a seat-world mint failure used to vanish into the same bare omission as
     # "no seat needed yet" — the claim itself still succeeds (the assertion world doesn't
     # depend on the seat world), but the receipt now SAYS why seat_id is missing instead of

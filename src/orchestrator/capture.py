@@ -1682,7 +1682,17 @@ async def link_repo(
 # which record_decision's wrapper never widened when the first six landed either. open_
 # thread only ever has "repo" in scope: its own `resolves=` closes a DIFFERENT, pre-existing
 # thread, after its atomic block.
-_REQUIRED_LINK_KIND_TABLE = {"repo": "in_repo", "grounds": "grounded_by", "resolves": "answers"}
+# "holds"/"works_in" (kind == link_type, no renaming needed) were added for the post-mint
+# invariant below (Thoth's ruling, DM 9018/thread 9004) — confirm_or_confess_link's own two
+# callers, claim_name (Seat) and register_agent (Agent), never go through
+# _enforce_required_links itself (they mint across more than one phase, no single
+# actions.atomic() block to refuse-and-rollback inside), but they still write
+# derivation_abstained_<link_type> through the same _confess_abstention helper, which reads
+# this table for every kind it is given.
+_REQUIRED_LINK_KIND_TABLE = {
+    "repo": "in_repo", "grounds": "grounded_by", "resolves": "answers",
+    "holds": "holds", "works_in": "works_in",
+}
 
 
 async def _confess_abstention(
@@ -1716,6 +1726,64 @@ async def _confess_abstention(
             {"link_type": link_type, "candidate_count": 0, "reason": unlinked_because,
              "candidates": []},
             source, observed, _CONF, evidence_class=_EC)
+
+
+# THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004, THE ORPHAN LAWS item 2
+# pass 2): claim_name -> ensure_seat/bind_holder and register_agent mint an object across
+# more than one phase under an advisory lock (_seat_lock / mint_lock), never one
+# actions.atomic() block — #189's own raise-and-rollback gate (_enforce_required_links,
+# just above) cannot reach across that gap; there is no single transaction left to roll
+# back by the time the natural link would be missing. So this checks instead of refuses:
+# the object this mint produced ends up linked or confessed, never a silent third state.
+# The heartbeat sub-sweep (post_mint_orphan_sweep, seats.py) is the other half — it
+# catches whatever this in-line call missed because the process died between phases,
+# before this ever ran.
+async def confirm_or_confess_link(
+    actions: Actions, obj_id: uuid.UUID, link_type: str, *, direction: str = "from",
+    reason: str, source: str, observed: datetime,
+) -> bool:
+    """Real link checked first, same ordering _enforce_required_links already uses (never
+    poison the hatch's own count with a confession that never needed it). `direction`
+    picks which side of the link `obj_id` sits on: "from" (this object -> its natural
+    target, e.g. Agent -> SoftwareProject via works_in) or "to" (the target points AT
+    this object, e.g. Agent -> Seat via holds — the Seat is `obj_id`, but it never
+    initiates the link itself). UNLIKE _enforce_required_links' own satisfied-check, this
+    filters on valid_until: `holds` is routinely invalidated (a vacated seat, a healed
+    prior holder) and a dead link must never read as still-satisfied — repo/grounds/
+    resolves are close to append-only in practice, which is why that check never needed
+    the filter; `holds` cannot make the same assumption.
+
+    Idempotent: an object that already carries a live, non-resolved `unlinked_because` or
+    `derivation_abstained_<link_type>` is left alone, never re-confessed on every repeat
+    mount or heartbeat tick. `link_type` doubles as `_confess_abstention`'s own `kind` key
+    (see _REQUIRED_LINK_KIND_TABLE) — callers here always pass the bare link type, not a
+    softer abstraction, since these two callers each have exactly one natural link and
+    nothing to disambiguate.
+
+    Returns True when this call wrote a fresh confession, False when the object was
+    already linked or already confessed — the heartbeat sweep's own receipt counts on
+    this to know how many objects it actually touched, vs. how many it merely re-checked."""
+    col = "from_id" if direction == "from" else "to_id"
+    satisfied = await actions.pool.fetchval(
+        f"SELECT 1 FROM links WHERE {col}=$1 AND type=$2 AND evidence_class=$3 "
+        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1",
+        obj_id, link_type, EvidenceClass.SELF_DECLARED.value)
+    if satisfied:
+        return False
+    already_confessed = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND ("
+        "  name = 'unlinked_because' OR "
+        "  (name = $2 AND NOT (value ? 'resolved'))"
+        ") LIMIT 1",
+        obj_id, f"derivation_abstained_{link_type}")
+    if already_confessed:
+        return False
+    await actions.assert_property(obj_id, "unlinked_because", reason, source, observed,
+                                  _CONF, evidence_class=_EC)
+    await actions.assert_property(obj_id, "unlinked_because_kind", "standalone", source,
+                                  observed, _CONF, evidence_class=_EC)
+    await _confess_abstention(actions, obj_id, (link_type,), reason, source, observed)
+    return True
 
 
 async def _enforce_required_links(
