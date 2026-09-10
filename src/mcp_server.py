@@ -9019,7 +9019,8 @@ PRACTICE_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("record"), "statement": _s(),
             "failure_prevented": _opt_s(), "surface": _opt_s(), "repo": _opt_s(),
-            "witnesses": _opt_list_s(), **_SUBAGENT_TRIO,
+            "witnesses": _opt_list_s(), "unlinked_because": _opt_s(),
+            "unlinked_because_kind": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "statement"]),
         _dispatcher_action_schema({
             "action": _action_const("amend"), "ref": _s(), "amendment": _s(),
@@ -9030,7 +9031,8 @@ PRACTICE_INPUT_SCHEMA: dict[str, Any] = {
 _HAND_BUILT_SCHEMAS["practice"] = PRACTICE_INPUT_SCHEMA
 
 _PRACTICE_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
-    "record": (["statement", "failure_prevented", "surface", "repo", "witnesses"],
+    "record": (["statement", "failure_prevented", "surface", "repo", "witnesses",
+               "unlinked_because", "unlinked_because_kind"],
               ["statement"]),
     "amend": (["ref", "amendment"], ["ref", "amendment"]),
 }
@@ -9041,7 +9043,8 @@ async def _practice_impl(
     statement: str | None = None, failure_prevented: str | None = None,
     surface: str | None = None, repo: str | None = None,
     witnesses: list[str] | None = None, ref: str | None = None,
-    amendment: str | None = None, subagent_id: str | None = None,
+    amendment: str | None = None, unlinked_because: str | None = None,
+    unlinked_because_kind: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `practice` and its 2 hidden single-purpose aliases
@@ -9075,9 +9078,14 @@ async def _practice_impl(
                                 "note": "matched no object — quote its UUID or 8-char "
                                         "short id"})
         actor = await _actor_for(ctx, subagent_id, subagent_type)
-        p = await capture.record_practice(
-            Actions(pool), statement, failure_prevented=failure_prevented,
-            surface=surface, repo=repo, witnesses=wids, source=actor)
+        try:
+            p = await capture.record_practice(
+                Actions(pool), statement, failure_prevented=failure_prevented,
+                surface=surface, repo=repo, witnesses=wids, source=actor,
+                unlinked_because=unlinked_because,
+                unlinked_because_kind=unlinked_because_kind)
+        except ValueError as e:  # #189/8919: refused, none of its required links declared
+            return {"error": str(e)}
         out: dict[str, Any] = {"id": str(p), "statement": statement,
                                "confirmed": await capture.practice_confirmed_count(pool, p)}
         if receipt:
@@ -9122,7 +9130,8 @@ async def practice(
     action: str, statement: str | None = None, failure_prevented: str | None = None,
     surface: str | None = None, repo: str | None = None,
     witnesses: list[str] | None = None, ref: str | None = None,
-    amendment: str | None = None, subagent_id: str | None = None,
+    amendment: str | None = None, unlinked_because: str | None = None,
+    unlinked_because_kind: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -9138,7 +9147,10 @@ async def practice(
         Commit(s)/Thread(s) as evidence (a miss is reported, never fatal). Idempotent
         on the normalized statement. Timeless, never moment-stamped — a later disproof
         kills it via record_decision(refutes=...), never here. Runs the same prior-art
-        check record_decision does.
+        check record_decision does. `unlinked_because`/`unlinked_because_kind` (DM
+        8919/thread 8861): the declare-or-refuse hatch, same shape record_decision's
+        own params — currently INERT here (a Practice's `repo` requirement is unarmed
+        by default) until this Type's `required_link_kinds` opts in.
       amend: narrow or correct a LIVE practice's guidance (ref, amendment) — without
         touching its id, its `statement` (record's own idempotency key), or its
         witness/confirmed count. Amendments fold directly into practices()'s own
@@ -9148,6 +9160,7 @@ async def practice(
     return await _practice_impl(
         action, statement=statement, failure_prevented=failure_prevented,
         surface=surface, repo=repo, witnesses=witnesses, ref=ref, amendment=amendment,
+        unlinked_because=unlinked_because, unlinked_because_kind=unlinked_because_kind,
         subagent_id=subagent_id, subagent_type=subagent_type, ctx=ctx)
 
 
@@ -9175,6 +9188,7 @@ async def ingest_reference(
     title: str, source_url: str | None = None, vendor: str | None = None,
     body: str | None = None, caveats: str | None = None, repo: str | None = None,
     cites: list[str] | None = None,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
@@ -9184,7 +9198,11 @@ async def ingest_reference(
     = what it claims, in your words. `caveats` is first-class and separate from body —
     the "but only under X" that dies when buried in prose. `cites` wires paper-to-paper
     lineage (ids/canonicals/titles of already-ingested References). Graded
-    SELF_DECLARED. Returns the id + canonical to cite."""
+    SELF_DECLARED. `unlinked_because`/`unlinked_because_kind` (DM 8919/thread 8861):
+    record_decision's own declare-or-refuse hatch, widened to this door — a caller-typed
+    `repo=` satisfies it outright; a mount-defaulted repo (see `repo_defaulted` below)
+    does NOT, same rule record_decision already applies to its own repo param.
+    Returns the id + canonical to cite."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     cids: list[uuid.UUID] = []
@@ -9210,6 +9228,8 @@ async def ingest_reference(
             source=actor,
             repo_evidence_class=(EvidenceClass.DIRECT_OBSERVATION.value
                                   if repo_defaulted else None),
+            unlinked_because=unlinked_because,
+            unlinked_because_kind=unlinked_because_kind,
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}

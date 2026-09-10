@@ -342,6 +342,222 @@ async def test_record_decision_bears_on_link_rolls_back_with_a_refused_write(
         "SELECT count(*) FROM links WHERE type='answers' AND to_id=$1", thread) == 0
 
 
+# --- THE WIDENED GATE (Thoth's ruling, DM 8919/thread 8861 — THE ORPHAN LAWS item 2) ---
+# --- dual-write: the hatch now ALSO writes derivation_abstained_<link_type>, and the ---
+# --- gate is wired onto two more doors: ingest_reference and record_practice. ---------
+
+async def test_enforce_required_links_hatch_dual_writes_derivation_abstained(
+    actions: Actions,
+) -> None:
+    """The hatch's OWN dual-write: unlinked_because/unlinked_because_kind are unchanged
+    (adoption_meter's own metric), and a derivation_abstained_<link_type> record now
+    lands alongside them, in the same shape derive_or_abstain's own abstention uses."""
+    await ensure_type(actions, name="GateWidget8", kind="object", actor="test",
+                      required_link_kinds=["repo"])
+    async with actions.atomic() as a:
+        oid = await _mint_bare(a, "GateWidget8")
+        await capture._enforce_required_links(
+            a, oid, "GateWidget8", kinds_in_scope=("repo",),
+            unlinked_because="no project exists for this yet", source="test",
+            observed=datetime.now(UTC))
+    because = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='unlinked_because'", oid)
+    assert because == "no project exists for this yet"
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", oid)
+    assert abstained == {"link_type": "in_repo", "candidate_count": 0,
+                         "reason": "no project exists for this yet", "candidates": []}
+
+
+async def test_enforce_required_links_hatch_dual_writes_even_when_type_unenforced(
+    actions: Actions,
+) -> None:
+    """The SAME 'arming later never retroactively silences an already-confessed gap'
+    principle `unlinked_because` itself already follows applies to the dual-write too —
+    exercised via the early 'not required' branch (no required_link_kinds declared at
+    all for this type)."""
+    await ensure_type(actions, name="GateWidget9", kind="object", actor="test")
+    async with actions.atomic() as a:
+        oid = await _mint_bare(a, "GateWidget9")
+        await capture._enforce_required_links(
+            a, oid, "GateWidget9", kinds_in_scope=("repo",),
+            unlinked_because="no project applies here", source="test",
+            observed=datetime.now(UTC))
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", oid)
+    assert abstained == {"link_type": "in_repo", "candidate_count": 0,
+                         "reason": "no project applies here", "candidates": []}
+
+
+async def test_enforce_required_links_no_hatch_no_dual_write(actions: Actions) -> None:
+    """Negative control: a satisfied gate (real link, no hatch) writes no abstention —
+    the dual-write is a hatch-only companion, never an unconditional stamp."""
+    await ensure_type(actions, name="GateWidget10", kind="object", actor="test",
+                      required_link_kinds=["repo"])
+    async with actions.atomic() as a:
+        oid = await _mint_bare(a, "GateWidget10")
+        other = await _mint_bare(a, "SoftwareProject")
+        await a.create_link(oid, other, "in_repo", "test", datetime.now(UTC), 0.9,
+                            evidence_class="self_declared")
+        await capture._enforce_required_links(
+            a, oid, "GateWidget10", kinds_in_scope=("repo",),
+            unlinked_because=None, source="test", observed=datetime.now(UTC))
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_in_repo'", oid) == 0
+
+
+@pytest.fixture
+async def reference_requires_repo(actions: Actions):
+    await ensure_type(actions, name="Reference", kind="object", actor="test",
+                      required_link_kinds=["repo"])
+    catalog._cache.clear()
+    try:
+        yield
+    finally:
+        await ensure_type(actions, name="Reference", kind="object", actor="test",
+                          required_link_kinds=[])
+        catalog._cache.clear()
+
+
+async def test_ingest_reference_refuses_when_declared_and_nothing_links_it(
+    actions: Actions, reference_requires_repo: None,
+) -> None:
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.ingest_reference(actions, "an undeclared, unlinked reference")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Reference'") == 0
+
+
+async def test_ingest_reference_passes_when_repo_is_caller_declared(
+    actions: Actions, reference_requires_repo: None,
+) -> None:
+    ref, _ = await capture.ingest_reference(
+        actions, "a properly linked reference", repo="osiris")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE id=$1", ref) == 1
+
+
+async def test_ingest_reference_mount_defaulted_repo_does_not_satisfy_the_gate(
+    actions: Actions, reference_requires_repo: None,
+) -> None:
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.ingest_reference(
+            actions, "a mount-defaulted-only reference", repo="osiris",
+            repo_evidence_class="direct_observation")
+
+
+async def test_ingest_reference_unlinked_because_hatch_dual_writes(
+    actions: Actions, reference_requires_repo: None,
+) -> None:
+    ref, _ = await capture.ingest_reference(
+        actions, "a deliberately unlinked reference",
+        unlinked_because="not scoped to any one project")
+    recorded = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='unlinked_because'", ref)
+    assert recorded == "not scoped to any one project"
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", ref)
+    assert abstained["reason"] == "not scoped to any one project"
+
+
+async def test_ingest_reference_with_no_declared_requirement_is_unaffected(
+    actions: Actions,
+) -> None:
+    """Negative control: Reference's REAL, shipped required_link_kinds is empty — every
+    existing caller (repo-less references included) must keep working exactly as
+    before."""
+    ref, _ = await capture.ingest_reference(actions, "an ordinary unlinked reference, today")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE id=$1", ref) == 1
+
+
+@pytest.fixture
+async def practice_requires_repo(actions: Actions):
+    await ensure_type(actions, name="Practice", kind="object", actor="test",
+                      required_link_kinds=["repo"])
+    catalog._cache.clear()
+    try:
+        yield
+    finally:
+        await ensure_type(actions, name="Practice", kind="object", actor="test",
+                          required_link_kinds=[])
+        catalog._cache.clear()
+
+
+async def test_record_practice_refuses_when_declared_and_nothing_links_it(
+    actions: Actions, practice_requires_repo: None,
+) -> None:
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.record_practice(actions, "an undeclared, unlinked practice")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Practice'") == 0
+
+
+async def test_record_practice_passes_when_repo_is_caller_declared(
+    actions: Actions, practice_requires_repo: None,
+) -> None:
+    p = await capture.record_practice(
+        actions, "a properly linked practice", repo="osiris")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE id=$1", p) == 1
+
+
+async def test_record_practice_unlinked_because_hatch_dual_writes(
+    actions: Actions, practice_requires_repo: None,
+) -> None:
+    p = await capture.record_practice(
+        actions, "a deliberately unlinked practice",
+        unlinked_because="applies across every project, no single repo")
+    abstained = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='derivation_abstained_in_repo'", p)
+    assert abstained["reason"] == "applies across every project, no single repo"
+
+
+async def test_record_practice_with_no_declared_requirement_is_unaffected(
+    actions: Actions,
+) -> None:
+    """Negative control: Practice's REAL, shipped required_link_kinds is empty — the
+    gate is inert by default, exactly as designed (a Practice is deliberately
+    repo-agnostic)."""
+    p = await capture.record_practice(actions, "an ordinary unlinked practice, today")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE id=$1", p) == 1
+
+
+async def test_record_practice_implements_gate_inside_its_own_atomic_block(
+    actions: Actions, practice_requires_repo: None,
+) -> None:
+    """record_practice now runs inside `actions.atomic()` (it didn't before this
+    widening) — a refused mint must roll back its OWN writes (statement/witnesses)
+    too, the same discipline record_decision/open_thread already prove."""
+    thread = await capture.open_thread(actions, "evidence a refused practice witnesses")
+    with pytest.raises(ValueError, match="unlinked_because"):
+        await capture.record_practice(
+            actions, "a refused practice that only witnesses a thread",
+            witnesses=[thread])
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='witnesses' AND to_id=$1", thread) == 0
+
+
+async def test_record_practice_implements_and_bears_on_land_together_when_satisfied(
+    actions: Actions, practice_requires_repo: None,
+) -> None:
+    thread = await capture.open_thread(actions, "evidence a satisfied practice witnesses")
+    p = await capture.record_practice(
+        actions, "a properly linked practice that also witnesses",
+        repo="osiris", witnesses=[thread])
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='witnesses' AND from_id=$1 "
+        "AND to_id=$2", p, thread) == 1
+
+
 async def test_record_decision_implements_and_bears_on_land_together_when_satisfied(
     actions: Actions, decision_requires_repo: None,
 ) -> None:

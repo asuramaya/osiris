@@ -1418,7 +1418,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # identity, so nobody could mechanically repair someone ELSE's duplicate works_in edge
 # without a raw graph write. No new tool, load-bearing growth per this file's own
 # escape valve. Measured exact (116,943), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 118328
+# 118,328 -> 119,302 (2026-09-10, Thoth's ruling via DM 8919/thread 8861 — THE ORPHAN
+# LAWS item 2): widened #189's declare-or-refuse gate (_enforce_required_links) to two
+# more object-minting doors, `ingest_reference` and `practice(action='record')`/
+# `record_practice` — each gained `unlinked_because`/`unlinked_because_kind` params
+# (practice's own PRACTICE_INPUT_SCHEMA branch plus both dispatcher docstrings) mirroring
+# record_decision/open_thread's own existing shape. No new tool, load-bearing growth per
+# this file's own escape valve. Measured exact (119,302), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 119302
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
