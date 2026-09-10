@@ -870,6 +870,89 @@ async def resolve_agent_orphans(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def resolve_reference_orphans(
+    actions: Actions, *, actor: str = "provenance-sweep:agent",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """PROVENANCE SWEEP, WAVE 15, REFERENCE LANE (mail 8840): links every zero-live-link
+    Reference to its project, resolved from its OWN `topic` property against a real
+    project-name PREFIX — `bootstrap_project` (orchestrator/bootstrap.py) always writes
+    `topic=f"{project}-{topic}"` when it calls `ingest_log` for a named project, so a
+    topic literally starting with `"<some live SoftwareProject's name>-"` is a mechanical,
+    zero-ambiguity signal, never a content guess.
+
+    LIVE-MEASURED (2026-09-09), AND REPORTED HONESTLY RATHER THAN FORCED: every one of the
+    56 real Reference orphans carries a BARE topic (`history`, `design`, `ops`, or one
+    genuinely test-shaped outlier `sekhmet-bootstrap-smoke-history` whose own prefix
+    matches no live project) — the project-prefixed population (`heinrich-history`,
+    `decepticons-history`, `monsterhouse-history`, ...) was ALREADY linked before this
+    lane exists (36 of 38 measured live; `resolve_agent_orphans`'s own history shows a
+    zero-mint run is not a broken resolver, it is what "we already checked" looks like).
+    A bare topic carries no project-identifying signal in its own data at all — `source_id`
+    is uniformly the synthetic `"ref:osiris"` default regardless of which project the
+    ingest actually served (`ingest_log`'s own docstring names this exact gap) — so
+    EVERY orphan today abstains, correctly: minting "osiris" off a bare topic would be
+    exactly the content-inference guess `derive_or_abstain`'s whole contract refuses.
+    This lane still ships (Thoth's mail 8840: build the resolver, not just what it
+    resolves today) — a future `ingest_log` call for a real project that forgets `repo=`
+    IS caught here, and `retry_ambiguous_abstentions`/`retryable_abstentions` already
+    retry every abstention this records for free the moment its shape changes.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once an object is linked."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    projects = await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
+    names = sorted({p["canonical"].removeprefix("repo:") for p in projects})
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='topic' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS topic "
+        "FROM objects o WHERE o.type='Reference' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        topic = (row["topic"] or "").strip()
+        matching = [n for n in names if topic.startswith(n + "-")]
+        candidate_ids: list[uuid.UUID] = []
+        reason: str | None = None
+        if not matching:
+            reason = (f"topic {topic!r} carries no live project's name as a prefix — no "
+                      "signal to derive from" if topic else
+                      "no topic property recorded at all")
+        else:
+            for proj in matching:
+                pid = await actions.create_or_find_object(
+                    "SoftwareProject", f"repo:{proj}", actor)
+                candidate_ids.append(pid)
+            if len(matching) > 1:
+                reason = (f"topic {topic!r} matches {len(matching)} distinct project name "
+                          f"prefixes ({', '.join(matching)}) — not a unique lookup, never "
+                          "guessed")
+        if len(candidate_ids) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidate_ids[0]), "topic": topic}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": reason, "topic": topic,
+                     "candidate_count": len(candidate_ids)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                    why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
     """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
     name this codebase's own generic listing/describe queries already key on across
