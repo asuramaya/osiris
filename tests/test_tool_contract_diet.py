@@ -1418,7 +1418,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # identity, so nobody could mechanically repair someone ELSE's duplicate works_in edge
 # without a raw graph write. No new tool, load-bearing growth per this file's own
 # escape valve. Measured exact (116,943), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 118328
+# 118,328 -> 118,628 (2026-09-10, Thoth mail 8921/8922, Metron's mechanism report):
+# thread(action='annotate') gains optional corrected_summary/because -- one call now
+# fixes a proven-false headline instead of requiring a caller to already know
+# correct_summary is a separate verb (the exact affordance gap the report named). No
+# new tool, load-bearing growth per this file's own escape valve. Measured exact
+# (118,628), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 118628
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

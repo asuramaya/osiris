@@ -9512,7 +9512,7 @@ THREAD_INPUT_SCHEMA: dict[str, Any] = {
         }, ["action", "ref"]),
         _dispatcher_action_schema({
             "action": _action_const("annotate"), "ref": _s(), "note": _s(),
-            **_SUBAGENT_TRIO,
+            "corrected_summary": _opt_s(), "because": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "ref", "note"]),
         _dispatcher_action_schema({
             "action": _action_const("correct_summary"), "ref": _s(),
@@ -9528,7 +9528,7 @@ _HAND_BUILT_SCHEMAS["thread"] = THREAD_INPUT_SCHEMA
 
 _THREAD_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "resolve": (["ref", "because", "artifact", "dry_run"], ["ref"]),
-    "annotate": (["ref", "note"], ["ref", "note"]),
+    "annotate": (["ref", "note", "corrected_summary", "because"], ["ref", "note"]),
     "correct_summary": (["ref", "corrected_summary", "because"], ["ref", "corrected_summary"]),
     "reclassify": (["ref", "kind", "because", "owner", "arc"], ["ref", "kind"]),
 }
@@ -9600,12 +9600,17 @@ async def _thread_action_impl(
         assert isinstance(ref, str)
         assert note is not None
         try:
-            tid = await capture.annotate_thread(Actions(pool), ref, note, source=actor)
+            tid = await capture.annotate_thread(
+                Actions(pool), ref, note, corrected_summary=corrected_summary,
+                because=because, source=actor)
         except ValueError as e:
             return {"error": str(e)}
         if tid is None:
             return {"error": f"no thread matches {ref!r}"}
-        return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+        out = {"id": str(tid), "note": note.strip(), "status": "annotated"}
+        if corrected_summary:
+            out["corrected_summary"] = corrected_summary.strip()
+        return out
     if action == "correct_summary":
         assert isinstance(ref, str)
         assert corrected_summary is not None
@@ -9691,7 +9696,9 @@ async def thread(
         writing — pass `dry_run=False` explicitly to actually close the batch — and the
         whole batch refuses if any ref does not resolve to exactly one thread.
       annotate: add `note` WITHOUT closing it or touching `summary`/`status` (ref, note)
-        — each call appends independently, never supersedes an earlier note.
+        — each call appends independently, never supersedes an earlier note. Optional
+        `corrected_summary`/`because` fix the headline in the same call, same as
+        correct_summary below.
       correct_summary: replace the headline in place via `corrected_summary` (ref,
         corrected_summary — `summary` itself, the dedup key, is never touched);
         re-calling supersedes the prior correction rather than piling up notes.
