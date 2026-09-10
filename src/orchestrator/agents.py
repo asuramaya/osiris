@@ -4142,6 +4142,21 @@ async def register_agent(
     principal = await actions.create_or_find_object("Person", f"principal:{actor}", src)
     await actions.assert_property(principal, "name", actor, src, now, _CONF, evidence_class=_EC)
     await _link_once(actions, a, principal, "acts_for", src, now)
+    # THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004): the Agent object
+    # mints under mint_lock above, but its works_in link (just above, when
+    # identity.project resolves at all) is a separate later write outside that lock — no
+    # single actions.atomic() block spans both, so #189's own refuse-and-rollback gate
+    # can't reach across the gap. This never refuses: a project-less mount (no cwd/seat
+    # ever resolved one) is a real, common, legitimate state, not a bug — it just
+    # confesses that gap the same honest way a caller's own unlinked_because would,
+    # once, idempotently, rather than leaving it silent. The heartbeat sub-sweep
+    # (seats.py's post_mint_orphan_sweep) catches whatever a crash between mint_lock and
+    # this line missed.
+    from src.orchestrator.capture import confirm_or_confess_link
+    await confirm_or_confess_link(
+        actions, a, "works_in",
+        reason="no live works_in link observed when register_agent's post-mint invariant ran",
+        source=src, observed=now)
     return a
 
 

@@ -158,3 +158,60 @@ async def test_claim_name_confesses_when_the_seat_is_left_unlinked(actions: Acti
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
         "AND name='derivation_abstained_holds'", seat_oid) == 1
+
+
+# --- wired through register_agent (Agent) ---------------------------------------------
+
+async def test_register_agent_leaves_no_confession_when_a_project_resolves(
+    actions: Actions,
+) -> None:
+    """A resolved project means works_in gets written a few lines above the invariant
+    check runs — the healthy, overwhelmingly common path — so this must stay a no-op."""
+    from src.orchestrator.agents import AgentIdentity, register_agent
+
+    ident = AgentIdentity(agent_id="agent:pmi-agent-1", session="sess-pmi-1",
+                          project="pmi-project-1", model=None, cwd=None)
+    a = await register_agent(actions, ident, actor="test")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name IN ('unlinked_because', 'derivation_abstained_works_in')", a) == 0
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='works_in' "
+        "AND (valid_until IS NULL OR valid_until > now())", a) == 1
+
+
+async def test_register_agent_confesses_when_no_project_ever_resolves(
+    actions: Actions,
+) -> None:
+    """A project-less mount (no cwd, no seat, nothing to resolve) is a real, common,
+    legitimate state — not a crash — but it still leaves the Agent with no works_in link,
+    so the invariant confesses it honestly rather than leaving a silent hole."""
+    from src.orchestrator.agents import AgentIdentity, register_agent
+
+    ident = AgentIdentity(agent_id="agent:pmi-agent-2", session="sess-pmi-2",
+                          project=None, model=None, cwd=None)
+    a = await register_agent(actions, ident, actor="test")
+    assert await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", a) is not None
+    row = await actions.pool.fetchval(
+        "SELECT value FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_works_in'", a)
+    assert row["link_type"] == "works_in"
+
+
+async def test_register_agent_confession_is_idempotent_across_repeat_mounts(
+    actions: Actions,
+) -> None:
+    """register_agent runs on EVERY mount — a project-less agent must be confessed once,
+    not re-confessed (and re-timestamped) on every single re-mount."""
+    from src.orchestrator.agents import AgentIdentity, register_agent
+
+    ident = AgentIdentity(agent_id="agent:pmi-agent-3", session="sess-pmi-3",
+                          project=None, model=None, cwd=None)
+    a1 = await register_agent(actions, ident, actor="test")
+    a2 = await register_agent(actions, ident, actor="test")
+    assert a1 == a2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_works_in'", a1) == 1
