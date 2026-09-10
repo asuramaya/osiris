@@ -52,3 +52,68 @@ def test_mailbox_listens_for_the_osiris_run_navigation_event_scoped_to_its_own_s
     listener = _JS.split("document.addEventListener('osiris:run'", 1)[1][:300]
     assert "if (ACTIVE_SURFACE !== 'mailbox') return;" in listener
     assert "runMailboxComposition(e.detail.name, e.detail.args || {});" in listener
+
+
+# THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "pick a room, run/author/
+# fork compositions" — CMD-K's runTool() used to POST /compositions/{name}/run and dump the raw
+# JSON into a <pre>, never reaching osiris.js's generic renderer (P4, commit 9c5e923) that piece
+# 1 finally wired up for the mailbox. Every saved composition now renders through the same
+# Osiris.renderResult() pipeline, room-scoped listing feeds the palette (PICK), a raw-spec save
+# flow reaches /compositions (AUTHOR), and forking a running composition's own spec under a new
+# name (FORK) is one more POST to the same route.
+
+
+def test_run_tool_delegates_to_the_generic_composer_runner() -> None:
+    assert "async function runTool(name) { await runComposition(name, {}, FOCUS); }" in _JS
+
+
+def test_composer_runner_renders_through_osiris_render_result_not_a_raw_json_dump() -> None:
+    body = _JS.split("async function runComposition(", 1)[1].split("\nfunction ", 1)[0]
+    assert "Osiris.renderResult(res" in body
+    assert "JSON.stringify(res, null, 2)" not in body
+
+
+def test_composer_runner_hits_run_spec_for_a_function_drill_in() -> None:
+    body = _JS.split("async function runComposition(", 1)[1].split("\nfunction ", 1)[0]
+    assert "'/compositions/run-spec'" in body
+    assert "op: 'function', name: name, args: args" in body
+
+
+def test_shell_listens_for_osiris_run_scoped_away_from_the_mailbox_surface() -> None:
+    needle = "document.addEventListener('osiris:run'"
+    hits = [i for i in range(len(_JS)) if _JS.startswith(needle, i)]
+    assert len(hits) == 2  # renderMailbox's own listener (piece 1) + this general one
+    shell_listener = _JS[hits[1]:hits[1] + 300]
+    assert "if (ACTIVE_SURFACE === 'mailbox') return;" in shell_listener
+    assert "runComposition(e.detail.name, e.detail.args || {}, FOCUS);" in shell_listener
+
+
+def test_author_composition_previews_before_saving() -> None:
+    body = _JS.split("async function authorComposition()", 1)[1].split("\nasync function ", 1)[0]
+    # the preview call comes before the save call — a bad spec must never reach the DB
+    preview_at = body.index("'/compositions/run-spec'")
+    save_at = body.index("JSON.stringify({ name: name, spec: spec, room_id: ROOM || null })")
+    assert preview_at < save_at
+
+
+def test_fork_composition_saves_the_on_screen_spec_under_a_new_name() -> None:
+    body = _JS.split("async function forkComposition()", 1)[1].split("\nasync function ", 1)[0]
+    assert "LAST_COMPOSITION_RUN.spec" in body
+    assert "room_id: ROOM || null" in body
+
+
+def test_load_compositions_is_room_scoped_and_called_on_room_switch() -> None:
+    assert "'/compositions' + (ROOM ? ('?room=' + encodeURIComponent(ROOM)) : '')" in _JS
+    switch_room = _JS.split("async function switchRoom(", 1)[1].split("\nasync function ", 1)[0]
+    assert "await loadCompositions();" in switch_room
+
+
+def test_palette_has_an_author_composition_entry() -> None:
+    assert "Author composition…" in _JS
+    assert "run: () => authorComposition()" in _JS
+
+
+def test_palette_search_includes_saved_compositions_in_both_search_paths() -> None:
+    assert "SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql))" in _JS
+    assert "OMNI_ITEMS = toolHits.concat(compHits);" in _JS
+    assert "OMNI_ITEMS = toolHits.concat(compHits, graphHits).slice(0, 16);" in _JS
