@@ -945,6 +945,17 @@ const Osiris = (() => {
   // already established. Lands inside cell()'s EXISTING clamp+tooltip once it runs long
   // (below) — nothing new needed there, only the text itself had to stop lying.
   const NEST_ITEMS_CAP = 4;
+  // THE RESERVED UNAVAILABLE MARKER (thread 04c651ce item 2, Thoth dispatch msg 9123):
+  // compositions.py's `_unavailable(reason)` nests {"_unavailable": reason} on a field that
+  // genuinely could not be computed (a PARTIAL failure — real data sits right beside it in
+  // the same row/result) — a reserved leading-underscore key, checked by KEY same as this
+  // file's own `_action`/`_actions` row-control convention, never by sniffing text content
+  // for the word "unavailable" (which a real value could legitimately contain). table()'s
+  // cell() strips it to a distinct dimmed marker instead of flattening it as if it were
+  // real nested JSON; a programmatic reader checks the raw JSON's own `_unavailable` key.
+  const UNAVAILABLE_KEY = "_unavailable";
+  const isUnavailable = (v) =>
+    !!(v && typeof v === "object" && !Array.isArray(v) && UNAVAILABLE_KEY in v);
   function _hasNestedObject(v) {
     return Array.isArray(v) ? v.some((x) => x && typeof x === "object") : !!(v && typeof v === "object");
   }
@@ -969,6 +980,7 @@ const Osiris = (() => {
   const _txt = (v) => {
     if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);   // ISO → date
     if (v == null) return "";
+    if (isUnavailable(v)) return "unavailable";  // stripped: never flattened as if it were data
     if (Array.isArray(v) && !_hasNestedObject(v)) return v.join(", ");  // unchanged: flat list
     if (Array.isArray(v) || typeof v === "object") return _flatVal(v, 0);
     return String(v);
@@ -1102,6 +1114,8 @@ const Osiris = (() => {
     // it here (rather than a fresh magic number) means anything past "glanceable" gets two real,
     // word-wrapped lines instead of a starved column's only remaining option: mid-word carnage.
     const cell = (v) => {
+      if (isUnavailable(v))  // stripped to a distinct dimmed marker, the real reason on hover
+        return `<span class="o-faint" title="${esc(v[UNAVAILABLE_KEY])}">unavailable</span>`;
       const s = _txt(v);
       if (s.length > 160)                       // a genuine wall of text: hard-cap the DOM weight
         return `<span class="clamp" title="${esc(s)}">${esc(s.slice(0, 157))}…</span>`;

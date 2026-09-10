@@ -950,7 +950,16 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") 
     is exactly the live, still-being-written file, never a static copy sitting still.
     `job_dir` defaults to `""`, synthesizing `f"jobs/{sid}"` below (the SAME convention
     `_lineage_resume_candidate` used before its own rewrite) when a caller has no real
-    per-hop anchor to pass — a real job_dir, when the caller has one, is always preferred."""
+    per-hop anchor to pass — a real job_dir, when the caller has one, is always preferred.
+
+    TRACED (thread 04c651ce item 3, Thoth dispatch msg 9123): the file-read's own `except
+    OSError: return False` collapses "confirmed not mid-turn" and "couldn't read the
+    transcript at all" into the same False, same disease shape as `_confirm_listener`/
+    `_clear_stale_stopped_record` below. Named safe, not fixed, because both live callers
+    already treat False as "assume asleep, fall through to the wake path" — the SAFE
+    default either way (waking a genuinely-busy agent costs a redundant nudge; failing to
+    wake a genuinely-idle one is the worse failure), never a claim this function could not
+    actually verify."""
     if not sid:
         return False
     t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
