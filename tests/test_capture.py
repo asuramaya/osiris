@@ -949,6 +949,107 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
     assert "false positive" in second["note"]
 
 
+async def test_record_decision_tool_receipt_names_the_prose_derived_decided_in(
+    actions: Actions,
+) -> None:
+    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): capture.record_decision's own
+    prose-scan (task #101) mints `decided_in` from a commit sha named in the caller's
+    own rationale, inside the SAME transaction as everything else this receipt already
+    reports — but the MCP wrapper never surfaced it. A caller citing a real commit had
+    no way to tell whether it became a real edge."""
+    from src import mcp_server as srv
+
+    commit_id = await actions.create_or_find_object("Commit", "commit:238b48fb7104", "git")
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            "Wire seed_catalog into the lifespan (receipt-law fixture)",
+            rationale="Fixed by calling it once in create_app()'s lifespan "
+                      "(commit 238b48f).", repo="receiptlawproj")
+    finally:
+        srv._pool = saved_pool
+    assert out["decided_in"] == [str(commit_id)[:8]]
+
+
+async def test_record_decision_tool_receipt_names_prose_cites_and_skips(
+    actions: Actions,
+) -> None:
+    """Same gap, the `cites`(prose)/`prose_citation_skips` half: a decision that cites
+    "ruling <id>" in its own summary mints a real `cites` edge (origin='prose') when the
+    id resolves, or records why it did not when it doesn't — neither ever showed up in
+    the receipt, only the caller-declared `cites=` param's own field did (a DIFFERENT
+    field here, `prose_cites`, never overloading that key with a second meaning)."""
+    from src import mcp_server as srv
+
+    target = await srv.record_decision("a real ruling to be prose-cited",
+                                       repo="receiptlawproj2")
+    target_short = target["id"][:8]
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.record_decision(
+            f"a decision citing ruling {target_short} and a bogus one",
+            rationale="also cites ruling 00000000 which resolves to nothing.",
+            repo="receiptlawproj2")
+    finally:
+        srv._pool = saved_pool
+    assert out.get("prose_cites") == [target_short]
+    assert out.get("prose_citation_skips")
+
+
+async def test_reclassify_thread_receipt_names_the_owner(actions: Actions) -> None:
+    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): the kind change was already
+    confirmed in this receipt; a reclassify that ALSO changes owner in the same call
+    never confirmed that part landed."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    await claim_name(actions, "agent:reclowner1", "Reclowner", source="agent:reclowner1")
+    seat = await held_seat(actions.pool, "agent:reclowner1")
+    assert seat is not None
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        opened = await srv.open_thread("a thread to reclassify with a new owner",
+                                       repo="reclownerproj", kind="task")
+        out = await srv.reclassify_thread(opened["id"], "question", owner=seat["seat_id"])
+    finally:
+        srv._pool = saved_pool
+    assert out["owner"] == seat["seat_id"]
+
+
+async def test_open_thread_dedup_names_a_dropped_owner(actions: Actions) -> None:
+    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): discarded_on_noop's own docstring
+    already named 'owner' as a field a dedup hit could silently drop — kind/arc were
+    wired into the check, owner never was. A bare owner= on a dedup hit must show up in
+    `discarded`, the same as kind/arc already do."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    await claim_name(actions, "agent:ownerdrop1", "Ownerdrop", source="agent:ownerdrop1")
+    seat = await held_seat(actions.pool, "agent:ownerdrop1")
+    assert seat is not None
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        first = await srv.open_thread(
+            "a thread that will be near-duplicated for the owner-drop check",
+            repo="ownerdropproj", kind="task")
+        assert first["deduped"] == "false"
+        out = await srv.open_thread(
+            "a thread that will be near-duplicated for the owner-drop check",
+            repo="ownerdropproj", kind="task", owner=seat["seat_id"])
+    finally:
+        srv._pool = saved_pool
+    assert out["deduped"] == "true"
+    assert "owner" in out.get("discarded", {})
+
+
 async def test_record_decision_tool_names_an_exact_retry_as_a_safe_repeat(
     actions: Actions,
 ) -> None:

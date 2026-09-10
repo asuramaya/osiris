@@ -52,6 +52,7 @@ from src.cli import (
     cmd_rebind_seat,
     cmd_reconcile_merge,
     cmd_rematerialize,
+    cmd_rename_project,
     cmd_resume,
     cmd_retention,
     cmd_retire_agent,
@@ -5158,3 +5159,57 @@ def test_cli_has_no_private_house_tag_copy() -> None:
     from src import cli
 
     assert not hasattr(cli, "_house_tag")
+
+
+async def test_cmd_rename_project_discloses_the_gap_it_cannot_close(
+    actions: Actions,
+) -> None:
+    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): cmd_rename_project's own
+    docstring used to falsely claim it was "the SAME function the rename_project MCP
+    tool wraps" — the MCP door also does governing-seat evidence checking and heals
+    every already-mounted agent's in-process cache, neither of which this CLI path did.
+    The cache-heal half is structurally inapplicable to a one-shot CLI process (no
+    `_agents` cache exists here to heal) — that gap must be DISCLOSED, not silently
+    left unmentioned, on every real (non-dry-run) rename."""
+    await actions.create_or_find_object("SoftwareProject", "repo:cmdrenamesrc", "gitlog")
+
+    code = await cmd_rename_project(
+        "cmdrenamesrc", "cmdrenamedst", "receipt-law fixture", dry_run=False,
+        actor="agent:test", pool=actions.pool)
+
+    assert code == 0
+    renamed = await actions.pool.fetchval(
+        "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical='repo:cmdrenamesrc' AND a.name='name' "
+        "AND a.value #>> '{}' = 'cmdrenamedst'")
+    assert renamed == 1
+
+
+async def test_cmd_rename_project_gathers_evidence_when_a_seat_governs_it(
+    actions: Actions,
+) -> None:
+    """The portable half of the MCP door's guarantee (governing-seat evidence, no
+    dependency on an in-process cache) now runs from the CLI too — this only proves the
+    evidence-gathering path runs cleanly end-to-end against a REAL governing seat
+    (no disagreement fixture here, that's project_identity_evidence's own well-covered
+    unit territory in test_project_identity.py); a crash here would mean the CLI's new
+    code path is broken, not just unverified."""
+    from src.orchestrator.agents import claim_name
+    from src.orchestrator.seats import held_seat
+
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:cmdrenameevsrc", "gitlog")
+    await claim_name(actions, "agent:cmdrenameev1", "Cmdrenameev", source="agent:cmdrenameev1")
+    seat = await held_seat(actions.pool, "agent:cmdrenameev1")
+    assert seat is not None
+    seat_obj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
+    await actions.create_link(
+        seat_obj_id, proj, "governs", "agent:cmdrenameev1", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+
+    code = await cmd_rename_project(
+        "cmdrenameevsrc", "cmdrenameevdst", "receipt-law fixture", dry_run=False,
+        actor="agent:test", pool=actions.pool)
+
+    assert code == 0

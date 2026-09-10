@@ -4997,10 +4997,24 @@ async def cmd_rename_project(
 ) -> int:
     """osiris rename-project <project> <new_name> <because> [--apply] [--merge-into]
     [--actor W] — the console-script door onto orchestrator.project_identity.
-    rename_project, the SAME function the rename_project MCP tool wraps (forwards to
-    project(action='rename')). Dry-run by default; --apply writes."""
+    rename_project, the SAME underlying write the rename_project MCP tool's
+    project(action='rename') calls. Dry-run by default; --apply writes.
+
+    RECEIPT LAW (Thoth mail 9122 item 1, wave 16) — NOT the same overall guarantee as
+    the MCP door, and this docstring used to falsely claim it was: the MCP door also
+    (a) gathers governing-seat evidence and warns when it disagrees with `new_name`
+    (`rename_evidence`/`evidence_disagrees`/`warning`, mcp_server.py's `_project_impl`
+    rename branch) and (b) heals every already-mounted agent's IN-PROCESS mount cache
+    so a live session's `get_status()` stops reporting the pre-rename name. (b) is
+    structurally inapplicable here — a CLI invocation is its own short-lived process
+    with no `_agents` cache to heal; only the long-lived MCP server process has one.
+    (a) is portable and IS run here now (see below) — the earlier gap was landing a
+    rename while governing-seat evidence still disagreed with the new name, with no
+    warning at all, silently."""
     from src.actions.core import Actions
+    from src.orchestrator.project_identity import project_identity_evidence, rename_evidence_verdict
     from src.orchestrator.project_identity import rename_project as _rename_project
+    from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
 
     owns_pool = pool is None
     if pool is None:
@@ -5020,9 +5034,43 @@ async def cmd_rename_project(
                   "instance.", file=sys.stderr)
             return 1
     try:
+        # SAME evidence-gathering the MCP door runs, before the write (best-effort —
+        # an ambiguous ref is the real refusal inside _rename_project itself below).
+        evidence_by_seat: dict[str, Any] = {}
+        try:
+            row = await _resolve_software_project(pool, project)
+        except AmbiguousProjectRef:
+            row = None
+        if row is not None:
+            seat_rows = await pool.fetch(
+                "SELECT s.canonical FROM links l JOIN objects s ON s.id=l.from_id "
+                "WHERE l.to_id=$1 AND l.type='governs' "
+                "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
+            for r in seat_rows:
+                evidence_by_seat[r["canonical"]] = await project_identity_evidence(
+                    pool, seat_id=r["canonical"])
         out = await _rename_project(Actions(pool), project=project, new_name=new_name,
                                     because=because, actor=actor, dry_run=dry_run,
                                     merge_into=merge_into)
+        if evidence_by_seat and not out.get("error") and not dry_run:
+            rename_evidence = {
+                seat: {"verdict": rename_evidence_verdict(ev, new_name), "evidence": ev}
+                for seat, ev in evidence_by_seat.items()
+            }
+            out["rename_evidence"] = rename_evidence
+            disagreeing = [s for s, v in rename_evidence.items() if v["verdict"] == "disagrees"]
+            if disagreeing:
+                out["evidence_disagrees"] = True
+                out["warning"] = (
+                    f"{new_name!r} was written, but {len(disagreeing)} governing seat "
+                    f"evidence disagrees with it: {', '.join(disagreeing)} — their own "
+                    "pin/charter/remote still names something else; go fix those, this "
+                    "write did not")
+        if not dry_run and not out.get("error"):
+            out["mount_cache_note"] = (
+                "any already-mounted agent's in-process get_status() may still report "
+                "the pre-rename name until its next re-mount — this CLI process has no "
+                "live agent cache to heal (only the MCP server process does)")
     finally:
         if owns_pool:
             await pool.close()

@@ -1457,7 +1457,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 79
 # directly from a caller would be the raw-mutation shortcut house law forbids — this
 # is the MCP-facing door onto it), not prose growth on an existing one; raised
 # deliberately, measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 123373
+# 121931 -> 122273 (2026-09-10, Thoth mail 9122 item 1, wave 16, THE RECEIPT LAW audit):
+# thread(action='resolve')'s own ACTION TABLE entry gains one sentence disclosing that
+# dry_run is inert for a single ref (the schema offers it uniformly for both the single
+# and batch shapes) — the only prose growth in this fix; the sibling record_decision/
+# reclassify receipt fields this same audit added are pure code, no schema/docstring
+# growth of their own. No new tool, load-bearing growth per this file's own escape
+# valve. Measured exact (122,273), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 123715
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
