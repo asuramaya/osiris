@@ -2367,6 +2367,7 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     """sibling-one's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
     of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit
     project must OVERRIDE the mount."""
+    import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key, orient
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.compositions import seed_default_compositions
@@ -2391,9 +2392,20 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     ctx = _Ctx()
     _agents[_conn_key(ctx)] = AgentIdentity(   # mounted as sibling-one...
         agent_id="agent:heinX", session="heinX", project="sibling-one", model=None, cwd=None)
+    # the file's pool ritual (see test_record_decision_obsoletes_and_orient_announces_
+    # fleet_wide just above): point the server at THIS test's pool (and loop) — a test
+    # that instead lets _pool_get mint the global pool leaves it bound to a dead loop
+    # for every later caller in the same worker (full-suite-only: asyncpg.exceptions.
+    # _base.InterfaceError / "attached to a different loop", never reproduced standalone
+    # or in a small targeted run — caught by Thoth's own full-suite gate, not by this
+    # file's own targeted list, which never runs enough MCP-tool-calling tests in one
+    # process to land on a stale pool).
+    saved_pool = srv._pool
+    srv._pool = actions.pool
     try:
         res = await orient(project="sibling-two", ctx=ctx)   # ...but explicitly asks sibling-two
     finally:
+        srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
     assert res["project"] == "sibling-two"                   # honored the explicit scope
     assert "the sibling-two-only thread" in [r["summary"] for r in res["open_threads"]]
