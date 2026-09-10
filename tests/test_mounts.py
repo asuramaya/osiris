@@ -1215,6 +1215,7 @@ async def test_find_session_row_covers_both_lanes(actions: Actions) -> None:
     MCP connection id in session_key never serves the lookup."""
     p = actions.pool
     # lane 1: jobs/<sid8> — session_key deliberately carries an UNRELATED conn id
+    await actions.create_or_find_object("Agent", "agent:beadfeed", "test")
     await mounts.save_mount(p, job_dir="/x/jobs/beadfeed", agent_id="agent:beadfeed",
                             project="demo", cwd="/w", model=None,
                             session_key="sid:99887766554433221100aabbccddeeff")
@@ -1233,6 +1234,62 @@ async def test_find_session_row_covers_both_lanes(actions: Actions) -> None:
     assert row2 is not None and row2["agent_id"] == "agent:cafe0002-ii"
     # (3) honesty about absence
     assert await mounts.find_session_row(p, "0dead000-none-anywhere") is None
+
+
+async def test_find_session_row_lane_1_refuses_a_retired_or_dead_collision(
+    actions: Actions,
+) -> None:
+    """Wave 16 item 1: an 8-char sid prefix is not a strong key — two DIFFERENT job_dir
+    paths can share the same trailing /jobs/<sid8> (different parent directories), and
+    lane 1's own LIKE match has no way to tell them apart except last_seen. Before this
+    fix, whichever row happened to be freshest (or NULL-sorted-first) won regardless of
+    whether it still named anything real; compute_heartbeat then UPDATEs that row
+    unconditionally. Here the FRESHER row names a RETIRED Agent — the fix must skip past
+    it to the older, still-active one, never the reverse."""
+    p = actions.pool
+    now = datetime.now(UTC)
+    retired_id = await actions.create_or_find_object("Agent", "agent:retired01", "test")
+    await actions.set_status(retired_id, "retired", "test cleanup", "test")
+    await mounts.save_mount(p, job_dir="/old-office/jobs/shareid8", agent_id="agent:retired01",
+                            project="demo", cwd="/w", model=None, session_key=None)
+    # the retired row is the FRESHER one (would win a bare ORDER BY last_seen DESC LIMIT 1)
+    await p.execute("UPDATE agent_mounts SET last_seen=$1 WHERE job_dir=$2",
+                    now, "/old-office/jobs/shareid8")
+
+    await actions.create_or_find_object("Agent", "agent:liveone1", "test")
+    await mounts.save_mount(p, job_dir="/new-office/jobs/shareid8", agent_id="agent:liveone1",
+                            project="demo", cwd="/w2", model=None, session_key=None)
+    await p.execute("UPDATE agent_mounts SET last_seen=$1 WHERE job_dir=$2",
+                    now - timedelta(minutes=30), "/new-office/jobs/shareid8")
+
+    row = await mounts.find_session_row(p, "shareid8-0000-4000-8000-000000000000")
+    assert row is not None
+    assert row["agent_id"] == "agent:liveone1", (
+        "matched the retired agent's row despite it being fresher — the retirement "
+        "predicate did not apply")
+
+    # the SAME collision, but the other row is merely SUSPENDED (a released session, not
+    # a retired agent) — release_session_mounts' own epoch sentinel must be refused too.
+    # SUSPENDED_AT is a REAL (ancient) timestamp, so it only risks winning against a row
+    # whose own last_seen is still NULL (seated but not yet heartbeat-certified,
+    # `alive=False` — see save_mount's own "a heartbeat must be earned" docstring):
+    # NULLS LAST sorts any real timestamp, however old, ahead of a NULL one.
+    await actions.create_or_find_object("Agent", "agent:deadone1", "test")
+    await mounts.save_mount(p, job_dir="/dead-office/jobs/otherid8", agent_id="agent:deadone1",
+                            project="demo", cwd="/w3", model=None, session_key=None)
+    await mounts.release_session_mounts(
+        p, job_dir="/dead-office/jobs/otherid8", session_id="otherid8-dead-dead-dead-000000000000")
+
+    await actions.create_or_find_object("Agent", "agent:liveone2", "test")
+    await mounts.save_mount(p, job_dir="/fresh-office/jobs/otherid8", agent_id="agent:liveone2",
+                            project="demo", cwd="/w4", model=None, session_key=None,
+                            alive=False)
+
+    row2 = await mounts.find_session_row(p, "otherid8-0000-4000-8000-000000000000")
+    assert row2 is not None
+    assert row2["agent_id"] == "agent:liveone2", (
+        "matched the suspended row despite NULLS LAST sorting it first — the "
+        "SUSPENDED_AT exclusion did not apply")
 
 
 async def test_find_session_row_lane_3_self_evident_derivation(actions: Actions) -> None:

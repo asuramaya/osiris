@@ -157,6 +157,7 @@ async def test_settle_tool_standing_orders_unchanged_closes_the_box_honestly(
     agent = "agent:standingtool1"
     job_dir = str(tmp_path / "jobs" / "standtl1")  # exactly 8 chars, find_session_row's convention
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="someproj",
                      cwd=str(tmp_path), model=None, session_key=None)
     await actions.pool.execute(
@@ -1249,6 +1250,7 @@ async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
     agent = "agent:settlecc1"
     job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars — matches session[:8]
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
                      cwd=str(tmp_path), model=None, session_key=None)
     await actions.pool.execute(
@@ -2227,6 +2229,7 @@ async def test_settle_tool_charter_box_still_none_for_an_unseated_session(
     agent = "agent:settleunseated1"
     job_dir = str(tmp_path / "jobs" / "settleun")  # EXACTLY 8 chars
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="someproj",
                      cwd=str(tmp_path), model=None, session_key=None)
     await actions.pool.execute(
@@ -2269,6 +2272,7 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     agent = "agent:settlecf1"
     job_dir = str(tmp_path / "jobs" / "settlecf")  # EXACTLY 8 chars — see below
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
                      cwd=str(tmp_path), model=None, session_key=None)
     await actions.pool.execute(
@@ -2388,6 +2392,7 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
     agent = "agent:settlerp1"
     job_dir = str(tmp_path / "jobs" / "settlerp")  # EXACTLY 8 chars
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
                      cwd=str(office), model=None, session_key=None)
     await actions.pool.execute(
@@ -2480,6 +2485,7 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
     agent = "agent:settleic1"
     job_dir = str(tmp_path / "jobs" / "settleic")  # EXACTLY 8 chars
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
+    await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="redmonth",
                      cwd=str(tmp_path), model=None, session_key=None)
     await actions.pool.execute(

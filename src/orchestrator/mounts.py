@@ -404,6 +404,12 @@ async def find_session_row(
     Three lanes, strongest evidence first:
       1. THE ANCHOR NAMED FOR THE SID — the whisper derives ~/.claude/jobs/<sid8> for
          every session it greets, so this covers first lives, resumes, and forks alike.
+         GUARDED (wave 16 item 1): an 8-char prefix collides across real sessions often
+         enough that this rung refuses a SUSPENDED row (SUSPENDED_AT, release_session_
+         mounts' own sentinel) or one naming a RETIRED Agent — compute_heartbeat trusts
+         whatever this returns enough to UPDATE it unconditionally, so a dead/retired
+         match here would resurrect a corpse's last_seen under a live session's own
+         heartbeat.
       2. THE SESSION LEDGER — anchor_sid:<sid8> assertions (handshake.record_session_anchor
          files sid→soul at every whisper for identities the sid alone could not re-derive);
          the owner's lineage's freshest row answers for a window whose durable anchor
@@ -453,9 +459,20 @@ async def find_session_row(
         if row is not None:
             return row
     sid8 = dsh_uuid[:8] if dsh_uuid else sid[:8]
+    # LIVENESS + RETIREMENT (task #68's own dispatch, wave 16 item 1): an 8-char prefix
+    # is not a strong key — a genuinely dead row (SUSPENDED_AT, this module's own
+    # release_session_mounts sentinel) or a row still naming a RETIRED Agent (never
+    # deleted, constitution #3) can share a sid8 with a real live session, and
+    # compute_heartbeat blindly UPDATEs whatever this rung returns. Same predicate
+    # lane 2's owner-agent check already carries (`o.status='active'`) — never a new
+    # law, just applied here too, plus the dead-row exclusion that lane never needed
+    # (it resolves through a still-current assertion, this rung matches raw rows).
     row = await db.fetchrow(
-        f"SELECT {cols} FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1 "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", sid8)
+        f"SELECT {cols} FROM agent_mounts m WHERE m.job_dir LIKE '%/jobs/' || $1 "
+        "AND m.last_seen IS DISTINCT FROM $2 "
+        "AND EXISTS (SELECT 1 FROM objects o WHERE o.canonical=m.agent_id "
+        "  AND o.type='Agent' AND o.status='active') "
+        "ORDER BY m.last_seen DESC NULLS LAST LIMIT 1", sid8, SUSPENDED_AT)
     if row is not None:
         return row
     owner = await db.fetchval(
