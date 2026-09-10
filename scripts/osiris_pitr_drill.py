@@ -25,6 +25,7 @@ tested directly.
 from __future__ import annotations
 
 import argparse
+import base64
 import shutil
 import subprocess
 import sys
@@ -83,6 +84,42 @@ def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: P
                  f"/var/lib/postgresql/data/wal_archive/{seg}"],
                 stdout=fh, timeout=60, check=True)
     return len(list(scratch_wal_dir.iterdir()))
+
+
+def _soul_round_trip_check(container: str) -> str | None:
+    """PROVE DECRYPTION, NOT PRESENCE (Thoth mail 9134, operator ruling on thread
+    773d633a): the marker-object check above only proves the restored copy has ROWS —
+    it says nothing about whether the CURRENT key on this box can actually open the
+    soul store's own encrypted content, which is the one thing a restore drill exists
+    to prove that a plain "the data restored" check cannot. Shared by this module's
+    own `run_drill` and scripts/osiris_preflight.py's plain-dump `drill()` (imported
+    from here, never duplicated — this module has no import FROM osiris_preflight, so
+    this is the direction that avoids a cycle). Picks ONE real `soul_lines` row from
+    the restored scratch container (`docker exec psql`, the SAME query shape every
+    other check in either drill already makes — no new port, no new connectivity into
+    the scratch container needed) and decrypts it on THIS box with the currently-
+    configured `get_soul_fernet()`. None (pass) when the restored copy has no
+    soul_lines rows at all — a soul-store-empty snapshot (a fresh install, or a dump
+    taken before the first transcript was ever ingested) is not a failure of THIS
+    specific check, the same "not activated here is not a failure" law this module's
+    own `drill_pitr` caller already holds for a missing base backup."""
+    from cryptography.fernet import InvalidToken
+    from src.ingest.soul_crypto import get_soul_fernet
+
+    out = subprocess.run(
+        ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
+         "SELECT encode(raw_line, 'base64') FROM soul_lines ORDER BY random() LIMIT 1"],
+        capture_output=True, text=True, timeout=30)
+    b64 = out.stdout.strip()
+    if not b64:
+        return None
+    try:
+        get_soul_fernet().decrypt(base64.b64decode(b64))
+    except InvalidToken:
+        return ("soul-store round-trip FAILED: a real row from the restored copy does "
+                "not decrypt under the key currently configured on this box — a "
+                "genuine decryption-proof failure, not just a presence check")
+    return None
 
 
 def run_drill(
@@ -154,7 +191,7 @@ def run_drill(
         if n < 1:
             return (f"restored copy is missing the post-base-backup marker "
                     f"({marker_canonical!r}) — WAL replay did not reach it")
-        return None
+        return _soul_round_trip_check(drill_name)
     except Exception as e:  # noqa: BLE001
         return f"PITR drill failed: {type(e).__name__}: {e}"
     finally:

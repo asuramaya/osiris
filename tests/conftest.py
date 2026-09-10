@@ -340,6 +340,18 @@ def _install_tool_contract_ceiling_merge_driver() -> None:
 _TEST_OFFICE_ROOT = Path(tempfile.mkdtemp(prefix=f"osiris-test-seats-{os.getpid()}-"))
 os.environ["OSIRIS_OFFICE_ROOT"] = str(_TEST_OFFICE_ROOT)
 
+# SOUL-STORE ENCRYPTION TEST KEY, FIXED (Thoth mail 9134): every soul_store write/read
+# now goes through src.ingest.soul_crypto.get_soul_key(), whose real fallback ladder (OS
+# keyring, then a 0600 file at /etc/osiris/soul.key) is wrong for a test run in every
+# way — no permission to write /etc/osiris, and (the load-bearing reason for a FIXED
+# key rather than one generated fresh here) xdist runs each test worker as its own OS
+# process with its own `os.environ`, so a key minted per-process would make one worker's
+# encrypted rows unreadable by any assertion running in another. `OSIRIS_SOUL_KEY` (the
+# env override get_soul_key's own docstring names for exactly this) is pinned to one
+# constant every worker agrees on — same discipline `LeaseStore`'s own tests already use
+# a fixed `KEY` constant for, adapted for a module with no per-call key param.
+os.environ.setdefault("OSIRIS_SOUL_KEY", "nq4cGwKz9TMd_Nl8ZV8rrhonPw_P_KR7HqCZN_V6qVQ=")
+
 
 def _default_basetemp() -> str:
     """THE ENOSPC INCIDENT'S OWN ROOT CAUSE (obligation a867ae37, found while building its

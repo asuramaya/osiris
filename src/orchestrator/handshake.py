@@ -24,8 +24,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import asyncpg
+from cryptography.fernet import InvalidToken
+
 from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
+from src.ingest.soul_crypto import get_soul_fernet
 from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
@@ -116,6 +120,47 @@ async def _fork_child(
 # is the natural unit. 2000 lines comfortably covers a compact_boundary's own act (a mount
 # or send close to the last thing the prior session did before compacting).
 _COMPACT_SEAT_TAIL_LINES = 2000
+_COMPACT_SEAT_SCAN_BATCH = 5000
+
+
+async def _find_anchor_sid_containing(
+    pool: asyncpg.Pool, harness: str, needle: str,
+) -> str | None:
+    """Which `anchor_sid` (if any) carries a `soul_lines` row whose plaintext contains
+    `needle` — `compact_seat`'s own scoped uuid search, extracted so its docstring's
+    encryption note (above) has one function to point at. DECRYPT-AND-SCAN, batched,
+    stopping at the first match: Fernet ciphertext carries no plaintext substring a
+    database-side scan (LIKE, an index, anything) could ever match, so this is
+    unavoidably a full walk in the worst case — see `compact_seat`'s own docstring for
+    why that cost is accepted rather than silently returning a wrong (empty) answer.
+    Ordered by `(anchor_sid, line_idx)` so a resumable/idempotent re-scan is possible
+    in principle, though this call never actually resumes one (it always runs once,
+    start to finish, per `compact_seat` invocation)."""
+    fernet = get_soul_fernet()
+    needle_bytes = needle.encode()
+    cursor: tuple[str, int] | None = None
+    while True:
+        if cursor is None:
+            rows = await pool.fetch(
+                "SELECT anchor_sid, line_idx, raw_line FROM soul_lines WHERE harness=$1 "
+                "ORDER BY anchor_sid, line_idx LIMIT $2", harness, _COMPACT_SEAT_SCAN_BATCH)
+        else:
+            sid, idx = cursor
+            rows = await pool.fetch(
+                "SELECT anchor_sid, line_idx, raw_line FROM soul_lines WHERE harness=$1 "
+                "AND (anchor_sid, line_idx) > ($2, $3) ORDER BY anchor_sid, line_idx LIMIT $4",
+                harness, sid, idx, _COMPACT_SEAT_SCAN_BATCH)
+        if not rows:
+            return None
+        for row in rows:
+            try:
+                plaintext = fernet.decrypt(bytes(row["raw_line"]))
+            except InvalidToken:
+                continue
+            if needle_bytes in plaintext:
+                return str(row["anchor_sid"])
+        last = rows[-1]
+        cursor = (last["anchor_sid"], last["line_idx"])
 
 
 async def compact_seat(
@@ -133,9 +178,19 @@ async def compact_seat(
     mind became an unrelated agent:5025423c that nothing ever resumes into).
 
     Finds which anchor_sid's own `soul_lines` carries a line whose `uuid` equals this
-    transcript's `logicalParentUuid` (a scoped `raw_line` scan — measured live against
-    Jesus's own real uuid, ~0.3s over ~1M rows; this fires only once per genuine manual
-    compact, never a hot path, so the missing index is not worth adding for it).
+    transcript's `logicalParentUuid`. ENCRYPTION AT REST (Thoth mail 9134) RETIRED THE
+    ORIGINAL FAST PATH HERE: this used to be a bytea `LIKE` scan straight against
+    `raw_line` (measured live against Jesus's own real uuid, ~0.3s over ~1M rows) —
+    Fernet ciphertext carries no plaintext substring a `LIKE` scan (or any index) could
+    ever match, so that approach is gone, not merely slower. `_find_anchor_sid_
+    containing` below now decrypts-and-scans, batched, stopping at the first match —
+    meaningfully slower in the worst case (a full-table walk, decrypting as it goes)
+    but correctness has to win here: a silently-broken substring search reproduces the
+    exact Jesus incident this door exists to fix, and "fires only once per genuine
+    manual compact, never a hot path" is still true regardless of the constant. A real
+    plaintext search index (extracting each line's own `uuid` field at ingest time
+    into a separate, unencrypted column) is the proper long-term fix and is NOT built
+    here — flagged as a named follow-up, not silently accepted as good enough forever.
 
     RESOLVES BY ACT, NEVER BY ASSERTION ALONE (Thoth's ruling on the Chad/aad6603a
     incident, msg 6842: the SAME anchor-leak class this whole family belongs to — a
@@ -179,19 +234,22 @@ async def compact_seat(
     parent_uuid = d.get("logicalParentUuid")
     if not isinstance(parent_uuid, str) or not parent_uuid:
         return None
-    owner_sid = await actions.pool.fetchval(
-        "SELECT anchor_sid FROM soul_lines WHERE harness='claude-code' "
-        "AND raw_line LIKE ('%' || $1 || '%')::bytea LIMIT 1", parent_uuid)
+    owner_sid = await _find_anchor_sid_containing(actions.pool, "claude-code", parent_uuid)
     if owner_sid is None:
         return None
-    owner_sid = str(owner_sid)
     from src.orchestrator.agents import _generation, lineage_head
     from src.orchestrator.signatures import newest_signatures
 
+    fernet = get_soul_fernet()
     rows = await actions.pool.fetch(
         "SELECT raw_line FROM soul_lines WHERE harness='claude-code' AND anchor_sid=$1 "
         "ORDER BY line_idx DESC LIMIT $2", owner_sid, _COMPACT_SEAT_TAIL_LINES)
-    lines = [bytes(r["raw_line"]).decode("utf-8", errors="replace") for r in reversed(rows)]
+    lines = []
+    for r in reversed(rows):
+        try:
+            lines.append(fernet.decrypt(bytes(r["raw_line"])).decode("utf-8", errors="replace"))
+        except InvalidToken:
+            continue
     act_signature, _whisper = newest_signatures(lines)
     if act_signature is None:
         return None  # nothing signed in the owning session's own tail — refuse, never guess
