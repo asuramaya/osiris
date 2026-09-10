@@ -215,3 +215,61 @@ async def test_register_agent_confession_is_idempotent_across_repeat_mounts(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
         "AND name='derivation_abstained_works_in'", a1) == 1
+
+
+# --- the heartbeat sub-sweep half (resolve_seat_orphans) -------------------------------
+
+async def test_resolve_seat_orphans_confesses_a_vacant_seat(actions: Actions) -> None:
+    seat = await _mint_bare(actions, "Seat")
+    out = await capture.resolve_seat_orphans(actions, dry_run=False, because="test sweep")
+    assert out["scanned"] == 1
+    assert out["to_mint"] == 0
+    assert out["to_abstain"] == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_holds'", seat) == 1
+
+
+async def test_resolve_seat_orphans_ignores_a_held_seat(actions: Actions) -> None:
+    seat = await _mint_bare(actions, "Seat")
+    agent = await _mint_bare(actions, "Agent")
+    await actions.create_link(agent, seat, "holds", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    out = await capture.resolve_seat_orphans(actions, dry_run=False, because="test sweep")
+    assert out["scanned"] == 0
+    assert out["to_abstain"] == 0
+
+
+async def test_resolve_seat_orphans_dry_run_previews_without_writing(actions: Actions) -> None:
+    seat = await _mint_bare(actions, "Seat")
+    out = await capture.resolve_seat_orphans(actions)  # dry_run=True default
+    assert out["scanned"] == 1
+    assert out["to_abstain"] == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_holds'", seat) == 0
+
+
+async def test_resolve_seat_orphans_is_idempotent(actions: Actions) -> None:
+    await _mint_bare(actions, "Seat")
+    first = await capture.resolve_seat_orphans(actions, dry_run=False, because="run 1")
+    second = await capture.resolve_seat_orphans(actions, dry_run=False, because="run 2")
+    assert first["to_abstain"] == 1
+    assert second["scanned"] == 0
+
+
+async def test_resolve_seat_orphans_catches_a_crash_between_ensure_seat_and_bind_holder(
+    actions: Actions,
+) -> None:
+    """The exact population claim_name's own in-line check cannot reach: a Seat minted by
+    SOME other path (mintseat.py/greatfold.py, or claim_name itself if the process died
+    right after ensure_seat) with nothing ever binding it."""
+    from src.orchestrator.seats import ensure_seat
+
+    result = await ensure_seat(actions, house="pmi-house", handle="Pmiseat3", source="test")
+    seat_oid = await actions.create_or_find_object("Seat", result["seat_id"], "test")
+    out = await capture.resolve_seat_orphans(actions, dry_run=False, because="crash recovery")
+    assert out["to_abstain"] == 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_holds'", seat_oid) == 1

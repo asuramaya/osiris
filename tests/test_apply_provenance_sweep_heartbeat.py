@@ -23,7 +23,7 @@ async def test_runs_every_lane_and_totals_a_real_mint(actions: Actions) -> None:
 
     assert set(out["lanes"]) == {
         "agent", "decision_thread", "decision_thread_at_write_time",
-        "reference", "practice", "superstition",
+        "reference", "practice", "superstition", "seat",
     }
     assert out["total_minted"] >= 1
     assert out["lanes"]["superstition"]["to_mint"] >= 1
@@ -43,7 +43,7 @@ async def test_a_single_lane_failure_never_sinks_the_others(
     assert "simulated DB hiccup" in out["lanes"]["agent_error"]
     # every OTHER lane still ran to completion
     for key in ("decision_thread", "decision_thread_at_write_time", "reference",
-               "practice", "superstition"):
+               "practice", "superstition", "seat"):
         assert key in out["lanes"]
         assert "to_mint" in out["lanes"][key]
 

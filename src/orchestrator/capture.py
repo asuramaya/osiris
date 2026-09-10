@@ -1120,6 +1120,58 @@ async def resolve_superstition_orphans(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def resolve_seat_orphans(
+    actions: Actions, *, actor: str = "provenance-sweep:seat",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE POST-MINT INVARIANT'S OWN HEARTBEAT HALF (Thoth's ruling, DM 9018/thread 9004):
+    claim_name's own in-line check (agents.py) catches a vacant Seat in the same call
+    that minted it — bind_holder always runs right after ensure_seat, same call, so that
+    check is normally a no-op. This is what catches the one thing it cannot: a process
+    that crashed BETWEEN ensure_seat succeeding and bind_holder ever running, or a Seat
+    minted by some other caller (mintseat.py, greatfold.py) that never went through
+    claim_name's own binding step at all. Every active, unconfessed Seat with no live
+    holder — confessed via the same `capture.confirm_or_confess_link` claim_name's
+    in-line check already uses, on the SAME heartbeat `apply_provenance_sweep_heartbeat`
+    already runs every other lane through.
+
+    UNLIKE this module's other orphan lanes (Agent/Reference/Practice/Superstition), this
+    is not a derive_or_abstain candidate lookup — a vacant Seat has no ambiguous candidate
+    set to resolve from its own properties; it is either held or it is not. So `to_mint`
+    stays 0 always here; `to_abstain` counts real confessions, one per Seat this call
+    actually wrote a hatch for (a Seat already confessed by an earlier run is excluded by
+    the query itself, never re-counted).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once a Seat is held or already confessed."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    rows = await actions.pool.fetch(
+        "SELECT o.id, o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())) "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+        "AND (ca.name='unlinked_because' OR "
+        "     (ca.name='derivation_abstained_holds' AND NOT (ca.value ? 'resolved'))))")
+    plan: list[dict[str, Any]] = []
+    confessed = 0
+    for row in rows:
+        plan.append({"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain"})
+        if not dry_run:
+            wrote = await confirm_or_confess_link(
+                actions, row["id"], "holds", direction="to",
+                reason="no live holder found by the provenance sweep's heartbeat",
+                source=actor, observed=datetime.now(UTC))
+            if wrote:
+                confessed += 1
+        else:
+            confessed += 1
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": 0,
+           "to_abstain": confessed, "plan": plan, "because": because if not dry_run else None}
+
+
 _PROVENANCE_SWEEP_BECAUSE = (
     "classification_laws_heartbeat: provenance sweep self-heal (wave 15, mail 8840) — "
     "every lane below is cardinality-1-mint-or-abstain via derive_or_abstain, never a "
@@ -1137,7 +1189,9 @@ async def apply_provenance_sweep_heartbeat(
     built — Agent (`resolve_agent_orphans`), Decision/Thread (`backfill_lineage_repo_
     links` + its at-write-time sibling), Reference (`resolve_reference_orphans`),
     Practice (`resolve_practice_orphans`), Superstition (`resolve_superstition_orphans`)
-    — for real (`dry_run=False`), each independently, under ONE fixed `because` (this
+    — plus the post-mint invariant's own heartbeat half, Seat (`resolve_seat_orphans`,
+    Thoth's ruling DM 9018/thread 9004) — for real (`dry_run=False`), each independently,
+    under ONE fixed `because` (this
     module's `_PROVENANCE_SWEEP_BECAUSE`): every lane is cardinality-1-mint-or-abstain
     by construction, so there is nothing here for a human to authorize per-run that
     the lane's own contract doesn't already guarantee.
@@ -1179,6 +1233,11 @@ async def apply_provenance_sweep_heartbeat(
             actions, actor=actor, dry_run=False, because=because)
     except Exception as exc:
         lanes["superstition_error"] = repr(exc)
+    try:
+        lanes["seat"] = await resolve_seat_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["seat_error"] = repr(exc)
     return {"lanes": lanes,
            "total_minted": sum(v.get("to_mint", 0) for v in lanes.values()
                                if isinstance(v, dict)),
