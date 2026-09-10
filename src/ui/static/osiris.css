@@ -1873,6 +1873,14 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   background: var(--bg);
   display: none;
 }
+/* WAVE B (thread 8839): the Atlas surface — sigma.js's own canvas fills the same slot #cy
+   does; only one of the three (#cy / #result / #sigma-atlas) is ever visible at once, per
+   switchSurface()'s own display toggling in console.js. */
+#sigma-atlas {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+}
 #stage.panel #cy { display: none; }
 #stage.panel #result { display: block; }
 
