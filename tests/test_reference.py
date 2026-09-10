@@ -85,7 +85,7 @@ async def test_ingest_reference_doc_grades_and_dedups(actions: Actions, tmp_path
     p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
                  "# Object Sets\n\nThe ops.")
-    r = await ingest_reference_doc(actions, str(p))
+    r = await ingest_reference_doc(actions, str(p), unlinked_because="test fixture")
     assert r["canonical"] == "ref:palantir-thing" and r["vendor"] == "palantir"
     row = await actions.pool.fetchrow(
         "SELECT "
@@ -98,7 +98,7 @@ async def test_ingest_reference_doc_grades_and_dedups(actions: Actions, tmp_path
         "FROM objects o WHERE o.type='Reference'")
     assert row["name"] == "Object Sets" and row["vendor"] == "palantir"
     assert row["ec"] == "authoritative_api"        # a vendor doc is the published canon
-    await ingest_reference_doc(actions, str(p))     # idempotent on the canonical
+    await ingest_reference_doc(actions, str(p), unlinked_because="test fixture")  # idempotent
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Reference'") == 1
 
@@ -108,8 +108,7 @@ async def test_ingest_reference_doc_links_in_repo_when_given(
 ) -> None:
     """Operator ruling, 2026-08-27 (decision 49231693's Reference-orphan trace): a doc
     only gets ingested because someone was working a project — `repo` links it at the
-    door instead of leaving that context to be thrown away. Never refuses when omitted
-    (the bare-CLI case still has no project to give)."""
+    door instead of leaving that context to be thrown away."""
     p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
                  "# Object Sets\n\nThe ops.")
@@ -123,9 +122,32 @@ async def test_ingest_reference_doc_links_in_repo_when_given(
     q = tmp_path / "unlinked-thing.md"  # type: ignore[attr-defined]
     q.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
                  "# Untied\n\nno repo given.")
-    r2 = await ingest_reference_doc(actions, str(q))
+    r2 = await ingest_reference_doc(actions, str(q), unlinked_because="no project for this doc")
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", r2["id"]) == 0
+    because = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", r2["id"])
+    assert because == "no project for this doc"
+
+
+async def test_ingest_reference_doc_refuses_with_neither_repo_nor_hatch(
+    actions: Actions, tmp_path: object,
+) -> None:
+    """THE DECLARE-OR-REFUSE GATE WIDENS HERE (Thoth mail 8960 item 2, msg 9071): the
+    silent-omission door that produced resolve_reference_orphans' own 56-orphan backlog
+    is now closed — repo= or unlinked_because= is mandatory, no third silent option."""
+    p = tmp_path / "refused-thing.md"  # type: ignore[attr-defined]
+    p.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
+                 "# Refused\n\nno repo, no hatch.")
+    try:
+        await ingest_reference_doc(actions, str(p))
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical='ref:refused-thing'") == 0
 
 
 async def test_grounds_property_is_stored(actions: Actions, tmp_path: object) -> None:
@@ -134,7 +156,7 @@ async def test_grounds_property_is_stored(actions: Actions, tmp_path: object) ->
     p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t | grounds: src/x.py -->\n"
                  "# Thing\n\nbody")
-    r = await ingest_reference_doc(actions, str(p))
+    r = await ingest_reference_doc(actions, str(p), unlinked_because="test fixture")
     assert r["grounds"] == "src/x.py"
     g = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -408,10 +430,10 @@ async def test_ingest_log_is_idempotent_per_entry(actions: Actions, tmp_path) ->
 
     p = tmp_path / "log.md"
     p.write_text(_LOG)
-    r1 = await ingest_log(actions, str(p), topic="history")
+    r1 = await ingest_log(actions, str(p), topic="history", unlinked_because="test fixture")
     n1 = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Reference' AND canonical LIKE 'ref:history-%'")
-    r2 = await ingest_log(actions, str(p), topic="history")
+    r2 = await ingest_log(actions, str(p), topic="history", unlinked_because="test fixture")
     n2 = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Reference' AND canonical LIKE 'ref:history-%'")
     assert r1["entries"] == r2["entries"] and n1 == n2  # re-ingest mints nothing new
@@ -440,6 +462,27 @@ async def test_ingest_log_links_every_entry_in_repo_when_given(
         "AND o.canonical LIKE 'ref:history-%' AND l.type='in_repo' "
         "AND p.canonical='repo:linkedlogproj'")
     assert linked == n_entries > 0
+
+
+async def test_ingest_log_refuses_with_neither_repo_nor_hatch(
+    actions: Actions, tmp_path,  # type: ignore[no-untyped-def]
+) -> None:
+    """THE DECLARE-OR-REFUSE GATE WIDENS HERE too (Thoth mail 8960 item 2, msg 9071),
+    same shape as ingest_reference_doc's own widening — checked ONCE, before the first
+    entry mints, never per-entry (one call names one project for every entry it
+    produces)."""
+    from src.ingest.reference import ingest_log
+
+    p = tmp_path / "log.md"
+    p.write_text(_LOG)
+    try:
+        await ingest_log(actions, str(p), topic="refused")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE canonical LIKE 'ref:refused-%'") == 0
 
 
 def test_parse_log_splits_entries_whose_bold_header_wraps() -> None:
