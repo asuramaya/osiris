@@ -8203,6 +8203,42 @@ async def _surface_prior_art(
         return []
 
 
+async def _obsoleted_standing_practice(
+    pool: asyncpg.Pool, obsoletes: list[str] | None, prior: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    """Wave 16 item 3 (thread 51233089): does one of `obsoletes=`'s own quoted workaround
+    texts name the SAME words as a standing Practice the prior-art search already
+    surfaced? `refutes=` already gets this exact treatment (`refute_id`, below) —
+    `obsoletes=` never did, silently falling through to the generic re-derivation/
+    contradiction-cues wording, which names nothing about the obsoletion actually
+    requested. Scans every Practice-typed hit in `prior` (not just `prior[0]` —
+    `prior_art_from_hits`' own reserved slot means the best-ranked Practice need not be
+    first), resolves each by its own short id back to the full object
+    (`capture._find_practice`, `require_identifier=True` — the hit's id is already
+    identifier-shaped, never a prose match here), and compares its `statement` against
+    each obsoletes string under the SAME canon-key normalization `refute_id`'s own
+    Superstition lookup already uses (whitespace-collapsed, lowercased). Returns the
+    matched hit's short id plus the full uuid, or None."""
+    if not obsoletes:
+        return None
+    keys = {" ".join(s.split()).lower() for s in obsoletes if s and s.strip()}
+    if not keys:
+        return None
+    for hit in prior:
+        if hit.get("type") != "Practice":
+            continue
+        pid = await capture._find_practice(pool, hit["id"], require_identifier=True)
+        if pid is None:
+            continue
+        statement = await pool.fetchval(
+            "SELECT val.value #>> '{}' FROM current_assertions val "
+            "WHERE val.object_id=$1 AND val.name='statement' "
+            "ORDER BY val.confidence DESC, val.observed_at DESC LIMIT 1", pid)
+        if statement and " ".join(statement.split()).lower() in keys:
+            return {"id": hit["id"], "full_id": str(pid)}
+    return None
+
+
 # THE HATCH'S TWO POPULATIONS MUST STAY SEPARABLE (Thoth's condition 2, msg 5802/5811):
 # a Decision whose ONLY requested connectivity is an extension-link param (obsoletes=/
 # confirms=/refutes=/implements=/rediscovers=/bears_on=, which mint AFTER capture.
@@ -8834,6 +8870,7 @@ async def record_decision(
     strong = capture.prior_art_is_strong(prior)
     if prior:
         out["prior_art"] = _slim_prior_art(prior)
+    obsoleted_practice = await _obsoleted_standing_practice(pool, obsoletes, prior)
     if refute_id is not None:
         # THE STRUCTURAL DISCRIMINATOR, DECOUPLED FROM SEARCH TIMING (thread 7e8cb735,
         # piece 2): refute_id was already resolved and validated against a real Practice
@@ -8849,6 +8886,17 @@ async def record_decision(
             f"this OVERTURNS standing Practice {str(refute_id)[:8]} — handled below via "
             "refutes= (converts it to a dead Superstition, flagged not retired)")
         out["prior_art_polarity"] = "contradict"
+    elif obsoleted_practice is not None:
+        # wave 16 item 3 (thread 51233089): the SAME structural discriminator as
+        # refute_id above, for obsoletes= — an explicit obsoletion already names its own
+        # target, so it never needs the generic re-derivation/contradiction-cues guess
+        # below. Unlike refute_id, obsoletes= never converts the Practice itself (only
+        # the matching Superstition dies) — the wording says so plainly.
+        out["prior_art_flag"] = (
+            f"this OBSOLETES standing Practice {obsoleted_practice['id']} — handled "
+            "below via obsoletes= (kills the matching Superstition; the Practice "
+            "record itself is untouched, only the workaround it names)")
+        out["prior_art_polarity"] = "obsolete"
     elif strong:
         top = prior[0]
         top_kind = top.get("type") or "Decision"
