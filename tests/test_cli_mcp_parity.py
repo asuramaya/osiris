@@ -188,6 +188,8 @@ CLI_ONLY_PARAMS = {
         "own entry below.",
     ("thread", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
         "own entry below.",
+    ("proposal", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
     ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
         "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
         "bare console caller has no mount to derive it from, so this names the gap with "
@@ -1250,6 +1252,11 @@ class NewToolDeclaration(TypedDict, total=False):
 # what each field means.
 NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     "resume": {"binding_verb": True},
+    # proposal(action=...) — miners as last resort, item 2 (decision ac892cd9, Thoth
+    # mail 8842/8920/8945): propose/accept/reject over a NEW Proposal object type. Not
+    # a seat/office/project binding-mover; not a parameterization of any existing
+    # tool — a genuinely new capability, no prior verb it could have ridden on.
+    "proposal": {"binding_verb": False},
     # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.

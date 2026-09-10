@@ -3424,6 +3424,65 @@ async def cmd_thread(
     return 0
 
 
+# --- proposal (miners as last resort, item 2, decision ac892cd9) -------------------------------
+
+async def cmd_proposal(
+    action: str, *, from_id: str | None = None, link_type: str | None = None,
+    candidate: str | None = None, confidence: float | None = None,
+    owner: str | None = None, miner: str | None = None,
+    proposal_ref: str | None = None, reason: str | None = None,
+    actor: str = _CONSOLE_ACTOR, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris proposal <propose|accept|reject> ... — the console-script door onto
+    `_proposal_action_impl`, the SAME function the `proposal` MCP tool wraps (miners as
+    last resort, decision ac892cd9). `--candidate` takes a JSON string
+    ('{"kind":"link",...}' or '{"kind":"object",...}') since a graph write's own shape
+    has no flat flag equivalent."""
+    import json as _json
+
+    from src.mcp_server import _proposal_action_impl
+
+    parsed_candidate = None
+    if candidate is not None:
+        try:
+            parsed_candidate = _json.loads(candidate)
+        except _json.JSONDecodeError as exc:
+            print(f"osiris proposal: --candidate is not valid JSON — {exc}",
+                  file=sys.stderr)
+            return 1
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(settings.database_url, min_size=1, max_size=2,
+                                     application_name="osiris-cli:proposal")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris proposal: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _proposal_action_impl(
+            pool, actor, action, from_id=from_id, link_type=link_type,
+            candidate=parsed_candidate, confidence=confidence, owner=owner, miner=miner,
+            proposal_ref=proposal_ref, reason=reason)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris proposal: refused — {out['error']}", file=sys.stderr)
+        return 1
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="proposal")
+    return 0
+
+
 # --- rebind-seat / correct-pin-value (thread 6437, #199's parity lane) --------------------------
 #
 # THE JESUS/CHAD PATH, FROM A TERMINAL: a seat self-reconciling ran exactly
@@ -5137,7 +5196,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project,
-                        set-project-tag
+                        set-project-tag, proposal
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile, fleet-prune
 
@@ -5608,6 +5667,34 @@ def _build_parser() -> argparse.ArgumentParser:
                           help=f"who is closing this — defaults to {_CONSOLE_ACTOR!r}")
     p_thread.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line")
+
+    p_proposal = sub.add_parser("proposal", description=_d(
+        "miners as last resort (decision ac892cd9) — propose/accept/reject over a "
+        "Proposal, the same `proposal` MCP tool's own three actions"),
+        epilog="example: osiris proposal accept --proposal-ref proposal:1234...\n"
+               "example: osiris proposal reject --proposal-ref proposal:1234... "
+               "--reason 'wrong shortlist'")
+    p_proposal.add_argument("action", choices=("propose", "accept", "reject"))
+    p_proposal.add_argument("--from-id", default=None,
+                            help="propose only: the abstaining object's canonical or uuid")
+    p_proposal.add_argument("--link-type", default=None,
+                            help="propose only: must match the abstention's own namespace")
+    p_proposal.add_argument("--candidate", default=None,
+                            help="propose only: a JSON string, "
+                                 "{\"kind\":\"link\",...} or {\"kind\":\"object\",...}")
+    p_proposal.add_argument("--confidence", type=float, default=None,
+                            help="propose only: capped at the DERIVED tier regardless")
+    p_proposal.add_argument("--owner", default=None,
+                            help="propose only: an active seat, its handle, or 'operator'")
+    p_proposal.add_argument("--miner", default=None, help="propose only: the proposing miner")
+    p_proposal.add_argument("--proposal-ref", default=None,
+                            help="accept/reject: the Proposal's own canonical")
+    p_proposal.add_argument("--reason", default=None,
+                            help="reject only: mandatory, the miner reads it back")
+    p_proposal.add_argument("--actor", default=_CONSOLE_ACTOR,
+                            help=f"who is acting — defaults to {_CONSOLE_ACTOR!r}")
+    p_proposal.add_argument("--json", action="store_true", dest="as_json",
+                            help="machine-readable: one compact JSON line")
 
     p_rebind_seat = sub.add_parser(
         "rebind-seat", description=_d(
@@ -6266,6 +6353,12 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_thread(
             args.ref, because=args.because, artifact=args.artifact,
             dry_run=args.dry_run, actor=args.actor, as_json=args.as_json))
+    if args.command == "proposal":
+        return asyncio.run(cmd_proposal(
+            args.action, from_id=args.from_id, link_type=args.link_type,
+            candidate=args.candidate, confidence=args.confidence, owner=args.owner,
+            miner=args.miner, proposal_ref=args.proposal_ref, reason=args.reason,
+            actor=args.actor, as_json=args.as_json))
     if args.command == "rebind-seat":
         return asyncio.run(cmd_rebind_seat(args.seat, args.new_cwd, actor=args.actor,
                                            extract=args.extract, because=args.because,

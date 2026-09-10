@@ -1363,12 +1363,19 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
     # chrome and the statusline must show the same red number (vitals, 2026-07-19)
     from src.orchestrator.vitals import operator_debts
     owed = (await operator_debts(pool))["owed"]
+    # PROPOSALS — READ-ONLY (Thoth mail 8920/8945, decision ac892cd9's item 2): a miner's
+    # guess awaiting judgment is not a duty either, same discipline as `miner_guesses`
+    # above — count and up to three per owner, never counted in `owed`, accept/reject
+    # happen through the `proposal` verb from the owning seat's own tab, never here.
+    from src.orchestrator.proposals import proposals_band
+    proposals = await proposals_band(pool)
     return {
         "owed": owed,
         "letters": len(bands["fyi"]),
         "needs_decision": bands["decision"],
         "needs_hands": bands["hands"],
         "fyi": bands["fyi"],
+        **({"proposals": proposals} if proposals["count"] else {}),
         **({"dimmed": dimmed} if dimmed else {}),
         **({"your_queue": {
             "threads": queue,

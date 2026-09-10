@@ -183,6 +183,10 @@ def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -
     guesses = (desk.get("miner_guesses") or {}).get("threads") or []
     if guesses:
         lines.append(f"miner_guesses: {len(guesses)} (not counted in owed)")
+    proposals = desk.get("proposals") or {}
+    if proposals.get("count"):
+        lines.append(f"proposals: {proposals['count']} (miners as last resort, "
+                     "accept/reject from the owning seat's own tab)")
     queue = (desk.get("your_queue") or {}).get("threads") or []
     if queue:
         lines.append("your_queue:")

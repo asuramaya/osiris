@@ -9663,6 +9663,83 @@ async def thread_action(
         subagent_id=subagent_id, subagent_type=subagent_type)
 
 
+async def _proposal_action_impl(
+    pool: asyncpg.Pool, actor: str, action: str, *, from_id: str | None = None,
+    link_type: str | None = None, candidate: dict[str, Any] | None = None,
+    confidence: float | None = None, owner: str | None = None, miner: str | None = None,
+    proposal_ref: str | None = None, reason: str | None = None,
+) -> dict[str, Any]:
+    """The proposal() MCP tool's own body, factored out so `osiris proposal` (the CLI
+    door) calls the SAME implementation rather than a second copy that could drift —
+    the identical shape `_thread_action_impl` already holds for `thread(action=...)`."""
+    from src.orchestrator.proposals import accept as _accept
+    from src.orchestrator.proposals import propose as _propose
+    from src.orchestrator.proposals import reject as _reject
+
+    if action == "propose":
+        if not from_id or not link_type or candidate is None or confidence is None \
+                or not owner or not miner:
+            return {"error": "propose needs from_id, link_type, candidate, confidence, "
+                             "owner, and miner"}
+        resolved_from_id = await pool.fetchval(
+            "SELECT id FROM objects WHERE canonical=$1", from_id)
+        if resolved_from_id is None:
+            try:
+                resolved_from_id = uuid.UUID(from_id)
+            except ValueError:
+                return {"error": f"from_id {from_id!r} names no object by canonical "
+                                 "and is not a raw uuid"}
+        return await _propose(
+            Actions(pool), from_id=resolved_from_id, link_type=link_type,
+            candidate=candidate, confidence=confidence, owner=owner, miner=miner,
+            actor=actor)
+    if action == "accept":
+        if not proposal_ref:
+            return {"error": "accept needs proposal_ref"}
+        return await _accept(Actions(pool), proposal=proposal_ref, actor=actor)
+    if action == "reject":
+        if not proposal_ref or not reason:
+            return {"error": "reject needs proposal_ref and reason"}
+        return await _reject(Actions(pool), proposal=proposal_ref, reason=reason,
+                             actor=actor)
+    return {"error": f"unknown action {action!r} — propose, accept, or reject"}
+
+
+@mcp.tool()
+async def proposal(
+    action: str, from_id: str | None = None, link_type: str | None = None,
+    candidate: dict[str, Any] | None = None, confidence: float | None = None,
+    owner: str | None = None, miner: str | None = None,
+    proposal_ref: str | None = None, reason: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """MINERS AS LAST RESORT (decision ac892cd9) — one door, three actions:
+
+      propose: mint a Proposal (never a real graph write) against an existing,
+        unresolved `derivation_abstained_<link_type>` property — the last-resort law.
+        `from_id` (a canonical or raw uuid) names the abstaining object; `link_type`
+        must match the abstention's own namespace exactly; `candidate` is what would be
+        minted if accepted ({"kind":"link", "from_id","to_id","link_type"} or
+        {"kind":"object", "type","canonical","properties":{...}}); `owner` resolves via
+        the one owner law (an active seat, its handle, or 'operator'); `miner` names the
+        proposing miner. Refuses per proposals.propose()'s own three laws — no live
+        abstention, an unresolvable owner, or a malformed candidate.
+      accept: mints the real object/link `proposal_ref` names, under THIS CALL's own
+        identity (self_declared — a mind's own testimony, never the miner's grade).
+        Refuses on anything but a live, unexpired, still-`proposed` Proposal.
+      reject: retires `proposal_ref` (status='rejected') with a mandatory `reason` the
+        proposing miner reads back on its own next tick.
+
+    Never touches an existing miner — nothing calls propose() automatically yet."""
+    ident = await _ident_for(ctx)
+    actor = ident.agent_id if ident is not None else "console:proposal"
+    pool = await _pool_get()
+    return await _proposal_action_impl(
+        pool, actor, action, from_id=from_id, link_type=link_type, candidate=candidate,
+        confidence=confidence, owner=owner, miner=miner, proposal_ref=proposal_ref,
+        reason=reason)
+
+
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action='resolve')",

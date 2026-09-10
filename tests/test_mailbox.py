@@ -1273,6 +1273,37 @@ async def test_desk_your_queue_derives_from_operator_owned_threads(actions: Acti
     assert q[0]["kind"] == "obligation"
 
 
+async def test_desk_proposals_band_is_read_only_and_absent_when_empty(
+    actions: Actions,
+) -> None:
+    """Thoth mail 8920/8945, decision ac892cd9's item 2: the desk shows a proposals
+    band (count + up to three per owner) only when one exists — never a bare
+    'proposals: 0' line cluttering an otherwise clear desk, same discipline every other
+    band here already holds (miner_guesses, dimmed)."""
+    from src.orchestrator import capture
+    from src.orchestrator.mailbox import read_desk
+    from src.orchestrator.proposals import propose
+
+    desk_clear = await read_desk(actions.pool)
+    assert "proposals" not in desk_clear
+
+    from src.ontology.catalog import ensure_type
+
+    await ensure_type(actions, name="GateWidget", kind="object", actor="test")
+    orphan = await actions.create_or_find_object(
+        "GateWidget", "gatewidget:desktest", "test")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(
+        actions, from_id=orphan, link_type="implements",
+        candidate={"kind": "link", "from_id": "x", "to_id": "y", "link_type": "implements"},
+        confidence=0.9, owner="operator", miner="test-miner", actor="test-miner")
+    assert "error" not in out
+
+    desk = await read_desk(actions.pool)
+    assert desk["proposals"]["count"] == 1
+    assert "operator" in desk["proposals"]["by_owner"]
+
+
 async def test_an_agents_OWN_broadcast_is_not_its_mail(actions: Actions) -> None:
     """THE SELF-ECHO (Metron V, msgs 444/446 — six blocked turns in one night, all of them to
     acknowledge his own voice). A project broadcast fanned out to its own author: every send()
