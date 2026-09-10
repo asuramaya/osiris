@@ -2088,8 +2088,13 @@ async def test_amend_practice_tool_appends_without_touching_statement(actions: A
         out = await srv.amend_practice(str(p), "confirmed live on gestalt, 2026-08-02")
     finally:
         srv._pool = saved_pool
-    assert out == {"id": str(p), "amendment": "confirmed live on gestalt, 2026-08-02",
-                   "status": "amended"}
+    assert out["id"] == str(p)
+    assert out["amendment"] == "confirmed live on gestalt, 2026-08-02"
+    assert out["status"] == "amended"
+    # thread 55e5ac72: the receipt now carries the row practices() would render, so a
+    # write is never invisible on its own receipt
+    assert out["practice"]["id"] == str(p)
+    assert out["practice"]["amendments"] == ["confirmed live on gestalt, 2026-08-02"]
     amendments = await practice_amendments(actions.pool, p)
     assert [a["amendment"] for a in amendments] == ["confirmed live on gestalt, 2026-08-02"]
     assert (await _props(actions.pool, p))["statement"] == (

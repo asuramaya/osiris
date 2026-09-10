@@ -1315,16 +1315,18 @@ async def search(
 
 @mcp.tool()
 async def practices(
-    surface: str | None = None, limit: int = 50, ctx: Context | None = None
+    surface: str | None = None, limit: int = 50, recent: bool = False,
+    ctx: Context | None = None,
 ) -> list[dict[str, Any]]:
     """THE THAW's technique log (ruling 1e6d7367) — ON-DEMAND only, never in orient's
-    ambient payload (per the ruling's own scoping: surfacing happens on a write-collision
-    or here, nowhere else). `surface` narrows to one domain (BlindSpot's own vocabulary,
-    e.g. 'deploy', 'succession'); omitted, every active Practice, most-confirmed first.
+    ambient payload. `surface` narrows to one domain (BlindSpot's own vocabulary, e.g.
+    'deploy', 'succession'); omitted, every active Practice, most-confirmed first.
     `confirmed` is the live `witnesses` link count, never a stored number. A refuted
-    Practice still lists, carrying `refuted_by` — flagged, never hidden."""
+    Practice still lists, carrying `refuted_by` — flagged, never hidden. `recent=True`
+    ranks last-touched first."""
     pool = await _pool_get()
-    spec = {"op": "function", "name": "practices", "args": {"surface": surface, "limit": limit}}
+    spec = {"op": "function", "name": "practices",
+           "args": {"surface": surface, "limit": limit, "recent": recent}}
     out = await comp.run_spec(pool, spec, None, name="practices")
     items: list[dict[str, Any]] = out["items"]
     return items
@@ -9154,7 +9156,20 @@ async def _practice_impl(
             return {"error": str(e)}
         if pid is None:
             return {"error": f"no practice matches {ref!r}"}
-        return {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
+        out = {"id": str(pid), "amendment": amendment.strip(), "status": "amended"}
+        # THE RECEIPT CARRIES THE ROW (thread 55e5ac72, Thoth dispatch msg 9123): a write
+        # is never invisible on its own receipt — `id=` bypasses practices()'s own ranked
+        # window entirely, the exact gap a fresh amendment used to fall through (a just-
+        # amended practice is systematically the least-confirmed, so it sorted outside the
+        # default limit=50 on the very next read). Same `practices` Function every reader
+        # already uses (comp.run_spec), never a second query that could drift.
+        practice_out = await comp.run_spec(
+            pool, {"op": "function", "name": "practices", "args": {"id": str(pid)}}, None,
+            name="amend-practice-receipt")
+        rows: list[dict[str, Any]] = practice_out["items"]
+        if rows:
+            out["practice"] = rows[0]
+        return out
     raise AssertionError(f"action {action!r} passed validation but has no branch")
 
 

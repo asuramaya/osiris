@@ -3246,9 +3246,24 @@ async def _fn_practices(
     followed the identical reasoning onto its own equivalent surface, `recall()`, rather
     than here (thread 1f4dcc03, fixed) — a Decision has no standing "current guidance"
     listing the way Practices do; recall(kind='decision') is the read that already exists
-    for "give me the whole record." """
+    for "give me the whole record."
+
+    `recent=True` (thread 55e5ac72, Thoth dispatch msg 9123): orders by `last_touch` DESC
+    (the newest observed_at across EVERY assertion on the practice, amendments included)
+    instead of the default `confirmed DESC` — the default ranking systematically hides
+    exactly the practices most in need of a second look, since a freshly-created or
+    freshly-amended practice is by construction the least-confirmed. Default unchanged;
+    `recent` is purely an alternate ordering, never a filter.
+
+    `id` (same thread, half 1): a single practice by id, bypassing BOTH `surface` and the
+    ranked window entirely — the shape `amend_practice`'s own receipt uses so a write is
+    never invisible on its own receipt regardless of where the row would otherwise rank."""
     surface = str(args.get("surface") or "").strip() or None
     limit = max(1, min(int(args.get("limit") or 50), 200))
+    recent = bool(args.get("recent"))
+    raw_id = str(args.get("id") or "").strip() or None
+    practice_id = uuid.UUID(raw_id) if raw_id else None
+    order_clause = "last_touch DESC NULLS LAST" if recent else "confirmed DESC, statement ASC"
     rows = await pool.fetch(
         "WITH p AS ("
         "  SELECT o.id, "
@@ -3268,15 +3283,19 @@ async def _fn_practices(
         "     AS confirmed, "
         "   (SELECT array_agg(a.value #>> '{}' ORDER BY a.observed_at ASC) "
         "    FROM current_assertions a WHERE a.object_id=o.id AND a.name LIKE 'amendment:%') "
-        "     AS amendments "
+        "     AS amendments, "
+        "   (SELECT max(a.observed_at) FROM current_assertions a WHERE a.object_id=o.id) "
+        "     AS last_touch "
         "  FROM objects o WHERE o.type='Practice' AND o.status='active') "
-        "SELECT * FROM p WHERE $1::text IS NULL OR surface = $1 "
-        "ORDER BY confirmed DESC, statement ASC LIMIT $2",
-        surface, limit)
+        "SELECT * FROM p WHERE ($1::text IS NULL OR surface = $1) "
+        "  AND ($3::uuid IS NULL OR id = $3) "
+        f"ORDER BY {order_clause} LIMIT $2",
+        surface, limit, practice_id)
     return [
         {"id": str(r["id"]), "statement": r["statement"],
          "failure_prevented": r["failure_prevented"], "surface": r["surface"],
          "confirmed": r["confirmed"],
+         "last_touch": r["last_touch"].isoformat() if r["last_touch"] else None,
          **({"refuted_by": r["refuted_by"]} if r["refuted_by"] else {}),
          **({"amendments": list(r["amendments"])} if r["amendments"] else {})}
         for r in rows

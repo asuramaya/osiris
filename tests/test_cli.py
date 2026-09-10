@@ -3627,6 +3627,8 @@ async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:
     assert out == 0
     assert f"amended {p}" in buf.getvalue()
     assert "confirmed live on gestalt, 2026-08-02" in buf.getvalue()
+    # thread 55e5ac72: this door's own receipt mirrors the MCP wrapper's `practice` row
+    assert "practice now reads: always vendor the lockfile before a release" in buf.getvalue()
 
     amendments = await practice_amendments(actions.pool, p)
     assert [a["amendment"] for a in amendments] == ["confirmed live on gestalt, 2026-08-02"]
