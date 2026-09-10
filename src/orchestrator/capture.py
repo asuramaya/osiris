@@ -46,7 +46,7 @@ from typing import Any
 
 import asyncpg
 
-from src.actions.core import Actions
+from src.actions.core import ActionError, Actions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
@@ -517,6 +517,41 @@ async def record_lineage_abstain(
 # — but the handling below is unconditional, not contingent on that measurement staying
 # true. The abstain path itself (candidates 0-or-2+) DOES go through `derive_or_abstain`
 # directly, so it already gets the shared abstention-recording discipline for free.
+async def _supersede_stale_in_repo_abstention(
+    actions: Actions, object_id: uuid.UUID, repo: str, actor: str, observed: datetime,
+    reason_note: str,
+) -> None:
+    """Retire a live `derivation_abstained_in_repo` record after a successful mint,
+    tolerant of a CONCURRENT writer already retiring the SAME row between this call's own
+    read and write. LIVE-FOUND (2026-09-09, wave 15's real apply run under real fleet
+    load): `backfill_lineage_repo_links` and `backfill_lineage_repo_links_at_write_time`
+    can both resolve the same leftover object in the same pass — `supersede_assertion`
+    refuses a row no longer live (`ActionError: already superseded`), and until this fix
+    that crashed the whole apply run partway through, on an ActionError that meant
+    'someone else already did the thing you wanted,' not a real failure. Swallowed here
+    ONLY for that one message; any other ActionError still propagates. The object ends up
+    resolved either way — the loser's own `resolved_to` note is redundant, not lost data,
+    since the winning mint's own `link_repo` call already recorded the live `in_repo`
+    edge itself."""
+    stale = await actions.pool.fetch(
+        "SELECT id FROM assertions WHERE object_id=$1 "
+        "AND name='derivation_abstained_in_repo' AND NOT (value ? 'resolved') "
+        "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
+        object_id)
+    if not stale:
+        return
+    proj_id = await _resolve_repo(actions.pool, repo)
+    for s in stale:
+        try:
+            await actions.supersede_assertion(
+                object_id, "derivation_abstained_in_repo", s["id"],
+                {"link_type": "in_repo", "resolved": True, "resolved_to": str(proj_id)},
+                actor, observed, _DERIVE_CONF, reason_note, evidence_class=_DERIVE_TIER.value)
+        except ActionError as e:
+            if "already superseded" not in str(e):
+                raise
+
+
 async def backfill_lineage_repo_links(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
@@ -572,22 +607,10 @@ async def backfill_lineage_repo_links(
                 # abstention needs `supersede_assertion`, the one legitimate cross-source
                 # retirement door, not a second same-source row that would merely coexist
                 # beside the stale one (Khnum's own correct_agent_house precedent).
-                stale = await pool.fetch(
-                    "SELECT id FROM assertions WHERE object_id=$1 "
-                    "AND name='derivation_abstained_in_repo' AND NOT (value ? 'resolved') "
-                    "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
-                    row["id"])
-                if stale:
-                    proj_id = await _resolve_repo(pool, repo)
-                    for s in stale:
-                        await actions.supersede_assertion(
-                            row["id"], "derivation_abstained_in_repo", s["id"],
-                            {"link_type": "in_repo", "resolved": True,
-                             "resolved_to": str(proj_id)},
-                            actor, observed, _DERIVE_CONF,
-                            f"backfill_lineage_repo_links resolved this object to "
-                            f"{repo!r}, superseding the stale abstention",
-                            evidence_class=_DERIVE_TIER.value)
+                await _supersede_stale_in_repo_abstention(
+                    actions, row["id"], repo, actor, observed,
+                    f"backfill_lineage_repo_links resolved this object to "
+                    f"{repo!r}, superseding the stale abstention")
         else:
             reason = (
                 f"{len(result['lineage_projects'])} distinct projects across this "
@@ -659,22 +682,10 @@ async def backfill_lineage_repo_links_at_write_time(
             if not dry_run:
                 await link_repo(actions, row["id"], repo, observed, source=actor,
                                 evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
-                stale = await pool.fetch(
-                    "SELECT id FROM assertions WHERE object_id=$1 "
-                    "AND name='derivation_abstained_in_repo' AND NOT (value ? 'resolved') "
-                    "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
-                    row["id"])
-                if stale:
-                    proj_id = await _resolve_repo(pool, repo)
-                    for s in stale:
-                        await actions.supersede_assertion(
-                            row["id"], "derivation_abstained_in_repo", s["id"],
-                            {"link_type": "in_repo", "resolved": True,
-                             "resolved_to": str(proj_id)},
-                            actor, observed, _DERIVE_CONF,
-                            f"backfill_lineage_repo_links_at_write_time resolved this "
-                            f"object to {repo!r}, superseding the stale abstention",
-                            evidence_class=_DERIVE_TIER.value)
+                await _supersede_stale_in_repo_abstention(
+                    actions, row["id"], repo, actor, observed,
+                    f"backfill_lineage_repo_links_at_write_time resolved this object to "
+                    f"{repo!r}, superseding the stale abstention")
         else:
             reason = (
                 f"{len(lineage['projects'])} distinct projects across this lineage's own "

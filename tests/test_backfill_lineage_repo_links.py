@@ -152,6 +152,42 @@ async def test_backfill_requires_a_because_to_execute(actions: Actions) -> None:
     assert n == 0
 
 
+async def test_backfill_tolerates_a_concurrently_superseded_abstention(
+    actions: Actions,
+) -> None:
+    """LIVE-FOUND (2026-09-09, wave 15's real apply run): a SECOND lane (this lane's own
+    at-write-time sibling) can retire the SAME stale abstention between this lane's own
+    read and write — `supersede_assertion` refuses a row no longer live, and until the
+    fix that crashed this whole backfill mid-run under real fleet load. Simulated here by
+    superseding the abstention out from under the call BEFORE it runs; the mint must still
+    land, never crash."""
+    now = datetime.now(UTC)
+    gen1 = await actions.create_or_find_object("Agent", "agent:hist9", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:histproj9", "test")
+    await actions.create_link(gen1, proj, "works_in", "test", now, 0.9,
+                              evidence_class="self_declared")
+    thread = await open_thread(actions, "carries an abstention another writer beat us to",
+                               source="agent:hist9-ii")
+    stale_id = await actions.assert_property(
+        thread, "derivation_abstained_in_repo",
+        {"link_type": "in_repo", "candidate_count": 0, "reason": "raced"},
+        "some-other-lane", now, 0.6, evidence_class="direct_observation")
+    # a concurrent writer retires it first — exactly what this test is reproducing
+    await actions.supersede_assertion(
+        thread, "derivation_abstained_in_repo", stale_id,
+        {"link_type": "in_repo", "resolved": True, "resolved_to": "concurrent-writer"},
+        "another-agent", now, 0.6, "a concurrent lane resolved this first",
+        evidence_class="direct_observation")
+
+    out = await backfill_lineage_repo_links(
+        actions, actor="test", dry_run=False, because="test authorization")
+
+    assert out["to_mint"] == 1  # never crashed, the mint still landed
+    linked = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='in_repo'", thread)
+    assert linked == proj
+
+
 async def test_backfill_mint_supersedes_a_live_abstention_from_another_lane(
     actions: Actions,
 ) -> None:
