@@ -6,12 +6,14 @@
 # = its bare filename) — Postgres's own contract: this must be atomic and idempotent, and
 # a non-zero exit tells Postgres to RETRY the same segment later rather than lose it.
 #
-# LIVES INSIDE THE PERSISTENT VOLUME, NOT THE CONTAINER'S OWN ROOT FS (deploy/up.sh's own
-# `docker run --rm ... postgres:16` — a real restart cycle stops and REMOVES this
-# container; only the named `osiris-pg-data` volume, mounted at
-# /var/lib/postgresql/data, survives that). Deployed to
-# /var/lib/postgresql/data/osiris_archive_wal.sh precisely so a future recreate finds it
-# again without redeploying anything by hand.
+# BIND-MOUNTED READ-ONLY FROM THIS REPO CHECKOUT (compose-drift fix, Thoth mail 9122
+# item 2, wave 16) to /var/lib/postgresql/data/osiris_archive_wal.sh — deploy/up.sh,
+# docker-compose.yml, and deploy/docker-compose.full.yml all mount this exact file at
+# this exact path, so a container recreate always finds the CURRENT checked-in version,
+# never a stale manually-`docker cp`'d copy nobody remembers making. (Earlier this was
+# a one-off manual copy INTO the data volume with no deploy artifact reproducing it —
+# the exact silent-drift risk this fix closes; a bind mount from the repo is idempotent
+# across recreates by construction, unlike a copy-once-and-forget step.)
 #
 # WRITES INTO THE SAME VOLUME (/var/lib/postgresql/data/wal_archive/), NOT DIRECTLY INTO
 # THE HOST VAULT: this container carries no bind mount for ~/osiris-vault today (checked:

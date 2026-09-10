@@ -2,6 +2,14 @@
 # only through Postgres + Redis (the bus; no RPC mesh). Cut 1 of the deployment ladder.
 # Bring up:  docker compose -f deploy/docker-compose.full.yml up -d --build
 # (this box has no compose plugin yet — see deploy/up.sh for the docker-run fallback.)
+#
+# COMPOSE DRIFT FIX (Thoth mail 9122 item 2, wave 16): see docker-compose.yml's own
+# header comment for the full reasoning — volume pinned to the real `osiris-pg-data`
+# name, archive_mode/archive_command/wal_level added (the structural facts a recreate
+# would otherwise silently drop forever), the old hardcoded tuning -c flags REMOVED
+# (they were years-stale relative to live — shared_buffers alone measured live at
+# 7.7GB, not the 4GB checked in here — and scripts/osiris_pg_autotune.py now owns these
+# post-boot; a hardcoded value here would silently down-tune a recreated box).
 services:
   postgres:
     image: postgres:16
@@ -10,26 +18,23 @@ services:
       POSTGRES_PASSWORD: osiris
       POSTGRES_DB: osiris
     ports: ["127.0.0.1:5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    # tuning: deploy/postgresql.conf has the full justification (thread e6fd3772 piece
-    # 1) — override-only -c flags, never replace the image's own generated config.
+    volumes:
+      - "pgdata:/var/lib/postgresql/data"
+      - "../scripts/osiris_archive_wal.sh:/var/lib/postgresql/data/osiris_archive_wal.sh:ro"
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=4GB"
+      - "wal_level=replica"
       - "-c"
-      - "effective_cache_size=12GB"
+      - "archive_mode=on"
       - "-c"
-      - "work_mem=32MB"
-      - "-c"
-      - "maintenance_work_mem=512MB"
-      - "-c"
-      - "random_page_cost=1.1"
+      - "archive_command=bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U osiris -d osiris"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7
@@ -41,6 +46,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   # one-shot: bring the schema to head before the surfaces start
   migrate:
@@ -88,4 +94,6 @@ services:
 
 volumes:
   pgdata:
+    name: osiris-pg-data
   redisdata:
+    name: osiris-redis-data

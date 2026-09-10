@@ -13,14 +13,40 @@ export DATABASE_URL="postgresql://osiris:osiris@127.0.0.1:${PG_PORT}/osiris"
 export REDIS_URL="redis://127.0.0.1:${REDIS_PORT}/0"
 
 echo "[up] infra (Postgres + Redis) as containers"
-# tuning flags: deploy/postgresql.conf has the full justification (thread e6fd3772
-# piece 1) — override-only, never replaces the image's own generated config, so every
-# other stock default (data_directory, socket paths, ...) is untouched.
-docker run -d --rm --name osiris-pg -e POSTGRES_USER=osiris -e POSTGRES_PASSWORD=osiris \
-  -e POSTGRES_DB=osiris -p "127.0.0.1:${PG_PORT}:5432" postgres:16 \
-  -c shared_buffers=4GB -c effective_cache_size=12GB -c work_mem=32MB \
-  -c maintenance_work_mem=512MB -c random_page_cost=1.1 >/dev/null
-docker run -d --rm --name osiris-redis -p "127.0.0.1:${REDIS_PORT}:6379" redis:7 >/dev/null
+# COMPOSE DRIFT FIX (Thoth mail 9122 item 2, wave 16): this used to run --rm with no
+# volume at all — a real restart cycle would have STOPPED AND REMOVED the container,
+# discarding every row silently, and never configured WAL archiving (archive_mode/
+# archive_command), the exact "a recreate can never drop WAL archiving" failure this
+# fix closes. Named volume osiris-pg-data (not an anonymous/compose-prefixed one) is
+# THE volume the real box's own osiris-pg already runs on (confirmed via `docker
+# inspect osiris-pg` and osiris_archive_wal.sh's own header comment) — using the same
+# name here means a recreate on THIS box reattaches to real data instead of silently
+# starting empty. --restart unless-stopped matches the live box's own policy (a crash
+# self-heals; a deliberate `docker stop` stays stopped, matching deploy/down.sh).
+#
+# archive_mode/archive_command/wal_level are the STRUCTURAL facts nothing else
+# rederives — scripts/osiris_archive_wal.sh (bind-mounted read-only from the repo, so
+# it's always the checked-in version, never a stale manually-`docker cp`'d copy) is
+# what archive_command actually invokes.
+#
+# TUNING FLAGS (shared_buffers/effective_cache_size/work_mem/maintenance_work_mem/
+# random_page_cost) ARE DELIBERATELY NOT SET HERE ANYMORE: scripts/osiris_pg_autotune.py
+# (deploy/osiris-pg-autotune.timer, daily) derives these from the box's own RAM/CPU and
+# persists them via ALTER SYSTEM — the values that WERE hardcoded here (4GB/12GB/32MB/
+# 512MB) are years-stale relative to what's live now (measured: shared_buffers alone is
+# live at 7.7GB, not 4GB) and a recreate using this script would have silently DOWN-
+# TUNED a production box back to those old numbers every time. The image's own stock
+# defaults are a safe day-0 floor; autotune's first daily run corrects them within 24h.
+docker run -d --name osiris-pg --restart unless-stopped \
+  -e POSTGRES_USER=osiris -e POSTGRES_PASSWORD=osiris -e POSTGRES_DB=osiris \
+  -p "127.0.0.1:${PG_PORT}:5432" \
+  -v osiris-pg-data:/var/lib/postgresql/data \
+  -v "$(pwd)/scripts/osiris_archive_wal.sh:/var/lib/postgresql/data/osiris_archive_wal.sh:ro" \
+  postgres:16 \
+  -c wal_level=replica -c archive_mode=on \
+  -c archive_command='bash /var/lib/postgresql/data/osiris_archive_wal.sh %p %f' >/dev/null
+docker run -d --name osiris-redis --restart unless-stopped \
+  -p "127.0.0.1:${REDIS_PORT}:6379" -v osiris-redis-data:/data redis:7 >/dev/null
 
 echo "[up] waiting for Postgres"
 for _ in $(seq 1 30); do docker exec osiris-pg pg_isready -U osiris >/dev/null 2>&1 && break; sleep 0.5; done
