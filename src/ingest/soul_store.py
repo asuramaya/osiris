@@ -29,7 +29,7 @@ import gzip
 import hashlib
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -459,6 +459,20 @@ def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
                     f"nothing in {file_a} or earlier in {file_b}")
         seen.add(u)
     return None
+
+
+class _ChainBroken(Exception):
+    """Raised by `SoulStore._iter_verified_lines` on the FIRST gap/mismatch/corrupt-cold
+    blob it finds (consolidation, Thoth mail 9134, operator ruling on thread 773d633a —
+    one verified reader before encryption, not three copies of the same verify loop).
+    `receipt` carries the EXACT `{"error", "verified_through"}` shape every caller
+    already returned before this consolidation — each caller catches this and maps it
+    onto its own pre-existing contract, so nothing downstream needs to learn a new
+    error shape."""
+
+    def __init__(self, receipt: dict[str, Any]) -> None:
+        super().__init__(receipt.get("error", "chain broken"))
+        self.receipt = receipt
 
 
 @dataclass(frozen=True)
@@ -920,24 +934,100 @@ class SoulStore:
             "SELECT content_gzip, last_hash, line_count FROM soul_lines_cold "
             "WHERE harness=$1 AND anchor_sid=$2", harness, anchor_sid)
 
-    async def _all_raw_lines(self, harness: str, anchor_sid: str) -> list[bytes] | None:
-        """Every raw line for `anchor_sid`, in order, hot or cold — the ONE read-through
-        primitive `re_materialize`/`raw_lines`/`mining_view` share, so "read through both
-        tiers without knowing which you hit" (wave 12 item 2's own acceptance) is true by
-        construction rather than three separate copies of the same if-cold-else-hot branch
-        agreeing by convention. None when neither tier holds anything for this session —
-        matches every one of those three callers' own "not ingested" contract; a cold row
-        is never empty by construction (`fold_to_cold_tier` refuses an empty session), so
-        this never returns `[]` either, same as the hot path already promised."""
+    async def _iter_verified_lines(
+        self, harness: str, anchor_sid: str,
+    ) -> AsyncIterator[bytes]:
+        """THE ONE READ-THROUGH, CHAIN-VERIFYING PRIMITIVE (consolidation, Thoth mail
+        9134, operator ruling on thread 773d633a: fold `_all_raw_lines`/`_verified_
+        lines`/`_stream_verified_write`'s own three copies of "hot-paged-SELECT-or-
+        cold-decompress, verify the chain" into one, before encryption lands — a wrong
+        or rotated-out key will need ONE consistent place to raise, not three). Yields
+        nothing (an empty generator) when neither tier holds anything for this session
+        — indistinguishable from a zero-iteration loop, matching every caller's own
+        "not ingested" case. A genuine break — a hot gap, a hash mismatch, a corrupt
+        cold blob — raises `_ChainBroken`, carrying the exact `{"error",
+        "verified_through"}` shape every caller already returned before this change;
+        each of the three (now two, after this fold) wrapper methods below catches it
+        and maps it onto its own pre-existing external contract, so nothing downstream
+        learns a new error shape.
+
+        COLD: decompress once, recompute the whole chain via `_hash_rows` and compare
+        against `last_hash` (the cold tier's own single-comparison law `verify_chain`
+        already established) before yielding anything — `_all_raw_lines`'s own COLD
+        branch never did this verification before this change (it trusted the stored
+        blob outright); this is the one place this consolidation deliberately widens
+        behavior beyond "identical on every path" — disclosed here, not silent, and
+        only observable on an already-corrupt blob, the case nothing before this ever
+        exercised in practice or in this file's own tests.
+
+        HOT: pages through `soul_lines` at `_REMATERIALIZE_PAGE_LINES` a page — the
+        same page size `_stream_verified_write` already used — so a caller that also
+        streams rather than collects pays no new memory cost from this fold."""
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            return _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
-        rows = await self.pool.fetch(
-            "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
-            "ORDER BY line_idx ASC", harness, anchor_sid)
-        if not rows:
+            content = gzip.decompress(bytes(cold["content_gzip"]))
+            lines_cold = _split_cold_content(content)
+            if not lines_cold:
+                return
+            _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
+            if final_hash != cold["last_hash"]:
+                raise _ChainBroken({
+                    "error": "cold tier chain broken — the recomputed hash does not "
+                             "match the hash recorded at fold time (corrupted or "
+                             "tampered)", "verified_through": -1})
+            for line in lines_cold:
+                yield line
+            return
+        expected_prev: str | None = None
+        i = 0
+        while True:
+            rows = await self.pool.fetch(
+                "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
+                "WHERE harness=$1 AND anchor_sid=$2 AND line_idx >= $3 AND line_idx < $4 "
+                "ORDER BY line_idx ASC",
+                harness, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
+            if not rows:
+                return
+            for row in rows:
+                if row["line_idx"] != i:
+                    raise _ChainBroken({
+                        "error": f"chain broken — a GAP at line_idx {i} (expected "
+                                 f"{i}, found {row['line_idx']})",
+                        "verified_through": i - 1})
+                if row["prev_hash"] != expected_prev:
+                    raise _ChainBroken({
+                        "error": f"chain broken at line {i} — prev_hash does not "
+                                 "match the prior line's own hash",
+                        "verified_through": i - 1})
+                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                    raise _ChainBroken({
+                        "error": f"chain broken at line {i} — stored hash does not "
+                                 "match its own content (tampered or corrupted)",
+                        "verified_through": i - 1})
+                expected_prev = row["line_hash"]
+                yield bytes(row["raw_line"])
+                i += 1
+
+    async def _all_raw_lines(self, harness: str, anchor_sid: str) -> list[bytes] | None:
+        """Every raw line for `anchor_sid`, in order, hot or cold, chain-verified via
+        `_iter_verified_lines` — the ONE read-through primitive `re_materialize`/
+        `raw_lines`/`mining_view` share, so "read through both tiers without knowing
+        which you hit" (wave 12 item 2's own acceptance) is true by construction
+        rather than three separate copies of the same if-cold-else-hot branch agreeing
+        by convention. None when neither tier holds anything for this session, OR when
+        the chain doesn't verify (`_ChainBroken` maps to None here — this function's
+        own contract has never had a distinct "corrupt" outcome to report, so a break
+        is folded into the same "nothing usable" answer "not ingested" already meant)
+        — matches every one of those three callers' own contract; a cold row is never
+        empty by construction (`fold_to_cold_tier` refuses an empty session), so this
+        never returns `[]` either, same as the hot path already promised."""
+        lines: list[bytes] = []
+        try:
+            async for line in self._iter_verified_lines(harness, anchor_sid):
+                lines.append(line)
+        except _ChainBroken:
             return None
-        return [bytes(r["raw_line"]) for r in rows]
+        return lines or None
 
     async def _last_ingested_at(self, harness: str, anchor_sid: str) -> datetime | None:
         """One indexed row lookup — the cheap half of the spend gate, same shape
@@ -1142,13 +1232,13 @@ class SoulStore:
     async def _verified_lines(
         self, anchor_sid: str, harness: str = _HARNESS,
     ) -> tuple[list[bytes] | None, dict[str, Any] | None]:
-        """Walk soul_lines in order, verifying the hash chain AS it collects — a break is
-        a NAMED state (the second element), never a silent partial result. Returns
-        (lines, None) on a clean chain, (None, break_receipt) on the first gap/mismatch,
-        (None, None) when nothing was ever ingested for this session — three distinct
-        outcomes, never conflated. Raw bytes (0052) — `rematerialize_to_disk`'s own
-        byte-exact promise starts here. `harness` (thread 6483/6587): defaults to
-        'claude-code' for backward compatibility — see `verify_chain`'s own note.
+        """Walk `_iter_verified_lines`, collecting — a break is a NAMED state (the
+        second element), never a silent partial result. Returns (lines, None) on a
+        clean chain, (None, break_receipt) on the first gap/mismatch, (None, None)
+        when nothing was ever ingested for this session — three distinct outcomes,
+        never conflated. Raw bytes (0052) — `rematerialize_to_disk`'s own byte-exact
+        promise starts here. `harness` (thread 6483/6587): defaults to 'claude-code'
+        for backward compatibility — see `verify_chain`'s own note.
 
         KEPT WHOLE-FILE ON PURPOSE, alongside the streamed `_stream_verified_write`
         below (Imhotep's streaming rewrite, cc4bb6a, msg 6593/the 307MB question): a
@@ -1160,136 +1250,50 @@ class SoulStore:
         never reaches this — it uses the streamed writer, at full 307MB-scale memory
         savings. Only an explicit seek (Marquee's own repair, a controlled, human-
         supervised operation, never the hot resume path) pays the whole-file cost this
-        function still carries.
-
-        READS THROUGH THE COLD TIER (wave 12 item 2): a folded session's chain is
-        recomputed from its decompressed content and checked against `last_hash` (the
-        cold tier's own single-comparison version of `verify_chain`'s law) — a mismatch
-        is the SAME break-receipt shape a hot gap/tamper would produce, so `upto`'s own
-        seek callers never need to know which tier answered them."""
-        cold = await self._cold_row(harness, anchor_sid)
-        if cold is not None:
-            lines_cold = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
-            if not lines_cold:
-                return None, None
-            _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
-            if final_hash != cold["last_hash"]:
-                return None, {
-                    "error": "cold tier chain broken — the recomputed hash does not "
-                             "match the hash recorded at fold time (corrupted or "
-                             "tampered)",
-                    "verified_through": -1}
-            return lines_cold, None
-        rows = await self.pool.fetch(
-            "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
-            "WHERE harness=$1 AND anchor_sid=$2 ORDER BY line_idx ASC",
-            harness, anchor_sid)
-        if not rows:
-            return None, None
-        expected_prev: str | None = None
+        function still carries."""
         lines: list[bytes] = []
-        for i, row in enumerate(rows):
-            if row["line_idx"] != i:
-                return None, {
-                    "error": f"chain broken — a GAP at line_idx {i} (expected {i}, "
-                             f"found {row['line_idx']})",
-                    "verified_through": i - 1}
-            if row["prev_hash"] != expected_prev:
-                return None, {
-                    "error": f"chain broken at line {i} — prev_hash does not match the "
-                             "prior line's own hash",
-                    "verified_through": i - 1}
-            if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
-                return None, {
-                    "error": f"chain broken at line {i} — stored hash does not match "
-                             "its own content (tampered or corrupted)",
-                    "verified_through": i - 1}
-            expected_prev = row["line_hash"]
-            lines.append(row["raw_line"])
+        try:
+            async for line in self._iter_verified_lines(harness, anchor_sid):
+                lines.append(line)
+        except _ChainBroken as exc:
+            return None, exc.receipt
+        if not lines:
+            return None, None
         return lines, None
 
     async def _stream_verified_write(
         self, anchor_sid: str, target: Path, harness: str = _HARNESS,
     ) -> dict[str, Any]:
-        """Page through soul_lines, verifying the hash chain AS each page arrives, and
-        write each verified line straight to a temp file next to `target` — never
-        holding the reconstructed content in memory (msg 6583: the old whole-file join
-        measured another ~888MB peak RSS on top of ingest's own, on a real 307MB
-        session). Same promise as before, just streamed: a break is a NAMED receipt
+        """Walk `_iter_verified_lines`, writing each verified line straight to a temp
+        file next to `target` — never holding the reconstructed content in memory
+        (msg 6583: the old whole-file join measured another ~888MB peak RSS on top of
+        ingest's own, on a real 307MB session). A break is a NAMED receipt
         (`{"error": ..., "verified_through": N}`) and NOTHING lands at `target` — the
-        temp file is discarded, never renamed, on the first gap/mismatch or on zero rows
-        ever ingested. Only a fully clean pass gets the atomic rename onto `target`.
-        `harness` (thread 6483/6587, the same parity fix `verify_chain` carries):
-        defaults to 'claude-code' for backward compatibility.
-
-        READS THROUGH THE COLD TIER (wave 12 item 2) — the caller (`rematerialize_to_
-        disk`, and through it `verify_round_trip_sample`/every real resume) never knows
-        which tier answered it. A folded session's chain is recomputed once from its
-        decompressed content and checked against `last_hash`; only a clean match gets
-        the SAME atomic temp-file-then-rename write the hot path uses, so a corrupted
-        cold blob leaves `target` untouched, exactly like a hot gap/tamper would."""
-        cold = await self._cold_row(harness, anchor_sid)
-        if cold is not None:
-            content = gzip.decompress(bytes(cold["content_gzip"]))
-            lines_cold = _split_cold_content(content)
-            if not lines_cold:
-                return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing "
-                                 "to materialize"}
-            _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
-            if final_hash != cold["last_hash"]:
-                return {"error": "cold tier chain broken — the recomputed hash does not "
-                                 "match the hash recorded at fold time (corrupted or "
-                                 "tampered)", "verified_through": -1}
-            cold_f, cold_tmp = _open_tmp_writer(target)
-            cold_f.write(content)
-            _finalize_tmp(cold_f, cold_tmp, target)
-            return {"written": str(target), "lines": len(lines_cold),
-                    "sha256": hashlib.sha256(content).hexdigest()}
+        temp file is discarded, never renamed, on the first gap/mismatch or on zero
+        lines ever yielded. Only a fully clean pass gets the atomic rename onto
+        `target`. `harness` (thread 6483/6587, the same parity fix `verify_chain`
+        carries): defaults to 'claude-code' for backward compatibility."""
         f = None
         tmp: Path | None = None
         hasher = hashlib.sha256()
-        expected_prev: str | None = None
-        i = 0
-        wrote_any = False
-        while True:
-            rows = await self.pool.fetch(
-                "SELECT line_idx, raw_line, line_hash, prev_hash FROM soul_lines "
-                "WHERE harness=$1 AND anchor_sid=$2 AND line_idx >= $3 AND line_idx < $4 "
-                "ORDER BY line_idx ASC",
-                harness, anchor_sid, i, i + _REMATERIALIZE_PAGE_LINES)
-            if not rows:
-                break
-            if f is None:
-                f, tmp = _open_tmp_writer(target)
-            for row in rows:
-                if row["line_idx"] != i:
-                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
-                    return {"error": f"chain broken — a GAP at line_idx {i} (expected "
-                                     f"{i}, found {row['line_idx']})",
-                            "verified_through": i - 1}
-                if row["prev_hash"] != expected_prev:
-                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
-                    return {"error": f"chain broken at line {i} — prev_hash does not "
-                                     "match the prior line's own hash",
-                            "verified_through": i - 1}
-                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
-                    _discard_tmp(f, tmp)  # type: ignore[arg-type]
-                    return {"error": f"chain broken at line {i} — stored hash does not "
-                                     "match its own content (tampered or corrupted)",
-                            "verified_through": i - 1}
-                expected_prev = row["line_hash"]
-                chunk = bytes(row["raw_line"]) + b"\n"
+        n_lines = 0
+        try:
+            async for line in self._iter_verified_lines(harness, anchor_sid):
+                if f is None:
+                    f, tmp = _open_tmp_writer(target)
+                chunk = line + b"\n"
                 f.write(chunk)
                 hasher.update(chunk)
-                wrote_any = True
-                i += 1
-        if not wrote_any:
+                n_lines += 1
+        except _ChainBroken as exc:
             if f is not None:
                 _discard_tmp(f, tmp)  # type: ignore[arg-type]
+            return exc.receipt
+        if n_lines == 0:
             return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
                              "materialize"}
         _finalize_tmp(f, tmp, target)  # type: ignore[arg-type]
-        return {"written": str(target), "lines": i, "sha256": hasher.hexdigest()}
+        return {"written": str(target), "lines": n_lines, "sha256": hasher.hexdigest()}
 
     async def rematerialize_to_disk(
         self, anchor_sid: str, *, dest: str | None = None, force: bool = False,
