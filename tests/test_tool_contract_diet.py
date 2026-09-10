@@ -1457,7 +1457,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 79
 # directly from a caller would be the raw-mutation shortcut house law forbids — this
 # is the MCP-facing door onto it), not prose growth on an existing one; raised
 # deliberately, measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 123377
+TOOL_CONTRACT_CEILING_CHARS = 123373
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
