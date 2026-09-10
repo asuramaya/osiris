@@ -32,6 +32,11 @@ new writes:
     `body_usage`, grouped by provider/exit_cause, beside `costs` in the same report shape — the
     hypervisor/cgroup receipt sitting next to the vendor's dollar. Visibility only; the ceiling's
     dollar gate is untouched.
+  * PROPOSALS — miners-as-last-resort item 4 (decision ac892cd9): made/accepted/rejected/
+    expired-in-effect per (miner, owner) pair, off the Proposal objects items 1-3 already mint
+    (proposals.py). Counts only — dollar cost is deliberately NOT re-estimated here; it's already
+    the `costs` stream above, off `ceiling()`'s own measured vendor figure, and llm_usage carries
+    no owner dimension to split it by pair, so this stream doesn't fabricate one.
 
 Read-side by default; the window is either an explicit rolling `since` OR the stored OPERATOR
 WATERMARK ("what's new since I last looked"). Reading NEVER advances the watermark — advancing is
@@ -398,6 +403,61 @@ async def _bodies(actions: Actions, since: datetime) -> dict[str, Any]:
     }
 
 
+async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, Any]:
+    """Miners-as-last-resort item 4 (decision ac892cd9): made/accepted/rejected/expired-
+    in-effect per (miner, owner) pair, off the Proposal objects propose()/accept()/
+    reject() already mint (proposals.py, items 1-3). `made` counts a Proposal whose own
+    `miner` property (asserted once, at mint) falls in the window; `accepted`/`rejected`
+    count a `status` transition (supersede_assertion, so its own `observed_at` is the
+    transition time, not the mint time) in the window; `expired` is a live snapshot —
+    still `status='proposed'` but past its own `expires_at` — since nothing sweeps a
+    Proposal to a real 'expired' status yet. No dollar figure here: see the module
+    docstring's PROPOSALS note."""
+    rows = await actions.pool.fetch(
+        "SELECT "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS miner, "
+        "  (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='miner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS made_at, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS owner, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS status, "
+        "  (SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS status_at, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='expires_at' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS expires_at "
+        "FROM objects o WHERE o.type='Proposal'")
+    now = datetime.now(UTC)
+    by_pair: dict[tuple[str, str], dict[str, int]] = {}
+    for r in rows:
+        if r["miner"] is None or r["owner"] is None:
+            continue
+        agg = by_pair.setdefault((r["miner"], r["owner"]),
+                                 {"made": 0, "accepted": 0, "rejected": 0, "expired": 0})
+        if r["made_at"] is not None and r["made_at"] >= since:
+            agg["made"] += 1
+        if r["status"] in ("accepted", "rejected") and r["status_at"] is not None \
+                and r["status_at"] >= since:
+            agg[r["status"]] += 1
+        if r["status"] == "proposed" and r["expires_at"] is not None \
+                and datetime.fromisoformat(r["expires_at"]) < now:
+            agg["expired"] += 1
+    by = [{"miner": miner, "owner": owner, **agg}
+          for (miner, owner), agg in sorted(by_pair.items())]
+    return {"by_pair": by,
+            "made": sum(a["made"] for a in by_pair.values()),
+            "accepted": sum(a["accepted"] for a in by_pair.values()),
+            "rejected": sum(a["rejected"] for a in by_pair.values()),
+            "expired": sum(a["expired"] for a in by_pair.values())}
+
+
 async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
     """Retrieval telemetry off search_log — the embeddings tripwire made visible: how often
     the fleet searched, how often it found NOTHING, and the queries that missed most. A memory
@@ -584,6 +644,7 @@ async def fleet_digest(
     bodies = await _bodies(actions, effective_since)
     retrieval = await _retrieval(actions, effective_since)
     miner = await _miner(actions, effective_since)
+    proposals = await _proposal_telemetry(actions, effective_since)
     obligation_pressure = await _obligation_pressure(actions)
     operator_inbox = await _operator_inbox(actions, lease_secs=lease_secs)
     # the danger map: a STAMPED swap (durable, from the transcript at mount) OR a LIVE swap
@@ -624,6 +685,8 @@ async def fleet_digest(
             "body_core_seconds": bodies["core_seconds"],
             "body_ram_gib_seconds": bodies["ram_gib_seconds"],
             "miner_errors": miner["errors"],
+            "proposals_made": proposals["made"], "proposals_accepted": proposals["accepted"],
+            "proposals_rejected": proposals["rejected"], "proposals_expired": proposals["expired"],
             # the graph has NO sighting of these minds, ever — neither a transcript stamp nor a
             # mount. Counted, never silently dropped. This is a CENSUS gap, not (yet) a ghost
             # count: walking the 208 found 17 spawns still on disk, 25 bare lineage anchors, 4
@@ -645,6 +708,7 @@ async def fleet_digest(
         "bodies": bodies,
         "retrieval": retrieval,
         "miner": miner,
+        "proposals": proposals,
         "obligation_pressure": obligation_pressure,
         "operator_inbox": operator_inbox,
     }

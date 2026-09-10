@@ -415,6 +415,91 @@ def test_run_gates_timing_out_twice_still_refuses_unconditionally(
     assert _status_word(ok, msg) == "TIMEOUT"
 
 
+# --- the instrument fix (Thoth's ruling, mail 9017): scale the timeout with load ---------
+
+def test_load_scaled_pytest_timeout_stays_at_base_under_the_threshold() -> None:
+    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    # whatever this host's real load is, either it's under the threshold (base, unscaled)
+    # or over it (scaled) -- both are legitimate; the contract this proves is just that a
+    # low load never scales UP.
+    if load1 is not None and load1 <= gate_hook._PYTEST_LOAD_THRESHOLD:
+        assert timeout == gate_hook._PYTEST_TIMEOUT_SECS
+
+
+def test_load_scaled_pytest_timeout_scales_up_over_the_threshold(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (16.0, 12.0, 10.0))
+    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    assert load1 == 16.0
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * 2  # 16 / 8 == 2x
+
+
+def test_load_scaled_pytest_timeout_caps_the_scale_factor(monkeypatch: Any) -> None:
+    """A hang is still a hang eventually -- tolerance, not blindness, same law the
+    retry-once mechanism already holds one layer up."""
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (400.0, 300.0, 200.0))
+    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    assert load1 == 400.0
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * gate_hook._PYTEST_TIMEOUT_MAX_SCALE
+
+
+def test_load_scaled_pytest_timeout_degrades_to_base_without_getloadavg(
+    monkeypatch: Any,
+) -> None:
+    def _no_getloadavg() -> tuple[float, float, float]:
+        raise AttributeError("no getloadavg on this platform")
+
+    monkeypatch.setattr(gate_hook.os, "getloadavg", _no_getloadavg)
+    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS
+    assert load1 is None
+
+
+def test_run_gates_scales_the_actual_subprocess_timeout_under_high_load(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """Proves the scaling actually reaches subprocess.run's own `timeout=` kwarg, not
+    just the standalone helper function in isolation."""
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (32.0, 20.0, 15.0))
+    _write(tmp_path, "tests/test_a.py")
+    seen_timeouts: list[float] = []
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "1 passed"
+        stderr = ""
+
+    def _record_timeout(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        seen_timeouts.append(kwargs["timeout"])
+        return _FakeProc()
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _record_timeout)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert seen_timeouts == [gate_hook._PYTEST_TIMEOUT_SECS * 4]  # 32 / 8 == 4x
+    assert ok is True
+    assert "load 32.0" in msg  # the receipt names the load, never a silent scale
+
+
+def test_run_gates_timeout_receipt_names_the_load_that_caused_the_scale(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (24.0, 18.0, 12.0))
+    _write(tmp_path, "tests/test_a.py")
+
+    def _always_times_out(cmd: list[str], **kwargs: Any) -> None:
+        raise gate_hook.subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(gate_hook.subprocess, "run", _always_times_out)
+    results = run_gates(tmp_path, ["tests/test_a.py"])
+    ok, msg = results["pytest"]
+    assert ok is False
+    assert msg.startswith("TIMED OUT TWICE")
+    assert "load 24.0" in msg
+    assert str(gate_hook._PYTEST_TIMEOUT_SECS * 3) in msg  # 24 / 8 == 3x
+
+
 def test_run_gates_a_retry_that_reveals_a_real_failure_is_not_swallowed(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:

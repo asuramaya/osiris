@@ -115,6 +115,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -150,6 +151,37 @@ VENV_BIN = Path(sys.executable).parent
 # PASSED, never treated as a failure.
 _PYTEST_FANOUT_CAP = 12
 _PYTEST_TIMEOUT_SECS = 180
+
+# THE INSTRUMENT FIX (Thoth's ruling, mail 9017, after three consecutive TIMED-OUT-TWICE
+# refusals on a genuinely clean commit under a measured 1-minute load of 15-32): a FIXED
+# 180s twice measures the box, not the code, once the host is under real multi-agent
+# contention (five concurrent seats can each fire this gate on the same shared tree,
+# _PYTEST_XDIST_CAP's own docstring above). Scaling the timeout with the live 1-minute
+# load average (`os.getloadavg()[0]`, POSIX-only — degrades to the fixed base on a
+# platform without it, never crashes the gate over an instrumentation nicety) keeps the
+# SAME two-strikes discipline (one retry, then refuse) while giving a genuinely
+# overloaded host the wall-clock a lightly loaded one already gets by default. Below
+# Thoth's own retry-authorization threshold (8, the same number his ruling gave for
+# "safe to retry a failed commit") the timeout is untouched; above it, scales linearly,
+# capped at 4x base — a hang is still a hang eventually, this is tolerance, not
+# blindness, the same law the retry-once mechanism already holds one layer up.
+_PYTEST_LOAD_THRESHOLD = 8.0
+_PYTEST_TIMEOUT_MAX_SCALE = 4.0
+
+
+def _load_scaled_pytest_timeout(base: int = _PYTEST_TIMEOUT_SECS) -> tuple[int, float | None]:
+    """(scaled_timeout_secs, load1) — `load1` is None when `os.getloadavg` is unavailable
+    (never POSIX-guaranteed), in which case the base timeout is returned unchanged. The
+    caller names `load1` in its own receipt so a scaled timeout is never silently
+    indistinguishable from the fixed default."""
+    try:
+        load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        return base, None
+    if load1 <= _PYTEST_LOAD_THRESHOLD:
+        return base, load1
+    scale = min(load1 / _PYTEST_LOAD_THRESHOLD, _PYTEST_TIMEOUT_MAX_SCALE)
+    return int(base * scale), load1
 
 # pytest's own "no tests were collected" exit status (pytest.ExitCode.NO_TESTS_COLLECTED).
 # NOT a failure -- see the branch that consumes it for the incident that proved it.
@@ -591,12 +623,16 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             # of whether pytest itself goes on to pass, fail, skip, or time out.
             print(f"gate_hook: {tmpdir_note}")
 
+        pytest_timeout, load1 = _load_scaled_pytest_timeout()
+        load_note = (f" (1-min load {load1:.1f}, timeout scaled to {pytest_timeout}s)"
+                    if load1 is not None and pytest_timeout != _PYTEST_TIMEOUT_SECS else "")
+
         def _run_pytest() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 [str(VENV_BIN / "pytest"), *test_files, "-q",
                  "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root,
                 capture_output=True, text=True, check=False,
-                env=pytest_env, timeout=_PYTEST_TIMEOUT_SECS,
+                env=pytest_env, timeout=pytest_timeout,
             )
 
         # TOLERANCE, NOT BLINDNESS (f1f8ad62, ruling f61cad1b: the ambient-load limb LEANS
@@ -651,7 +687,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (
                     True,
-                    f"PASSED ON RETRY — timed out after {_PYTEST_TIMEOUT_SECS}s on the "
+                    f"PASSED ON RETRY — timed out after {pytest_timeout}s{load_note} on the "
                     f"first attempt, then passed clean on an immediate second attempt "
                     f"[{' '.join(test_files)}]{tail}. NOT a plain pass — the first "
                     f"attempt's hang is real signal (f1f8ad62); a PATTERN of retries "
@@ -680,7 +716,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 tail = f" (also omitted {omitted})" if omitted else ""
                 retry_note = " (unchanged after an immediate retry)" if retried else ""
                 results["pytest"] = (
-                    ok, f"[{' '.join(test_files)}]{tail}{retry_note}\n{out}")
+                    ok, f"[{' '.join(test_files)}]{tail}{retry_note}{load_note}\n{out}")
         except subprocess.TimeoutExpired:
             # A DISTINCT WORD FROM "FAILED" (Thoth DM 2948, same discipline as smoke_chrome's
             # timeout-vs-refusal split): a hang past _PYTEST_TIMEOUT_SECS is not proven to be
@@ -691,7 +727,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             tail = f" (also omitted {omitted})" if omitted else ""
             results["pytest"] = (
                 False,
-                f"TIMED OUT TWICE — {_PYTEST_TIMEOUT_SECS}s on the first attempt AND an "
+                f"TIMED OUT TWICE — {pytest_timeout}s{load_note} on the first attempt AND an "
                 f"immediate retry (tolerance exhausted, f1f8ad62) under real ambient fleet "
                 f"load (not a proven code failure -- see the DB-contention negative "
                 f"control) [{' '.join(test_files)}]{tail}")
