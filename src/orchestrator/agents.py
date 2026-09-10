@@ -315,6 +315,45 @@ async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
            "resolved": resolved}
 
 
+async def lineage_works_in_at(
+    pool: asyncpg.Pool, agent_id: str, at: datetime,
+) -> dict[str, Any]:
+    """`lineage_works_in`'s own AT-WRITE-TIME sibling (provenance sweep, wave 15's Decision/
+    Thread lane, measured live 2026-09-09): a lineage that voted for a single project when
+    an object was written can still show 2+ projects TODAY, once a later generation moved
+    on — `lineage_works_in`'s "every live edge, right now" read then correctly abstains on
+    an object that was never actually ambiguous at the moment it was captured. Measured
+    against the population `backfill_lineage_repo_links` itself left abstained (177 rows,
+    2026-09-09): the current-unanimous check resolves 0 of them (by construction — that lane
+    already claimed every one it could), while windowing each lineage's own `works_in` edges
+    to `first_seen <= at AND (valid_until IS NULL OR valid_until > at)` resolves 45 — a
+    genuinely finer answer, not a repeat of the same lookup.
+
+    Same retired/false-mint exclusion as `lineage_works_in` (a mis-minted heir that was
+    later retired still voted at the time, if its own works_in edge was live then — RETIRED
+    STATUS ITSELF CARRIES NO TIMESTAMP THIS FUNCTION CAN WINDOW ON, so a generation retired
+    at any point is excluded from every `at`, not just windows after its retirement; this is
+    the conservative direction — it can only turn a resolvable answer into an abstention, never
+    the reverse). Same return shape as `lineage_works_in`; READ-ONLY, mints nothing."""
+    root = _generation(agent_id)[0]
+    rows = await pool.fetch(
+        "SELECT DISTINCT p.id, p.canonical FROM links l "
+        "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
+        "  AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
+        "  AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=a.id "
+        "    AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true') "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type='works_in' AND l.first_seen <= $2 "
+        "AND (l.valid_until IS NULL OR l.valid_until > $2)",
+        root, at)
+    by_project = sorted({(r["canonical"].removeprefix("repo:"), r["id"]) for r in rows})
+    projects = [name for name, _id in by_project]
+    candidate_ids = [pid for _name, pid in by_project]
+    resolved = projects[0] if len(projects) == 1 else None
+    return {"root": root, "projects": projects, "candidate_ids": candidate_ids,
+           "resolved": resolved}
+
+
 # Full roman numerals for the human DISPLAY generation (Anna IV, Anna IX) — unlike the id
 # suffix (restricted to i/v/x for hex-safety), a display label parses nothing, so it can use
 # the whole numeral system.
