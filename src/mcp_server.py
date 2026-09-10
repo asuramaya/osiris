@@ -9060,6 +9060,32 @@ async def record_decision(
         out["unresolved_grounds"] = missing
         out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
                        "then re-run record_decision (idempotent) to attach the edges")
+    # RECEIPT LAW (Thoth mail 9122 item 1, wave 16): capture.record_decision's own
+    # prose-scan (task #101) mints `decided_in` from a commit sha named in summary/
+    # rationale/protocol, and mints prose-derived `cites` edges (origin="prose",
+    # distinct from the caller-declared `cites=` param's own `out["cites"]` above — a
+    # DIFFERENT field, never overloading the same key with two meanings) alongside a
+    # `prose_citation_skips` property for anything that failed to resolve — all inside
+    # the SAME atomic transaction as everything else this receipt already reports, but
+    # none of it was ever surfaced: a caller citing "commit abc1234" or "ruling deadbeef"
+    # in their own summary/rationale had no way to tell whether it became a real edge,
+    # was skipped as unresolved, or was never attempted at all. Same read-back
+    # discipline as every other block here — nothing writes, this only reads what
+    # capture.record_decision already committed.
+    prose_decided_in = [str(r["id"])[:8] for r in await pool.fetch(
+        "SELECT to_id AS id FROM links WHERE from_id=$1 AND type='decided_in'", d)]
+    if prose_decided_in:
+        out["decided_in"] = prose_decided_in
+    prose_cited = [str(r["id"])[:8] for r in await pool.fetch(
+        "SELECT to_id AS id FROM links WHERE from_id=$1 AND type='cites' "
+        "AND properties->>'origin'='prose'", d)]
+    if prose_cited:
+        out["prose_cites"] = prose_cited
+    prose_skips = await pool.fetchval(
+        "SELECT value FROM current_assertions WHERE object_id=$1 "
+        "AND name='prose_citation_skips'", d)
+    if prose_skips:
+        out["prose_citation_skips"] = prose_skips
     # UNFILED WARNING (thread 595c3a89): a decision with no repo= and no auto-detected
     # decided_in commit citation produces ZERO outgoing links and is structurally
     # invisible to _fn_project no matter how many JOIN paths it grows — found live, all
@@ -9527,8 +9553,14 @@ async def open_thread(
         # changed the existing thread; owner/assignee keeps its own bespoke lease-
         # visibility note below (a sharper message than a generic diff would give it).
         # branch/files_touched/resolves are not yet wired into this check — a named gap,
-        # not a silent one; see the function's own docstring.
-        supplied = {k: v for k, v in {"kind": kind, "arc": arc}.items() if v is not None}
+        # not a silent one; see the function's own docstring. `owner` (RECEIPT LAW,
+        # Thoth mail 9122 item 1, wave 16) closes the exact gap discarded_on_noop's own
+        # docstring already named as its first known specimen — "owner" was listed
+        # there as a motivating case but never actually passed into `supplied` below,
+        # so a bare owner= on a dedup hit read as a clean receipt while nothing landed,
+        # same failure `assignee` already gets its own bespoke lease note for.
+        supplied = {k: v for k, v in {"kind": kind, "arc": arc, "owner": owner}.items()
+                   if v is not None}
         if supplied:
             existing_vals = await capture._thread_named_properties(pool, dup, tuple(supplied))
             discarded = capture.discarded_on_noop(supplied, existing_vals)
@@ -9836,6 +9868,11 @@ async def _thread_action_impl(
             return {"error": f"no thread matched {ref!r}"}
         out = {"id": str(t), "kind": kind,
                "status": "open (unchanged — reclassified, not resolved)"}
+        if owner:
+            # RECEIPT LAW (Thoth mail 9122 item 1, wave 16): resolved and passed into
+            # capture.reclassify_thread just above — the kind change was already
+            # confirmed in this receipt, the owner change never was.
+            out["owner"] = owner
         if arc:
             if await capture.arc_in_scope_for_thread(pool, t):
                 out["arc"] = arc
@@ -9876,7 +9913,11 @@ async def thread(
         earlier reasoning stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79):
         `because` becomes mandatory, `dry_run` DEFAULTS TRUE and previews without
         writing — pass `dry_run=False` explicitly to actually close the batch — and the
-        whole batch refuses if any ref does not resolve to exactly one thread.
+        whole batch refuses if any ref does not resolve to exactly one thread. `dry_run`
+        is INERT for a SINGLE `ref` (RECEIPT LAW, Thoth mail 9122 item 1, wave 16 — the
+        single-ref primitive `capture.resolve_thread` has never taken one, and passing
+        `dry_run=True` on a bare ref still resolves it for real): disclosed here since
+        the schema itself offers the param uniformly for both shapes.
       annotate: add `note` WITHOUT closing it or touching `summary`/`status` (ref, note)
         — each call appends independently, never supersedes an earlier note. Optional
         `corrected_summary`/`because` fix the headline in the same call, same as
