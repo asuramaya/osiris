@@ -608,6 +608,91 @@ async def brief_orphan_weekly(m: dict[str, Any]) -> None:
         await pool.close()
 
 
+# THE WEEKLY ABSTENTION DIGEST, beside the orphan band (Thoth mail 8960 item 2, msg
+# 9071): the SAME weekly-cursor shape the backlog and orphan bands above already
+# established, a third lever pulled the same way rather than a fourth hand-rolled
+# watermark. Reads `adoption_meter._hatch_counts` — the `unlinked_because`/
+# `unlinked_because_kind` hatch every declare-or-refuse door writes (record_decision,
+# open_thread, ingest_reference/ingest_log/ingest_reference_doc, record_practice, and
+# now the provenance sweep's own Agent/SoftwareProject/Seat lanes) — a DIFFERENT
+# population from the orphan band's own zero-live-link census just above: a hatch
+# confession is a DECLARED gap (the door refused to mint silently and the caller said
+# why), while an orphan is discovered post-hoc with no declaration at all. Distinct
+# numbers, worth a distinct line, not folded into the orphan band's own total.
+_ABSTENTION_WEEKLY_CURSOR_KEY = "preflight:abstention_weekly_total"
+
+
+def _abstention_delta(total: int, prior: str | None) -> int | None:
+    """Pure, same law as `_orphan_delta`/`_backlog_delta`: `None` on the very first run,
+    never coerced to 0 — "nothing to compare yet" and "no change" are different facts."""
+    return total - int(prior) if prior is not None else None
+
+
+def _format_abstention_weekly_line(m: dict[str, Any]) -> str:
+    """Pure message formatting for the abstention digest's weekly line — shared by
+    `main()`'s own unconditional print and `brief_abstention_weekly`'s desk post, same
+    convention the orphan/backlog bands' own formatters already set."""
+    delta = m["delta"]
+    delta_text = ("first run, no prior week to compare" if delta is None else
+                  f"{'+' if delta >= 0 else ''}{delta} since last week")
+    split = m["split"]
+    split_text = (f"extension={split['extension_link_pending']} "
+                  f"standalone={split['standalone_other']}" if split is not None else
+                  "unsplit — reason constant not on this build")
+    return (f"ABSTENTION DIGEST — {m['total']} declared hatch confession(s) fleet-wide, "
+            f"all-time cumulative ({delta_text}). {split_text}.")
+
+
+async def collect_abstention_weekly() -> dict[str, Any]:
+    """THE WEEKLY ABSTENTION DIGEST: fleet total hatch confessions, the extension/
+    standalone split, and the delta since the last time this ran — reuses
+    `adoption_meter._hatch_counts` rather than a second hand-rolled query, the same
+    "one derivation, not two" law `collect_orphan_weekly`/`collect_obligation_backlog_
+    weekly` already hold themselves to. Read-mostly: the only write is advancing this
+    collector's own cursor.
+
+    THE DELTA IS STILL A CUMULATIVE-TOTAL DIFFERENCE, NOT A WEEKLY RATE (same caveat
+    `_hatch_counts`'s own docstring names for its raw total): `unlinked_because` is
+    asserted once per object and never retracted, so a positive delta here means "this
+    many MORE confessions exist than a week ago," not "this many were written this
+    week" — the two agree only if nothing was ever resolved out from under the count in
+    between, which this digest does not attempt to detect."""
+    from src.db.pool import create_pool
+    from src.orchestrator.adoption_meter import _hatch_counts
+    from src.orchestrator.monitor import get_cursor, set_cursor
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-abstention-weekly")
+    try:
+        result = await _hatch_counts(pool)
+        total = int(result["total"])
+        prior = await get_cursor(pool, _ABSTENTION_WEEKLY_CURSOR_KEY)
+        delta = _abstention_delta(total, prior)
+        await set_cursor(pool, _ABSTENTION_WEEKLY_CURSOR_KEY, str(total))
+        return {"total": total, "split": result["split"], "delta": delta}
+    finally:
+        await pool.close()
+
+
+async def brief_abstention_weekly(m: dict[str, Any]) -> None:
+    """Post the abstention digest's weekly line to the operator's desk — informational
+    (`desk_kind='fyi'`), never a regression alarm, same cadence the orphan/backlog
+    bands' own briefs already run at."""
+    from src.db.pool import create_pool
+    from src.orchestrator.mailbox import send_message
+
+    pool = await create_pool(
+        DSN, min_size=1, max_size=1,
+        application_name="osiris-script:preflight-abstention-brief")
+    try:
+        await send_message(pool, from_agent="system:preflight", from_project="osiris",
+                           to_project="operator", body=_format_abstention_weekly_line(m),
+                           desk_kind="fyi", grade="fyi")
+    finally:
+        await pool.close()
+
+
 async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe).
 
@@ -708,6 +793,17 @@ def main() -> int:
                 print(f"(could not post the orphan band brief: {e})")
         if orphan_broken:
             fails.append(orphan_broken)
+    if "--drill" in sys.argv:
+        abstention_weekly, abstention_broken = _run_check(
+            "collect_abstention_weekly", collect_abstention_weekly())
+        if abstention_weekly is not None:
+            print(_format_abstention_weekly_line(abstention_weekly))
+            try:
+                asyncio.run(brief_abstention_weekly(abstention_weekly))
+            except Exception as e:  # noqa: BLE001 — the desk being down is itself printed
+                print(f"(could not post the abstention digest brief: {e})")
+        if abstention_broken:
+            fails.append(abstention_broken)
     if not fails:
         print("preflight: all green"
               f" (backup {m['backup_age_h']:.1f}h, vault {m['vault_age_d']:.1f}d,"
