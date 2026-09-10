@@ -886,7 +886,10 @@ def _tool_chars(t: Any) -> int:
 # — the witness surface dossier() deliberately hides (same_as/not_same_as links,
 # merge/unmerge/split events), read-only, genuinely new capability, not a mode of
 # any existing tool.
-TOOL_CONTRACT_EXPECTED_COUNT = 77
+# 77 -> 78 (2026-09-10, Imhotep, decision ac892cd9, "miners as last resort" item 2):
+# proposal — one door, three actions (propose/accept/reject) over a NEW Proposal
+# object type. Genuinely new capability, no existing tool it could parameterize.
+TOOL_CONTRACT_EXPECTED_COUNT = 78
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1435,7 +1438,10 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # (b)): threads()'s own docstring gains one paragraph naming the new `contested` field
 # and its `!` marker. No new tool, load-bearing growth per this file's own escape valve.
 # Measured exact (118,856), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 119830
+# 116153 -> 118254 (2026-09-10, Imhotep, decision ac892cd9): the new `proposal` tool
+# (2,101 chars) — miners as last resort, item 2. A genuinely new door, not prose growth
+# on an existing one; raised deliberately, measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 121931
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

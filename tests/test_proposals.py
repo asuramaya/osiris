@@ -1,7 +1,8 @@
-"""Miners as last resort, item 1 (decision ac892cd9): the Proposal object type + the
+"""Miners as last resort (decision ac892cd9). Item 1: the Proposal object type + the
 propose() write door, with the last-resort law wired against derive_or_abstain's own
-abstention shape. No accept/reject, no budget, no telemetry here — those are their own,
-later commits, per Thoth's "one commit per item" instruction."""
+abstention shape. Item 2: accept()/reject() and the read-only proposals_band(). No
+budget economics, no telemetry, no miner wiring here — those are their own, later
+commits, per Thoth's "one commit per item" instruction."""
 from __future__ import annotations
 
 import uuid
@@ -9,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator import capture
-from src.orchestrator.proposals import propose
+from src.orchestrator.proposals import accept, proposals_band, propose, reject
 
 
 async def _mint_bare(actions: Actions, type_name: str) -> uuid.UUID:
@@ -122,3 +123,157 @@ async def test_propose_resolves_a_real_seat_as_owner(actions: Actions) -> None:
                         miner="test-miner", actor="test-miner")
     assert "error" not in out
     assert out["owner"] == seat["seat_id"]
+
+
+_LINK_CANDIDATE = {"kind": "link", "from_id": "placeholder", "to_id": "placeholder",
+                   "link_type": "implements"}
+
+
+async def test_accept_mints_the_link_candidate_verbatim(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    target = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    candidate = {"kind": "link", "from_id": str(orphan), "to_id": str(target),
+                "link_type": "implements"}
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=candidate, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    assert "error" not in out
+
+    acc = await accept(actions, proposal=out["proposal"], actor="agent:accepter")
+    assert "error" not in acc
+    assert acc["status"] == "accepted"
+    row = await actions.pool.fetchrow(
+        "SELECT evidence_class, confidence, properties FROM links "
+        "WHERE from_id=$1 AND to_id=$2 AND type='implements'", orphan, target)
+    assert row is not None
+    assert row["evidence_class"] == "self_declared"
+    assert row["properties"]["accepted_from"] == out["proposal"]
+    status = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id AND o.canonical=$1 "
+        "WHERE a.name='status'", out["proposal"])
+    assert status == "accepted"
+
+
+async def test_accept_mints_the_object_candidate_verbatim(actions: Actions) -> None:
+    from src.ontology.catalog import ensure_type
+
+    await ensure_type(actions, name="GateWidget", kind="object", actor="test")
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    new_canon = f"gatewidget:{uuid.uuid4()}"
+    candidate = {"kind": "object", "type": "GateWidget", "canonical": new_canon,
+                "properties": {"note": "minted from a proposal"}}
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=candidate, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    assert "error" not in out
+
+    acc = await accept(actions, proposal=out["proposal"], actor="agent:accepter")
+    assert "error" not in acc
+    new_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='GateWidget' AND canonical=$1", new_canon)
+    assert new_id is not None
+    note = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 AND a.name='note'",
+        new_id)
+    assert note == "minted from a proposal"
+    accepted_from = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='accepted_from_proposal'", new_id)
+    assert accepted_from == out["proposal"]
+
+
+async def test_accept_refuses_a_non_proposed_proposal(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    first = await reject(actions, proposal=out["proposal"], reason="test rejection",
+                         actor="agent:rejecter")
+    assert first["status"] == "rejected"
+
+    second = await accept(actions, proposal=out["proposal"], actor="agent:accepter")
+    assert "error" in second
+    assert "rejected" in second["error"]
+
+
+async def test_accept_refuses_an_expired_proposal(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    proposal_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", out["proposal"])
+    past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    await actions.assert_property(proposal_id, "expires_at", past, "test-miner",
+                                  datetime.now(UTC), 0.4, evidence_class="derived",
+                                  actor="test-miner")
+
+    acc = await accept(actions, proposal=out["proposal"], actor="agent:accepter")
+    assert "error" in acc
+    assert "expired" in acc["error"]
+
+
+async def test_reject_retires_with_a_mandatory_reason(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    rej = await reject(actions, proposal=out["proposal"], reason="wrong shortlist",
+                       actor="agent:rejecter")
+    assert rej["status"] == "rejected"
+    proposal_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", out["proposal"])
+    reason = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='reject_reason'", proposal_id)
+    assert reason == "wrong shortlist"
+
+
+async def test_reject_refuses_without_a_reason(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    rej = await reject(actions, proposal=out["proposal"], reason="   ",
+                       actor="agent:rejecter")
+    assert "error" in rej
+
+
+async def test_proposals_band_counts_and_groups_by_owner(actions: Actions) -> None:
+    orphan1 = await _mint_bare(actions, "GateWidget")
+    orphan2 = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan1, "implements", [], "test")
+    await capture.derive_or_abstain(actions, orphan2, "implements", [], "test")
+    out1 = await propose(actions, from_id=orphan1, link_type="implements",
+                         candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                         miner="test-miner", actor="test-miner")
+    out2 = await propose(actions, from_id=orphan2, link_type="implements",
+                         candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                         miner="test-miner", actor="test-miner")
+
+    band = await proposals_band(actions.pool)
+    assert band["count"] >= 2
+    assert "operator" in band["by_owner"]
+    owner_proposals = {p["proposal"] for p in band["by_owner"]["operator"]}
+    assert {out1["proposal"], out2["proposal"]}.issubset(owner_proposals) or len(
+        band["by_owner"]["operator"]) == 3  # capped at 3 -- either fully present or capped
+
+
+async def test_proposals_band_excludes_a_resolved_proposal(actions: Actions) -> None:
+    orphan = await _mint_bare(actions, "GateWidget")
+    await capture.derive_or_abstain(actions, orphan, "implements", [], "test")
+    out = await propose(actions, from_id=orphan, link_type="implements",
+                        candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
+                        miner="test-miner", actor="test-miner")
+    await reject(actions, proposal=out["proposal"], reason="test", actor="agent:rejecter")
+
+    band = await proposals_band(actions.pool)
+    all_proposals = {p["proposal"] for rows in band["by_owner"].values() for p in rows}
+    assert out["proposal"] not in all_proposals
