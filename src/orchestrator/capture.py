@@ -607,6 +607,95 @@ async def backfill_lineage_repo_links(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def backfill_lineage_repo_links_at_write_time(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """PROVENANCE SWEEP, WAVE 15, DECISION/THREAD LANE REFINEMENT (mail 8840): the finer
+    rung `backfill_lineage_repo_links` itself named as follow-up scope rather than build
+    under context pressure (decision 69277bd3) — every object THAT lane left abstained
+    (its own current-unanimous check already claims everything it can) gets one more look,
+    this time windowing each lineage's own `works_in` edges to what was actually live AT
+    THE OBJECT'S OWN `observed_at` (`lineage_works_in_at`, agents.py) rather than what the
+    lineage's live edges say TODAY. A lineage that moved from one project to a second AFTER
+    an object was captured is not actually ambiguous about THAT object — it just looks that
+    way to a read with no clock. Measured live (2026-09-09) against the 177-row leftover
+    population: 45 resolve here that the current-unanimous check could not, 1 more is zero-
+    everywhere, 131 remain genuinely ambiguous even at their own write time.
+
+    Structurally the same shape as `backfill_lineage_repo_links` (same objects/summary
+    query, same mint-via-link_repo + cross-source supersede-on-mint, same derive_or_abstain
+    abstain path) — kept as its OWN function/commit per Thoth's "one resolver, one commit"
+    rule (mail 8840), not folded into the existing lane, since the two use genuinely
+    different lookups (`lineage_works_in` vs `lineage_works_in_at`) and running this one
+    is only correct to try SECOND, after the plain lane has already claimed what it can.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent for
+    the same reason the sibling lane is: a repeat call finds nothing left to scan once an
+    object is linked, and re-abstaining just re-asserts the same fact."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.orchestrator.agents import lineage_works_in_at
+
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT DISTINCT o.id, o.type, a.source_id, a.observed_at FROM objects o "
+        "JOIN assertions a ON a.object_id=o.id AND a.name='summary' "
+        "WHERE o.type IN ('Decision','Thread') AND o.status='active' "
+        "AND a.source_id LIKE 'agent:%' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    observed = datetime.now(UTC)
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        lineage = await lineage_works_in_at(pool, row["source_id"], row["observed_at"])
+        repo = lineage["resolved"]
+        if repo is not None:
+            entry = {"id": str(row["id"]), "type": row["type"], "verdict": "mint",
+                     "to": repo, "source": row["source_id"]}
+            minted += 1
+            if not dry_run:
+                await link_repo(actions, row["id"], repo, observed, source=actor,
+                                evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                stale = await pool.fetch(
+                    "SELECT id FROM assertions WHERE object_id=$1 "
+                    "AND name='derivation_abstained_in_repo' AND NOT (value ? 'resolved') "
+                    "AND NOT EXISTS (SELECT 1 FROM assertions s WHERE s.supersedes=id)",
+                    row["id"])
+                if stale:
+                    proj_id = await _resolve_repo(pool, repo)
+                    for s in stale:
+                        await actions.supersede_assertion(
+                            row["id"], "derivation_abstained_in_repo", s["id"],
+                            {"link_type": "in_repo", "resolved": True,
+                             "resolved_to": str(proj_id)},
+                            actor, observed, _DERIVE_CONF,
+                            f"backfill_lineage_repo_links_at_write_time resolved this "
+                            f"object to {repo!r}, superseding the stale abstention",
+                            evidence_class=_DERIVE_TIER.value)
+        else:
+            reason = (
+                f"{len(lineage['projects'])} distinct projects across this lineage's own "
+                f"works_in AT {row['observed_at'].isoformat()} "
+                f"({', '.join(lineage['projects'])}) — not a unique lookup, never guessed"
+                if lineage["projects"] else
+                "no project found anywhere across this lineage's own works_in, even at "
+                "the object's own write time")
+            entry = {"id": str(row["id"]), "type": row["type"], "verdict": "abstain",
+                     "reason": reason, "candidate_count": len(lineage["candidate_ids"]),
+                     "source": row["source_id"]}
+            abstained += 1
+            if not dry_run:
+                await derive_or_abstain(actions, row["id"], "in_repo",
+                                        lineage["candidate_ids"], actor,
+                                        why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 # LANE 1 (thread 33962e00, off Lane 0's derive_or_abstain above): the boot-startup
 # watchdog's own UNREVIEWED BOOT alarm Threads (deploy_guard.alarm_unreviewed_boot) —
 # minted with no ctx and no mounted caller, so #189 correctly left them unable to satisfy
