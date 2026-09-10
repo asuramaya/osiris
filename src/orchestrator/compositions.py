@@ -1399,6 +1399,37 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 _LINT_CAP = 50  # findings LISTED per check; totals are always reported — no silent caps
 _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
+# Every check _fn_lint runs, in the exact order it runs them — the could-not-evaluate net
+# (thread 04c651ce item 2) walks this list against `counts` to name which checks never
+# reached land() when one check's own query breaks partway through, rather than either the
+# whole call crashing (losing every OTHER check's real findings too) or a broken check
+# silently reading as counts[check]==0 (indistinguishable from a genuinely clean pass).
+_LINT_CHECK_NAMES = [
+    "contradiction", "status-regression", "laundering", "lineage-cycle", "lineage-dangling",
+    "orphan-heir", "retired-live", "false-mint", "false-mint-live",
+    "merged-with-live-successor", "orphan-link", "stale-obligation", "rot-candidate",
+    "rot-candidate-unscoped", "edgeless-closure-growth", "attribution", "phantom-twin",
+    "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
+    "stale-off-head-link", "stale-current-flag", "kindless-open-thread",
+    "unresolvable-owner", "zero-recipient-dm", "orphan", "contested-summary",
+]
+
+
+def _unavailable(reason: str) -> dict[str, Any]:
+    """THE RESERVED UNAVAILABLE MARKER (thread 04c651ce item 2, Thoth dispatch msg 9123):
+    a PARTIAL failure — one field of an otherwise-normal row/result genuinely could not be
+    computed (an exception, a dependency down) — needs a shape a programmatic reader can
+    tell apart from real data by STRUCTURE, never by sniffing human-readable text for the
+    word "unavailable" (which a real value could legitimately contain). Mirrors the
+    `_action`/`_actions` row-control convention this same file already uses: a reserved
+    leading-underscore key, checked by KEY not by content. osiris.js's table()/_txt() strip
+    this shape wherever it appears (top-level or nested in a cell) and render a distinct
+    dimmed marker instead of flattening it as if it were real nested JSON — see osiris.js's
+    own `_UNAVAILABLE_KEY`. Distinct from the fleet-wide `{"error": ...}` refusal idiom
+    (a deliberate validation refusal, a different concept this helper never touches) —
+    reserved for genuinely couldn't-evaluate cases, the ones today's `except Exception`
+    sites raise."""
+    return {"_unavailable": reason}
 
 # THE RATCHET (Thoth DM 2581/2603, decision fc5b6c5f/5713e1fc, cb38d922): resolved-with-no-
 # closure-edge must never increase. Armable now, not just measurable, because all three
@@ -1613,7 +1644,16 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     trusting it at face value overstated this graph's real debt by 54x, live. `severity` maps
     each check name to its grade (info/warn/error); `counts_by_severity` is the one-glance
     rollup — read that before `counts` when the question is how much of this actually
-    matters."""
+    matters.
+
+    `could_not_evaluate` (thread 04c651ce item 2, Thoth dispatch msg 9123): every check's
+    own query runs inside ONE shared try/except around the whole check sequence — if any
+    check's query breaks partway through, every check that already landed keeps its real
+    findings, and every check that never reached `land()` (that one plus every check still
+    to come, in run order) is named here with the exception as its reason, present ONLY
+    when non-empty. A check absent from `could_not_evaluate` and reading `counts[check]==0`
+    in `clean` is a genuinely clean pass — no longer structurally indistinguishable from a
+    check whose query silently broke."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
     live_secs = int(args.get("live_secs") or 900)  # a mount seen this recently is LIVE
@@ -1624,6 +1664,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     findings: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     severity_by_check: dict[str, str] = {}
+    could_not_evaluate: dict[str, str] = {}
+    # defaults for state the checks below fill in as they run — a check-isolating
+    # try/except means an EARLIER check's exception must never strand the epilogue
+    # (the final return) without these; a check that runs for real overwrites them.
+    now = datetime.now(UTC)
+    orphan_census_result: dict[str, Any] = {"by_type": {}, "abstained_total": 0}
 
     def land(check: str, severity: str, rows: list[dict[str, Any]]) -> None:
         counts[check] = len(rows)
@@ -1638,896 +1684,908 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         for r in listed:
             findings.append({"check": check, "severity": severity, **r})
 
-    # CONTRADICTION — same (object, field), different values from different sources, the top
-    # two winners within eps of each other: the grade-then-recency resolver is deciding this
-    # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
-    # The LIFECYCLE FAMILY is EXCLUDED: `status` because open→resolved from another hand is
-    # the state machine working, not a war (the first live lint flagged 23 of these; zero
-    # were real), and `resolved_in`/`resolved_because` because two sources both writing them
-    # means two hands BOTH closed the thread — a same-status double-resolution is
-    # CORROBORATION, two witnesses attesting one fact from their own vantages (operator
-    # ruling 64adf08a, the 94ddca1f adjudication: keep both witnesses, never pick one to
-    # satisfy the lint). The family's one true failure mode — a close being overridden —
-    # gets its own check below (status-regression).
-    #
-    # `is_handoff` JOINS THE LIFECYCLE FAMILY (thread 6027, Thoth's own "504 contradictions
-    # are probably one bug" dispatch): record_decision/settle stamp is_handoff='true' at
-    # confidence 0.9 (mcp_server.py's `settle` handler); `_retire_stale_handoffs`/
-    # `_retire_handoff_backlog` (the #150 backlog disposition) retire an OLDER marker within
-    # the SAME lineage by asserting is_handoff='false' at the SAME fixed 0.9 confidence — a
-    # deliberate supersession, not a second source disagreeing. Measured against the live
-    # graph (2026-08-29, script-verified via the same ranked-CTE this check runs): of 295
-    # is_handoff findings, ALL 295 had the 'false' winner's observed_at strictly later than
-    # the 'true' rival's, and ALL 295 were the false-over-true retirement direction — zero
-    # cases of the reverse (a stale 'false' overridden by a later 'true'), zero cases of a
-    # tie. The resolver was never wrong; this check's confidence-only heuristic just can't
-    # tell a designed two-state lifecycle (true at mint, false at retirement, same confidence
-    # both times) from a live dispute — exactly the class `status` was already excluded for.
-    # No dedicated regression check is added: the reverse direction has never been observed,
-    # so there is nothing yet to guard against (build one if it ever is).
-    #
-    # TWO MORE EXCLUSIONS (thread 4a7da43a/12a210ab, reap Stage 1b leg 1, 2026-07-28):
-    # (1) NON-ACTIVE SUBJECTS — a merged/historical/archived object's internal coin-flips
-    # are history, not live ambiguity: nothing in the read-path (lineage_head resolves
-    # merged_into before ever touching a loser's own properties) ever surfaces them, so
-    # flagging them is the same "cry wolf" class the orphan-link check already excludes for
-    # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS — seam-debounce and
-    # husk-heal both write succeeded_by='' at debounce/heal time as a "no successor seen
-    # yet" placeholder, WRITTEN BEFORE the real answer exists; once a real generation
-    # self-declares succeeded_from back at the predecessor, the guess is permanently stale
-    # but NEVER a live dispute (walked and verified live: lineage_head's walk continues
-    # through the winner regardless of whether it later gets healed as false_mint itself —
-    # decision c41f74a6 — so this is resolver noise from a known automated observer, not a
-    # coin-flip a mind needs to referee). THIS EXCLUSION IS NARROW ON PURPOSE (decision
-    # c14f8b0d, thread 6027/6036): `phantom-fold` ALSO writes succeeded_by='' but is
-    # DELIBERATELY LEFT OUT of the IN-list below, because its mechanism is the opposite of
-    # seam-debounce/husk-heal's — it RETRACTS an already-declared successor later proven a
-    # zero-turn phantom (atomic with false_mint/retired/retired_by), landing AFTER the real
-    # declaration by up to fold_existing_zero_turn_phantoms's own 15-minute sweep window,
-    # not before it. That retraction is legitimate lifecycle noise in the general case
-    # (measured 22/24 self-consistent), but a hand-reversed fold that never restores the
-    # pointer is a genuine live defect the lint SHOULD keep surfacing — silently folding
-    # phantom-fold into this exclusion would have hidden exactly that specimen
-    # (agent:seat-8187daaa-vii, repaired 2026-08-29). Do not generalize this comment's
-    # reasoning to any other blank-writing source without checking which mechanism it is.
-    # rn=1 vs rn=2 ALONE used to miss a rank-3+ rival hiding behind an agreeing top-2 (the
-    # auditor's completeness gap, thread 59e95366/decision 93d8d15c — confirmed on
-    # repo:bytebye/name: 19 rows sat invisible at rn=3+ purely because rn=1 and rn=2
-    # happened to already agree).
-    # `per_value` collapses every source's row to ONE best row per DISTINCT VALUE first
-    # (same confidence/observed_at tiebreak the ranking already used), so two corroborating
-    # sources on the winning value can no longer occupy both of the compared slots and hide
-    # a genuinely different value sitting one rank deeper. `ranked` then compares the winner
-    # against EVERY other distinct value (r.rn>1), not just the row immediately below it —
-    # the RESOLVER's own supersession is untouched by this (it still serves the single
-    # current-winning assertion exactly as before); only the AUDITOR's coverage widens.
-    con = await pool.fetch(
-        "WITH multi AS (SELECT object_id, name FROM current_assertions "
-        "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because', 'is_handoff') "
-        "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
-        "per_value AS (SELECT DISTINCT ON (ca.object_id, ca.name, ca.value #>> '{}') "
-        "  ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, ca.confidence, "
-        "  ca.observed_at "
-        "  FROM current_assertions ca JOIN multi USING (object_id, name) "
-        "  ORDER BY ca.object_id, ca.name, ca.value #>> '{}', "
-        "    ca.confidence DESC, ca.observed_at DESC), "
-        "ranked AS (SELECT *, row_number() OVER (PARTITION BY object_id, name "
-        "    ORDER BY confidence DESC, observed_at DESC) AS rn "
-        "  FROM per_value) "
-        "SELECT o.canonical, w.name AS field, w.v AS winner, w.source_id AS winner_source, "
-        "  w.confidence AS winner_conf, r.v AS rival, r.source_id AS rival_source, "
-        "  r.confidence AS rival_conf "
-        "FROM ranked w JOIN ranked r ON r.object_id=w.object_id AND r.name=w.name "
-        "  AND w.rn=1 AND r.rn>1 "
-        "JOIN objects o ON o.id=w.object_id "
-        "WHERE w.v IS DISTINCT FROM r.v AND w.source_id <> r.source_id "
-        "  AND w.confidence - r.confidence <= $1 "
-        "  AND o.status = 'active' "
-        "  AND NOT (w.name = 'succeeded_by' AND r.v = '' "
-        "    AND r.source_id IN ('seam-debounce', 'husk-heal')) "
-        "ORDER BY o.canonical, w.name", eps)
-    land("contradiction", "warn", [
-        {"subject": r["canonical"], "field": r["field"],
-         "detail": f"'{_cell(r['winner'])}' ({r['winner_source']}, "
-                   f"{round(float(r['winner_conf']), 3)}) wins over "
-                   f"'{_cell(r['rival'])}' ({r['rival_source']}, "
-                   f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
-        for r in con])
+    try:
+        # CONTRADICTION — same (object, field), different values from different sources, the top
+        # two winners within eps of each other: the grade-then-recency resolver is deciding this
+        # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
+        # The LIFECYCLE FAMILY is EXCLUDED: `status` because open→resolved from another hand is
+        # the state machine working, not a war (the first live lint flagged 23 of these; zero
+        # were real), and `resolved_in`/`resolved_because` because two sources both writing them
+        # means two hands BOTH closed the thread — a same-status double-resolution is
+        # CORROBORATION, two witnesses attesting one fact from their own vantages (operator
+        # ruling 64adf08a, the 94ddca1f adjudication: keep both witnesses, never pick one to
+        # satisfy the lint). The family's one true failure mode — a close being overridden —
+        # gets its own check below (status-regression).
+        #
+        # `is_handoff` JOINS THE LIFECYCLE FAMILY (thread 6027, Thoth's own "504 contradictions
+        # are probably one bug" dispatch): record_decision/settle stamp is_handoff='true' at
+        # confidence 0.9 (mcp_server.py's `settle` handler); `_retire_stale_handoffs`/
+        # `_retire_handoff_backlog` (the #150 backlog disposition) retire an OLDER marker within
+        # the SAME lineage by asserting is_handoff='false' at the SAME fixed 0.9 confidence — a
+        # deliberate supersession, not a second source disagreeing. Measured against the live
+        # graph (2026-08-29, script-verified via the same ranked-CTE this check runs): of 295
+        # is_handoff findings, ALL 295 had the 'false' winner's observed_at strictly later than
+        # the 'true' rival's, and ALL 295 were the false-over-true retirement direction — zero
+        # cases of the reverse (a stale 'false' overridden by a later 'true'), zero cases of a
+        # tie. The resolver was never wrong; this check's confidence-only heuristic just can't
+        # tell a designed two-state lifecycle (true at mint, false at retirement, same confidence
+        # both times) from a live dispute — exactly the class `status` was already excluded for.
+        # No dedicated regression check is added: the reverse direction has never been observed,
+        # so there is nothing yet to guard against (build one if it ever is).
+        #
+        # TWO MORE EXCLUSIONS (thread 4a7da43a/12a210ab, reap Stage 1b leg 1, 2026-07-28):
+        # (1) NON-ACTIVE SUBJECTS — a merged/historical/archived object's internal coin-flips
+        # are history, not live ambiguity: nothing in the read-path (lineage_head resolves
+        # merged_into before ever touching a loser's own properties) ever surfaces them, so
+        # flagging them is the same "cry wolf" class the orphan-link check already excludes for
+        # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS — seam-debounce and
+        # husk-heal both write succeeded_by='' at debounce/heal time as a "no successor seen
+        # yet" placeholder, WRITTEN BEFORE the real answer exists; once a real generation
+        # self-declares succeeded_from back at the predecessor, the guess is permanently stale
+        # but NEVER a live dispute (walked and verified live: lineage_head's walk continues
+        # through the winner regardless of whether it later gets healed as false_mint itself —
+        # decision c41f74a6 — so this is resolver noise from a known automated observer, not a
+        # coin-flip a mind needs to referee). THIS EXCLUSION IS NARROW ON PURPOSE (decision
+        # c14f8b0d, thread 6027/6036): `phantom-fold` ALSO writes succeeded_by='' but is
+        # DELIBERATELY LEFT OUT of the IN-list below, because its mechanism is the opposite of
+        # seam-debounce/husk-heal's — it RETRACTS an already-declared successor later proven a
+        # zero-turn phantom (atomic with false_mint/retired/retired_by), landing AFTER the real
+        # declaration by up to fold_existing_zero_turn_phantoms's own 15-minute sweep window,
+        # not before it. That retraction is legitimate lifecycle noise in the general case
+        # (measured 22/24 self-consistent), but a hand-reversed fold that never restores the
+        # pointer is a genuine live defect the lint SHOULD keep surfacing — silently folding
+        # phantom-fold into this exclusion would have hidden exactly that specimen
+        # (agent:seat-8187daaa-vii, repaired 2026-08-29). Do not generalize this comment's
+        # reasoning to any other blank-writing source without checking which mechanism it is.
+        # rn=1 vs rn=2 ALONE used to miss a rank-3+ rival hiding behind an agreeing top-2 (the
+        # auditor's completeness gap, thread 59e95366/decision 93d8d15c — confirmed on
+        # repo:bytebye/name: 19 rows sat invisible at rn=3+ purely because rn=1 and rn=2
+        # happened to already agree).
+        # `per_value` collapses every source's row to ONE best row per DISTINCT VALUE first
+        # (same confidence/observed_at tiebreak the ranking already used), so two corroborating
+        # sources on the winning value can no longer occupy both of the compared slots and hide
+        # a genuinely different value sitting one rank deeper. `ranked` then compares the winner
+        # against EVERY other distinct value (r.rn>1), not just the row immediately below it —
+        # the RESOLVER's own supersession is untouched by this (it still serves the single
+        # current-winning assertion exactly as before); only the AUDITOR's coverage widens.
+        con = await pool.fetch(
+            "WITH multi AS (SELECT object_id, name FROM current_assertions "
+            "  WHERE name NOT IN ('status', 'resolved_in', 'resolved_because', 'is_handoff') "
+            "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1), "
+            "per_value AS (SELECT DISTINCT ON (ca.object_id, ca.name, ca.value #>> '{}') "
+            "  ca.object_id, ca.name, ca.value #>> '{}' AS v, ca.source_id, ca.confidence, "
+            "  ca.observed_at "
+            "  FROM current_assertions ca JOIN multi USING (object_id, name) "
+            "  ORDER BY ca.object_id, ca.name, ca.value #>> '{}', "
+            "    ca.confidence DESC, ca.observed_at DESC), "
+            "ranked AS (SELECT *, row_number() OVER (PARTITION BY object_id, name "
+            "    ORDER BY confidence DESC, observed_at DESC) AS rn "
+            "  FROM per_value) "
+            "SELECT o.canonical, w.name AS field, w.v AS winner, w.source_id AS winner_source, "
+            "  w.confidence AS winner_conf, r.v AS rival, r.source_id AS rival_source, "
+            "  r.confidence AS rival_conf "
+            "FROM ranked w JOIN ranked r ON r.object_id=w.object_id AND r.name=w.name "
+            "  AND w.rn=1 AND r.rn>1 "
+            "JOIN objects o ON o.id=w.object_id "
+            "WHERE w.v IS DISTINCT FROM r.v AND w.source_id <> r.source_id "
+            "  AND w.confidence - r.confidence <= $1 "
+            "  AND o.status = 'active' "
+            "  AND NOT (w.name = 'succeeded_by' AND r.v = '' "
+            "    AND r.source_id IN ('seam-debounce', 'husk-heal')) "
+            "ORDER BY o.canonical, w.name", eps)
+        land("contradiction", "warn", [
+            {"subject": r["canonical"], "field": r["field"],
+             "detail": f"'{_cell(r['winner'])}' ({r['winner_source']}, "
+                       f"{round(float(r['winner_conf']), 3)}) wins over "
+                       f"'{_cell(r['rival'])}' ({r['rival_source']}, "
+                       f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
+            for r in con])
 
-    # STATUS-REGRESSION — the lifecycle property's real failure modes, widened per ruling
-    # aaf050e4 (operator, on top of 64adf08a): a normal open->resolved transition is STILL
-    # never flagged — only a genuine open-vs-resolved disagreement is. Three distinct
-    # shapes, unioned into one check:
-    #   (1) THE ORIGINAL — an 'open' NEWER than a different source's 'resolved' at
-    #       comparable confidence: a deliberate close overridden by recency (the
-    #       miner-re-opens-what-a-session-resolved class).
-    #   (2) THE NEVER-FLIPPED (ruling 1335332e's own 713 specimens): a current status='open'
-    #       assertion whose thread ALSO carries resolved_because/resolved_in evidence dated
-    #       AFTER it — a close happened and the flag never flipped (the supersession-leak
-    #       shape assert_singular_property now prevents going forward, but historical rows
-    #       still carry it, and any write path assert_singular_property doesn't cover could
-    #       still produce a fresh one). Silent when a LATER status assertion (any source) or
-    #       a LATER annotate note exists past the resolve — either is a legitimate, on-the-
-    #       record reopen, not a leak.
-    #   (3) THE EXACT TIE: two different sources asserting 'open' and 'resolved' at the
-    #       identical observed_at — the winner-picker's own confidence/recency tiebreak has
-    #       nothing left to break the tie on, so this is reported rather than silently
-    #       coin-flipped.
-    reg = await pool.fetch(
-        "WITH s AS (SELECT ca.object_id, ca.value #>> '{}' AS v, ca.source_id, "
-        "  ca.confidence, ca.observed_at "
-        "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
-        "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active') "
-        "SELECT o.canonical, op.source_id AS reopener, op.observed_at AS reopened_at, "
-        "  re.source_id AS resolver, "
-        "  (SELECT value #>> '{}' FROM current_assertions WHERE object_id=op.object_id "
-        "    AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
-        "FROM s op JOIN s re ON re.object_id=op.object_id "
-        "JOIN objects o ON o.id=op.object_id "
-        "WHERE op.v='open' AND re.v='resolved' AND op.observed_at > re.observed_at "
-        "  AND op.source_id <> re.source_id AND op.confidence >= re.confidence - $1 "
-        "ORDER BY op.observed_at", eps)
-    findings_reg = [
-        {"subject": r["canonical"],
-         "detail": f"re-opened by {r['reopener']} AFTER {r['resolver']} resolved it "
-                   f"({str(r['reopened_at'])[:19]}) — a deliberate close is being overridden "
-                   f"by recency: {_cell(r['summary'])}"}
-        for r in reg]
-    seen_regression = {r["canonical"] for r in reg}
+        # STATUS-REGRESSION — the lifecycle property's real failure modes, widened per ruling
+        # aaf050e4 (operator, on top of 64adf08a): a normal open->resolved transition is STILL
+        # never flagged — only a genuine open-vs-resolved disagreement is. Three distinct
+        # shapes, unioned into one check:
+        #   (1) THE ORIGINAL — an 'open' NEWER than a different source's 'resolved' at
+        #       comparable confidence: a deliberate close overridden by recency (the
+        #       miner-re-opens-what-a-session-resolved class).
+        #   (2) THE NEVER-FLIPPED (ruling 1335332e's own 713 specimens): a current status='open'
+        #       assertion whose thread ALSO carries resolved_because/resolved_in evidence dated
+        #       AFTER it — a close happened and the flag never flipped (the supersession-leak
+        #       shape assert_singular_property now prevents going forward, but historical rows
+        #       still carry it, and any write path assert_singular_property doesn't cover could
+        #       still produce a fresh one). Silent when a LATER status assertion (any source) or
+        #       a LATER annotate note exists past the resolve — either is a legitimate, on-the-
+        #       record reopen, not a leak.
+        #   (3) THE EXACT TIE: two different sources asserting 'open' and 'resolved' at the
+        #       identical observed_at — the winner-picker's own confidence/recency tiebreak has
+        #       nothing left to break the tie on, so this is reported rather than silently
+        #       coin-flipped.
+        reg = await pool.fetch(
+            "WITH s AS (SELECT ca.object_id, ca.value #>> '{}' AS v, ca.source_id, "
+            "  ca.confidence, ca.observed_at "
+            "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
+            "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active') "
+            "SELECT o.canonical, op.source_id AS reopener, op.observed_at AS reopened_at, "
+            "  re.source_id AS resolver, "
+            "  (SELECT value #>> '{}' FROM current_assertions WHERE object_id=op.object_id "
+            "    AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+            "FROM s op JOIN s re ON re.object_id=op.object_id "
+            "JOIN objects o ON o.id=op.object_id "
+            "WHERE op.v='open' AND re.v='resolved' AND op.observed_at > re.observed_at "
+            "  AND op.source_id <> re.source_id AND op.confidence >= re.confidence - $1 "
+            "ORDER BY op.observed_at", eps)
+        findings_reg = [
+            {"subject": r["canonical"],
+             "detail": f"re-opened by {r['reopener']} AFTER {r['resolver']} resolved it "
+                       f"({str(r['reopened_at'])[:19]}) — a deliberate close is being overridden "
+                       f"by recency: {_cell(r['summary'])}"}
+            for r in reg]
+        seen_regression = {r["canonical"] for r in reg}
 
-    # THE WINNER, not merely "an open row exists" (double-resolution's own corroboration
-    # shape — an old open superseded in spirit by two later, genuine resolves from
-    # different sources — must stay silent; only when 'open' actually WINS the standard
-    # confidence-then-recency ranking among ALL current status rows is there a live leak).
-    never_flipped = await pool.fetch(
-        "WITH winner AS (SELECT DISTINCT ON (ca.object_id) ca.object_id, "
-        "  ca.value #>> '{}' AS status, ca.observed_at AS win_at "
-        "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
-        "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active' "
-        "  ORDER BY ca.object_id, ca.confidence DESC, ca.observed_at DESC), "
-        "resolve_evidence AS (SELECT object_id, max(observed_at) AS resolved_at "
-        "  FROM current_assertions WHERE name IN ('resolved_because', 'resolved_in') "
-        "  GROUP BY object_id) "
-        "SELECT o.canonical, w.win_at AS open_at, re.resolved_at "
-        "FROM winner w JOIN resolve_evidence re ON re.object_id = w.object_id "
-        "JOIN objects o ON o.id = w.object_id "
-        "WHERE w.status = 'open' AND re.resolved_at > w.win_at "
-        "  AND NOT EXISTS (SELECT 1 FROM current_assertions later "
-        "    WHERE later.object_id = w.object_id AND later.name = 'status' "
-        "      AND later.observed_at > re.resolved_at) "
-        "  AND NOT EXISTS (SELECT 1 FROM current_assertions note "
-        "    WHERE note.object_id = w.object_id AND note.name LIKE 'note:%' "
-        "      AND note.observed_at > re.resolved_at)")
-    for r in never_flipped:
-        if r["canonical"] in seen_regression:
-            continue
-        seen_regression.add(r["canonical"])
-        findings_reg.append({
-            "subject": r["canonical"],
-            "detail": f"status reads 'open' ({str(r['open_at'])[:19]}) but resolved_because/"
-                      f"resolved_in evidence dated {str(r['resolved_at'])[:19]} shows a close "
-                      "happened and the flag never flipped — never reopened since"})
+        # THE WINNER, not merely "an open row exists" (double-resolution's own corroboration
+        # shape — an old open superseded in spirit by two later, genuine resolves from
+        # different sources — must stay silent; only when 'open' actually WINS the standard
+        # confidence-then-recency ranking among ALL current status rows is there a live leak).
+        never_flipped = await pool.fetch(
+            "WITH winner AS (SELECT DISTINCT ON (ca.object_id) ca.object_id, "
+            "  ca.value #>> '{}' AS status, ca.observed_at AS win_at "
+            "  FROM current_assertions ca JOIN objects o ON o.id=ca.object_id "
+            "  WHERE ca.name='status' AND o.type='Thread' AND o.status='active' "
+            "  ORDER BY ca.object_id, ca.confidence DESC, ca.observed_at DESC), "
+            "resolve_evidence AS (SELECT object_id, max(observed_at) AS resolved_at "
+            "  FROM current_assertions WHERE name IN ('resolved_because', 'resolved_in') "
+            "  GROUP BY object_id) "
+            "SELECT o.canonical, w.win_at AS open_at, re.resolved_at "
+            "FROM winner w JOIN resolve_evidence re ON re.object_id = w.object_id "
+            "JOIN objects o ON o.id = w.object_id "
+            "WHERE w.status = 'open' AND re.resolved_at > w.win_at "
+            "  AND NOT EXISTS (SELECT 1 FROM current_assertions later "
+            "    WHERE later.object_id = w.object_id AND later.name = 'status' "
+            "      AND later.observed_at > re.resolved_at) "
+            "  AND NOT EXISTS (SELECT 1 FROM current_assertions note "
+            "    WHERE note.object_id = w.object_id AND note.name LIKE 'note:%' "
+            "      AND note.observed_at > re.resolved_at)")
+        for r in never_flipped:
+            if r["canonical"] in seen_regression:
+                continue
+            seen_regression.add(r["canonical"])
+            findings_reg.append({
+                "subject": r["canonical"],
+                "detail": f"status reads 'open' ({str(r['open_at'])[:19]}) but resolved_because/"
+                          f"resolved_in evidence dated {str(r['resolved_at'])[:19]} shows a close "
+                          "happened and the flag never flipped — never reopened since"})
 
-    exact_tie = await pool.fetch(
-        "SELECT o.canonical, a.observed_at, a.v AS a_val, a.source_id AS a_source, "
-        "  b.v AS b_val, b.source_id AS b_source "
-        "FROM (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
-        "  FROM current_assertions WHERE name='status') a "
-        "JOIN (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
-        "  FROM current_assertions WHERE name='status') b "
-        "  ON a.object_id=b.object_id AND a.observed_at=b.observed_at "
-        "  AND a.source_id < b.source_id "
-        "JOIN objects o ON o.id=a.object_id "
-        "WHERE o.type='Thread' AND o.status='active' "
-        "  AND ((a.v='open' AND b.v='resolved') OR (a.v='resolved' AND b.v='open'))")
-    for r in exact_tie:
-        if r["canonical"] in seen_regression:
-            continue
-        seen_regression.add(r["canonical"])
-        findings_reg.append({
-            "subject": r["canonical"],
-            "detail": f"{r['a_source']} says '{r['a_val']}' and {r['b_source']} says "
-                      f"'{r['b_val']}' at the IDENTICAL timestamp "
-                      f"({str(r['observed_at'])[:19]}) — the winner-picker's own "
-                      "confidence/recency tiebreak has nothing left to break the tie on"})
-    land("status-regression", "error", findings_reg)
+        exact_tie = await pool.fetch(
+            "SELECT o.canonical, a.observed_at, a.v AS a_val, a.source_id AS a_source, "
+            "  b.v AS b_val, b.source_id AS b_source "
+            "FROM (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
+            "  FROM current_assertions WHERE name='status') a "
+            "JOIN (SELECT object_id, value #>> '{}' AS v, source_id, observed_at "
+            "  FROM current_assertions WHERE name='status') b "
+            "  ON a.object_id=b.object_id AND a.observed_at=b.observed_at "
+            "  AND a.source_id < b.source_id "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type='Thread' AND o.status='active' "
+            "  AND ((a.v='open' AND b.v='resolved') OR (a.v='resolved' AND b.v='open'))")
+        for r in exact_tie:
+            if r["canonical"] in seen_regression:
+                continue
+            seen_regression.add(r["canonical"])
+            findings_reg.append({
+                "subject": r["canonical"],
+                "detail": f"{r['a_source']} says '{r['a_val']}' and {r['b_source']} says "
+                          f"'{r['b_val']}' at the IDENTICAL timestamp "
+                          f"({str(r['observed_at'])[:19]}) — the winner-picker's own "
+                          "confidence/recency tiebreak has nothing left to break the tie on"})
+        land("status-regression", "error", findings_reg)
 
-    # LAUNDERING — through credence_props, the module whose own invariant demands every
-    # grade-is-the-message read path route through it. Candidates: only co-asserted objects
-    # (same fact, >1 source) — the lineage discipline is meaningless on a single voice.
-    cand_rows = await pool.fetch(
-        "SELECT object_id, max(observed_at) AS latest FROM current_assertions "
-        "WHERE (object_id, name) IN (SELECT object_id, name FROM current_assertions "
-        "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1) "
-        "GROUP BY object_id ORDER BY latest DESC LIMIT 500")
-    laundering: list[dict[str, Any]] = []
-    if cand_rows:
-        from src.actions.core import Actions
-        from src.orchestrator.credence import credence_props
+        # LAUNDERING — through credence_props, the module whose own invariant demands every
+        # grade-is-the-message read path route through it. Candidates: only co-asserted objects
+        # (same fact, >1 source) — the lineage discipline is meaningless on a single voice.
+        cand_rows = await pool.fetch(
+            "SELECT object_id, max(observed_at) AS latest FROM current_assertions "
+            "WHERE (object_id, name) IN (SELECT object_id, name FROM current_assertions "
+            "  GROUP BY object_id, name HAVING count(DISTINCT source_id) > 1) "
+            "GROUP BY object_id ORDER BY latest DESC LIMIT 500")
+        laundering: list[dict[str, Any]] = []
+        if cand_rows:
+            from src.actions.core import Actions
+            from src.orchestrator.credence import credence_props
 
-        oids = [r["object_id"] for r in cand_rows]
-        names = {r["id"]: r["canonical"] for r in await pool.fetch(
-            "SELECT id, canonical FROM objects WHERE id = ANY($1::uuid[])", oids)}
-        cred = await credence_props(Actions(pool), oids)
-        laundering = [
-            {"subject": names.get(uuid.UUID(w.object_id), w.object_id), "field": w.name,
-             "detail": f"{', '.join(w.laundering)} carried this fact above its origin "
-                       f"grade (winner: {w.source_id})"}
-            for w in cred.winners if w.laundering]
-    land("laundering", "warn", laundering)
+            oids = [r["object_id"] for r in cand_rows]
+            names = {r["id"]: r["canonical"] for r in await pool.fetch(
+                "SELECT id, canonical FROM objects WHERE id = ANY($1::uuid[])", oids)}
+            cred = await credence_props(Actions(pool), oids)
+            laundering = [
+                {"subject": names.get(uuid.UUID(w.object_id), w.object_id), "field": w.name,
+                 "detail": f"{', '.join(w.laundering)} carried this fact above its origin "
+                           f"grade (winner: {w.source_id})"}
+                for w in cred.winners if w.laundering]
+        land("laundering", "warn", laundering)
 
-    # LINEAGE — the succession invariants the identity layer lives by (ruling a882b334).
-    # THE WALK COVERS EVERY GENERATION THE GRAPH EVER REGISTERED, whatever its status:
-    # lineage_head deliberately walks THROUGH inactive generations (a historical middle is
-    # ancestry, not absence), and a lint that loads active-only diverged from that law —
-    # four bases whose -ii heirs had been archived read as 'dangling' for two sessions
-    # (task #20, 2026-07-19: every flagged edge pointed at a real, historical object).
-    # `canons` (active-only) still scopes the OTHER checks below; only the walk widened.
-    ag_rows = await pool.fetch(
-        "SELECT id, canonical, status FROM objects WHERE type='Agent'")
-    ag_ids = [r["id"] for r in ag_rows]
-    canon_of = {r["id"]: r["canonical"] for r in ag_rows}
-    known = set(canon_of.values())
-    canons = {r["canonical"] for r in ag_rows if r["status"] == "active"}
-    props: dict[str, dict[str, str]] = {}
-    if ag_ids:
-        for r in await pool.fetch(
-                "SELECT object_id, name, value #>> '{}' AS v "
-                "FROM winning_props($1::uuid[]) "
-                "WHERE name IN ('succeeded_by','succeeded_from','retired','false_mint')",
-                ag_ids):
-            props.setdefault(canon_of[r["object_id"]], {})[r["name"]] = r["v"] or ""
-    succ_by = {c: p["succeeded_by"] for c, p in props.items() if p.get("succeeded_by")}
-    cycles: list[dict[str, Any]] = []
-    dangling: list[dict[str, Any]] = []
-    seen_cycles: set[frozenset[str]] = set()
-    seen_dangling: set[str] = set()
-    for start in succ_by:
-        walk = [start]
-        walked = {start}
-        while (nxt := succ_by.get(walk[-1])) is not None:
-            if nxt not in known:
-                if walk[-1] not in seen_dangling:
-                    seen_dangling.add(walk[-1])
-                    dangling.append({"subject": walk[-1],
-                                     "detail": f"succeeded_by points at {nxt!r}, "
-                                               "which no Agent object of any status "
-                                               "carries — a pointer into the void"})
-                break
-            if nxt in walked:
-                members = frozenset(walk[walk.index(nxt):])
-                if members not in seen_cycles:
-                    seen_cycles.add(members)
-                    cycles.append({"subject": nxt,
-                                   "detail": "succession cycle: "
-                                             + " → ".join(walk[walk.index(nxt):] + [nxt])})
-                break
-            walk.append(nxt)
-            walked.add(nxt)
-    land("lineage-cycle", "error", cycles)
-    land("lineage-dangling", "error", dangling)
-    land("orphan-heir", "warn", [
-        {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
-                                 "with no recorded ancestor"}
-        for c in sorted(canons)
-        if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
-    live = {r["agent_id"] for r in await pool.fetch(
-        "SELECT DISTINCT agent_id FROM agent_mounts "
-        "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}
-    land("retired-live", "error", [
-        {"subject": c, "detail": "carries a winning retired=true yet holds a LIVE mount — "
-                                 "a closed name is being worn"}
-        for c in sorted(canons)
-        if props.get(c, {}).get("retired") == "true" and c in live])
-    land("false-mint", "info", [
-        {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
-                                 "be retired; listed so the healing stays visible"}
-        for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
-    # THE HALCYON RULE (obligation 6b1efacb, 2026-08-18) — a NAMED, DISTINCT check from
-    # "retired-live" above (which fires for any deliberate retirement racing a slow mount-
-    # row cleanup, a different and much less alarming shape): a generation SPECIFICALLY
-    # false_mint (never a plain deliberate close) with a live mount is the exact zero-turn
-    # phantom fold blindness this obligation's own occupancy fix (is_occupied_by_a_live_
-    # body) now guards against going forward — this check is the retrospective net for
-    # anything that slips through anyway, or that was folded before that fix shipped.
-    # `live` (agent_mounts freshness) is a cheaper, coarser signal than registry_census's
-    # own harness-confirmed check — a real false positive here is still worth a human's
-    # glance, never worth silently trusting agent_mounts alone for a repair decision.
-    land("false-mint-live", "error", [
-        {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount — a "
-                                 "genuinely live body may be wearing a phantom-folded "
-                                 "face (the halcyon shape, obligation 6b1efacb); "
-                                 "reinstate_generation is the repair door"}
-        for c in sorted(canons)
-        if props.get(c, {}).get("false_mint") == "true" and c in live])
+        # LINEAGE — the succession invariants the identity layer lives by (ruling a882b334).
+        # THE WALK COVERS EVERY GENERATION THE GRAPH EVER REGISTERED, whatever its status:
+        # lineage_head deliberately walks THROUGH inactive generations (a historical middle is
+        # ancestry, not absence), and a lint that loads active-only diverged from that law —
+        # four bases whose -ii heirs had been archived read as 'dangling' for two sessions
+        # (task #20, 2026-07-19: every flagged edge pointed at a real, historical object).
+        # `canons` (active-only) still scopes the OTHER checks below; only the walk widened.
+        ag_rows = await pool.fetch(
+            "SELECT id, canonical, status FROM objects WHERE type='Agent'")
+        ag_ids = [r["id"] for r in ag_rows]
+        canon_of = {r["id"]: r["canonical"] for r in ag_rows}
+        known = set(canon_of.values())
+        canons = {r["canonical"] for r in ag_rows if r["status"] == "active"}
+        props: dict[str, dict[str, str]] = {}
+        if ag_ids:
+            for r in await pool.fetch(
+                    "SELECT object_id, name, value #>> '{}' AS v "
+                    "FROM winning_props($1::uuid[]) "
+                    "WHERE name IN ('succeeded_by','succeeded_from','retired','false_mint')",
+                    ag_ids):
+                props.setdefault(canon_of[r["object_id"]], {})[r["name"]] = r["v"] or ""
+        succ_by = {c: p["succeeded_by"] for c, p in props.items() if p.get("succeeded_by")}
+        cycles: list[dict[str, Any]] = []
+        dangling: list[dict[str, Any]] = []
+        seen_cycles: set[frozenset[str]] = set()
+        seen_dangling: set[str] = set()
+        for start in succ_by:
+            walk = [start]
+            walked = {start}
+            while (nxt := succ_by.get(walk[-1])) is not None:
+                if nxt not in known:
+                    if walk[-1] not in seen_dangling:
+                        seen_dangling.add(walk[-1])
+                        dangling.append({"subject": walk[-1],
+                                         "detail": f"succeeded_by points at {nxt!r}, "
+                                                   "which no Agent object of any status "
+                                                   "carries — a pointer into the void"})
+                    break
+                if nxt in walked:
+                    members = frozenset(walk[walk.index(nxt):])
+                    if members not in seen_cycles:
+                        seen_cycles.add(members)
+                        cycles.append({"subject": nxt,
+                                       "detail": "succession cycle: "
+                                                 + " → ".join(walk[walk.index(nxt):] + [nxt])})
+                    break
+                walk.append(nxt)
+                walked.add(nxt)
+        land("lineage-cycle", "error", cycles)
+        land("lineage-dangling", "error", dangling)
+        land("orphan-heir", "warn", [
+            {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
+                                     "with no recorded ancestor"}
+            for c in sorted(canons)
+            if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
+        live = {r["agent_id"] for r in await pool.fetch(
+            "SELECT DISTINCT agent_id FROM agent_mounts "
+            "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}
+        land("retired-live", "error", [
+            {"subject": c, "detail": "carries a winning retired=true yet holds a LIVE mount — "
+                                     "a closed name is being worn"}
+            for c in sorted(canons)
+            if props.get(c, {}).get("retired") == "true" and c in live])
+        land("false-mint", "info", [
+            {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
+                                     "be retired; listed so the healing stays visible"}
+            for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
+        # THE HALCYON RULE (obligation 6b1efacb, 2026-08-18) — a NAMED, DISTINCT check from
+        # "retired-live" above (which fires for any deliberate retirement racing a slow mount-
+        # row cleanup, a different and much less alarming shape): a generation SPECIFICALLY
+        # false_mint (never a plain deliberate close) with a live mount is the exact zero-turn
+        # phantom fold blindness this obligation's own occupancy fix (is_occupied_by_a_live_
+        # body) now guards against going forward — this check is the retrospective net for
+        # anything that slips through anyway, or that was folded before that fix shipped.
+        # `live` (agent_mounts freshness) is a cheaper, coarser signal than registry_census's
+        # own harness-confirmed check — a real false positive here is still worth a human's
+        # glance, never worth silently trusting agent_mounts alone for a repair decision.
+        land("false-mint-live", "error", [
+            {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount — a "
+                                     "genuinely live body may be wearing a phantom-folded "
+                                     "face (the halcyon shape, obligation 6b1efacb); "
+                                     "reinstate_generation is the repair door"}
+            for c in sorted(canons)
+            if props.get(c, {}).get("false_mint") == "true" and c in live])
 
-    # MERGED-WITH-LIVE-SUCCESSOR (thread 16ef8d24, the xxxix mis-merge, decision 4510e4c6):
-    # a merge says "this label and its target are the same mind"; a real succeeded_by says
-    # "this mind's story continues at THAT label instead" — a MERGED object still carrying a
-    # winning succeeded_by that names a currently ACTIVE object claims both at once, and the
-    # two claims can point at different places (agent:d6a08aaa-xxxix's own succeeded_by named
-    # agent:d6a08aaa-g40, a real, distinct, still-onward-succeeding identity, while the merge
-    # had folded xxxix into agent:d6a08aaa-g40-vii — seven real generations later in that SAME
-    # chain). A CANDIDATE, not a verdict, same discipline as orphan-heir/retired-live above: a
-    # healthy merge whose target ALSO happens to carry an unrelated succeeded_by fires here
-    # too (an intermediate chain link pointing at a just-repaired ancestor, harmless) — every
-    # hit is unmerge()-worth a human's glance, never an auto-repair.
-    status_of = {r["canonical"]: r["status"] for r in ag_rows}
-    land("merged-with-live-successor", "warn", [
-        {"subject": c,
-         "detail": f"status=merged yet its own succeeded_by names "
-                   f"{props[c]['succeeded_by']!r}, which is currently ACTIVE — the mis-merge "
-                   "shape (decision 4510e4c6): review before trusting the fold, unmerge() is "
-                   "the repair door if the successor's chain is real and independent"}
-        for c in sorted(status_of)
-        if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
-        and status_of.get(props[c]["succeeded_by"]) == "active"])
+        # MERGED-WITH-LIVE-SUCCESSOR (thread 16ef8d24, the xxxix mis-merge, decision 4510e4c6):
+        # a merge says "this label and its target are the same mind"; a real succeeded_by says
+        # "this mind's story continues at THAT label instead" — a MERGED object still carrying a
+        # winning succeeded_by that names a currently ACTIVE object claims both at once, and the
+        # two claims can point at different places (agent:d6a08aaa-xxxix's own succeeded_by named
+        # agent:d6a08aaa-g40, a real, distinct, still-onward-succeeding identity, while the merge
+        # had folded xxxix into agent:d6a08aaa-g40-vii — seven real generations later in that SAME
+        # chain). A CANDIDATE, not a verdict, same discipline as orphan-heir/retired-live above: a
+        # healthy merge whose target ALSO happens to carry an unrelated succeeded_by fires here
+        # too (an intermediate chain link pointing at a just-repaired ancestor, harmless) — every
+        # hit is unmerge()-worth a human's glance, never an auto-repair.
+        status_of = {r["canonical"]: r["status"] for r in ag_rows}
+        land("merged-with-live-successor", "warn", [
+            {"subject": c,
+             "detail": f"status=merged yet its own succeeded_by names "
+                       f"{props[c]['succeeded_by']!r}, which is currently ACTIVE — the mis-merge "
+                       "shape (decision 4510e4c6): review before trusting the fold, unmerge() is "
+                       "the repair door if the successor's chain is real and independent"}
+            for c in sorted(status_of)
+            if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
+            and status_of.get(props[c]["succeeded_by"]) == "active"])
 
-    # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
-    # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance
-    # survives; the loser's same_as → winner IS the merge marker). So edges on non-active
-    # objects are HISTORY, not errors: this check is an INFO-grade consolidation-debt meter
-    # (rung 4's queue), with the merge markers themselves excluded — flagging the merge
-    # mechanism as damage taught the first live run to cry wolf 159 times.
-    _ORPHAN_WHERE = (
-        "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects t ON t.id=l.to_id "
-        "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
-        "  AND (fo.status <> 'active' OR t.status <> 'active') "
-        "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
-    orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
-    # this check's own SQL pre-limits to _LINT_CAP (unlike every other check, which fetches
-    # its FULL row set and only caps at land()'s own display layer) — a genuine, justified
-    # optimization for the DEFAULT unfiltered call, where only _LINT_CAP rows are ever
-    # displayed regardless of the real population.
-    #
-    # THE BUG THIS REPLACED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): when the
-    # check IS explicitly named, land()'s own offset/limit slicing assumes it received the
-    # FULL row set to slice in Python — exactly what every OTHER check already does. This
-    # fetch used to hard-cap at min(page_offset + page_limit, 5000) regardless of how large
-    # the real population was, so any offset landing past what actually got fetched sliced
-    # against a too-short list and silently returned [] — while `counts`/`remaining` (built
-    # from the independent COUNT(*) below) kept reporting a genuine positive remainder.
-    # Blindness rendered as silence, never a refusal — proven live against a 10,637-row
-    # population, reproduced in tests/test_lap_lint.py at 5,010 rows. Fetching exactly
-    # `orphan_total` rows when the check is named matches the function's own documented
-    # contract ("paginating its FULL row set... default: uncapped, all of it") — the same
-    # promise every sibling check already keeps unconditionally.
-    orphan_fetch = orphan_total if check_filter == "orphan-link" else _LINT_CAP
-    orphans = await pool.fetch(
-        "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
-        f" t.canonical AS to_c, t.status AS to_s {_ORPHAN_WHERE} "
-        "ORDER BY l.last_seen DESC LIMIT $1", orphan_fetch)
-    land("orphan-link", "info", [
-        {"subject": f"{r['from_c']} -{r['type']}-> {r['to_c']}",
-         "detail": "historical edge on a non-active object ("
-                   + ", ".join(f"{c} is {s}" for c, s in
-                               ((r["from_c"], r["from_s"]), (r["to_c"], r["to_s"]))
-                               if s != "active")
-                   + ") — expected under resolve-on-read; the count meters consolidation "
-                     "debt, not damage"}
-        for r in orphans])
-    counts["orphan-link"] = int(orphan_total)
+        # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
+        # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance
+        # survives; the loser's same_as → winner IS the merge marker). So edges on non-active
+        # objects are HISTORY, not errors: this check is an INFO-grade consolidation-debt meter
+        # (rung 4's queue), with the merge markers themselves excluded — flagging the merge
+        # mechanism as damage taught the first live run to cry wolf 159 times.
+        _ORPHAN_WHERE = (
+            "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects t ON t.id=l.to_id "
+            "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
+            "  AND (fo.status <> 'active' OR t.status <> 'active') "
+            "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
+        orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
+        # this check's own SQL pre-limits to _LINT_CAP (unlike every other check, which fetches
+        # its FULL row set and only caps at land()'s own display layer) — a genuine, justified
+        # optimization for the DEFAULT unfiltered call, where only _LINT_CAP rows are ever
+        # displayed regardless of the real population.
+        #
+        # THE BUG THIS REPLACED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): when the
+        # check IS explicitly named, land()'s own offset/limit slicing assumes it received the
+        # FULL row set to slice in Python — exactly what every OTHER check already does. This
+        # fetch used to hard-cap at min(page_offset + page_limit, 5000) regardless of how large
+        # the real population was, so any offset landing past what actually got fetched sliced
+        # against a too-short list and silently returned [] — while `counts`/`remaining` (built
+        # from the independent COUNT(*) below) kept reporting a genuine positive remainder.
+        # Blindness rendered as silence, never a refusal — proven live against a 10,637-row
+        # population, reproduced in tests/test_lap_lint.py at 5,010 rows. Fetching exactly
+        # `orphan_total` rows when the check is named matches the function's own documented
+        # contract ("paginating its FULL row set... default: uncapped, all of it") — the same
+        # promise every sibling check already keeps unconditionally.
+        orphan_fetch = orphan_total if check_filter == "orphan-link" else _LINT_CAP
+        orphans = await pool.fetch(
+            "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
+            f" t.canonical AS to_c, t.status AS to_s {_ORPHAN_WHERE} "
+            "ORDER BY l.last_seen DESC LIMIT $1", orphan_fetch)
+        land("orphan-link", "info", [
+            {"subject": f"{r['from_c']} -{r['type']}-> {r['to_c']}",
+             "detail": "historical edge on a non-active object ("
+                       + ", ".join(f"{c} is {s}" for c, s in
+                                   ((r["from_c"], r["from_s"]), (r["to_c"], r["to_s"]))
+                                   if s != "active")
+                       + ") — expected under resolve-on-read; the count meters consolidation "
+                         "debt, not damage"}
+            for r in orphans])
+        counts["orphan-link"] = int(orphan_total)
 
-    # STALE-OBLIGATION — a duty nobody resolved or resolved-away; age from birth, honestly
-    # crude (the graph has no per-thread activity clock yet).
-    th = await pool.fetch(
-        "SELECT o.id, o.created_at, "
-        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS st, "
-        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='kind' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
-        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
-        "FROM objects o WHERE o.type='Thread' AND o.status='active' "
-        "  AND o.created_at < now() - make_interval(days => $1)", stale_days)
-    now = datetime.now(UTC)
-    land("stale-obligation", "warn", [
-        {"subject": str(r["id"]), "age_days": (now - r["created_at"]).days,
-         "detail": f"open obligation, {(now - r['created_at']).days}d old: "
-                   f"{_cell(r['summary'])}"}
-        for r in sorted(th, key=lambda r: r["created_at"])
-        if r["st"] == "open" and r["kind"] == "obligation"])
+        # STALE-OBLIGATION — a duty nobody resolved or resolved-away; age from birth, honestly
+        # crude (the graph has no per-thread activity clock yet).
+        th = await pool.fetch(
+            "SELECT o.id, o.created_at, "
+            " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "   AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS st, "
+            " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "   AND name='kind' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS kind, "
+            " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) AS summary "
+            "FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "  AND o.created_at < now() - make_interval(days => $1)", stale_days)
+        now = datetime.now(UTC)
+        land("stale-obligation", "warn", [
+            {"subject": str(r["id"]), "age_days": (now - r["created_at"]).days,
+             "detail": f"open obligation, {(now - r['created_at']).days}d old: "
+                       f"{_cell(r['summary'])}"}
+            for r in sorted(th, key=lambda r: r["created_at"])
+            if r["st"] == "open" and r["kind"] == "obligation"])
 
-    # ROT-CANDIDATE (info) — an open thread whose repo's COMMITS, landed AFTER the
-    # thread's last movement, share its distinctive vocabulary: the work probably
-    # happened and nobody testified (two witnesses: Metron IV fa918939, Soundwave
-    # b813e389 — 'I re-derive which obligations are actually alive at every mount').
-    # Report-only, ruling 758ded94 intact: the finding DEALS the thread to a mind's
-    # triage verbs; the status change stays testimony, never lint's.
-    from src.ingest.mined import distinctive_terms
+        # ROT-CANDIDATE (info) — an open thread whose repo's COMMITS, landed AFTER the
+        # thread's last movement, share its distinctive vocabulary: the work probably
+        # happened and nobody testified (two witnesses: Metron IV fa918939, Soundwave
+        # b813e389 — 'I re-derive which obligations are actually alive at every mount').
+        # Report-only, ruling 758ded94 intact: the finding DEALS the thread to a mind's
+        # triage verbs; the status change stays testimony, never lint's.
+        from src.ingest.mined import distinctive_terms
 
-    open_th = await pool.fetch(
-        "SELECT o.id, p.canonical AS repo, "
-        " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
-        "   AS summary, "
-        " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
-        "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
-        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
-        "WHERE o.type='Thread' AND o.status='active' "
-        "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
-        "ORDER BY moved ASC LIMIT 200")
-    rot: list[dict[str, Any]] = []
-    repos = {r["repo"] for r in open_th if r["summary"]}
-    commits: dict[str, list[Any]] = {}
-    for repo in repos:
-        commits[repo] = await pool.fetch(
-            "SELECT o.canonical, o.created_at, "
+        open_th = await pool.fetch(
+            "SELECT o.id, p.canonical AS repo, "
             " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
             "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
-            "   AS summary "
+            "   AS summary, "
+            " (SELECT max(a.observed_at) FROM assertions a WHERE a.object_id=o.id) AS moved "
             "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
             "AND (l.valid_until IS NULL OR l.valid_until > now()) "
-            "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 "
-            "WHERE o.type='Commit' AND o.status='active' "
-            "ORDER BY o.created_at DESC LIMIT 300", repo)
-    for r in open_th:
-        if not r["summary"]:
-            continue
-        want = distinctive_terms(r["summary"])
-        if len(want) < 4:
-            continue  # a thin summary matches everything; never deal it on weak evidence
-        for c in commits.get(r["repo"], ()):
-            if r["moved"] and c["created_at"] <= r["moved"]:
-                continue  # only commits NEWER than the thread's last movement testify
-            got = distinctive_terms(c["summary"] or "")
-            shared = want & got
-            if len(shared) >= 3 and len(shared) >= 0.4 * len(want):
-                rot.append({
-                    "subject": str(r["id"]),
-                    "detail": f"probably resolved, confirm? open thread "
-                              f"'{_cell(r['summary'])}' — later commit {c['canonical']} "
-                              f"shares its vocabulary ({', '.join(sorted(shared)[:5])}); "
-                              "if truly done: resolve_thread with the commit as the "
-                              "because — your judgment is the testimony"})
-                break
-    land("rot-candidate", "info", rot)
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "WHERE o.type='Thread' AND o.status='active' "
+            "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+            "ORDER BY moved ASC LIMIT 200")
+        rot: list[dict[str, Any]] = []
+        repos = {r["repo"] for r in open_th if r["summary"]}
+        commits: dict[str, list[Any]] = {}
+        for repo in repos:
+            commits[repo] = await pool.fetch(
+                "SELECT o.canonical, o.created_at, "
+                " (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+                "   AND name='summary' ORDER BY confidence DESC, observed_at DESC LIMIT 1) "
+                "   AS summary "
+                "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+                "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+                "JOIN objects p ON p.id=l.to_id AND p.canonical=$1 "
+                "WHERE o.type='Commit' AND o.status='active' "
+                "ORDER BY o.created_at DESC LIMIT 300", repo)
+        for r in open_th:
+            if not r["summary"]:
+                continue
+            want = distinctive_terms(r["summary"])
+            if len(want) < 4:
+                continue  # a thin summary matches everything; never deal it on weak evidence
+            for c in commits.get(r["repo"], ()):
+                if r["moved"] and c["created_at"] <= r["moved"]:
+                    continue  # only commits NEWER than the thread's last movement testify
+                got = distinctive_terms(c["summary"] or "")
+                shared = want & got
+                if len(shared) >= 3 and len(shared) >= 0.4 * len(want):
+                    rot.append({
+                        "subject": str(r["id"]),
+                        "detail": f"probably resolved, confirm? open thread "
+                                  f"'{_cell(r['summary'])}' — later commit {c['canonical']} "
+                                  f"shares its vocabulary ({', '.join(sorted(shared)[:5])}); "
+                                  "if truly done: resolve_thread with the commit as the "
+                                  "because — your judgment is the testimony"})
+                    break
+        land("rot-candidate", "info", rot)
 
-    # ROT-CANDIDATE-UNSCOPED (info, Thoth DM 2704, finding 2 of the in_repo audit): the check
-    # above INNER JOINs in_repo — structurally, not by oversight: a thread's "did a later
-    # commit do this" verdict needs THAT repo's commits to compare against, and a repo-less
-    # thread has no commit corpus to be compared to. There is no signal to compensate with
-    # (open_thread_wall's union-by-owner doesn't apply here — owner names a MIND, not a
-    # commit history). So the fix is declaring the boundary, not compensating for it: a
-    # single fleet-wide count of open threads this check structurally cannot evaluate,
-    # the same shape close_by_commits.unreachable_no_repo and dispose.orphans() already use.
-    unscoped = await pool.fetchval(
-        "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
-        "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
-        "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
-        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
-        "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
-    land("rot-candidate-unscoped", "info", [
-        {"subject": "fleet", "count": int(unscoped),
-         "detail": f"{unscoped} open thread(s) have no in_repo edge at all — the "
-                   "rot-candidate check above cannot evaluate them (no repo, no commit "
-                   "corpus to compare against); not a defect, a structural blind spot "
-                   "this check is now honest about"}] if unscoped else [])
+        # ROT-CANDIDATE-UNSCOPED (info, Thoth DM 2704, finding 2 of the in_repo audit): the check
+        # above INNER JOINs in_repo — structurally, not by oversight: a thread's "did a later
+        # commit do this" verdict needs THAT repo's commits to compare against, and a repo-less
+        # thread has no commit corpus to be compared to. There is no signal to compensate with
+        # (open_thread_wall's union-by-owner doesn't apply here — owner names a MIND, not a
+        # commit history). So the fix is declaring the boundary, not compensating for it: a
+        # single fleet-wide count of open threads this check structurally cannot evaluate,
+        # the same shape close_by_commits.unreachable_no_repo and dispose.orphans() already use.
+        unscoped = await pool.fetchval(
+            "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
+            "  AND name='status' ORDER BY confidence DESC, observed_at DESC LIMIT 1) = 'open' "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
+        land("rot-candidate-unscoped", "info", [
+            {"subject": "fleet", "count": int(unscoped),
+             "detail": f"{unscoped} open thread(s) have no in_repo edge at all — the "
+                       "rot-candidate check above cannot evaluate them (no repo, no commit "
+                       "corpus to compare against); not a defect, a structural blind spot "
+                       "this check is now honest about"}] if unscoped else [])
 
-    # EDGELESS-CLOSURE-GROWTH (the ratchet, Thoth DM 2581/2603, decision cb38d922): resolved-
-    # with-no-closure-edge (resolved_by/answers/closed_by, valid_until open) must never grow
-    # past EDGELESS_CLOSURE_CEILING — every sanctioned closing path now mints an edge
-    # unconditionally, so growth can only mean a bypass. Fleet-wide by design (unlike most
-    # checks here this ignores `subject`/project scope on purpose — a bypass in one repo is
-    # exactly as much a defect as one in another, and the ceiling itself was measured
-    # fleet-wide). One finding, never a per-thread list — that's enumerate_threads' job, not
-    # lint's; this check answers "did the leak reopen," nothing more granular.
-    edgeless = await pool.fetchval(
-        "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
-        "AND o.merged_into IS NULL AND COALESCE((SELECT a.value #>> '{}' FROM "
-        "current_assertions a WHERE a.object_id=o.id AND a.name='status' "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'resolved' "
-        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
-        "  AND l.type IN ('resolved_by', 'closed_by') AND l.valid_until IS NULL) "
-        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
-        "  AND l.type='answers' AND l.valid_until IS NULL)")
-    land("edgeless-closure-growth", "error", [
-        {"subject": "fleet", "count": int(edgeless), "ceiling": EDGELESS_CLOSURE_CEILING,
-         "detail": f"resolved-with-no-closure-edge grew to {edgeless}, past the ceiling of "
-                   f"{EDGELESS_CLOSURE_CEILING} — every sanctioned closing path mints an "
-                   "edge unconditionally now, so this can only mean a bypass: raw SQL, an "
-                   "unguarded new writer, or a closure edge healed while status stayed "
-                   "resolved"}
-    ] if edgeless > EDGELESS_CLOSURE_CEILING else [])
+        # EDGELESS-CLOSURE-GROWTH (the ratchet, Thoth DM 2581/2603, decision cb38d922): resolved-
+        # with-no-closure-edge (resolved_by/answers/closed_by, valid_until open) must never grow
+        # past EDGELESS_CLOSURE_CEILING — every sanctioned closing path now mints an edge
+        # unconditionally, so growth can only mean a bypass. Fleet-wide by design (unlike most
+        # checks here this ignores `subject`/project scope on purpose — a bypass in one repo is
+        # exactly as much a defect as one in another, and the ceiling itself was measured
+        # fleet-wide). One finding, never a per-thread list — that's enumerate_threads' job, not
+        # lint's; this check answers "did the leak reopen," nothing more granular.
+        edgeless = await pool.fetchval(
+            "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
+            "AND o.merged_into IS NULL AND COALESCE((SELECT a.value #>> '{}' FROM "
+            "current_assertions a WHERE a.object_id=o.id AND a.name='status' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), 'open') = 'resolved' "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+            "  AND l.type IN ('resolved_by', 'closed_by') AND l.valid_until IS NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
+            "  AND l.type='answers' AND l.valid_until IS NULL)")
+        land("edgeless-closure-growth", "error", [
+            {"subject": "fleet", "count": int(edgeless), "ceiling": EDGELESS_CLOSURE_CEILING,
+             "detail": f"resolved-with-no-closure-edge grew to {edgeless}, past the ceiling of "
+                       f"{EDGELESS_CLOSURE_CEILING} — every sanctioned closing path mints an "
+                       "edge unconditionally now, so this can only mean a bypass: raw SQL, an "
+                       "unguarded new writer, or a closure edge healed while status stayed "
+                       "resolved"}
+        ] if edgeless > EDGELESS_CLOSURE_CEILING else [])
 
-    # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
-    # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.
-    # THE MATCH SEES THROUGH AN ANNOTATION: a writer may suffix its id with a parenthetical
-    # provenance note — 'agent:<id> (relaying operator ruling ...)' — and 338 of XLIV's
-    # relay writes read as an unregistered impersonator for two sessions because the exact
-    # match couldn't (task #21, 2026-07-19). The id is judged; the note rides along.
-    ghosts = await pool.fetch(
-        "SELECT w.source_id, count(*) AS writes, max(w.at) AS last FROM ("
-        "  SELECT source_id, observed_at AS at FROM assertions "
-        "   WHERE source_id LIKE 'agent:%' "
-        "  UNION ALL SELECT source_id, first_seen FROM links "
-        "   WHERE source_id LIKE 'agent:%') w "
-        "WHERE NOT EXISTS (SELECT 1 FROM objects o "
-        "  WHERE o.type='Agent' AND o.canonical = split_part(w.source_id, ' (', 1)) "
-        "GROUP BY w.source_id ORDER BY count(*) DESC")
-    land("attribution", "error", [
-        {"subject": r["source_id"], "writes": int(r["writes"]),
-         "detail": f"{r['writes']} write(s) from an agent id the graph never registered "
-                   f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
-        for r in ghosts])
+        # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
+        # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.
+        # THE MATCH SEES THROUGH AN ANNOTATION: a writer may suffix its id with a parenthetical
+        # provenance note — 'agent:<id> (relaying operator ruling ...)' — and 338 of XLIV's
+        # relay writes read as an unregistered impersonator for two sessions because the exact
+        # match couldn't (task #21, 2026-07-19). The id is judged; the note rides along.
+        ghosts = await pool.fetch(
+            "SELECT w.source_id, count(*) AS writes, max(w.at) AS last FROM ("
+            "  SELECT source_id, observed_at AS at FROM assertions "
+            "   WHERE source_id LIKE 'agent:%' "
+            "  UNION ALL SELECT source_id, first_seen FROM links "
+            "   WHERE source_id LIKE 'agent:%') w "
+            "WHERE NOT EXISTS (SELECT 1 FROM objects o "
+            "  WHERE o.type='Agent' AND o.canonical = split_part(w.source_id, ' (', 1)) "
+            "GROUP BY w.source_id ORDER BY count(*) DESC")
+        land("attribution", "error", [
+            {"subject": r["source_id"], "writes": int(r["writes"]),
+             "detail": f"{r['writes']} write(s) from an agent id the graph never registered "
+                       f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
+            for r in ghosts])
 
-    # PHANTOM-TWIN — an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
-    # some Seat's anchor (an OFFICE — single-occupant by design, ed5f5ce2) while the seat's
-    # holder is a different lineage. The bridged-resume path mints exactly this shape when
-    # its receipts are missing (agent:6ebb4445 beside alfred, 2026-07-16): the same soul
-    # wearing a second registry row. Adoption cures the cases with evidence; this tripwire
-    # makes the evidence-less remainder LOUD — the one degradation that touches identity
-    # must never be silent. Flag, never guess (blind adoption-by-location was the cwd-guess
-    # bug class; seating is deliberate or it is nothing).
-    twins = await pool.fetch(
-        "SELECT m.agent_id AS suspect, m.cwd AS office, s.canonical AS seat, "
-        "  h.canonical AS holder, m.last_seen "
-        "FROM agent_mounts m "
-        "JOIN current_assertions a ON a.name='anchor_cwd' AND a.value #>> '{}' = m.cwd "
-        "JOIN objects s ON s.id=a.object_id AND s.type='Seat' "
-        "JOIN links l ON l.to_id=s.id AND l.type='holds' "
-        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "JOIN objects h ON h.id=l.from_id AND h.type='Agent' "
-        "WHERE m.seat_id IS NULL "
-        "AND substring(m.agent_id from '^agent:[0-9a-f]{8}') "
-        "  <> substring(h.canonical from '^agent:[0-9a-f]{8}') "
-        "AND NOT EXISTS (SELECT 1 FROM current_assertions ha "
-        "  JOIN objects ao ON ao.id=ha.object_id "
-        "  WHERE ha.name='handle' AND ao.canonical = m.agent_id) "
-        "AND NOT EXISTS (SELECT 1 FROM links sp "
-        "  JOIN objects so ON so.id=sp.from_id "
-        "  WHERE sp.type='spawned_by' AND so.canonical = m.agent_id)")
-    land("phantom-twin", "warn", [
-        {"subject": r["suspect"], "office": r["office"], "seat": r["seat"],
-         "detail": f"anonymous agent {r['suspect']} mounted at {r['holder']}'s office "
-                   f"({r['seat']}, last seen "
-                   f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}) — "
-                   "likely the same soul wearing a second row (a bridged resume without "
-                   "its receipts). Verify and heal by hand; never auto-merge"}
-        for r in twins])
+        # PHANTOM-TWIN — an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
+        # some Seat's anchor (an OFFICE — single-occupant by design, ed5f5ce2) while the seat's
+        # holder is a different lineage. The bridged-resume path mints exactly this shape when
+        # its receipts are missing (agent:6ebb4445 beside alfred, 2026-07-16): the same soul
+        # wearing a second registry row. Adoption cures the cases with evidence; this tripwire
+        # makes the evidence-less remainder LOUD — the one degradation that touches identity
+        # must never be silent. Flag, never guess (blind adoption-by-location was the cwd-guess
+        # bug class; seating is deliberate or it is nothing).
+        twins = await pool.fetch(
+            "SELECT m.agent_id AS suspect, m.cwd AS office, s.canonical AS seat, "
+            "  h.canonical AS holder, m.last_seen "
+            "FROM agent_mounts m "
+            "JOIN current_assertions a ON a.name='anchor_cwd' AND a.value #>> '{}' = m.cwd "
+            "JOIN objects s ON s.id=a.object_id AND s.type='Seat' "
+            "JOIN links l ON l.to_id=s.id AND l.type='holds' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "JOIN objects h ON h.id=l.from_id AND h.type='Agent' "
+            "WHERE m.seat_id IS NULL "
+            "AND substring(m.agent_id from '^agent:[0-9a-f]{8}') "
+            "  <> substring(h.canonical from '^agent:[0-9a-f]{8}') "
+            "AND NOT EXISTS (SELECT 1 FROM current_assertions ha "
+            "  JOIN objects ao ON ao.id=ha.object_id "
+            "  WHERE ha.name='handle' AND ao.canonical = m.agent_id) "
+            "AND NOT EXISTS (SELECT 1 FROM links sp "
+            "  JOIN objects so ON so.id=sp.from_id "
+            "  WHERE sp.type='spawned_by' AND so.canonical = m.agent_id)")
+        land("phantom-twin", "warn", [
+            {"subject": r["suspect"], "office": r["office"], "seat": r["seat"],
+             "detail": f"anonymous agent {r['suspect']} mounted at {r['holder']}'s office "
+                       f"({r['seat']}, last seen "
+                       f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}) — "
+                       "likely the same soul wearing a second row (a bridged resume without "
+                       "its receipts). Verify and heal by hand; never auto-merge"}
+            for r in twins])
 
-    # PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d) — a
-    # generation whose MINT captured a live pulse on a DIFFERENT door of its own lineage:
-    # the predecessor was not dead when the heir was crowned (g40-v/vi were minted while
-    # g40-iv worked; each would have tripped this within a minute). The evidence is the
-    # `parallel_pulse_door` stamp mint_heir writes AT the mint — rows are hot state and
-    # the pulse is gone by lint time, so the stamp is the only witness. Testimony for
-    # the fold tray; the seam may still have been real (verify), never auto-fold.
-    par = await pool.fetch(
-        "SELECT o.canonical AS heir, "
-        "  max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') AS door, "
-        "  max(p.value #>> '{}') FILTER (WHERE p.name='predecessor_last_seen') AS pulse_at, "
-        "  max(p.value #>> '{}') FILTER (WHERE p.name='minted_because') AS because "
-        "FROM objects o JOIN current_assertions p ON p.object_id=o.id "
-        "WHERE o.type='Agent' AND o.status='active' "
-        "AND p.name IN ('parallel_pulse_door','predecessor_last_seen','minted_because') "
-        "GROUP BY o.canonical "
-        "HAVING max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') "
-        "  IS NOT NULL")
-    land("parallel-lives", "warn", [
-        {"subject": r["heir"],
-         "detail": f"{r['heir']} was minted ({r['because'] or 'unknown seam'}) while "
-                   f"door {r['door']} of its own lineage held a live pulse (predecessor "
-                   f"last seen {r['pulse_at'] or '?'}) — a parallel life: the "
-                   "predecessor was not dead. Verify the seam; fold by hand if false"}
-        for r in par])
+        # PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d) — a
+        # generation whose MINT captured a live pulse on a DIFFERENT door of its own lineage:
+        # the predecessor was not dead when the heir was crowned (g40-v/vi were minted while
+        # g40-iv worked; each would have tripped this within a minute). The evidence is the
+        # `parallel_pulse_door` stamp mint_heir writes AT the mint — rows are hot state and
+        # the pulse is gone by lint time, so the stamp is the only witness. Testimony for
+        # the fold tray; the seam may still have been real (verify), never auto-fold.
+        par = await pool.fetch(
+            "SELECT o.canonical AS heir, "
+            "  max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') AS door, "
+            "  max(p.value #>> '{}') FILTER (WHERE p.name='predecessor_last_seen') AS pulse_at, "
+            "  max(p.value #>> '{}') FILTER (WHERE p.name='minted_because') AS because "
+            "FROM objects o JOIN current_assertions p ON p.object_id=o.id "
+            "WHERE o.type='Agent' AND o.status='active' "
+            "AND p.name IN ('parallel_pulse_door','predecessor_last_seen','minted_because') "
+            "GROUP BY o.canonical "
+            "HAVING max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') "
+            "  IS NOT NULL")
+        land("parallel-lives", "warn", [
+            {"subject": r["heir"],
+             "detail": f"{r['heir']} was minted ({r['because'] or 'unknown seam'}) while "
+                       f"door {r['door']} of its own lineage held a live pulse (predecessor "
+                       f"last seen {r['pulse_at'] or '?'}) — a parallel life: the "
+                       "predecessor was not dead. Verify the seam; fold by hand if false"}
+            for r in par])
 
-    # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen;
-    # detail text corrected by decision c3504289, thread 6028/6037 — Thoth's own dispatch
-    # had quoted the ORIGINAL wording below as fact and it was false): a LIVE agent
-    # carrying more than one simultaneously-live works_in edge. THIS DOES NOT MEAN orient()
-    # can resolve the wrong project: measured directly (c3504289) — a seated agent's
-    # project comes from seat→derive_house (governs/charter), an unseated one from cwd
-    # pin/basename; NEITHER reads works_in at all. The two live readers that DO consult a
-    # single agent's own works_in for an answer (lineage_works_in's repo= default rung 3,
-    # offices.py's pin self-heal vote) already abstain to None the instant they see 2+
-    # distinct projects, by construction — a duplicate can never feed either one a wrong
-    # single answer. The real, measured cost is narrower: an honest repo= abstention where
-    # a default could otherwise have resolved, and an inflated agent_count in ledger-style
-    # reports. (Historical scope note unchanged: measured live, 2026-08-03, 41 agents
-    # fleet-wide carry the shape, but only currently-LIVE agents are flagged here — a dead
-    # generation's leftover duplicate feeds neither consumer above for anyone; that larger
-    # historical count is thread 20af2c95's own separate, still-open concern, not this
-    # check's.) Scoped to `live_secs` — the SAME liveness window phantom-twin already uses,
-    # not a second definition of "live". Testimony only: this counts, it never judges which
-    # edge is the stale one — invalidate_works_in is the repair, a mind names the target.
-    dup = await pool.fetch(
-        "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
-        "  WHERE last_seen > now() - make_interval(secs => $1)) "
-        "SELECT o.canonical AS agent, "
-        "  array_agg(DISTINCT p.canonical ORDER BY p.canonical) AS projects, "
-        "  count(DISTINCT l.to_id) AS n "
-        "FROM links l "
-        "JOIN objects o ON o.id=l.from_id AND o.type='Agent' AND o.status='active' "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
-        "JOIN live_agents la ON la.agent_id=o.canonical "
-        "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now()) "
-        "GROUP BY o.canonical HAVING count(DISTINCT l.to_id) > 1 "
-        "ORDER BY o.canonical", live_secs)
-    land("duplicate-works-in", "warn", [
-        {"subject": r["agent"],
-         "detail": f"{r['agent']} is live right now and carries {r['n']} simultaneously-"
-                   f"live works_in edges ({', '.join(r['projects'])}) — orient() itself "
-                   "does not resolve project through this edge (seat->derive_house or "
-                   "cwd pin/basename instead), but lineage_works_in's repo= default and "
-                   "offices.py's pin self-heal vote both abstain here instead of resolving "
-                   "one. Name the stale one and invalidate_works_in it; this check only "
-                   "counts, it never guesses which"}
-        for r in dup])
+        # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen;
+        # detail text corrected by decision c3504289, thread 6028/6037 — Thoth's own dispatch
+        # had quoted the ORIGINAL wording below as fact and it was false): a LIVE agent
+        # carrying more than one simultaneously-live works_in edge. THIS DOES NOT MEAN orient()
+        # can resolve the wrong project: measured directly (c3504289) — a seated agent's
+        # project comes from seat→derive_house (governs/charter), an unseated one from cwd
+        # pin/basename; NEITHER reads works_in at all. The two live readers that DO consult a
+        # single agent's own works_in for an answer (lineage_works_in's repo= default rung 3,
+        # offices.py's pin self-heal vote) already abstain to None the instant they see 2+
+        # distinct projects, by construction — a duplicate can never feed either one a wrong
+        # single answer. The real, measured cost is narrower: an honest repo= abstention where
+        # a default could otherwise have resolved, and an inflated agent_count in ledger-style
+        # reports. (Historical scope note unchanged: measured live, 2026-08-03, 41 agents
+        # fleet-wide carry the shape, but only currently-LIVE agents are flagged here — a dead
+        # generation's leftover duplicate feeds neither consumer above for anyone; that larger
+        # historical count is thread 20af2c95's own separate, still-open concern, not this
+        # check's.) Scoped to `live_secs` — the SAME liveness window phantom-twin already uses,
+        # not a second definition of "live". Testimony only: this counts, it never judges which
+        # edge is the stale one — invalidate_works_in is the repair, a mind names the target.
+        dup = await pool.fetch(
+            "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
+            "  WHERE last_seen > now() - make_interval(secs => $1)) "
+            "SELECT o.canonical AS agent, "
+            "  array_agg(DISTINCT p.canonical ORDER BY p.canonical) AS projects, "
+            "  count(DISTINCT l.to_id) AS n "
+            "FROM links l "
+            "JOIN objects o ON o.id=l.from_id AND o.type='Agent' AND o.status='active' "
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "JOIN live_agents la ON la.agent_id=o.canonical "
+            "WHERE l.type='works_in' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "GROUP BY o.canonical HAVING count(DISTINCT l.to_id) > 1 "
+            "ORDER BY o.canonical", live_secs)
+        land("duplicate-works-in", "warn", [
+            {"subject": r["agent"],
+             "detail": f"{r['agent']} is live right now and carries {r['n']} simultaneously-"
+                       f"live works_in edges ({', '.join(r['projects'])}) — orient() itself "
+                       "does not resolve project through this edge (seat->derive_house or "
+                       "cwd pin/basename instead), but lineage_works_in's repo= default and "
+                       "offices.py's pin self-heal vote both abstain here instead of resolving "
+                       "one. Name the stale one and invalidate_works_in it; this check only "
+                       "counts, it never guesses which"}
+            for r in dup])
 
-    # PEER-SILENT — task #76 item 2 (spec e6636c7e): v1's fiduciary-disclosure duty
-    # ("surface in-scope findings and risks to your peer proactively — silence is a
-    # violation", offices.py's PEER ADDENDUM) is prose only; nothing in this function
-    # measured it. A true "was every in-scope finding disclosed" check needs a disclosure
-    # marker that does not exist yet — this is the honest, mechanical proxy available from
-    # EXISTING conventions alone (reuse, not new machinery): has this pair exchanged ANY
-    # direct mail at all, recently? An active peer_of pair where no DM has passed between
-    # either side's holders in `stale_days` (or ever) is flagged — not proof a finding was
-    # withheld, but the coarse tripwire the spec's own "silence is a violation" language
-    # calls for. Matches EVERY agent that has EVER held either seat (the same `holds` edge
-    # `held_seat`/`resolve_seat` read elsewhere), not just the current generation, so a
-    # mid-reign swap on either side never produces a false silence. Counts a DM addressed
-    # directly agent-to-agent OR to either seat's own address (`to_agent='seat:...'`);
-    # deliberately does NOT count project broadcasts — a peer bond is a private duty, and
-    # crediting a broadcast neither peer need have read would hide real silence.
-    peer_silence = await pool.fetch(
-        "WITH active_peers AS ("
-        "  SELECT oa.canonical AS seat_a, ob.canonical AS seat_b, oa.id AS seat_a_id, "
-        "    ob.id AS seat_b_id, l.properties->>'because' AS because, "
-        "    l.first_seen AS peered_since "
-        "  FROM links l JOIN objects oa ON oa.id=l.from_id JOIN objects ob ON ob.id=l.to_id "
-        "  WHERE l.type='peer_of' AND (l.valid_until IS NULL OR l.valid_until > now())), "
-        "holders_a AS (SELECT ap.seat_a AS seat, f.canonical AS agent FROM active_peers ap "
-        "  JOIN links hl ON hl.to_id=ap.seat_a_id AND hl.type='holds' "
-        "  JOIN objects f ON f.id=hl.from_id), "
-        "holders_b AS (SELECT ap.seat_b AS seat, f.canonical AS agent FROM active_peers ap "
-        "  JOIN links hl ON hl.to_id=ap.seat_b_id AND hl.type='holds' "
-        "  JOIN objects f ON f.id=hl.from_id) "
-        "SELECT ap.seat_a, ap.seat_b, ap.because, ap.peered_since, "
-        "  MAX(m.created_at) AS last_contact "
-        "FROM active_peers ap "
-        "LEFT JOIN holders_a ha ON ha.seat=ap.seat_a "
-        "LEFT JOIN holders_b hb ON hb.seat=ap.seat_b "
-        "LEFT JOIN fleet_messages m "
-        "  ON (m.from_agent=ha.agent AND (m.to_agent=hb.agent OR m.to_agent=ap.seat_b)) "
-        "  OR (m.from_agent=hb.agent AND (m.to_agent=ha.agent OR m.to_agent=ap.seat_a)) "
-        "GROUP BY ap.seat_a, ap.seat_b, ap.because, ap.peered_since "
-        "HAVING MAX(m.created_at) IS NULL "
-        "  OR MAX(m.created_at) < now() - make_interval(days => $1) "
-        "ORDER BY ap.peered_since", stale_days)
-    land("peer-silent", "warn", [
-        {"subject": f"{r['seat_a']} <-> {r['seat_b']}",
-         "detail": f"peered since {r['peered_since'].isoformat()} ({r['because']!r}) — "
-                   + (f"last direct mail between them was {r['last_contact'].isoformat()}"
-                      if r["last_contact"] is not None
-                      else "no direct mail between them has ever been seen")
-                   + f", past the {stale_days}-day disclosure window. A proxy for the "
-                     "fiduciary-disclosure duty (spec e6636c7e), not proof either peer "
-                     "withheld a finding — testimony for a mind to judge, same as every "
-                     "other check here"}
-        for r in peer_silence])
+        # PEER-SILENT — task #76 item 2 (spec e6636c7e): v1's fiduciary-disclosure duty
+        # ("surface in-scope findings and risks to your peer proactively — silence is a
+        # violation", offices.py's PEER ADDENDUM) is prose only; nothing in this function
+        # measured it. A true "was every in-scope finding disclosed" check needs a disclosure
+        # marker that does not exist yet — this is the honest, mechanical proxy available from
+        # EXISTING conventions alone (reuse, not new machinery): has this pair exchanged ANY
+        # direct mail at all, recently? An active peer_of pair where no DM has passed between
+        # either side's holders in `stale_days` (or ever) is flagged — not proof a finding was
+        # withheld, but the coarse tripwire the spec's own "silence is a violation" language
+        # calls for. Matches EVERY agent that has EVER held either seat (the same `holds` edge
+        # `held_seat`/`resolve_seat` read elsewhere), not just the current generation, so a
+        # mid-reign swap on either side never produces a false silence. Counts a DM addressed
+        # directly agent-to-agent OR to either seat's own address (`to_agent='seat:...'`);
+        # deliberately does NOT count project broadcasts — a peer bond is a private duty, and
+        # crediting a broadcast neither peer need have read would hide real silence.
+        peer_silence = await pool.fetch(
+            "WITH active_peers AS ("
+            "  SELECT oa.canonical AS seat_a, ob.canonical AS seat_b, oa.id AS seat_a_id, "
+            "    ob.id AS seat_b_id, l.properties->>'because' AS because, "
+            "    l.first_seen AS peered_since "
+            "  FROM links l JOIN objects oa ON oa.id=l.from_id JOIN objects ob ON ob.id=l.to_id "
+            "  WHERE l.type='peer_of' AND (l.valid_until IS NULL OR l.valid_until > now())), "
+            "holders_a AS (SELECT ap.seat_a AS seat, f.canonical AS agent FROM active_peers ap "
+            "  JOIN links hl ON hl.to_id=ap.seat_a_id AND hl.type='holds' "
+            "  JOIN objects f ON f.id=hl.from_id), "
+            "holders_b AS (SELECT ap.seat_b AS seat, f.canonical AS agent FROM active_peers ap "
+            "  JOIN links hl ON hl.to_id=ap.seat_b_id AND hl.type='holds' "
+            "  JOIN objects f ON f.id=hl.from_id) "
+            "SELECT ap.seat_a, ap.seat_b, ap.because, ap.peered_since, "
+            "  MAX(m.created_at) AS last_contact "
+            "FROM active_peers ap "
+            "LEFT JOIN holders_a ha ON ha.seat=ap.seat_a "
+            "LEFT JOIN holders_b hb ON hb.seat=ap.seat_b "
+            "LEFT JOIN fleet_messages m "
+            "  ON (m.from_agent=ha.agent AND (m.to_agent=hb.agent OR m.to_agent=ap.seat_b)) "
+            "  OR (m.from_agent=hb.agent AND (m.to_agent=ha.agent OR m.to_agent=ap.seat_a)) "
+            "GROUP BY ap.seat_a, ap.seat_b, ap.because, ap.peered_since "
+            "HAVING MAX(m.created_at) IS NULL "
+            "  OR MAX(m.created_at) < now() - make_interval(days => $1) "
+            "ORDER BY ap.peered_since", stale_days)
+        land("peer-silent", "warn", [
+            {"subject": f"{r['seat_a']} <-> {r['seat_b']}",
+             "detail": f"peered since {r['peered_since'].isoformat()} ({r['because']!r}) — "
+                       + (f"last direct mail between them was {r['last_contact'].isoformat()}"
+                          if r["last_contact"] is not None
+                          else "no direct mail between them has ever been seen")
+                       + f", past the {stale_days}-day disclosure window. A proxy for the "
+                         "fiduciary-disclosure duty (spec e6636c7e), not proof either peer "
+                         "withheld a finding — testimony for a mind to judge, same as every "
+                         "other check here"}
+            for r in peer_silence])
 
-    # HELD-PAST-DEADLINE — task #76 item 4b (spec e6636c7e, decision e85d3040): the mutual
-    # HOLD's auto-escalation-to-the-operator half, built as a LINT check rather than a new
-    # daemon (Thoth's ruling, matching the operator's own #169 precedent — match the
-    # instrument to the base rate; a periodic read over durable state is exactly graph_lint's
-    # own shape, and this reuses the SAME function item 2 just extended, no new machinery).
-    # A hold_action() thread (severity='hold') still open past its own hold_deadline is
-    # flagged — this is testimony ONLY, same as every other check: the actual push-to-the-
-    # operator act stays a mind's (or a later caller's) own move, never lint's.
-    held_past_deadline = await pool.fetch(
-        "SELECT o.id, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hold_holder' ORDER BY a.confidence DESC, a.observed_at DESC "
-        "   LIMIT 1) AS holder, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hold_held' ORDER BY a.confidence DESC, a.observed_at DESC "
-        "   LIMIT 1) AS held, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='hold_act' ORDER BY a.confidence DESC, a.observed_at DESC "
-        "   LIMIT 1) AS act, "
-        " (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='hold_deadline' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS deadline "
-        "FROM objects o "
-        "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
-        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='severity' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "    = 'hold' "
-        "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "    = 'open' "
-        "  AND (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
-        "    WHERE a.object_id=o.id AND a.name='hold_deadline' "
-        "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) < now() "
-        "ORDER BY (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
-        "  WHERE a.object_id=o.id AND a.name='hold_deadline' "
-        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) ASC")
-    land("held-past-deadline", "warn", [
-        {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
-         "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
-                   "resolve_thread call yet — the spec's auto-escalation-to-the-operator "
-                   "half, unbuilt as a push, surfaces here instead: this is where a mind "
-                   "(or a future caller reading this check) takes it to the operator's "
-                   "desk, not lint's own act"}
-        for r in held_past_deadline])
+        # HELD-PAST-DEADLINE — task #76 item 4b (spec e6636c7e, decision e85d3040): the mutual
+        # HOLD's auto-escalation-to-the-operator half, built as a LINT check rather than a new
+        # daemon (Thoth's ruling, matching the operator's own #169 precedent — match the
+        # instrument to the base rate; a periodic read over durable state is exactly graph_lint's
+        # own shape, and this reuses the SAME function item 2 just extended, no new machinery).
+        # A hold_action() thread (severity='hold') still open past its own hold_deadline is
+        # flagged — this is testimony ONLY, same as every other check: the actual push-to-the-
+        # operator act stays a mind's (or a later caller's) own move, never lint's.
+        held_past_deadline = await pool.fetch(
+            "SELECT o.id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='hold_holder' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   LIMIT 1) AS holder, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='hold_held' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   LIMIT 1) AS held, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='hold_act' ORDER BY a.confidence DESC, a.observed_at DESC "
+            "   LIMIT 1) AS act, "
+            " (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='hold_deadline' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS deadline "
+            "FROM objects o "
+            "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
+            "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "    AND a.name='severity' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "    = 'hold' "
+            "  AND (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "    AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "    = 'open' "
+            "  AND (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+            "    WHERE a.object_id=o.id AND a.name='hold_deadline' "
+            "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) < now() "
+            "ORDER BY (SELECT (a.value #>> '{}')::timestamptz FROM current_assertions a "
+            "  WHERE a.object_id=o.id AND a.name='hold_deadline' "
+            "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) ASC")
+        land("held-past-deadline", "warn", [
+            {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
+             "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
+                       "resolve_thread call yet — the spec's auto-escalation-to-the-operator "
+                       "half, unbuilt as a push, surfaces here instead: this is where a mind "
+                       "(or a future caller reading this check) takes it to the operator's "
+                       "desk, not lint's own act"}
+            for r in held_past_deadline])
 
-    # STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — RECURRENCE DETECTION): the
-    # write-side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs
-    # onto its heir, decision 5b217d13, 2026-08-04) closed the LEAK; backfill_agent_
-    # project_links repairs the historical debt it left behind (906 measured at the time,
-    # down to 2 by the time this check was written) — but nothing watched for the CLASS
-    # recurring (a future mint path this fix never reached, or a regression in it). Same
-    # enumeration backfill_agent_project_links itself uses — an Agent that is NOT its
-    # lineage's living_head yet still carries a live works_in/governs edge — read-only
-    # here; the repair stays that verb's own job, this only counts.
-    from src.orchestrator.folds import living_head
+        # STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — RECURRENCE DETECTION): the
+        # write-side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs
+        # onto its heir, decision 5b217d13, 2026-08-04) closed the LEAK; backfill_agent_
+        # project_links repairs the historical debt it left behind (906 measured at the time,
+        # down to 2 by the time this check was written) — but nothing watched for the CLASS
+        # recurring (a future mint path this fix never reached, or a regression in it). Same
+        # enumeration backfill_agent_project_links itself uses — an Agent that is NOT its
+        # lineage's living_head yet still carries a live works_in/governs edge — read-only
+        # here; the repair stays that verb's own job, this only counts.
+        from src.orchestrator.folds import living_head
 
-    off_head_rows = await pool.fetch(
-        "SELECT DISTINCT f.canonical AS agent, f.status AS status, p.canonical AS project "
-        "FROM links l "
-        "JOIN objects f ON f.id=l.from_id AND f.type='Agent' "
-        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
-        "WHERE l.type IN ('works_in','governs') "
-        "AND (l.valid_until IS NULL OR l.valid_until > now())")
-    off_head_bases = {_generation(str(r["agent"]))[0] for r in off_head_rows}
-    off_head_of: dict[str, str] = {b: await living_head(pool, b) for b in off_head_bases}
-    stale_links = [r for r in off_head_rows
-                   if str(r["agent"]) != off_head_of[_generation(str(r["agent"]))[0]]]
-    land("stale-off-head-link", "warn", [
-        {"subject": r["agent"],
-         "detail": f"{r['agent']} ({r['status']}) still carries a live works_in/governs "
-                   f"edge to {r['project']} though "
-                   f"{off_head_of[_generation(str(r['agent']))[0]]} is this lineage's "
-                   "living head now — backfill_agent_project_links is the repair; this "
-                   "only counts (thread 20af2c95's own recurrence tripwire)"}
-        for r in stale_links])
+        off_head_rows = await pool.fetch(
+            "SELECT DISTINCT f.canonical AS agent, f.status AS status, p.canonical AS project "
+            "FROM links l "
+            "JOIN objects f ON f.id=l.from_id AND f.type='Agent' "
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "WHERE l.type IN ('works_in','governs') "
+            "AND (l.valid_until IS NULL OR l.valid_until > now())")
+        off_head_bases = {_generation(str(r["agent"]))[0] for r in off_head_rows}
+        off_head_of: dict[str, str] = {b: await living_head(pool, b) for b in off_head_bases}
+        stale_links = [r for r in off_head_rows
+                       if str(r["agent"]) != off_head_of[_generation(str(r["agent"]))[0]]]
+        land("stale-off-head-link", "warn", [
+            {"subject": r["agent"],
+             "detail": f"{r['agent']} ({r['status']}) still carries a live works_in/governs "
+                       f"edge to {r['project']} though "
+                       f"{off_head_of[_generation(str(r['agent']))[0]]} is this lineage's "
+                       "living head now — backfill_agent_project_links is the repair; this "
+                       "only counts (thread 20af2c95's own recurrence tripwire)"}
+            for r in stale_links])
 
-    # STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — RECURRENCE DETECTION): the SAME
-    # anomaly `stale_current_flags`'s own read door surfaces (an assertion still carrying
-    # `is_current=true` though a real `supersedes` FK already points at it from another row)
-    # — folded into the standing lint wall so a future session finds this without knowing
-    # to call that door by name. NOT a live write-path bug (verified: both of
-    # assert_property's supersession paths, actions/core.py:265-269 same-source and :346-349
-    # cross-source, flip `is_current=false` on the superseded row in the SAME transaction as
-    # the write, unconditionally) — the live population (123,914 at last count, d8225e71) is
-    # migration-0047 backfill debt (pre-existing rows the migration's own backfill never
-    # reached), not ongoing accrual. Still `warn`, not `info`: khepri's own specimen (seat:
-    # ddafff44) proved this actively BLOCKS retire_assertion/reconcile_seat_identity on an
-    # affected object, a live consequence orphan-link's own historical debt never has.
-    # repair_stale_current_flags is the batched backfill; this only counts. Same pre-
-    # limited-fetch shape as orphan-link (thread 187323d9's own fix): the population is
-    # five figures, so the DEFAULT unfiltered call fetches only `_LINT_CAP` rows (matching
-    # what land() would ever display anyway); a call naming check='stale-current-flag'
-    # fetches its true, full total instead — land()'s own counts[check]=len(rows) must
-    # see the FULL row set to report honestly, never the pre-limited sample.
-    stale_flag_total = await pool.fetchval(
-        "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
-        "WHERE a.is_current")
-    stale_flag_fetch = stale_flag_total if check_filter == "stale-current-flag" else _LINT_CAP
-    stale_flags = await pool.fetch(
-        "SELECT a.id AS stale_id, a.object_id, a.name "
-        "FROM assertions a JOIN assertions s ON s.supersedes = a.id "
-        "WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1", stale_flag_fetch)
-    land("stale-current-flag", "warn", [
-        {"subject": str(r["object_id"]),
-         "detail": f"assertion {r['stale_id']} ({r['name']}) on {r['object_id']} still "
-                   "reads is_current=true though a real supersedes FK already points at "
-                   "it — repair_stale_current_flags is the batched repair; this only "
-                   "counts (thread 09bde57e's own recurrence tripwire)"}
-        for r in stale_flags])
-    counts["stale-current-flag"] = int(stale_flag_total or 0)
+        # STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — RECURRENCE DETECTION): the SAME
+        # anomaly `stale_current_flags`'s own read door surfaces (an assertion still carrying
+        # `is_current=true` though a real `supersedes` FK already points at it from another row)
+        # — folded into the standing lint wall so a future session finds this without knowing
+        # to call that door by name. NOT a live write-path bug (verified: both of
+        # assert_property's supersession paths, actions/core.py:265-269 same-source and :346-349
+        # cross-source, flip `is_current=false` on the superseded row in the SAME transaction as
+        # the write, unconditionally) — the live population (123,914 at last count, d8225e71) is
+        # migration-0047 backfill debt (pre-existing rows the migration's own backfill never
+        # reached), not ongoing accrual. Still `warn`, not `info`: khepri's own specimen (seat:
+        # ddafff44) proved this actively BLOCKS retire_assertion/reconcile_seat_identity on an
+        # affected object, a live consequence orphan-link's own historical debt never has.
+        # repair_stale_current_flags is the batched backfill; this only counts. Same pre-
+        # limited-fetch shape as orphan-link (thread 187323d9's own fix): the population is
+        # five figures, so the DEFAULT unfiltered call fetches only `_LINT_CAP` rows (matching
+        # what land() would ever display anyway); a call naming check='stale-current-flag'
+        # fetches its true, full total instead — land()'s own counts[check]=len(rows) must
+        # see the FULL row set to report honestly, never the pre-limited sample.
+        stale_flag_total = await pool.fetchval(
+            "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+            "WHERE a.is_current")
+        stale_flag_fetch = stale_flag_total if check_filter == "stale-current-flag" else _LINT_CAP
+        stale_flags = await pool.fetch(
+            "SELECT a.id AS stale_id, a.object_id, a.name "
+            "FROM assertions a JOIN assertions s ON s.supersedes = a.id "
+            "WHERE a.is_current ORDER BY a.observed_at ASC LIMIT $1", stale_flag_fetch)
+        land("stale-current-flag", "warn", [
+            {"subject": str(r["object_id"]),
+             "detail": f"assertion {r['stale_id']} ({r['name']}) on {r['object_id']} still "
+                       "reads is_current=true though a real supersedes FK already points at "
+                       "it — repair_stale_current_flags is the batched repair; this only "
+                       "counts (thread 09bde57e's own recurrence tripwire)"}
+            for r in stale_flags])
+        counts["stale-current-flag"] = int(stale_flag_total or 0)
 
-    # KINDLESS-OPEN-THREAD (thread b5ae6773, #203's write-time classification laws): an
-    # open Thread with no `kind` at all — the write-time refusal (open_thread's own MCP
-    # tool) stops this going forward; this is the standing audit that catches anything
-    # that slipped past it (an internal caller, a pre-law row migration 0060 hasn't
-    # reached yet). Never a REPAIR — reclassify_thread is the mind's own act.
-    kindless = await pool.fetch(
-        "SELECT o.canonical, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS summary "
-        "FROM objects o "
-        "WHERE o.type='Thread' AND o.status='active' "
-        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "  AND NOT EXISTS (SELECT 1 FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='kind')")
-    land("kindless-open-thread", "warn", [
-        {"subject": r["canonical"],
-         "detail": f"open with no kind at all — {(r['summary'] or '')[:120]!r}; "
-                   "reclassify_thread(kind=...) is the fix, never a silent default"}
-        for r in kindless])
+        # KINDLESS-OPEN-THREAD (thread b5ae6773, #203's write-time classification laws): an
+        # open Thread with no `kind` at all — the write-time refusal (open_thread's own MCP
+        # tool) stops this going forward; this is the standing audit that catches anything
+        # that slipped past it (an internal caller, a pre-law row migration 0060 hasn't
+        # reached yet). Never a REPAIR — reclassify_thread is the mind's own act.
+        kindless = await pool.fetch(
+            "SELECT o.canonical, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AS summary "
+            "FROM objects o "
+            "WHERE o.type='Thread' AND o.status='active' "
+            "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='status' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "  AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='kind')")
+        land("kindless-open-thread", "warn", [
+            {"subject": r["canonical"],
+             "detail": f"open with no kind at all — {(r['summary'] or '')[:120]!r}; "
+                       "reclassify_thread(kind=...) is the fix, never a silent default"}
+            for r in kindless])
 
-    # UNRESOLVABLE-OWNER (thread b5ae6773, same law's other half): an open Thread's
-    # `owner` that resolves to neither an active Seat nor the literal 'operator' — a
-    # bare handle nobody holds, a dead agent id, a project name with no chartered
-    # coordinator. `resolve_owner_seat` is the SAME function migration 0060 uses to
-    # backfill the existing stock, so a row this check clears is a row the migration
-    # would also have accepted.
-    from src.orchestrator.owner_normalization import resolve_owner_seat
+        # UNRESOLVABLE-OWNER (thread b5ae6773, same law's other half): an open Thread's
+        # `owner` that resolves to neither an active Seat nor the literal 'operator' — a
+        # bare handle nobody holds, a dead agent id, a project name with no chartered
+        # coordinator. `resolve_owner_seat` is the SAME function migration 0060 uses to
+        # backfill the existing stock, so a row this check clears is a row the migration
+        # would also have accepted.
+        from src.orchestrator.owner_normalization import resolve_owner_seat
 
-    owned = await pool.fetch(
-        "SELECT o.canonical, "
-        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS owner "
-        "FROM objects o "
-        "WHERE o.type='Thread' AND o.status='active' "
-        "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='status' "
-        "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
-        "  AND EXISTS (SELECT 1 FROM current_assertions a "
-        "   WHERE a.object_id=o.id AND a.name='owner')")
-    bad_owner: list[dict[str, Any]] = []
-    for r in owned:
-        owner_val = r["owner"]
-        if not owner_val:
-            continue
-        if await resolve_owner_seat(pool, owner_val) is None:
-            bad_owner.append({
-                "subject": r["canonical"],
-                "detail": f"owner {owner_val!r} resolves to no active seat or "
-                         "'operator' — a bare handle nobody holds, a dead agent id, "
-                         "or a project with no chartered coordinator seat",
-            })
-    land("unresolvable-owner", "warn", bad_owner)
+        owned = await pool.fetch(
+            "SELECT o.canonical, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+            "   AND a.name='owner' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "   AS owner "
+            "FROM objects o "
+            "WHERE o.type='Thread' AND o.status='active' "
+            "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='status' "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
+            "  AND EXISTS (SELECT 1 FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name='owner')")
+        bad_owner: list[dict[str, Any]] = []
+        for r in owned:
+            owner_val = r["owner"]
+            if not owner_val:
+                continue
+            if await resolve_owner_seat(pool, owner_val) is None:
+                bad_owner.append({
+                    "subject": r["canonical"],
+                    "detail": f"owner {owner_val!r} resolves to no active seat or "
+                             "'operator' — a bare handle nobody holds, a dead agent id, "
+                             "or a project with no chartered coordinator seat",
+                })
+        land("unresolvable-owner", "warn", bad_owner)
 
-    # ZERO-RECIPIENT-DM (thread 9d1d41c8, folded into wave 8's fleet-hygiene work —
-    # Thoth's own follow-up on 24f52959: "add a read-only graph_lint audit for 'DMs
-    # with zero recipient rows'"): a DM (fleet_messages.to_agent IS NOT NULL) with NO
-    # message_recipients row at all — nobody was ever registered to read it, the exact
-    # silent-loss shape 24f52959 fixed ONE cause of (a seat's own agent:seat-<hex>
-    # placeholder resolving to a dead lineage instead of the seat). A project BROADCAST
-    # (to_agent IS NULL) is excluded — every agent in the project is its own implicit
-    # recipient, so a broadcast legitimately mints no message_recipients row until
-    # someone actually reads it; only a DM's own to_agent promises a specific reader.
-    # Read-only census, never a repair — resending is a mind's own act, same doctrine
-    # every other check in this function holds to. `zero_recipient_dm_rows` (mailbox.py)
-    # is the ONE place this query lives — the mechanical backlog closer
-    # (scripts/close_zero_recipient_dm_backlog.py, wave 13 item 1) acts on the identical
-    # rows this check itself reports, never a second query that could drift.
-    from src.orchestrator.mailbox import zero_recipient_dm_rows
+        # ZERO-RECIPIENT-DM (thread 9d1d41c8, folded into wave 8's fleet-hygiene work —
+        # Thoth's own follow-up on 24f52959: "add a read-only graph_lint audit for 'DMs
+        # with zero recipient rows'"): a DM (fleet_messages.to_agent IS NOT NULL) with NO
+        # message_recipients row at all — nobody was ever registered to read it, the exact
+        # silent-loss shape 24f52959 fixed ONE cause of (a seat's own agent:seat-<hex>
+        # placeholder resolving to a dead lineage instead of the seat). A project BROADCAST
+        # (to_agent IS NULL) is excluded — every agent in the project is its own implicit
+        # recipient, so a broadcast legitimately mints no message_recipients row until
+        # someone actually reads it; only a DM's own to_agent promises a specific reader.
+        # Read-only census, never a repair — resending is a mind's own act, same doctrine
+        # every other check in this function holds to. `zero_recipient_dm_rows` (mailbox.py)
+        # is the ONE place this query lives — the mechanical backlog closer
+        # (scripts/close_zero_recipient_dm_backlog.py, wave 13 item 1) acts on the identical
+        # rows this check itself reports, never a second query that could drift.
+        from src.orchestrator.mailbox import zero_recipient_dm_rows
 
-    zero_recip = await zero_recipient_dm_rows(pool)
-    land("zero-recipient-dm", "warn", [
-        {"subject": r["to_agent"],
-         "detail": f"DM #{r['id']} from {r['from_agent']} to {r['to_agent']} "
-                   f"({r['created_at'].isoformat()}) has NO message_recipients row — "
-                   "nobody was ever registered to read it; resend by handle if it "
-                   "still matters"}
-        for r in zero_recip])
+        zero_recip = await zero_recipient_dm_rows(pool)
+        land("zero-recipient-dm", "warn", [
+            {"subject": r["to_agent"],
+             "detail": f"DM #{r['id']} from {r['from_agent']} to {r['to_agent']} "
+                       f"({r['created_at'].isoformat()}) has NO message_recipients row — "
+                       "nobody was ever registered to read it; resend by handle if it "
+                       "still matters"}
+            for r in zero_recip])
 
-    # ORPHAN — THE ORPHAN LAWS item 1 (operator's word, wave 15, Thoth DM 8841): every
-    # active object with no live link at all, Type nodes excluded, an ACKNOWLEDGED
-    # disconnection (a live `derivation_abstained_*` record) named on each finding rather
-    # than left indistinguishable from one nobody has ever looked at. `orphan_by_type`/
-    # `orphan_abstained_total` carry the by-type rollup this check's own findings can't
-    # (one row per OBJECT, same shape every other check here already uses) — the exact
-    # numbers preflight's own weekly line reads, one derivation shared, not two.
-    orphans = await orphan_census(pool)
-    land("orphan", "warn", [
-        {"subject": r["canonical"],
-         "detail": f"type={r['type']}, no live link at all" + (
-             " (a derivation_abstained record already explains this — expected, not "
-             "unexamined)" if r["abstained"] else " — never linked, never abstained; "
-             "genuinely unexamined")}
-        for r in orphans["rows"]])
+        # ORPHAN — THE ORPHAN LAWS item 1 (operator's word, wave 15, Thoth DM 8841): every
+        # active object with no live link at all, Type nodes excluded, an ACKNOWLEDGED
+        # disconnection (a live `derivation_abstained_*` record) named on each finding rather
+        # than left indistinguishable from one nobody has ever looked at. `orphan_by_type`/
+        # `orphan_abstained_total` carry the by-type rollup this check's own findings can't
+        # (one row per OBJECT, same shape every other check here already uses) — the exact
+        # numbers preflight's own weekly line reads, one derivation shared, not two.
+        orphan_census_result = await orphan_census(pool)
+        land("orphan", "warn", [
+            {"subject": r["canonical"],
+             "detail": f"type={r['type']}, no live link at all" + (
+                 " (a derivation_abstained record already explains this — expected, not "
+                 "unexamined)" if r["abstained"] else " — never linked, never abstained; "
+                 "genuinely unexamined")}
+            for r in orphan_census_result["rows"]])
 
-    # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
-    # active Thread whose newest note post-dates its own last summary touch — a false
-    # headline the fleet has already disproved but not yet corrected on the record.
-    contested = await contested_summary_audit(pool)
-    land("contested-summary", "warn", [
-        {"subject": r["canonical"],
-         "detail": "a note newer than this thread's own last summary correction "
-                   "disputes it — correct_summary or annotate(corrected_summary=) to "
-                   "clear it"}
-        for r in contested["rows"]])
+        # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
+        # active Thread whose newest note post-dates its own last summary touch — a false
+        # headline the fleet has already disproved but not yet corrected on the record.
+        contested = await contested_summary_audit(pool)
+        land("contested-summary", "warn", [
+            {"subject": r["canonical"],
+             "detail": "a note newer than this thread's own last summary correction "
+                       "disputes it — correct_summary or annotate(corrected_summary=) to "
+                       "clear it"}
+            for r in contested["rows"]])
+    except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
+        # other: a genuinely distinct could-not-evaluate state (ruling on thread
+        # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call
+        # crashing and losing every check's findings, or a broken check silently
+        # reading as counts[check]==0 (a clean pass). Every check already landed
+        # before the exception keeps its real findings; every check that never
+        # reached land() is named here instead of just vanishing from the response.
+        reason = f"{type(exc).__name__}: {exc}"
+        for _check_name in _LINT_CHECK_NAMES:
+            if _check_name not in counts:
+                could_not_evaluate[_check_name] = reason
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
@@ -2563,9 +2621,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "severity": severity_by_check,
         "counts_by_severity": counts_by_severity,
         "clean": sorted(c for c, n in counts.items() if n == 0),
+        **({"could_not_evaluate": could_not_evaluate} if could_not_evaluate else {}),
         **({"capped": capped, "note": note} if capped else {}),
-        "orphan_by_type": orphans["by_type"],
-        "orphan_abstained_total": orphans["abstained_total"],
+        "orphan_by_type": orphan_census_result["by_type"],
+        "orphan_abstained_total": orphan_census_result["abstained_total"],
         "ran_at": now.isoformat(),
         "discipline": "report-only — the lint never writes (rule #7); "
                       "findings are testimony, not verdicts",
@@ -3513,10 +3572,12 @@ async def _fn_overhead(
     try:
         telemetry = await TelemetryStore(pool).summary()
     except Exception:  # noqa: BLE001 — see above: unavailable, not silent — a PARTIAL
-        # failure (totals/top_sessions above are fine), so this nests {"error": ...} on
-        # just this sub-field rather than discarding real data the way the outer except
-        # does (thread 02e0ab9c/6190)
-        out["telemetry"] = {"error": "retained-telemetry data unavailable"}
+        # failure (totals/top_sessions above are fine), so this nests the reserved
+        # unavailable marker on just this sub-field rather than discarding real data the
+        # way the outer except does (thread 02e0ab9c/6190; marker itself thread 04c651ce
+        # item 2, msg 9123 — was a plain {"error": ...}, structurally indistinguishable
+        # from a real field of that shape to a programmatic reader)
+        out["telemetry"] = _unavailable("retained-telemetry data unavailable")
     else:
         out["telemetry"] = (
             telemetry if telemetry is not None

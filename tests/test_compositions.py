@@ -1463,6 +1463,27 @@ async def test_overhead_degrades_honestly_on_a_pool_failure() -> None:
     assert data == {"error": "overhead data unavailable"}
 
 
+async def test_overhead_telemetry_partial_failure_carries_the_reserved_unavailable_marker(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 04c651ce item 2 (Thoth dispatch msg 9123): totals/top_sessions succeed, only
+    telemetry's own read breaks — a PARTIAL failure, distinguished from the outer
+    connection-failure test above by its `_unavailable` shape, never the fleet-wide
+    `{"error": ...}` refusal idiom (real data sits right beside it in the same result)."""
+    import src.orchestrator.compositions as compositions_mod
+    from src.ingest.telemetry import TelemetryStore
+
+    async def boom(self: TelemetryStore) -> None:
+        raise RuntimeError("telemetry store exploded")
+
+    monkeypatch.setattr(TelemetryStore, "summary", boom)
+
+    data = await compositions_mod._fn_overhead(actions.pool, None, {})
+    assert data["totals"]["sessions"] == 0          # real data, unaffected by the break
+    assert data["telemetry"] == compositions_mod._unavailable(
+        "retained-telemetry data unavailable")
+
+
 async def test_overhead_composition_end_to_end(actions: Actions) -> None:
     await save_composition(actions.pool, "overhead", {"op": "function", "name": "overhead"})
     res = await run_composition(actions.pool, "overhead")
@@ -2550,6 +2571,44 @@ async def test_lint_orphan_excludes_type_nodes(actions: Actions) -> None:
     result = await _fn_lint(actions.pool, None, {})
     assert result["counts"]["orphan"] == 0
     assert "Type" not in result["orphan_by_type"]
+
+
+async def test_lint_a_clean_run_carries_no_could_not_evaluate_key_at_all(
+    actions: Actions,
+) -> None:
+    """A healthy pass — every check actually ran — must not carry `could_not_evaluate`
+    at all (present ONLY when non-empty), so a caller can gate on the key's mere
+    presence rather than checking it's an empty dict."""
+    result = await _fn_lint(actions.pool, None, {})
+    assert "could_not_evaluate" not in result
+
+
+async def test_lint_isolates_one_broken_check_from_every_other(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 04c651ce item 2 (Thoth dispatch msg 9123): a check whose own query breaks
+    must not crash the whole lint call OR silently read as counts[check]==0 (a clean
+    pass) — it lands in `could_not_evaluate` with the real exception as its reason.
+    Every check that already ran before the break (contradiction, first in run order)
+    keeps its real findings; the broken check itself (orphan) AND every check still to
+    come after it (contested-summary, last in run order) are both named — genuinely
+    true, since neither one ever got the chance to run."""
+    import src.orchestrator.compositions as compositions_mod
+
+    async def boom(pool: object) -> None:
+        raise RuntimeError("orphan_census exploded")
+
+    monkeypatch.setattr(compositions_mod, "orphan_census", boom)
+
+    result = await compositions_mod._fn_lint(actions.pool, None, {})
+    assert "contradiction" in result["counts"]        # ran before the break, untouched
+    assert "orphan" not in result["counts"]            # the broken check itself
+    assert "contested-summary" not in result["counts"]  # never reached, after the break
+    assert "orphan_census exploded" in result["could_not_evaluate"]["orphan"]
+    assert "orphan_census exploded" in result["could_not_evaluate"]["contested-summary"]
+    # the epilogue (ran_at/orphan_by_type) must still be safely returned, not a NameError
+    assert result["ran_at"]
+    assert result["orphan_by_type"] == {}
 
 
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
