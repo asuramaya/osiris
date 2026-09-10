@@ -398,6 +398,39 @@ async def test_proposal_telemetry_counts_per_miner_owner_pair(actions: Actions) 
     assert dg["summary"]["proposals_expired"] == 1
 
 
+async def test_proposal_telemetry_reports_by_lane(actions: Actions) -> None:
+    """Wave 16, decision 4d622aee: 'the weekly desk line reports proposals and
+    acceptance per lane' — a lane is `<from object's type>:<link_type>`, read off
+    evidence_pointer, never a new column."""
+    decision_id = await actions.create_or_find_object(
+        "Decision", "decision:digestlane1", "test")
+    thread_id = await actions.create_or_find_object("Thread", "thread:digestlane1", "test")
+
+    async def _mint(status: str, from_id: uuid.UUID, link_type: str) -> None:
+        pid = await actions.create_or_find_object(
+            "Proposal", f"proposal:{uuid.uuid4()}", "abstention")
+        await _prop(actions, pid, "miner", "abstention", "abstention", "derived")
+        await _prop(actions, pid, "owner", "operator", "abstention", "derived")
+        await _prop(actions, pid, "status", status, "abstention", "derived")
+        await _prop(actions, pid, "expires_at",
+                    (datetime.now(UTC) + timedelta(days=14)).isoformat(),
+                    "abstention", "derived")
+        await _prop(actions, pid, "evidence_pointer",
+                    {"from_id": str(from_id), "link_type": link_type}, "abstention", "derived")
+
+    await _mint("accepted", decision_id, "in_repo")
+    await _mint("rejected", decision_id, "in_repo")
+    await _mint("proposed", thread_id, "in_repo")
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    by_lane = {r["lane"]: r for r in dg["proposals"]["by_lane"]}
+    assert by_lane["Decision:in_repo"]["made"] == 2
+    assert by_lane["Decision:in_repo"]["accepted"] == 1
+    assert by_lane["Decision:in_repo"]["rejected"] == 1
+    assert by_lane["Thread:in_repo"]["made"] == 1
+    assert by_lane["Thread:in_repo"]["accepted"] == 0
+
+
 async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
     actions: Actions,
 ) -> None:

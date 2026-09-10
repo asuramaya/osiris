@@ -1861,8 +1861,15 @@ async def link_repo(
 # record_decision's callers pass, never the bare link type this lane already has in hand).
 _REQUIRED_LINK_KIND_TABLE = {
     "repo": "in_repo", "grounds": "grounded_by", "resolves": "answers",
-    "holds": "holds", "works_in": "works_in", "in_repo": "in_repo",
 }
+# WAVE 16 ITEM 5's own fold-in (thread f2c9c4f2, Thoth mail 9078's in_repo KeyError caught
+# during the w121->w122 rebase, c601833): this used to ALSO carry "holds": "holds",
+# "works_in": "works_in", "in_repo": "in_repo" — three identity entries added by hand, one
+# per new confirm_or_confess_link caller, because a caller passing its own real link_type
+# as `kind` (rather than one of the three door-side shorthand words above) got a KeyError
+# unless someone remembered to add it. Both lookup sites below now fall back to treating
+# an unrecognized `kind` AS the link_type itself (`.get(kind, kind)`) — a caller naming its
+# own real link_type directly just works, no hand-added entry, ever again.
 
 
 async def _confess_abstention(
@@ -1890,7 +1897,7 @@ async def _confess_abstention(
     a caller confessing a gap is a declaration, not a deterministic join over facts the
     graph already asserts."""
     for kind in kinds_in_scope:
-        link_type = _REQUIRED_LINK_KIND_TABLE[kind]
+        link_type = _REQUIRED_LINK_KIND_TABLE.get(kind, kind)
         await a.assert_property(
             obj_id, f"derivation_abstained_{link_type}",
             {"link_type": link_type, "candidate_count": 0, "reason": unlinked_because,
@@ -2041,7 +2048,7 @@ async def _enforce_required_links(
         # unlinked_because would take the hatch branch anyway — POISONING the hatch
         # count, the arc's only metric, with writes that never needed it.
         for kind in required:
-            link_type = _REQUIRED_LINK_KIND_TABLE[kind]
+            link_type = _REQUIRED_LINK_KIND_TABLE.get(kind, kind)
             satisfied = await conn.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND type=$2 AND evidence_class=$3 "
                 "LIMIT 1", obj_id, link_type, EvidenceClass.SELF_DECLARED.value)

@@ -180,6 +180,15 @@ class Settings(BaseSettings):
     # buries it: scoped-out transcripts are never marked swept, so widening the scope later
     # lets the orphan reaper drain the interim backlog through the normal licensed lanes.
     osiris_sense_projects: str = ""
+    # THE FIRST MINER (wave 16, decision 4d622aee, operator 2026-09-10: "yes, build and
+    # wire it"): one generic abstention miner, lanes as data. LIVE by the operator's own
+    # explicit choice, not dark like the adversary above — miners stayed off over trust +
+    # infra, and the operator judged both paid down (thread 8dfcd4b1).
+    osiris_abstention_miner_enabled: bool = True
+    # PER-LANE OFF SWITCH, same shape as osiris_sense_projects' own comma/space list: lane
+    # object-type names (e.g. "Decision,Thread") to silence without touching the others —
+    # a bad lane's own candidate-pool query going wrong must never cost the whole miner.
+    osiris_abstention_miner_lanes_off: str = ""
     # THE FREE OBSERVER, and it has its OWN switch on purpose. The transcripts root, read with a
     # `stat()` and nothing else: a session that is alive is WRITING TO ITS TRANSCRIPT whether or
     # not it is talking to us, so liveness is the freshest of (osiris call, transcript write).
