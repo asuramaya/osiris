@@ -1513,6 +1513,23 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
+    """FIX (e), METRON'S MECHANISM REPORT (mail 8890/8921/8922): the fleet-wide number
+    the report itself asked for — "an audit for 'threads whose newest note post-dates
+    the summary' would size it fleet-wide in one query." Every ACTIVE Thread where
+    `CONTESTED_SQL` (capture.py, the one shared definition fixes (b)/(c)/(d) all import)
+    holds. Shared by graph_lint's own 'contested-summary' check and any caller that just
+    wants the number — one derivation, never two drifting copies of the same query."""
+    from src.orchestrator.capture import CONTESTED_SQL
+
+    rows = await pool.fetch(
+        f"SELECT o.id, o.canonical FROM objects o "
+        f"WHERE o.status='active' AND o.type='Thread' AND {CONTESTED_SQL} "
+        "ORDER BY o.canonical")
+    return {"rows": [{"id": r["id"], "canonical": r["canonical"]} for r in rows],
+           "total": len(rows)}
+
+
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
@@ -1570,7 +1587,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     findings/counts, carry the by-type rollup — an object already carrying a durable
     `derivation_abstained_*` record names an ACKNOWLEDGED disconnection, distinct from
     one nobody has ever examined; `orphan_census` is the shared derivation preflight's
-    own weekly line reads too, never a second copy).
+    own weekly line reads too, never a second copy), CONTESTED-SUMMARY (warn: an active
+    Thread whose newest note post-dates its own last summary correction — a headline the
+    fleet has already disproved on the record but not yet fixed; fix (e), Metron's
+    mechanism report, mail 8890/8921/8922 — `contested_summary_audit` is the shared
+    query this check and `CONTESTED_SQL` (capture.py) both anchor on, never a second
+    derivation of "which summary wins, and is it stale").
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -2495,6 +2517,17 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "unexamined)" if r["abstained"] else " — never linked, never abstained; "
              "genuinely unexamined")}
         for r in orphans["rows"]])
+
+    # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
+    # active Thread whose newest note post-dates its own last summary touch — a false
+    # headline the fleet has already disproved but not yet corrected on the record.
+    contested = await contested_summary_audit(pool)
+    land("contested-summary", "warn", [
+        {"subject": r["canonical"],
+         "detail": "a note newer than this thread's own last summary correction "
+                   "disputes it — correct_summary or annotate(corrected_summary=) to "
+                   "clear it"}
+        for r in contested["rows"]])
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
