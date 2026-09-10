@@ -311,6 +311,42 @@ async def test_parallel_lives_is_always_report_only(actions: Actions) -> None:
     assert "never auto-fold" in rows[0]["rule"]
 
 
+async def test_report_half_healed_phantom_never_reasserts_an_already_open_thread(
+    actions: Actions,
+) -> None:
+    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
+    `_report_half_healed_phantom` used to call `open_thread` on EVERY sweep, live-measured
+    at 1,119 identical kind/summary/owner/status rows on one Thread (the detector runs
+    every 15 minutes, forever, for as long as the condition stays true). A repeat sighting
+    of an ALREADY-OPEN thread must annotate, never re-call open_thread — mirroring the
+    resolved-thread branch this module already carried (thread 672972a2)."""
+    from src.orchestrator.agents import _report_half_healed_phantom
+
+    await _report_half_healed_phantom(
+        actions, phantom="agent:pf500001-ii", grandancestor="agent:pf500001")
+    thread_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Thread' AND canonical LIKE 'thread:%' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=objects.id "
+        "AND a.name='summary' AND a.value #>> '{}' LIKE '%pf500001-ii%')")
+    assert thread_id is not None
+    for prop in ("kind", "summary", "owner", "status"):
+        assert await actions.pool.fetchval(
+            "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2",
+            thread_id, prop) == 1
+
+    await _report_half_healed_phantom(
+        actions, phantom="agent:pf500001-ii", grandancestor="agent:pf500001")
+    for prop in ("kind", "summary", "owner", "status"):
+        assert await actions.pool.fetchval(
+            "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2",
+            thread_id, prop) == 1  # unchanged — no reassertion on the repeat sweep
+    status = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        thread_id)
+    assert status == "open"  # still open — the repeat sweep annotated, never closed/reopened
+
+
 async def test_half_healed_phantom_threads_are_counted_and_never_acted_on(
     actions: Actions,
 ) -> None:

@@ -163,6 +163,30 @@ async def test_link_repo_still_accepts_a_bare_name_and_the_repo_prefixed_form(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 1
 
 
+async def test_mint_or_find_repo_no_ops_when_resolve_repo_keeps_missing_it(
+    actions: Actions,
+) -> None:
+    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
+    `create_or_find_object` is idempotent on canonical, but `_resolve_repo`'s own (narrower,
+    status='active'-gated) lookup can keep missing an object that already exists — every
+    such call then falls into the `if proj is None:` mint branch and used to reassert
+    `name` unconditionally, live-measured at 3,140 identical rows apiece for seven disk-
+    census objects. A repeat call against an already-named object must write nothing."""
+    from src.orchestrator.capture import _mint_or_find_repo
+
+    now = datetime.now(UTC)
+    proj = await _mint_or_find_repo(actions, "missedrepo", now)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", proj) == 1
+
+    # force _resolve_repo to keep missing it (status != 'active') without touching identity
+    await actions.pool.execute("UPDATE objects SET status='merged' WHERE id=$1", proj)
+    again = await _mint_or_find_repo(actions, "missedrepo", now)
+    assert again == proj  # create_or_find_object still finds the SAME object by canonical
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", proj) == 1
+
+
 async def test_record_decision_refuses_a_path_shaped_repo_and_mints_nothing(
     actions: Actions,
 ) -> None:

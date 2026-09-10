@@ -370,14 +370,34 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             except ValueError as e:
                 refused.append({"name": name, "path": str(repo), "reason": str(e)})
                 continue
-            await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
-                                          observed, 0.9, evidence_class=ec)
-            await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
-                                          observed, 0.9, evidence_class=ec)
-            if remote_url:
-                await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
+            # SAME CHECK-CURRENT-FIRST PATTERN as the "known" branch just below (operator
+            # ruling, thread 2a280e07, mail 9240 — "fix the sources"): `_mint_or_find_repo`
+            # finding `obj` here does NOT mean this is genuinely the first sighting — when
+            # `_resolve_repo`'s own (narrower) lookup keeps missing an object that already
+            # exists under this exact canonical, this branch runs on EVERY census sweep for
+            # it, live-measured at 3,140 identical rows apiece across discovered/on_disk_
+            # path/remote_url for seven objects. Checked once per property so a repeat
+            # sweep of an already-discovered object writes nothing.
+            discovered_current = await actions.pool.fetchval(
+                "SELECT 1 FROM current_assertions WHERE object_id=$1 "
+                "AND name='discovered' AND source_id='disk-census' LIMIT 1", obj)
+            if not discovered_current:
+                await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
                                               observed, 0.9, evidence_class=ec)
-                remoted.append(name)
+            current_path = await actions.pool.fetchval(
+                "SELECT a.value #>> '{}' FROM current_assertions a "
+                "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", obj)
+            if current_path != str(repo):
+                await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
+                                              observed, 0.9, evidence_class=ec)
+            if remote_url:
+                current_remote = await actions.pool.fetchval(
+                    "SELECT a.value #>> '{}' FROM current_assertions a "
+                    "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", obj)
+                if current_remote != remote_url:
+                    await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
+                                                  observed, 0.9, evidence_class=ec)
+                    remoted.append(name)
             minted.append(name)
             continue
         known += 1

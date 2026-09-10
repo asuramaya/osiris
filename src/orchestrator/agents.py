@@ -2345,8 +2345,15 @@ async def _report_half_healed_phantom(
     STILL PRESENT is real and worth saying — but re-opening a thread a human already closed
     is not this detector's call. If the thread already exists and currently reads
     status='resolved', this ANNOTATES it with the still-present sighting instead of calling
-    open_thread at all; otherwise (never seen before, or still open from an earlier sweep)
-    behaves exactly as before."""
+    open_thread at all.
+
+    STILL-OPEN GETS THE SAME TREATMENT (operator ruling on thread 2a280e07, mail 9240 —
+    "fix the sources"): a thread already open from an earlier sweep needs no re-write
+    either — kind/summary/owner/status were all identical every 15 minutes for the live
+    specimen this was measured from (1,119 identical rows on one Thread, thread 2a280e07's
+    own live count). Only a genuinely NEW sighting (no Thread canon exists yet) calls
+    open_thread at all now; every repeat sweep of an already-open or already-resolved
+    Thread annotates instead — same no-write outcome, still records "still present"."""
     logger.warning(
         "half-healed phantom detected: %s (ancestor %s's succeeded_by never restored)",
         phantom, grandancestor)
@@ -2368,6 +2375,16 @@ async def _report_half_healed_phantom(
             f"still present at {datetime.now(UTC).isoformat()}: {grandancestor}'s "
             f"succeeded_by remains unwound past {phantom}. Resolved once already — "
             "re-opening it is a human's call, not this detector's.",
+            source=_HALF_HEAL_SRC)
+        return
+    if current_status is not None:
+        # already open from an earlier sweep — nothing has changed, annotate rather than
+        # reassert kind/summary/owner/status identically on every 15-minute tick
+        await annotate_thread(
+            actions, canon,
+            f"still present at {datetime.now(UTC).isoformat()}: {grandancestor}'s "
+            f"succeeded_by remains unwound past {phantom}. Already open from an earlier "
+            "sweep.",
             source=_HALF_HEAL_SRC)
         return
     await open_thread(actions, summary, kind="obligation", owner="operator",
