@@ -589,6 +589,226 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             it["display_label"] = disp[str(it["id"])]
         return items
 
+    @app.get("/objects/edge_counts")
+    async def object_edge_counts(
+        ids: str, p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, int]:
+        """WAVE A item 7 (graph visualizer, thread 8839): a batched edge-count lookup for
+        Browse's own tiles (an "N links" badge) — kept as its OWN endpoint rather than a
+        per-row COUNT joined into `list_objects`'s already-complex query, which the browse
+        surface calls for up to 2000 rows at once; this is a second, cheap, opt-in fetch
+        the client makes for whatever page it actually rendered. `ids` is a comma-separated
+        list of object uuids; blank/malformed entries are skipped, never a 400 — a stray
+        bad id in a client-built list shouldn't blank the whole badge row. UNION ALL over
+        both `links_from_idx`/`links_to_idx` (migration 0001) rather than a single OR
+        query, so each half stays index-only."""
+        id_list: list[uuid.UUID] = []
+        for raw in ids.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                id_list.append(uuid.UUID(raw))
+            except ValueError:
+                continue
+        if not id_list:
+            return {}
+        rows = await p.fetch(
+            "SELECT node, count(*) AS n FROM ("
+            "  SELECT from_id AS node FROM links WHERE from_id = ANY($1::uuid[]) "
+            "    AND (valid_until IS NULL OR valid_until > now())"
+            "  UNION ALL"
+            "  SELECT to_id AS node FROM links WHERE to_id = ANY($1::uuid[]) "
+            "    AND (valid_until IS NULL OR valid_until > now())"
+            ") x GROUP BY node",
+            id_list,
+        )
+        return {str(r["node"]): int(r["n"]) for r in rows}
+
+    @app.get("/objects/viewport")
+    async def object_viewport(
+        minx: float, maxx: float, miny: float, maxy: float,
+        exclude: str | None = None,
+        limit: int = Query(2000, le=5000),
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, list[dict[str, Any]]]:
+        """WAVE B item 2 (graph visualizer, thread 8839): nodes + edges inside a bounding
+        box, read straight off graph_x/graph_y (wave B item 1's own layout heartbeat) --
+        the full-view renderer's OWN pull, never a client-side force layout over the whole
+        graph. An unpositioned object (the heartbeat hasn't reached it yet) simply isn't
+        visible yet -- it appears once positioned, never guessed at.
+
+        `exclude` (a comma-separated id list, "delta on pan"): skip nodes the caller
+        already holds, so panning a few pixels re-fetches only what's newly exposed at the
+        strip's edge instead of the whole viewport every time. Edges are returned only
+        among the returned node set (both endpoints must be in THIS response, or already
+        on the caller's own side per `exclude` -- an edge to something off-screen is drawn
+        by the caller once that far node itself arrives, never guessed at here)."""
+        excl_ids: list[uuid.UUID] = []
+        if exclude:
+            for raw in exclude.split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    excl_ids.append(uuid.UUID(raw))
+                except ValueError:
+                    continue
+        rows = await p.fetch(
+            "SELECT o.id, o.type, o.canonical, gx.v AS x, gy.v AS y FROM objects o "
+            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+            "      WHERE name='graph_x') gx ON gx.object_id = o.id "
+            "JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+            "      WHERE name='graph_y') gy ON gy.object_id = o.id "
+            "WHERE o.status NOT IN ('archived','merged','retired') "
+            "  AND gx.v BETWEEN $1 AND $2 AND gy.v BETWEEN $3 AND $4 "
+            "  AND NOT (o.id = ANY($5::uuid[])) "
+            "LIMIT $6",
+            minx, maxx, miny, maxy, excl_ids, limit,
+        )
+        ids = [r["id"] for r in rows]
+        props_by_id = await fetch_label_props(p, ids)
+        nodes = [
+            {"id": str(r["id"]), "type": r["type"],
+             "label": resolve_label(r["type"], props_by_id.get(r["id"], {}),
+                                    r["canonical"]).label,
+             "x": r["x"], "y": r["y"]}
+            for r in rows
+        ]
+        edge_rows = await p.fetch(
+            "SELECT from_id, to_id, type FROM links "
+            "WHERE from_id = ANY($1::uuid[]) AND to_id = ANY($1::uuid[])",
+            ids,
+        ) if ids else []
+        edges = [{"source": str(r["from_id"]), "target": str(r["to_id"]), "type": r["type"]}
+                for r in edge_rows]
+        return {"nodes": nodes, "edges": edges}
+
+    # WAVE B item 3 (graph visualizer, thread 8839): the two coarser LEVELS OF DETAIL above
+    # item 2's own individual-node viewport -- level 0 (supernodes per project) and level 1
+    # (clusters by type inside one project). Deliberately NOT heartbeat-precomputed like
+    # item 1's own per-object positions: the population these aggregate over is projects
+    # and types (bounded at a few hundred rows), not the 41k-object graph itself, so a plain
+    # GROUP BY on every request is already cheap and genuinely mechanical (no hand-run
+    # step) -- the "precomputed" concern item 1 exists to solve (an O(n^2) relaxation over
+    # 41k nodes per request) simply doesn't apply to a count/avg rollup over a few hundred.
+    # `_LIVE_LINK_COUNTS` is shared by both: one full-links-table aggregate rather than a
+    # correlated per-row EXISTS subquery, so "orphan" (zero live links -- graph_lint/
+    # triage's own bucket definition, compositions.py's `p.link_count = 0`) stays a single
+    # join, never N queries.
+    _LIVE_LINK_COUNTS = (
+        "(SELECT node, count(*) AS n FROM ("
+        "  SELECT from_id AS node FROM links WHERE valid_until IS NULL OR valid_until > now()"
+        "  UNION ALL"
+        "  SELECT to_id AS node FROM links WHERE valid_until IS NULL OR valid_until > now()"
+        ") x GROUP BY node)"
+    )
+    _GRAPH_POS_JOIN = (
+        "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+        "  WHERE name='graph_x') gx ON gx.object_id = o.id "
+        "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v FROM current_assertions "
+        "  WHERE name='graph_y') gy ON gy.object_id = o.id "
+    )
+
+    @app.get("/graph/supernodes")
+    async def graph_supernodes(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """LOD level 0: one supernode per active project (count, orphan count, and a
+        position -- the centroid of its already-positioned members, so a supernode lands
+        somewhere real rather than an arbitrary layout of its own), plus the weighted
+        inter-project edges (how many live links cross from one project's members to
+        another's) and an `unfiled` bucket (objects with no in_repo link to any project) --
+        orphans distinct at EVERY level, never folded into a bare total."""
+        rows = await p.fetch(
+            f"WITH lc AS {_LIVE_LINK_COUNTS}, "
+            "proj_members AS ("
+            "  SELECT p.id AS project_id, p.canonical AS project_canonical, o.id AS object_id "
+            "  FROM objects p "
+            "  JOIN links l ON l.to_id = p.id AND l.type='in_repo' "
+            "    AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "  JOIN objects o ON o.id = l.from_id AND o.status NOT IN "
+            "    ('archived','merged','retired') "
+            "  WHERE p.type='SoftwareProject' AND p.status='active') "
+            "SELECT pm.project_id, pm.project_canonical, count(*) AS n, "
+            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans, "
+            "  avg(gx.v) AS x, avg(gy.v) AS y "
+            "FROM proj_members pm "
+            "LEFT JOIN lc ON lc.node = pm.object_id "
+            "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v "
+            "  FROM current_assertions WHERE name='graph_x') gx ON gx.object_id = pm.object_id "
+            "LEFT JOIN (SELECT object_id, (value #>> '{}')::float8 AS v "
+            "  FROM current_assertions WHERE name='graph_y') gy ON gy.object_id = pm.object_id "
+            "GROUP BY pm.project_id, pm.project_canonical"
+        )
+        supernodes = [
+            {"id": str(r["project_id"]), "label": r["project_canonical"],
+             "count": int(r["n"]), "orphans": int(r["orphans"]),
+             "x": r["x"], "y": r["y"]}
+            for r in rows
+        ]
+        edge_rows = await p.fetch(
+            "WITH proj_of AS ("
+            "  SELECT o.id AS object_id, p.id AS project_id FROM objects o "
+            "  JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+            "    AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "  JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            "    AND p.status='active') "
+            "SELECT LEAST(a.project_id, b.project_id) AS p1, "
+            "  GREATEST(a.project_id, b.project_id) AS p2, count(*) AS weight "
+            "FROM links l "
+            "JOIN proj_of a ON a.object_id = l.from_id "
+            "JOIN proj_of b ON b.object_id = l.to_id "
+            "WHERE a.project_id <> b.project_id "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "GROUP BY LEAST(a.project_id,b.project_id), GREATEST(a.project_id,b.project_id)"
+        )
+        project_edges = [
+            {"source": str(r["p1"]), "target": str(r["p2"]), "weight": int(r["weight"])}
+            for r in edge_rows
+        ]
+        unfiled = await p.fetchrow(
+            f"WITH lc AS {_LIVE_LINK_COUNTS} "
+            "SELECT count(*) AS n, "
+            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans "
+            "FROM objects o LEFT JOIN lc ON lc.node = o.id "
+            "WHERE o.status NOT IN ('archived','merged','retired') "
+            "  AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+            "    AND l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()))"
+        )
+        return {
+            "supernodes": supernodes, "project_edges": project_edges,
+            "unfiled": {"count": int(unfiled["n"]), "orphans": int(unfiled["orphans"])},
+        }
+
+    @app.get("/graph/clusters")
+    async def graph_clusters(
+        project: str, p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, list[dict[str, Any]]]:
+        """LOD level 1: one cluster per object TYPE inside one project (count, orphan
+        count, centroid position) -- the zoomed-IN half of the same two-tier law
+        graph_supernodes serves for level 0. `project` is the project's own canonical
+        (e.g. "repo:osiris" or bare "osiris" -- both resolve)."""
+        canon = project if ":" in project else f"repo:{project}"
+        rows = await p.fetch(
+            f"WITH lc AS {_LIVE_LINK_COUNTS} "
+            "SELECT o.type, count(*) AS n, "
+            "  count(*) FILTER (WHERE COALESCE(lc.n,0)=0) AS orphans, "
+            "  avg(gx.v) AS x, avg(gy.v) AS y "
+            "FROM objects o "
+            "JOIN links l ON l.from_id=o.id AND l.type='in_repo' "
+            "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+            f"  AND (p.canonical=$1 OR p.canonical=$2) {_GRAPH_POS_JOIN}"
+            "LEFT JOIN lc ON lc.node = o.id "
+            "WHERE o.status NOT IN ('archived','merged','retired') "
+            "GROUP BY o.type",
+            canon, project,
+        )
+        return {"clusters": [
+            {"type": r["type"], "count": int(r["n"]), "orphans": int(r["orphans"]),
+             "x": r["x"], "y": r["y"]}
+            for r in rows
+        ]}
+
     @app.get("/objects/{object_id}")
     async def get_object(
         object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
@@ -793,10 +1013,38 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             list(seen),
         )
         node_props = await fetch_label_props(p, [r["id"] for r in node_rows])
+        # WAVE A item 4 (graph visualizer, thread 8839): agents painted with the fleet
+        # view's own live/idle/dead states, not a bare type color — the same LIVE_SECS
+        # window seats.py's own occupancy read uses (900s), plus an IDLE tier (seen in the
+        # last day) so a body that stepped away reads differently from one that never will
+        # again. Looked up by CANONICAL (agent:<id>), the same string agent_mounts.agent_id
+        # stores — an Agent object's `id` (uuid) is never what a mount row keys on.
+        agent_ids = [r["canonical"] for r in node_rows if r["type"] == "Agent" and r["canonical"]]
+        agent_state: dict[str, str] = {}
+        if agent_ids:
+            state_rows = await p.fetch(
+                "SELECT agent_id, max(last_seen) AS last_seen FROM agent_mounts "
+                "WHERE agent_id = ANY($1::text[]) GROUP BY agent_id",
+                agent_ids,
+            )
+            now = datetime.now(UTC)
+            for r in state_rows:
+                last_seen = r["last_seen"]
+                if last_seen is None:
+                    state = "dead"
+                elif (now - last_seen).total_seconds() <= 900:
+                    state = "live"
+                elif (now - last_seen).total_seconds() <= 86400:
+                    state = "idle"
+                else:
+                    state = "dead"
+                agent_state[r["agent_id"]] = state
         nodes = [
             {"id": str(r["id"]), "type": r["type"],
              "label": resolve_label(r["type"], node_props.get(r["id"], {}),
-                                    r["canonical"]).label}
+                                    r["canonical"]).label,
+             **({"agent_state": agent_state.get(r["canonical"], "dead")}
+                if r["type"] == "Agent" else {})}
             for r in node_rows
         ]
         edge_rows = await p.fetch(

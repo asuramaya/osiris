@@ -23,6 +23,27 @@ function ensureBoard() {
   return board;
 }
 
+// WAVE B (thread 8839): the Atlas — sigma.js's own full-graph renderer, a separate
+// instance from the cytoscape board above (never the same object; the two libraries don't
+// share a canvas). `onDrillDown` names what a click just did, purely for the level badge —
+// the actual navigation (which fetch runs next) lives inside makeAtlas itself.
+var atlas = null;
+function ensureAtlas() {
+  if (!atlas && typeof Osiris !== "undefined" && Osiris.makeAtlas) {
+    atlas = Osiris.makeAtlas($("sigma-atlas"), function(kind) { setAtlasLevelBadge(kind === "object" ? "nodes" : kind); });
+  }
+  return atlas;
+}
+function setAtlasLevelBadge(level) {
+  var el = $('atlas-level-badge');
+  if (el) el.textContent = level === 'supernodes' ? 'projects' : (level === 'clusters' ? 'types' : 'objects');
+}
+function atlasZoomOut() {
+  var a = ensureAtlas(); if (!a) return;
+  a.zoomOut();
+  setAtlasLevelBadge(a.level());
+}
+
 function setStatus(s) { $("status").textContent = s; }
 function showBoard() { $("stage").classList.remove("panel"); }
 function showPanel() { $('stage').classList.add('panel'); }
@@ -32,9 +53,18 @@ async function switchSurface(surface) {
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
+  // WAVE B (thread 8839): Atlas is a THIRD stage besides #cy (the neighbourhood board) and
+  // #result (table/mailbox/projects panels) — its own visibility toggle, never routed
+  // through showBoard()/showPanel(), which only ever know about the other two.
+  $('sigma-atlas').style.display = surface === 'atlas' ? 'block' : 'none';
   if (surface === 'browse') {
     $('entity-taxonomy-bar').style.display = 'flex'; $('viewsw').style.display = '';
     if (!SET.length) await loadObjectSet(); renderEntityExplorer();
+  } else if (surface === 'atlas') {
+    $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
+    $('stage').classList.remove('panel');
+    (ensureAtlas()).loadSupernodes();
+    setAtlasLevelBadge('supernodes');
   } else {
     $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
     (ensureBoard()).clear(); showBoard();
@@ -201,6 +231,28 @@ async function loadObjectSet() {
   // 2000). A failed/slow counts fetch degrades to null, and the toolbar falls back to
   // the old SET-derived count rather than showing nothing.
   TRUE_COUNTS = await fetch(objectCountsUrl()).then(r => r.json()).catch(() => null);
+  loadEdgeCounts(SET.map(function(o){ return o.id; }));
+}
+// WAVE A item 7 (thread 8839): Browse tiles carry an edge-count badge — fetched separately
+// from the object list itself (a per-row COUNT joined into that already-complex query would
+// cost every one of its many callers, not just Browse), batched in chunks small enough to
+// stay a sane query-string length, and rendered as soon as each chunk lands rather than
+// blocking the table/board's own first paint on it.
+var EDGE_COUNTS = {};
+async function loadEdgeCounts(ids) {
+  var CHUNK = 150;
+  for (var i = 0; i < ids.length; i += CHUNK) {
+    var chunk = ids.slice(i, i + CHUNK);
+    try {
+      var counts = await fetch('/objects/edge_counts?ids=' + chunk.join(',')).then(function(r){return r.json();});
+      Object.assign(EDGE_COUNTS, counts);
+      if (ACTIVE_SURFACE === 'browse') renderEntityExplorerStage();
+    } catch(e) {}
+  }
+}
+function edgeCountBadge(id) {
+  var n = EDGE_COUNTS[id];
+  return n ? '<span class="ee-edge-badge" title="' + n + ' link(s)">' + n + '</span>' : '';
 }
 async function loadMoreObjects() {
   if (OBJECTS_LOADING_MORE || !OBJECTS_HAS_MORE || !SET.length) return;
@@ -339,7 +391,7 @@ function renderTableRow(o) {
   var tColor = '#6e7681';
   try { tColor = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
   return '<tr class="ee-row' + (isSel ? ' sel' : '') + (isExp ? ' expanded' : '') + '" onclick="inspectAndToggleRow(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')">' +
-    '<td><span class="ee-type-pill" style="border-color:' + tColor + '40;color:' + tColor + ';background:' + tColor + '18"><span class="dot" style="background:' + tColor + '"></span> ' + esc(o.type) + '</span></td>' +
+    '<td><span class="ee-type-pill" style="border-color:' + tColor + '40;color:' + tColor + ';background:' + tColor + '18"><span class="dot" style="background:' + tColor + '"></span> ' + esc(o.type) + '</span> ' + edgeCountBadge(o.id) + '</td>' +
     '<td>' + renderKey(o) + '</td>' +
     '<td class="ee-summary-cell"><div class="ee-name">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="ee-summary-preview">' + esc(summary) + '</div>' : '') + '</td>' +
     '<td style="color:var(--muted);font-size:11px;font-family:var(--font-mono)">' + esc(dateStr) + '</td>' +
@@ -377,7 +429,7 @@ function renderBoardCard(o) {
   const grade = (p.evidence_class || p.grade || 'self_declared').toLowerCase(), source = p.source_id || p.source_label || p.source || '';
   const isDuty = o.type === 'Thread' && (p.kind === 'obligation' || o.status === 'obligation'), statusLabel = isDuty ? 'duty' : (o.status || 'active');
   var cc = '#6e7681'; try { cc = Osiris.ty(o.type).c || '#6e7681'; } catch(e) {}
-  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type" style="border-color:' + cc + '40;color:' + cc + ';background:' + cc + '18"><span class="dot" style="background:' + cc + '"></span> ' + esc(o.type) + '</span>' + renderKey(o) + '</div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
+  return '<div class="board-card' + (FOCUS === o.id ? ' sel' : '') + '" onclick="inspectOnly(\'' + o.id + '\')" ondblclick="primaryAction(\'' + o.id + '\', \'' + esc(o.type) + '\')"><div class="card-tags-top"><span class="card-tag card-tag-type" style="border-color:' + cc + '40;color:' + cc + ';background:' + cc + '18"><span class="dot" style="background:' + cc + '"></span> ' + esc(o.type) + '</span>' + edgeCountBadge(o.id) + renderKey(o) + '</div><div class="card-main-content"><div class="card-title">' + esc(o.display_label || o.name || summary || o.id) + '</div>' + (summary && summary !== o.name ? '<div class="card-desc">' + esc(summary) + '</div>' : '') + '</div><div class="card-tags-bottom"><span class="card-tag card-tag-status status-' + esc(statusLabel) + '">' + esc(statusLabel) + '</span>' + (dateStr ? '<span class="card-tag card-tag-date">' + esc(dateStr) + '</span>' : '') + (grade ? '<span class="card-tag card-tag-grade grade-' + esc(grade) + '">' + esc(grade.replace(/_/g, ' ')) + '</span>' : '') + (source ? '<span class="card-tag card-tag-source">by ' + esc(source) + '</span>' : '') + '</div></div>';
 }
 
 // ── Mailbox ──────────────────────────────────────────────────────────────────
@@ -478,16 +530,107 @@ function openProjectInBrowse(name) {
 
 
 // ── Focus / Inspect ──────────────────────────────────────────────────────────
-async function focus(id) {
+// WAVE A item 6 (thread 8839): the breadcrumb trail behind focus()'s own navigation —
+// every node a click/search/dbltap brought into focus, in order, deduped only when it
+// repeats the CURRENT tail (revisiting an older crumb truncates forward, browser-history
+// style, rather than growing a trail that loops on itself).
+let BREADCRUMBS = [];
+function pushBreadcrumb(id, label) {
+  if (BREADCRUMBS.length && BREADCRUMBS[BREADCRUMBS.length - 1].id === id) return;
+  BREADCRUMBS.push({ id, label: label || id.slice(0, 8) });
+  if (BREADCRUMBS.length > 12) BREADCRUMBS = BREADCRUMBS.slice(-12);
+  renderBreadcrumbs();
+}
+function renderBreadcrumbs() {
+  var el = $('graph-breadcrumbs'); if (!el) return;
+  el.innerHTML = BREADCRUMBS.map(function(c, i) {
+    var cur = i === BREADCRUMBS.length - 1;
+    return (i ? '<span class="crumb-sep">/</span>' : '') +
+      '<span class="crumb' + (cur ? ' current' : '') + '" title="' + esc(c.label) + '" onclick="jumpToBreadcrumb(' + i + ')">' + esc(c.label) + '</span>';
+  }).join('');
+}
+function jumpToBreadcrumb(i) {
+  if (i < 0 || i >= BREADCRUMBS.length) return;
+  var target = BREADCRUMBS[i];
+  BREADCRUMBS = BREADCRUMBS.slice(0, i + 1);
+  focus(target.id, true);
+}
+// Escape steps back one crumb (console.js's own keydown handler calls this when the board
+// is the active surface and there's somewhere to step back TO).
+function stepBackBreadcrumb() {
+  if (BREADCRUMBS.length < 2) return false;
+  BREADCRUMBS.pop();
+  focus(BREADCRUMBS[BREADCRUMBS.length - 1].id, true);
+  return true;
+}
+async function focus(id, fromBreadcrumb) {
   FOCUS = id; postConsole({ focused_object_id: id });
   $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
   showBoard(); (ensureBoard()).clear();
   const g = await fetch('/objects/' + id + '/graph?hops=1').then(r => r.json());
   let capped = 0;
   if (g.nodes.length > 29) { capped = g.nodes.length - 1; const keep = new Set([id, ...g.nodes.filter(n => n.id !== id).slice(0, 28).map(n => n.id)]); g.nodes = g.nodes.filter(n => keep.has(n.id)); g.edges = g.edges.filter(e => keep.has(e.source) && keep.has(e.target)); }
-  (ensureBoard()).mergeGraph(g); (ensureBoard()).layout((ensureBoard()).cy.nodes().length > 1); (ensureBoard()).focusNode(id);
+  // WAVE A item 5 (thread 8839): mergeGraph decides layout() for itself now (only an
+  // otherwise-empty board gets one; an already-populated board lands new nodes near their
+  // neighbors instead) — this call site just frames whatever landed, it never re-shuffles it.
+  (ensureBoard()).mergeGraph(g); (ensureBoard()).focusNode(id); (ensureBoard()).fit();
   inspect(id);
+  var self = g.nodes.find(function(n){ return n.id === id; });
+  if (!fromBreadcrumb) pushBreadcrumb(id, self ? self.label : id.slice(0, 8));
   setStatus(capped ? 'Showing 28 of ' + capped + ' connections.' : (ensureBoard()).cy.nodes().length + ' objects on the board.');
+}
+// WAVE A item 6: expand/collapse the CURRENT selection's own one-hop neighborhood WITHOUT
+// clearing the board (focus() always does; this is the additive verb search/inspect use to
+// widen or narrow what's already on screen around one node).
+async function expandFocusOneHop() {
+  if (!FOCUS) { setStatus('Select a node first.'); return; }
+  var added = await (ensureBoard()).expandOneHop(FOCUS);
+  setStatus(added ? 'Expanded: +' + added + ' element(s).' : 'Nothing new to expand.');
+}
+function collapseFocusOneHop() {
+  if (!FOCUS) { setStatus('Select a node first.'); return; }
+  var n = (ensureBoard()).collapseOneHop(FOCUS);
+  setStatus(n ? 'Collapsed ' + n + ' leaf node(s).' : 'Nothing to collapse.');
+}
+// ── Graph search box (item 6) ───────────────────────────────────────────────
+let GRAPH_SEARCH_ITEMS = [], GRAPH_SEARCH_SEL = 0, GRAPH_SEARCH_TIMER = null, GRAPH_SEARCH_TOKEN = 0;
+function graphSearchInput(q) {
+  var dd = $('graph-search-dd'); if (!dd) return;
+  clearTimeout(GRAPH_SEARCH_TIMER);
+  if (!q || !q.trim()) { dd.style.display = 'none'; GRAPH_SEARCH_ITEMS = []; return; }
+  var myToken = ++GRAPH_SEARCH_TOKEN;
+  GRAPH_SEARCH_TIMER = setTimeout(async function() {
+    var hits = [];
+    try {
+      var res = await fetch('/search?q=' + encodeURIComponent(q) + '&limit=8').then(function(r){return r.json();});
+      hits = Array.isArray(res.hits) ? res.hits : (Array.isArray(res) ? res : []);
+    } catch(e) { hits = []; }
+    if (myToken !== GRAPH_SEARCH_TOKEN) return;
+    GRAPH_SEARCH_ITEMS = hits.filter(function(h){ return h && h.id; });
+    GRAPH_SEARCH_SEL = 0;
+    renderGraphSearchList();
+  }, 200);
+}
+function renderGraphSearchList() {
+  var dd = $('graph-search-dd'); if (!dd) return;
+  if (!GRAPH_SEARCH_ITEMS.length) { dd.style.display = 'none'; return; }
+  dd.style.display = 'block';
+  dd.innerHTML = GRAPH_SEARCH_ITEMS.map(function(h, i) {
+    var label = h.display_label || h.label || h.name || h.canonical || h.id;
+    return '<div class="dd-item' + (i === GRAPH_SEARCH_SEL ? ' sel' : '') + '" onclick="pickGraphSearch(' + i + ')"><div class="dd-item-main"><span class="dd-item-name">' + esc(label) + '</span><span class="dd-item-hint">' + esc(h.type || '') + '</span></div></div>';
+  }).join('');
+}
+function pickGraphSearch(i) {
+  var item = GRAPH_SEARCH_ITEMS[i]; if (!item) return;
+  $('graph-search-dd').style.display = 'none'; $('graph-search').value = '';
+  focus(item.id);
+}
+function graphSearchKey(e) {
+  if (!GRAPH_SEARCH_ITEMS.length) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); GRAPH_SEARCH_SEL = Math.min(GRAPH_SEARCH_SEL + 1, GRAPH_SEARCH_ITEMS.length - 1); renderGraphSearchList(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); GRAPH_SEARCH_SEL = Math.max(GRAPH_SEARCH_SEL - 1, 0); renderGraphSearchList(); }
+  else if (e.key === 'Enter') { e.preventDefault(); pickGraphSearch(GRAPH_SEARCH_SEL); }
+  else if (e.key === 'Escape') { $('graph-search-dd').style.display = 'none'; }
 }
 async function inspect(id) {
   FOCUS = id;
@@ -629,7 +772,16 @@ function openPalette() { $('search').focus(); $('global-search-box').classList.a
 async function openOmniSearch(val) { runOmniSearch(val); }
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────────────────
-document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName); if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); } else if (e.key === '/' && !inField) { e.preventDefault(); openPalette(); } else if (e.key === 'Escape') { closeAllDropdowns(); if ($('peek').className.includes('on')) closePeek(); } else if (e.key === '[' && !inField) { e.preventDefault(); toggleLeft(); } else if (e.key === ']' && !inField) { e.preventDefault(); toggleRight(); } });
+document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName); if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); } else if (e.key === '/' && !inField) { e.preventDefault(); openPalette(); } else if (e.key === 'Escape') {
+  // WAVE A item 6: Escape steps back one breadcrumb ONLY when nothing more local already
+  // consumed it (a dropdown, the peek overlay, or the search box's own Escape handler
+  // above) — same "most specific first" order this handler already follows.
+  const hadDropdown = !!document.querySelector('.dd-item') && ['workspace-dropdown','repo-dropdown','omni-dropdown'].some(id => { const el = $(id); return el && el.style.display && el.style.display !== 'none'; });
+  closeAllDropdowns();
+  const hadPeek = $('peek').className.includes('on');
+  if (hadPeek) closePeek();
+  if (!hadDropdown && !hadPeek && ACTIVE_SURFACE === 'browse') stepBackBreadcrumb();
+} else if (e.key === '[' && !inField) { e.preventDefault(); toggleLeft(); } else if (e.key === ']' && !inField) { e.preventDefault(); toggleRight(); } });
 function closePeek() { const o = $('peek'); o.className = 'peek-overlay'; o.innerHTML = ''; }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────

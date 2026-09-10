@@ -166,6 +166,25 @@ const Osiris = (() => {
   }
 
   // ---- the cytoscape board (objects render here) ---------------------------
+  // WAVE A item 1 (operator dispatch, wave 15, thread 8839): board labels are TITLES, not
+  // full text — full text lives only in the side panel's Osiris.objectDetail read (inspect()
+  // already fetches the real object, unabbreviated). Truncated here so a long summary never
+  // crowds the neighborhood it's rendered in.
+  const LABEL_MAX = 40;
+  const truncateLabel = (s) => {
+    s = s || "";
+    return s.length > LABEL_MAX ? s.slice(0, LABEL_MAX - 1) + "…" : s;
+  };
+  // hidden below a zoom threshold (labels are for orientation once you're close enough to
+  // read them, not for a zoomed-out overview where they'd just overlap) — cy.style().update()
+  // on every zoom tick is what makes the style FUNCTION below re-run; a static mapper is only
+  // ever evaluated once per element otherwise.
+  const ZOOM_LABEL_THRESHOLD = 0.45;
+  // WAVE A item 4: node size by degree — a floor for isolated nodes, growing with connection
+  // count, capped so one true supernode can't dwarf the board.
+  const NODE_SIZE_MIN = 26, NODE_SIZE_MAX = 68, NODE_SIZE_PER_DEGREE = 3;
+  const nodeSize = (e) => Math.min(NODE_SIZE_MAX, NODE_SIZE_MIN + e.degree() * NODE_SIZE_PER_DEGREE);
+
   // onFocus(id, deep, type): tap = select (deep=false), double-tap = primary action (deep=true).
   // onCtx(id, type, mouseEvent): right-click = the object's contextual action menu.
   function makeBoard(container, onFocus, onCtx) {
@@ -176,19 +195,52 @@ const Osiris = (() => {
       style: [
         { selector: "node", style: {
           "background-color": (e) => ty(e.data("type")).c, shape: (e) => ty(e.data("type")).s,
-          width: 32, height: 32, "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
-          label: "data(label)", color: "#f0f6fc", "font-size": 11, "font-weight": 600,
+          // WAVE A item 4: size by degree — a hub reads as a hub at a glance, a leaf as a
+          // leaf, without opening the inspector. Degree changes as edges are added/removed,
+          // so this must be a live style FUNCTION (re-run on cy.style().update()), never a
+          // value baked in at add-time.
+          width: (e) => nodeSize(e), height: (e) => nodeSize(e),
+          "border-width": 2, "border-color": "rgba(255,255,255,0.15)",
+          label: (e) => (cy.zoom() < ZOOM_LABEL_THRESHOLD ? "" : truncateLabel(e.data("label"))),
+          color: "#f0f6fc", "font-size": 11, "font-weight": 600,
           "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": 120,
           "text-background-color": "#0d1219", "text-background-opacity": 0.88, "text-background-padding": 3,
           "text-background-shape": "roundrectangle", "min-zoomed-font-size": 6 } },
+        // WAVE A item 4: agents painted with the fleet view's own live/idle/dead states
+        // (agent_state, server-supplied — see app.py's object_graph) as a border ring, laid
+        // over the type-coloured fill so BOTH facts stay visible: what kind of object, and
+        // whether it's a body still breathing. Declared BEFORE node.focus so a SELECTED
+        // agent still shows the blue focus ring, not its own liveness color — the
+        // interaction state always wins over the ambient one.
+        { selector: "node[type='Agent'][agent_state='live']", style: { "border-width": 3, "border-color": "#3fb950" } },
+        { selector: "node[type='Agent'][agent_state='idle']", style: { "border-width": 3, "border-color": "#d29922" } },
+        { selector: "node[type='Agent'][agent_state='dead']", style: { "border-width": 2, "border-color": "#6e7681" } },
         { selector: "node.focus", style: { "border-width": 3, "border-color": "#58a6ff" } },
+        // WAVE A item 2: edge labels OFF by default (a hairball of "spawned_by"/"in_repo"
+        // text under every line was the actual readability problem, not the lines
+        // themselves) — shown only on hover (.edge-hover) or on the selected node's own
+        // incident edges (.edge-focus), both toggled by class, never by re-deriving style.
         { selector: "edge", style: {
           width: 1.5, "line-color": "#2c3744", "target-arrow-color": "#58a6ff", "target-arrow-shape": "triangle",
-          "curve-style": "bezier", "arrow-scale": 0.9, label: "data(type)", "font-size": 9, color: "#8b949e",
+          "curve-style": "bezier", "arrow-scale": 0.9, label: "", "font-size": 9, color: "#8b949e",
           "text-background-color": "#0d1219", "text-background-opacity": 0.9, "text-background-padding": 2,
           "text-rotation": "autorotate", "min-zoomed-font-size": 6 } },
+        { selector: "edge.edge-hover, edge.edge-focus", style: { label: "data(type)", "line-color": "#4a5a6a" } },
+        // WAVE A item 3: a bundle node ("38 spawned_by") stands in for a hub's own
+        // same-type edge group once it passes HUB_BUNDLE_THRESHOLD — square, dashed, so it
+        // reads as a summary rather than a real object.
+        { selector: "node[type='bundle']", style: {
+          "background-color": "#21262d", shape: "round-rectangle", "border-style": "dashed",
+          "border-color": "#8b949e", width: 44, height: 24, "font-size": 10 } },
       ],
     });
+    cy.on("zoom", () => cy.style().update());
+    cy.on("mouseover", "edge", (e) => e.target.addClass("edge-hover"));
+    cy.on("mouseout", "edge", (e) => e.target.removeClass("edge-hover"));
+    // degree-based size (item 4) is only correct once every edge for this add batch has
+    // landed — one style().update() per batch is enough; cytoscape coalesces same-tick add
+    // events, so this never fires once per element.
+    cy.on("add remove", "edge", () => cy.style().update());
     const layout = (preserve) => {
       // a DISCONNECTED set (unrelated nodes, no edges — e.g. 5 open threads) force-packs into
       // an overlapping cluster under fcose; a grid spreads them cleanly. Edges → force layout.
@@ -203,23 +255,160 @@ const Osiris = (() => {
       // nodes off-viewport (the recurring "opening leads to nothing" blank board).
       cy.resize();
       cy.fit(undefined, 45);
+      // WAVE A item 5: layout is the ONE act allowed to move an already-placed node — every
+      // node it just positioned is now "placed", so a later incremental merge treats them as
+      // real neighbors to land new nodes near, and this run's own result is saved as the
+      // sticky position a future add (or reload) restores.
+      cy.nodes().forEach((n) => PLACED.add(n.id()));
+      savePositions();
     };
-    const mergeGraph = (g) => {
-      let added = 0;
-      g.nodes.forEach((n) => {
-        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: { id: n.id, type: n.type, label: n.label } }); added++; }
+    // sticky positions — a placed node moves ONLY via layout() above (Re-layout, or an
+    // empty board's own first population) or a human drag; simply adding more graph must
+    // never re-shuffle what's already on screen. Persisted per-browser (localStorage, not
+    // just in-memory) so a reload doesn't scramble a board someone spent time arranging.
+    const POS_KEY = "osiris.board.positions";
+    const loadPositions = () => {
+      try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}"); } catch (e) { return {}; }
+    };
+    const savePositions = () => {
+      try {
+        const pos = {};
+        cy.nodes().forEach((n) => { pos[n.id()] = n.position(); });
+        localStorage.setItem(POS_KEY, JSON.stringify(pos));
+      } catch (e) {}
+    };
+    const SAVED_POS = loadPositions();
+    const PLACED = new Set();
+    cy.on("dragfree", "node", savePositions);
+    // a freshly-added node: its own saved position wins; otherwise land it near an already-
+    // PLACED neighbor (small jitter so siblings don't stack exactly on top of each other);
+    // otherwise (a true isolate on a populated board) leave it near the origin for a human's
+    // own explicit Re-layout to spread properly, rather than silently invoking one.
+    const settleNewNode = (n) => {
+      const saved = SAVED_POS[n.id()];
+      if (saved) { n.position(saved); PLACED.add(n.id()); return; }
+      const anchor = n.connectedEdges().connectedNodes().filter((m) => m.id() !== n.id() && PLACED.has(m.id()));
+      if (anchor.length) {
+        const p = anchor[0].position();
+        n.position({ x: p.x + (Math.random() - 0.5) * 90, y: p.y + (Math.random() - 0.5) * 90 });
+      } else {
+        n.position({ x: (Math.random() - 0.5) * 40, y: (Math.random() - 0.5) * 40 });
+      }
+      PLACED.add(n.id());
+    };
+    // WAVE A item 4: an Agent node's server-supplied `agent_state` (live/idle/dead, the
+    // fleet view's own window) rides along as node data when present — passed through
+    // wherever a graph-fetched node becomes a cy node, never fabricated client-side.
+    const nodeData = (n) => (n.agent_state
+      ? { id: n.id, type: n.type, label: n.label, agent_state: n.agent_state }
+      : { id: n.id, type: n.type, label: n.label });
+    // WAVE A item 3: hub bundling — more than HUB_BUNDLE_THRESHOLD edges of ONE type off ONE
+    // node (the "38 spawned_by" shape) collapse into one bundle node rather than 38 real
+    // ones fighting the layout. Groups by (hub, direction, type); a group past threshold is
+    // withheld from the normal add pass below and replaced with a single synthetic node
+    // whose own data carries what it stands for, so a click can put it all back exactly.
+    const HUB_BUNDLE_THRESHOLD = 12;
+    const expandBundle = (bundleId) => {
+      const node = cy.getElementById(bundleId);
+      if (!node.length) return;
+      const info = node.data("bundleOf");
+      const anchorPos = node.position();
+      node.connectedEdges().remove();
+      node.remove();
+      if (!info) return;
+      const newIds = [];
+      info.nodes.forEach((n) => {
+        if (n && !cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); newIds.push(n.id); }
       });
-      g.edges.forEach((e) => {
+      info.edges.forEach((e) => {
         const id = `${e.source}-${e.type}-${e.target}`;
         if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
           cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
       });
+      // land the restored nodes where the bundle itself sat, jittered apart — an expand is
+      // the one case with no better anchor than "where the summary used to be".
+      newIds.forEach((id) => {
+        const n = cy.getElementById(id);
+        if (SAVED_POS[id]) { n.position(SAVED_POS[id]); } else {
+          n.position({ x: anchorPos.x + (Math.random() - 0.5) * 90, y: anchorPos.y + (Math.random() - 0.5) * 90 });
+        }
+        PLACED.add(id);
+      });
+      savePositions();
+    };
+    const mergeGraph = (g) => {
+      const wasEmpty = cy.nodes().length === 0;
+      let added = 0;
+      const newIds = [];
+      const claimed = new Set();       // edge keys already spoken for by a bundle
+      const bundledNodeIds = new Set(); // far-node ids hidden behind a bundle
+      const groups = {};
+      g.edges.forEach((e) => {
+        const ok = `${e.source}|out|${e.type}`, ik = `${e.target}|in|${e.type}`;
+        (groups[ok] = groups[ok] || { hub: e.source, dir: "out", type: e.type, edges: [] }).edges.push(e);
+        (groups[ik] = groups[ik] || { hub: e.target, dir: "in", type: e.type, edges: [] }).edges.push(e);
+      });
+      Object.values(groups)
+        .filter((gr) => gr.edges.length > HUB_BUNDLE_THRESHOLD)
+        .sort((a, b) => b.edges.length - a.edges.length)
+        .forEach((gr) => {
+          const fresh = gr.edges.filter((e) => !claimed.has(`${e.source}-${e.type}-${e.target}`));
+          if (fresh.length <= HUB_BUNDLE_THRESHOLD) return; // an earlier, bigger bundle already ate most of it
+          const bundleId = `bundle:${gr.hub}:${gr.dir}:${gr.type}`;
+          if (cy.getElementById(bundleId).length) return; // already bundled from an earlier merge
+          fresh.forEach((e) => claimed.add(`${e.source}-${e.type}-${e.target}`));
+          const far = fresh.map((e) => (gr.dir === "out" ? e.target : e.source));
+          far.forEach((id) => bundledNodeIds.add(id));
+          const farNodes = far.map((id) => g.nodes.find((n) => n.id === id)).filter(Boolean);
+          cy.add({ group: "nodes", data: {
+            id: bundleId, type: "bundle", label: `${fresh.length} ${gr.type}`,
+            bundleOf: { hub: gr.hub, dir: gr.dir, type: gr.type, nodes: farNodes, edges: fresh },
+          } });
+          newIds.push(bundleId);
+          // the hub itself may not be on the board yet within THIS merge call (e.g. a fresh
+          // placeObjects batch) — plant it now so the bundle edge has both ends to attach to.
+          if (!cy.getElementById(gr.hub).length) {
+            const hubNode = g.nodes.find((n) => n.id === gr.hub);
+            if (hubNode) { cy.add({ group: "nodes", data: nodeData(hubNode) }); newIds.push(gr.hub); added++; }
+          }
+          if (cy.getElementById(gr.hub).length) {
+            cy.add({ group: "edges", data: gr.dir === "out"
+              ? { id: `${bundleId}-e`, source: gr.hub, target: bundleId, type: gr.type }
+              : { id: `${bundleId}-e`, source: bundleId, target: gr.hub, type: gr.type } });
+          }
+          added++;
+        });
+      g.nodes.forEach((n) => {
+        if (bundledNodeIds.has(n.id)) return; // hidden behind a bundle — expandBundle() adds it back
+        if (!cy.getElementById(n.id).length) { cy.add({ group: "nodes", data: nodeData(n) }); newIds.push(n.id); added++; }
+      });
+      g.edges.forEach((e) => {
+        const id = `${e.source}-${e.type}-${e.target}`;
+        if (claimed.has(id)) return;
+        if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
+          cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
+      });
+      // WAVE A item 5: an empty board's first population still deserves a real layout (no
+      // neighbors exist yet to land near); anything added to an ALREADY-populated board
+      // lands near its neighbors instead — layout() is never called here past that point,
+      // so the explicit Re-layout button stays the only thing that moves a placed node.
+      if (wasEmpty) { layout(false); }
+      else { newIds.forEach((id) => settleNewNode(cy.getElementById(id))); savePositions(); }
       return added;
     };
-    cy.on("tap", "node", (e) => onFocus && onFocus(e.target.id(), false, e.target.data("type")));
-    cy.on("dbltap", "node", (e) => onFocus && onFocus(e.target.id(), true, e.target.data("type")));
+    // a bundle node's own click is EXPAND, not the normal select/focus verb — it isn't a
+    // real object, so onFocus (which fetches /objects/<id>) would 404 on it.
+    cy.on("tap", "node", (e) => {
+      if (e.target.data("type") === "bundle") { expandBundle(e.target.id()); return; }
+      onFocus && onFocus(e.target.id(), false, e.target.data("type"));
+    });
+    cy.on("dbltap", "node", (e) => {
+      if (e.target.data("type") === "bundle") return;
+      onFocus && onFocus(e.target.id(), true, e.target.data("type"));
+    });
     cy.on("cxttap", "node", (e) => {
       if (e.originalEvent) e.originalEvent.preventDefault();
+      if (e.target.data("type") === "bundle") return;
       onCtx && onCtx(e.target.id(), e.target.data("type"), e.originalEvent);
     });
     return {
@@ -229,7 +418,32 @@ const Osiris = (() => {
       // then frame the graph. Without this a board revealed from a panel paints blank.
       resizeFit: () => { cy.resize(); cy.fit(undefined, 40); },
       clear: () => cy.elements().remove(),
-      focusNode: (id) => { cy.nodes().removeClass("focus"); cy.getElementById(id).addClass("focus"); },
+      focusNode: (id) => {
+        cy.nodes().removeClass("focus"); cy.edges().removeClass("edge-focus");
+        const n = cy.getElementById(id);
+        n.addClass("focus"); n.connectedEdges().addClass("edge-focus");
+      },
+      // WAVE A item 6: expand/collapse one hop on the SELECTION — a search-driven verb
+      // distinct from focus() (which also recenters/reframes); this just widens or narrows
+      // what's on the board around one already-present node.
+      async expandOneHop(id) {
+        if (!cy.getElementById(id).length) return 0;
+        const g = await fetch(`/objects/${id}/graph?hops=1`).then((r) => r.json());
+        return mergeGraph(g);
+      },
+      // removes every neighbor of `id` whose ONLY connection to the board is `id` itself —
+      // the undo for expandOneHop's own leaves, never a node that's independently anchored
+      // elsewhere (collapsing must not silently delete someone else's context).
+      collapseOneHop(id) {
+        const center = cy.getElementById(id);
+        if (!center.length) return 0;
+        const doomed = center.neighborhood("node").filter((n) => n.degree() === 1);
+        const n = doomed.length;
+        doomed.connectedEdges().remove();
+        doomed.remove();
+        savePositions();
+        return n;
+      },
       // place a set of {id,label,type} as nodes + the links AMONG the set only. NOT each
       // node's 1-hop neighborhood — that pulled in strangers and made the hairball. A result
       // SET renders as itself; neighborhood expansion is "search around", a separate verb.
@@ -249,6 +463,122 @@ const Osiris = (() => {
         }
         layout(false);
       },
+    };
+  }
+
+  // ---- THE ATLAS (Wave B, thread 8839): the FULL-GRAPH renderer ------------
+  // sigma.js over graphology, vendored beside cytoscape — cytoscape/fcose stays the
+  // NEIGHBOURHOOD board's own renderer (makeBoard, above): a bounded 1-hop client-computed
+  // layout is exactly its job. The atlas is the opposite shape: ~41k objects, no client-
+  // side layout at all — every position it draws came from the server (wave B item 1's
+  // heartbeat for individual nodes, a live centroid rollup for supernodes/clusters), and
+  // it never asks for more than the current LOD level needs.
+  //
+  // THREE LEVELS, ONE RENDERER: `zoomInto(kind, id)` drops one level (supernodes → a
+  // project's clusters → that cluster's real positioned nodes via item 2's viewport
+  // endpoint); `zoomOut()` climbs back. Orphans (item 3's own `orphans` field) render as a
+  // dim count badge on every supernode/cluster label — distinct at every level, never
+  // folded into a bare total.
+  function makeAtlas(container, onDrillDown) {
+    const graph = new graphology.Graph();
+    const renderer = new Sigma(graph, container, {
+      renderEdgeLabels: false,
+      defaultNodeColor: "#6e7681",
+      defaultEdgeColor: "#2c3744",
+    });
+    let level = "supernodes";   // "supernodes" | "clusters" | "nodes"
+    let currentProject = null;  // set once we've drilled into a project's own clusters
+
+    function clear() { graph.clear(); }
+
+    // count -> radius: sqrt scale (area, not radius, should track count — a supernode
+    // twice the population should not look four times the size).
+    const sizeForCount = (n) => Math.min(40, 4 + Math.sqrt(Math.max(n, 1)) * 2.2);
+
+    function labelWithOrphans(base, orphans) {
+      return orphans ? `${base} (${orphans} orphan${orphans === 1 ? "" : "s"})` : base;
+    }
+
+    async function loadSupernodes() {
+      clear();
+      level = "supernodes"; currentProject = null;
+      const g = await fetch("/graph/supernodes").then((r) => r.json());
+      g.supernodes.forEach((s) => {
+        if (s.x == null || s.y == null) return;  // not yet positioned this tick — appears once it is
+        graph.addNode(s.id, {
+          label: labelWithOrphans(s.label, s.orphans), size: sizeForCount(s.count),
+          x: s.x, y: s.y, color: ty("SoftwareProject").c, kind: "project", raw: s,
+        });
+      });
+      g.project_edges.forEach((e) => {
+        if (graph.hasNode(e.source) && graph.hasNode(e.target) && !graph.hasEdge(e.source, e.target))
+          graph.addEdge(e.source, e.target, { size: Math.min(6, 1 + Math.log2(e.weight + 1)) });
+      });
+      renderer.refresh();
+    }
+
+    async function loadClusters(projectId, projectLabel) {
+      clear();
+      level = "clusters"; currentProject = { id: projectId, label: projectLabel };
+      const g = await fetch(`/graph/clusters?project=${encodeURIComponent(projectLabel)}`)
+        .then((r) => r.json());
+      g.clusters.forEach((c, i) => {
+        // a cluster with no positioned member yet has no centroid — seed it in a small
+        // circle around the origin rather than dropping it, so it's still clickable.
+        const x = c.x != null ? c.x : Math.cos(i) * 30;
+        const y = c.y != null ? c.y : Math.sin(i) * 30;
+        graph.addNode(`cluster:${projectLabel}:${c.type}`, {
+          label: labelWithOrphans(`${c.type} (${c.count})`, c.orphans),
+          size: sizeForCount(c.count), x, y, color: ty(c.type).c,
+          kind: "cluster", raw: { ...c, project: projectLabel },
+        });
+      });
+      renderer.refresh();
+    }
+
+    async function loadNodesNear(x, y, span) {
+      clear();
+      level = "nodes";
+      const g = await fetch("/objects/viewport?" + new URLSearchParams({
+        minx: x - span, maxx: x + span, miny: y - span, maxy: y + span, limit: 500,
+      })).then((r) => r.json());
+      g.nodes.forEach((n) => {
+        graph.addNode(n.id, {
+          label: truncateLabel(n.label), size: 6, x: n.x, y: n.y,
+          color: ty(n.type).c, kind: "object", raw: n,
+        });
+      });
+      g.edges.forEach((e) => {
+        const id = `${e.source}-${e.type}-${e.target}`;
+        if (graph.hasNode(e.source) && graph.hasNode(e.target) &&
+            !graph.hasEdge(id) && !graph.hasEdge(e.source, e.target))
+          graph.addEdgeWithKey(id, e.source, e.target, { size: 1 });
+      });
+      renderer.refresh();
+    }
+
+    renderer.on("clickNode", ({ node }) => {
+      const attrs = graph.getNodeAttributes(node);
+      if (attrs.kind === "project") {
+        loadClusters(node, attrs.raw.label);
+        onDrillDown && onDrillDown("clusters", attrs.raw);
+      } else if (attrs.kind === "cluster") {
+        loadNodesNear(attrs.x, attrs.y, 400);
+        onDrillDown && onDrillDown("nodes", attrs.raw);
+      } else if (onDrillDown) {
+        onDrillDown("object", attrs.raw);
+      }
+    });
+
+    return {
+      renderer, graph,
+      loadSupernodes,
+      zoomOut() {
+        if (level === "nodes" && currentProject) loadClusters(currentProject.id, currentProject.label);
+        else loadSupernodes();
+      },
+      level: () => level,
+      resize: () => renderer.refresh(),
     };
   }
 
@@ -771,6 +1101,6 @@ const Osiris = (() => {
       `</tr>`).join("")}</tbody></table>`;
   }
 
-  return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard,
+  return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels, makeBoard, makeAtlas,
     renderResult, viewsFor, defaultView, lineage, innerSelect, cardsGrid };
 })();

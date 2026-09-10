@@ -141,6 +141,182 @@ async def test_objects_list_resolves_labels_via_the_full_chain_and_disambiguates
     assert row["display_label"]
 
 
+async def test_object_edge_counts_batches_by_id(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave A item 7 (thread 8839): Browse's own edge-count badge, as a
+    batched lookup separate from the (already complex) /objects listing query."""
+    hub = await actions.create_or_find_object("Thread", "thread:gv-item7-hub", "test")
+    leaf1 = await actions.create_or_find_object("Agent", "agent:gv-item7-leaf1", "test")
+    leaf2 = await actions.create_or_find_object("Agent", "agent:gv-item7-leaf2", "test")
+    lonely = await actions.create_or_find_object("Thread", "thread:gv-item7-lonely", "test")
+    await actions.create_link(hub, leaf1, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(hub, leaf2, "closed_by", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/edge_counts", params={"ids": f"{hub},{lonely},not-a-uuid,"})
+    body = r.json()
+    assert body[str(hub)] == 2
+    assert str(lonely) not in body  # zero-edge objects carry no row -- absence IS zero
+    assert body == {str(hub): 2}
+
+
+async def test_object_edge_counts_is_empty_for_no_ids(client: httpx.AsyncClient) -> None:
+    r = await client.get("/objects/edge_counts", params={"ids": ""})
+    assert r.json() == {}
+
+
+async def test_object_viewport_returns_only_nodes_inside_the_bounding_box(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave B item 2 (thread 8839): the full-view renderer's own pull,
+    read straight off graph_x/graph_y (wave B item 1's positions)."""
+    inside = await actions.create_or_find_object("Thread", "thread:vp-inside", "test")
+    outside = await actions.create_or_find_object("Thread", "thread:vp-outside", "test")
+    await actions.assert_property(inside, "graph_x", 10.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(inside, "graph_y", 10.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(outside, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(outside, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport",
+                         params={"minx": 0, "maxx": 100, "miny": 0, "maxy": 100})
+    ids = {n["id"] for n in r.json()["nodes"]}
+    assert str(inside) in ids
+    assert str(outside) not in ids
+
+
+async def test_object_viewport_edges_only_among_the_returned_nodes(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Thread", "thread:vp-a", "test")
+    b = await actions.create_or_find_object("Thread", "thread:vp-b", "test")
+    c = await actions.create_or_find_object("Thread", "thread:vp-c", "test")
+    for oid, x in ((a, 5.0), (b, 6.0)):
+        await actions.assert_property(oid, "graph_x", x, "test", datetime.now(UTC), 1.0)
+        await actions.assert_property(oid, "graph_y", 5.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(c, "graph_x", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.assert_property(c, "graph_y", 9000.0, "test", datetime.now(UTC), 1.0)
+    await actions.create_link(a, b, "cites", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(a, c, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport",
+                         params={"minx": 0, "maxx": 100, "miny": 0, "maxy": 100})
+    body = r.json()
+    edge_types = [(e["source"], e["target"]) for e in body["edges"]]
+    assert (str(a), str(b)) in edge_types
+    assert not any(str(c) in pair for pair in edge_types)
+
+
+async def test_object_viewport_exclude_skips_ids_the_caller_already_holds(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Thread", "thread:vp-excl-a", "test")
+    b = await actions.create_or_find_object("Thread", "thread:vp-excl-b", "test")
+    for oid in (a, b):
+        await actions.assert_property(oid, "graph_x", 1.0, "test", datetime.now(UTC), 1.0)
+        await actions.assert_property(oid, "graph_y", 1.0, "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/objects/viewport", params={
+        "minx": 0, "maxx": 100, "miny": 0, "maxy": 100, "exclude": str(a)})
+    ids = {n["id"] for n in r.json()["nodes"]}
+    assert str(a) not in ids
+    assert str(b) in ids
+
+
+async def test_graph_supernodes_counts_members_per_project(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave B item 3 (thread 8839): LOD level 0 -- one supernode per
+    project, sized by count. A project MEMBER always carries its own in_repo edge, so it
+    can never itself read as "orphan" (zero live links, graph_lint/triage's own bucket
+    definition) -- a project supernode's own orphans reads structurally 0; the real
+    zero-link population lands entirely in the unfiled bucket (tested separately below)."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-proj", "test")
+    connected = await actions.create_or_find_object("Thread", "thread:gv-lod-connected", "test")
+    member = await actions.create_or_find_object("Thread", "thread:gv-lod-member", "test")
+    other = await actions.create_or_find_object("Thread", "thread:gv-lod-other", "test")
+    await actions.create_link(connected, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(member, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(connected, other, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    body = r.json()
+    row = next(s for s in body["supernodes"] if s["label"] == "repo:gv-lod-proj")
+    assert row["count"] == 2
+    assert row["orphans"] == 0
+
+
+async def test_graph_supernodes_unfiled_orphans_are_the_true_zero_link_objects(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The real "zero links at all" population (graph_lint/triage's exact orphan
+    definition) can only ever land in `unfiled` -- project/cluster membership itself
+    requires a link, so a genuinely edgeless object is never IN a project to begin with."""
+    await actions.create_or_find_object("Thread", "thread:gv-lod-true-orphan", "test")
+    linked_but_unfiled = await actions.create_or_find_object(
+        "Thread", "thread:gv-lod-linked-unfiled", "test")
+    other = await actions.create_or_find_object("Thread", "thread:gv-lod-unfiled-peer", "test")
+    await actions.create_link(linked_but_unfiled, other, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    unfiled = r.json()["unfiled"]
+    assert unfiled["count"] >= 3          # both unfiled objects, at least
+    assert unfiled["orphans"] >= 1        # at least the truly-zero-link one
+
+
+async def test_graph_supernodes_weighs_inter_project_edges(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj_a = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-a", "test")
+    proj_b = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-b", "test")
+    obj_a = await actions.create_or_find_object("Thread", "thread:gv-lod-ia", "test")
+    obj_b = await actions.create_or_find_object("Thread", "thread:gv-lod-ib", "test")
+    await actions.create_link(obj_a, proj_a, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(obj_b, proj_b, "in_repo", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(obj_a, obj_b, "cites", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    edges = r.json()["project_edges"]
+    pair = {str(proj_a), str(proj_b)}
+    match = next(e for e in edges if {e["source"], e["target"]} == pair)
+    assert match["weight"] == 1
+
+
+async def test_graph_supernodes_unfiled_bucket_counts_projectless_objects(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    await actions.create_or_find_object("Thread", "thread:gv-lod-unfiled", "test")
+    r = await client.get("/graph/supernodes")
+    assert r.json()["unfiled"]["count"] >= 1
+
+
+async def test_graph_clusters_groups_by_type_inside_one_project(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-clusters", "test")
+    t1 = await actions.create_or_find_object("Thread", "thread:gv-cl-1", "test")
+    t2 = await actions.create_or_find_object("Thread", "thread:gv-cl-2", "test")
+    c1 = await actions.create_or_find_object("Commit", "commit:gv-cl-1", "test")
+    for oid in (t1, t2, c1):
+        await actions.create_link(oid, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/clusters", params={"project": "repo:gv-clusters"})
+    clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
+    assert clusters.get("Thread") == 2
+    assert clusters.get("Commit") == 1
+
+
+async def test_graph_clusters_resolves_a_bare_project_name(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-bare", "test")
+    t1 = await actions.create_or_find_object("Thread", "thread:gv-bare-1", "test")
+    await actions.create_link(t1, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/clusters", params={"project": "gv-bare"})
+    clusters = {c["type"]: c["count"] for c in r.json()["clusters"]}
+    assert clusters.get("Thread") == 1
+
+
 async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None:
     await _seed(actions)
     oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1", LAZARUS)
@@ -149,6 +325,46 @@ async def test_object_graph(client: httpx.AsyncClient, actions: Actions) -> None
     types = {n["type"] for n in g["nodes"]}
     assert "IntrusionSet" in types and "Malware" in types
     assert any(e["type"] == "uses" for e in g["edges"])
+
+
+async def test_object_graph_paints_agent_nodes_with_live_idle_dead_state(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """GRAPH VISUALIZER wave A item 4 (thread 8839): an Agent node's own graph-endpoint row
+    carries `agent_state`, resolved from agent_mounts.last_seen against the same LIVE_SECS
+    window (900s) seats.py's own occupancy read uses, plus an idle tier (seen in the last
+    day). A non-Agent node never carries the field at all -- it isn't a claim this endpoint
+    can make about a Thread or a Commit."""
+    from src.orchestrator.mounts import save_mount
+
+    live_id = await actions.create_or_find_object("Agent", "agent:gv-live", "test")
+    idle_id = await actions.create_or_find_object("Agent", "agent:gv-idle", "test")
+    dead_id = await actions.create_or_find_object("Agent", "agent:gv-dead", "test")
+    thread_id = await actions.create_or_find_object("Thread", "thread:gv-item4", "test")
+    await actions.create_link(thread_id, live_id, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(thread_id, idle_id, "closed_by", "test", datetime.now(UTC), 1.0)
+    await actions.create_link(thread_id, dead_id, "closed_by", "test", datetime.now(UTC), 1.0)
+
+    await save_mount(actions.pool, job_dir="/test/gv-live", agent_id="agent:gv-live",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await save_mount(actions.pool, job_dir="/test/gv-idle", agent_id="agent:gv-idle",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '6 hours' WHERE agent_id=$1",
+        "agent:gv-idle")
+    await save_mount(actions.pool, job_dir="/test/gv-dead", agent_id="agent:gv-dead",
+                     project="osiris", cwd="/test", model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '3 days' WHERE agent_id=$1",
+        "agent:gv-dead")
+
+    r = await client.get(f"/objects/{thread_id}/graph", params={"hops": 1})
+    g = r.json()
+    by_id = {n["id"]: n for n in g["nodes"]}
+    assert by_id[str(live_id)]["agent_state"] == "live"
+    assert by_id[str(idle_id)]["agent_state"] == "idle"
+    assert by_id[str(dead_id)]["agent_state"] == "dead"
+    assert "agent_state" not in by_id[str(thread_id)]
 
 
 async def test_available_helpers_from_manifest_registry(
