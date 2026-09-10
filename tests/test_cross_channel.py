@@ -20,6 +20,7 @@ from src.ingest.cross_channel import (
     extract_harness_sends,
     recover_harness_exchanges,
 )
+from src.ingest.soul_store import _hash_rows
 from src.orchestrator.seats import bind_holder, ensure_seat
 
 
@@ -81,17 +82,27 @@ def test_extract_never_reindexes_around_a_skipped_line() -> None:
 async def _seed_soul(
     actions: Actions, anchor_sid: str, lines: list[str], *, source_path: str = "fake",
 ) -> None:
+    """Inserts a REAL hash chain via `_hash_rows` — the same construction `ingest_path`
+    itself uses — not stub `hash{i}`/`prev_hash=NULL` placeholders. The consolidated
+    `_iter_verified_lines` (Thoth mail 9134) now chain-verifies every hot read, including
+    the once-unverified `raw_lines()` this module's `recover_harness_exchanges` calls;
+    a fixture that never chained its own rows reads as a broken chain post-consolidation
+    (caught live: every recover_harness_exchanges call here returned `{"error": ...}`
+    instead of a found/written receipt). This fixture now reflects what soul_lines
+    actually looks like once written, so it exercises the same verified path real data
+    does, not a hole the old unverified reader used to paper over."""
+    rows, _, last_hash = _hash_rows(
+        "claude-code", anchor_sid, [ln.encode() for ln in lines], 0, None)
     async with actions.pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
                 "INSERT INTO soul_lines (harness, anchor_sid, line_idx, raw_line, line_hash, "
-                " prev_hash) VALUES ('claude-code', $1, $2, $3, $4, NULL)",
-                [(anchor_sid, i, ln.encode(), f"hash{i}") for i, ln in enumerate(lines)])
+                " prev_hash) VALUES ($1, $2, $3, $4, $5, $6)", rows)
             await conn.execute(
                 "INSERT INTO soul_sessions (harness, anchor_sid, source_path, last_line_idx, "
                 " last_hash) VALUES ('claude-code', $1, $2, $3, $4) "
                 "ON CONFLICT (harness, anchor_sid) DO NOTHING",
-                anchor_sid, source_path, len(lines), f"hash{len(lines) - 1}" if lines else None)
+                anchor_sid, source_path, len(lines), last_hash)
 
 
 async def test_recover_reports_an_error_when_nothing_is_soul_stored(actions: Actions) -> None:
