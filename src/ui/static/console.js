@@ -433,29 +433,59 @@ function renderBoardCard(o) {
 }
 
 // ── Mailbox ──────────────────────────────────────────────────────────────────
-async function renderMailbox() {
+// Ported off /pulse (which never carried a `messages` array — src/api/app.py's pulse_route
+// only ever returned {line, live, owed, briefs, wakes, spend}; the old code silently rendered
+// "No messages" even when mail was waiting) onto the REAL mail read: the "mail" saved
+// composition (MAIL_OVERVIEW, compositions.py) wraps chrome.mail_overview — the same fold-
+// aware room/soul read /mail's own HTML view uses. #92's own drill-in (task #90, Thoth msg
+// 1976/2005): each row's `row_action` is "run:mail_threads" — the click delegate in osiris.js
+// dispatches an `osiris:run` DOM event rather than POSTing, and this is the page shell that
+// event was always meant to be caught by (never wired to any listener until now).
+async function renderMailbox() { await runMailboxComposition('mail', {}); }
+
+async function runMailboxComposition(name, args) {
   var container = $('result'); showPanel();
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading…</div>';
   try {
-    var p = await fetch('/pulse').then(function(r){return r.json();});
-    // /pulse returns {line, live, owed, briefs, wakes, spend} — it has NEVER carried a
-    // `messages` array (server route: src/api/app.py's pulse_route). The old code called
-    // .json() a SECOND time on `p.messages || []` (an array, which has no .json() method),
-    // which threw and was swallowed by the outer catch — always rendering "No messages",
-    // even when mail was waiting, with nothing in the console to say why (found live,
-    // flagged twice, survived both because the failure was silent). No JSON mail-list route
-    // exists yet (a real gap, tracked separately) — until one does, say so LOUDLY instead of
-    // rendering a false "No messages in inbox."
-    if (!Array.isArray(p.messages)) {
-      console.error('renderMailbox: /pulse has no messages array — no JSON mail-list route exists yet', p);
-      container.innerHTML = '<div class="o-empty" style="padding:40px">Mailbox feed unavailable — /pulse carries no message data (no JSON mail-list route exists yet; see /mail for the HTML view).</div>';
+    var isFunctionDrill = args && Object.keys(args).length > 0;
+    var res = isFunctionDrill
+      ? await fetch('/compositions/run-spec', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ spec: { op: 'function', name: name, args: args }, name: name }),
+        }).then(function(r){ return r.json(); })
+      : await fetch('/compositions/' + encodeURIComponent(name) + '/run', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ subject: null }),
+        }).then(function(r){ return r.json(); });
+    if (res.error) {
+      container.innerHTML = '<div class="o-empty" style="padding:40px">' + esc(res.error) + '</div>';
       return;
     }
-    var msgs = p.messages;
-    if (!msgs.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No messages in inbox.</div>'; return; }
-    container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto"><h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Mailbox (' + msgs.length + ')</h2>' + msgs.map(function(m){ return '<div class="mail-card" style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div><span style="font-weight:600;color:var(--blue);font-size:11px">' + esc(m.from_agent || m.from_project || '') + '</span> <span style="color:var(--faint)">' + String.fromCharCode(8594) + '</span> <span style="color:var(--muted);font-size:11px">' + esc(m.to_project || m.to_agent || '') + '</span></div><div style="font-size:10px;color:var(--faint)">' + esc(m.created_at ? m.created_at.slice(0, 10) : '') + '</div></div><div style="font-size:12px;line-height:1.5;color:var(--text);margin-bottom:8px;white-space:pre-wrap;word-break:break-word">' + esc((m.body || '').slice(0, 500)) + '</div></div>'; }).join('') + '</div>';
-    setStatus(msgs.length + ' messages');
-  } catch(e) { console.error('renderMailbox failed', e); container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load mailbox.</div>'; }
+    var panel = document.createElement('div');
+    panel.style.padding = '16px';
+    await Osiris.renderResult(res, { board: null, panel: panel }, Osiris.defaultView(res), null, null, null);
+    container.innerHTML = '';
+    if (isFunctionDrill) {
+      var back = document.createElement('div');
+      back.style.padding = '0 0 8px';
+      back.innerHTML = '<button class="iconbtn" onclick="renderMailbox()">' + String.fromCharCode(8592) + ' Back to Mailbox</button>';
+      container.appendChild(back);
+    }
+    container.appendChild(panel);
+    setStatus(res.count + (res.count === 1 ? ' item' : ' items'));
+  } catch(e) {
+    console.error('runMailboxComposition failed', name, args, e);
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load mailbox.</div>';
+  }
 }
+
+// osiris.js's click delegate dispatches this for any `"run:<function>"` row action (built for
+// exactly this case — see its own comment); scoped to the mailbox surface so a future consumer
+// of the same event elsewhere in the shell (the composer, piece 2) isn't shadowed by this one.
+document.addEventListener('osiris:run', function(e) {
+  if (ACTIVE_SURFACE !== 'mailbox') return;
+  runMailboxComposition(e.detail.name, e.detail.args || {});
+});
 
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
 var PROJECTS_INDEX_DATA = null, PROJECTS_INDEX_STATUS = 'active';
