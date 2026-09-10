@@ -35,12 +35,16 @@ from src.orchestrator.mailbox import desk_briefs_from, settle_history_at_join, u
 async def fork_seat(
     actions: Actions, *, job_dir: str | None, root: Path | None = None,
 ) -> str | None:
-    """The seat this session ALREADY HAS under another name — or None if it is truly new.
+    """The PARENT this session's transcript proves it is a `--fork-session --resume` copy
+    of — or None if no such transcript exists / it names nobody. TWO PARALLEL LIVE
+    CONVERSATIONS under one mind's name — see forks.py for the autopsy. Ask the
+    transcript's own record uuids who its parent is before we mint it a second identity.
 
-    `claude --fork-session --resume` continues one mind under a NEW session id: new id, new
-    whisper, new automount, A SECOND SEAT (see forks.py for the autopsy). The fork is not a
-    stranger; it is the same conversation, still running. Ask the transcript who it really is
-    before minting anybody.
+    NARROWED (operator ruling, decision d438f6b7, thread 0f7bf055) to ONLY the genuine
+    transcript-copy archaeology: the caller (`automount`) treats a resolved parent here as
+    a DOTTED CHILD (`_fork_child`), never the parent's own identity — correct for a real
+    fork (two live processes), wrong for `resumed_job_seat`'s own case (one conversation,
+    a new anchor) which used to live in this same function and is now split out below.
 
     Called ONLY when the registry has no row for this anchor — i.e. once, at a session's birth
     — and memoized from there. A session that is nobody's child pays one ~1s disk sweep, ever.
@@ -50,17 +54,60 @@ async def fork_seat(
     base = root or (Path.home() / ".claude/projects")
     path = locate_current_transcript(base, job_dir, anchored_only=True)
     if path is None:
-        # THE BRIDGED RESUME (90f0cb3a): the session-picker resume mints a new sid that
-        # writes NO transcript of its own (appends continue in the resumed session's file),
-        # so the archaeology above finds nothing and this mind would be minted a twin. The
-        # harness's own job state names who it continues — adopt that seat.
-        prior = mounts.resumed_anchor(job_dir)
-        rec = await mounts.find_mount(actions.pool, job_dir=prior) if prior else None
-        return rec.agent_id if rec else None
+        return None
     try:
         return await forks.seat_of_fork(actions.pool, path, root=base)
     except Exception:  # noqa: BLE001 — identity may degrade, but the whisper must never die
         return None
+
+
+async def resumed_job_seat(
+    actions: Actions, *, job_dir: str | None, root: Path | None = None,
+) -> str | None:
+    """THE BRIDGED RESUME (90f0cb3a): the session-picker/daemon-backend resume (ctrl+a)
+    mints a NEW job for the continued conversation but writes NO transcript of its own
+    (appends continue in the resumed session's file), so `fork_seat`'s own archaeology
+    finds nothing and this mind would be minted a twin. The harness's own job state
+    (jobs/<sid8>/state.json: resumeSessionId) names who it continues.
+
+    ONE CONVERSATION, ONE WINDOW — genuinely NOT a fork (split out from `fork_seat`,
+    operator ruling d438f6b7/thread 0f7bf055): the caller adopts the resolved seat
+    OUTRIGHT, the same literal rebind `ledgered`/`viewed` already get, never `_fork_child`'s
+    dotted-child treatment — there is only ever one live process here, nothing to
+    distinguish from its own parent.
+
+    Only meaningful when `fork_seat` already found no transcript to search at all (a real
+    transcript, even one with an unmatched parent, means this door does not apply)."""
+    if not job_dir:
+        return None
+    base = root or (Path.home() / ".claude/projects")
+    if locate_current_transcript(base, job_dir, anchored_only=True) is not None:
+        return None  # a real transcript exists — fork_seat's own archaeology owns this case
+    prior = mounts.resumed_anchor(job_dir)
+    rec = await mounts.find_mount(actions.pool, job_dir=prior) if prior else None
+    return rec.agent_id if rec else None
+
+
+async def _fork_child(
+    actions: Actions, *, parent_agent: str, session_id: str, project: str | None, actor: str,
+) -> str | None:
+    """FORKS ARE SUBAGENTS OF THE CURRENT GENERATION, NOT SUCCESSIONS (operator ruling,
+    decision d438f6b7, thread 0f7bf055): a session `fork_seat`/`bridged_seat` resolved to
+    `parent_agent` is the whole conversation, but never a succession — mint/find it as a
+    DOTTED CHILD of that parent (patronym 'Thoth XXV.1', spawned_by-linked, no seat of its
+    own), the exact shape a sidechain Task-tool spawn already carries. Reuses
+    `register_spawn` (lineage.py) outright — the same edges, the same patronym mechanism,
+    never a second implementation. `session_id[:8]` matches the raw id shape a natural
+    fresh mint would already use (resolve_identity's own convention), so this claims
+    EXACTLY the canonical a plain mint would have anyway — the fix is in the WIRING
+    (spawned_by + patronym via register_spawn), never a new naming scheme. None only on
+    an unusable raw id (an empty session_id) — the caller falls back to the parent's own
+    id rather than lose the rebind."""
+    from src.orchestrator.lineage import register_spawn
+
+    return await register_spawn(
+        actions, session_id[:8], agent_type="fork", parent_agent=parent_agent,
+        project=project, session=session_id, witnessed=True)
 
 
 # A generous line-count tail, not a byte one (soul_lines has no cumulative byte column to
@@ -743,32 +790,39 @@ async def automount(
     # carries REWRITES every record's sessionId to the new one, so the fork swears it is newborn.
     # Ask its record uuids who its parent is before we mint it a second identity.
     forked = await fork_seat(actions, job_dir=job_dir, root=root) if bound is None else None
-    # THE FORK'S OWN REGISTRY HOP (the bridged-resume branch inside fork_seat, same leak
-    # class): when the archaeology finds no transcript at all, fork_seat adopts whoever
-    # mounts.resumed_anchor's OWN job_dir points at — the identical inherited-job_dir
-    # vector, one hop later. Same acts-first check, same refusal.
     if forked is not None:
         forked_contradiction = await asyncio.to_thread(
             _transcript_contradicts, session_id, forked, root)
         if forked_contradiction:
             forked = None
+    # THE BRIDGED RESUME (90f0cb3a, split out of fork_seat — operator ruling d438f6b7,
+    # thread 0f7bf055): the SAME inherited-job_dir leak class, one hop later, but this is
+    # genuinely a RESUME (one window), never a fork — see resumed_job_seat's own docstring
+    # for why it gets the literal-adoption treatment `forked` no longer does.
+    resumed_job = (await resumed_job_seat(actions, job_dir=job_dir, root=root)
+                  if bound is None and forked is None else None)
+    if resumed_job is not None:
+        resumed_job_contradiction = await asyncio.to_thread(
+            _transcript_contradicts, session_id, resumed_job, root)
+        if resumed_job_contradiction:
+            resumed_job = None
     # THE MANUAL COMPACT (Jesus's own incident, thread 6835): a fresh session id whose
     # first line's logicalParentUuid names the PRIOR session's own last message — not a
     # fork (no shared uuid, a genuinely new file), so ask compact_seat before falling
     # through to a fresh mint.
     compacted = (await compact_seat(actions, job_dir=job_dir, root=root)
-                if bound is None and forked is None else None)
+                if bound is None and forked is None and resumed_job is None else None)
     # THE TAB VIEW (the alias-clone class): neither a row nor a fork, but the hook's own
     # transcript_path names the session this tab continues — adopt, never clone.
     viewed = (await view_seat(actions, transcript_path=transcript_path,
                               session_id=session_id, jobs_home=jobs_home)
-              if bound is None and forked is None and compacted is None
-              and transcript_path else None)
+              if bound is None and forked is None and resumed_job is None
+              and compacted is None and transcript_path else None)
     # THE SESSION LEDGER (16e3cee9): a sid the graph has bound to a soul REBINDS —
     # a wiped registry row can no longer orphan a living mind into a fresh identity.
     ledgered = (await ledger_seat(actions, sid_prefix=session_id)
-                if bound is None and forked is None and compacted is None
-                and viewed is None else None)
+                if bound is None and forked is None and resumed_job is None
+                and compacted is None and viewed is None else None)
     # THE BRIDGE (task #68 binding leg): a background-job fork's own environment names the
     # stable conversation it continues — an OBSERVED fact, not a guess, so it takes priority
     # over office_hint below and, unlike office_hint, is never refused just because the
@@ -776,8 +830,8 @@ async def automount(
     # for something the harness actually told us).
     bridge_ambiguity: str | None = None
     bridged = None
-    if (bound is None and forked is None and compacted is None and viewed is None
-            and ledgered is None and bridge_session_id):
+    if (bound is None and forked is None and resumed_job is None and compacted is None
+            and viewed is None and ledgered is None and bridge_session_id):
         try:
             bridged = await bridged_seat(actions, bridge_session_id=bridge_session_id)
         except BridgeAmbiguity as e:
@@ -790,8 +844,9 @@ async def automount(
     # once. The greeting only HINTS whose office this is; the mint waits for the first
     # ACT (office_claim at mount()/re-attach). Identity is earned, never granted.
     office_hint = (await office_seat(actions, cwd=cwd, office_root=office_root)
-                   if bound is None and forked is None and compacted is None
-                   and viewed is None and ledgered is None and bridged is None else None)
+                   if bound is None and forked is None and resumed_job is None
+                   and compacted is None and viewed is None and ledgered is None
+                   and bridged is None else None)
     # you can only DIE if you LIVED — a fork has lived under its ancestor's name, and a
     # ledgered sid IS a lived mind whatever became of its registry row. Post-gate, a
     # whisper ROW alone is not a life: the row is the gate's own artifact (an address),
@@ -799,8 +854,8 @@ async def automount(
     # a row-only stranger's compact re-fire would mint a base AND a phantom heir in one
     # greeting.
     from src.orchestrator.agents import _generation
-    lived = (forked is not None or compacted is not None or ledgered is not None
-             or bridged is not None)
+    lived = (forked is not None or resumed_job is not None or compacted is not None
+             or ledgered is not None or bridged is not None)
     if not lived and bound is not None:
         _base = _generation(bound.agent_id)[0]
         if _base != f"agent:{(session_id or '')[:8].lower()}":
@@ -828,14 +883,39 @@ async def automount(
                                      transcript_path=transcript_path)
     ident = resolve_identity(cwd=cwd, job_dir=job_dir, root=root, project_label=project_label,
                              store_reading=reading)
+    # FORKS ARE SUBAGENTS OF THE CURRENT GENERATION, NOT SUCCESSIONS (operator ruling,
+    # decision d438f6b7, thread 0f7bf055): a `--fork-session` is the whole conversation
+    # copied under a new session id, but it never WAS the parent's own identity object —
+    # this used to `ident.agent_id = forked`, literally collapsing the fork onto the exact
+    # same Agent the parent session mounts as (two live processes, one identity object).
+    # Measured live (0f7bf055's own boundary walk): the archaeology's failure mode wasn't
+    # even that collapse — it was falling all the way through to a bare ANONYMOUS mint
+    # (agent:6eff8929, seat_id NULL, zero holds links) once no door resolved a parent, and
+    # a nested launch's own inherited CLAUDE_CODE_BRIDGE_SESSION_ID could then wrongly
+    # rebind the fork onto the LAUNCHER's own identity — a hijack, not a rebind. Both
+    # fixed the SAME way: `forked`/`bridged`, once resolved, mint/find a DOTTED CHILD of
+    # that parent via `_fork_child` (spawned_by-linked, patronym-named 'Thoth XXV.1', no
+    # seat of its own — the exact shape a sidechain spawn already carries) instead of
+    # ever becoming the parent's own object outright. A wrongly-resolved bridge id can now
+    # at worst mis-attribute a visible, correctable child's parentage — it can no longer
+    # impersonate a live identity.
+    fork_child_id: str | None = None
     if bound is not None:
         if _generation(bound.agent_id)[0] != _generation(ident.agent_id)[0]:
             # the deliberate binding wins: seams (swap/compaction) run on the SEAT's lineage
             ident.agent_id = bound.agent_id
     elif forked is not None:
-        # the same mind, wearing a new session id. Adopt the ancestor's SEAT — never the
-        # transcript's root sid, which would invent a third identity while curing a second.
-        ident.agent_id = forked
+        fork_child_id = await _fork_child(actions, parent_agent=forked,
+                                          session_id=session_id, project=ident.project,
+                                          actor=actor)
+        ident.agent_id = fork_child_id or forked  # register_spawn refusal: fall back to
+                                                   # the old collapse rather than lose the
+                                                   # rebind entirely (a bad raw id only,
+                                                   # never a reachable live path)
+    elif resumed_job is not None:
+        # a job-state resume (ctrl+a) — ONE conversation, ONE window, genuinely not a
+        # fork (resumed_job_seat's own docstring): adopt outright, same as ledgered/viewed.
+        ident.agent_id = resumed_job
     elif compacted is not None:
         # a manual /compact's fresh session id: adopt the prior generation's lineage HEAD
         # (compact_seat's own resolution via logicalParentUuid) — mint_reason="compaction"
@@ -848,9 +928,13 @@ async def automount(
         # a known sid: the graph remembers who this session IS — rebind, never mint
         ident.agent_id = ledgered
     elif bridged is not None:
-        # a known bridge id: the harness's own word for who this session continues —
-        # rebind to the lineage's living head, never mint an unrelated sixth identity
-        ident.agent_id = bridged
+        # a known bridge id: the harness's own word for who this session continues — a
+        # background-job fork, the SAME "whole session, not a succession" shape as
+        # `forked` above, and the exact leak vector 0f7bf055 caught live — same guard.
+        fork_child_id = await _fork_child(actions, parent_agent=bridged,
+                                          session_id=session_id, project=ident.project,
+                                          actor=actor)
+        ident.agent_id = fork_child_id or bridged
     # THE FULL VISITOR GATE (Phase 1b of ruling 120fcc81; extends the office gate
     # f580762 to EVERY threshold): no greeting mints an object ANYWHERE. A stranger —
     # no lived lineage, no viewed transcript — gets a registry row and nothing else;
@@ -894,7 +978,13 @@ async def automount(
     if not lived and viewed is None and not (seat_id and attach_token) and spawn_child is None:
         mechanical_mount = await mechanical_seat_mount(
             actions, cwd=cwd, project=ident.project, agent_id=ident.agent_id, actor=actor)
-    if lived or viewed is not None or (seat_id and attach_token) or mechanical_mount:
+    if fork_child_id is None and (
+        lived or viewed is not None or (seat_id and attach_token) or mechanical_mount
+    ):
+        # a fork/bridge child is fully self-registered by `_fork_child` (register_spawn's
+        # own edges + patronym) — same reasoning the declared-child block above already
+        # applies to `spawn_child`: register_agent's own project/name resolution must
+        # never run a second time over a child object it didn't mint.
         await register_agent(actions, ident, actor=actor, expected_model=expected_model,
                              mint_reason=mint_reason)
     # IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed) — SAME LAW,

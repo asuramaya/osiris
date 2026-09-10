@@ -930,10 +930,13 @@ async def test_the_ledger_remembers_every_sid_of_a_lineage(actions: Actions) -> 
 async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """task #68 binding leg: a background-job fork's CLAUDE_CODE_BRIDGE_SESSION_ID rebinds
+    """task #68 binding leg: a background-job fork's CLAUDE_CODE_BRIDGE_SESSION_ID resolves
     to its lineage's living head — the class fork_seat cannot see, because this kind of
     fork's transcript starts fresh (sessionKind='bg') and shares no record uuid with its
-    ancestor's at all."""
+    ancestor's at all. FORKS ARE SUBAGENTS, NOT SUCCESSIONS (decision d438f6b7, thread
+    0f7bf055): the resolved bridge owner is never adopted outright — the fork mints its
+    own DOTTED CHILD (spawned_by-linked, patronym-named), never an anonymous stranger and
+    never the ancestor's own identity object either."""
     root = tmp_path / "projects"
     o = await actions.create_or_find_object("Agent", "agent:5198945f", "agent:5198945f")
     now = datetime.now(UTC)
@@ -949,10 +952,20 @@ async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
     out = await automount(actions, session_id=fork_sid, cwd="/w/imhotep-repo",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="startup", bridge_session_id=bridge)
-    assert out["agent"] == "agent:5198945f"           # rebound via the bridge
-    assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='Agent' "
-        "AND canonical='agent:e08c3850'") == 0         # no sixth identity minted
+    assert out["agent"] == "agent:e08c3850"            # its OWN dotted-child object
+    child = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical='agent:e08c3850'")
+    assert child is not None                           # a real, distinct object — never anonymous
+    parent_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:5198945f'")
+    linked = await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='spawned_by'",
+        child, parent_id)
+    assert linked == 1                                 # never a hijack of the ancestor's own soul
+    patronym = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='patronym'", child)
+    assert patronym == "Imhotep I.1"                   # the dotted-child shape (decision d438f6b7)
 
 
 async def test_no_bridge_id_never_touches_the_bridge_door(
@@ -997,8 +1010,10 @@ async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive
     the office's own lineage still has a live pulse ('two parallel fresh contexts must
     never both be the seat' — office_seat's own law, correct for a cwd-GUESS). The bridge is
     not a guess — the harness said so directly — so it must succeed exactly where office_hint
-    would decline and mint a guest. This is the exact shape of Imhotep's own six-id
-    biography: a fork landing while its ancestor is still live and running."""
+    would decline and mint a guest — as a DOTTED CHILD of the live ancestor (decision
+    d438f6b7, thread 0f7bf055), never a fresh anonymous guest and never the ancestor's own
+    identity object either. This is the exact shape of Imhotep's own six-id biography: a
+    fork landing while its ancestor is still live and running."""
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -1022,10 +1037,118 @@ async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive
     out = await automount(actions, session_id=fork_sid, cwd=str(office),
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           office_root=offices, source="startup", bridge_session_id=bridge)
-    assert out["agent"] == "agent:aaaa1111"           # rebound, not a guest
+    assert out["agent"] == "agent:bbbb2222"           # its own dotted-child object, not a guest
+    child = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical='agent:bbbb2222'")
+    assert child is not None
+    parent_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:aaaa1111'")
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='Agent' "
-        "AND canonical='agent:bbbb2222'") == 0
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='spawned_by'",
+        child, parent_id) == 1                        # never a hijack of the ancestor's own soul
+    patronym = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='patronym'", child)
+    assert patronym == "Nefer I.1"
+
+
+async def test_all_four_session_boundaries_never_mint_an_anonymous_id(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FOUR-BOUNDARY WALK (operator ruling, decision d438f6b7, thread 0f7bf055):
+    spawn, resume, fork, and compact on one synthetic seat, closing 0f7bf055 on this
+    commit. Spawn/resume/compact were already measured live and correct (0f7bf055's own
+    boundary walk, 2026-09-10) — carried here as the regression guard; fork was the one
+    genuinely broken boundary, reproduced live as a bare anonymous mint with zero holds
+    links (agent:6eff8929), which this test proves can no longer happen."""
+    from src.ingest.soul_store import SoulStore
+
+    fake_root = tmp_path / ".osiris" / "seats"
+    fake_root.mkdir(parents=True)
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
+    seat_cwd = str(fake_root)
+    transcripts = tmp_path / "projects"
+    proj_dir = transcripts / seat_cwd.replace("/", "-")
+
+    # --- SPAWN: a fresh seat, bound from birth (osiris launch's own shape) ---
+    seat = await ensure_seat(actions, house="osiris", handle="Probe", source="test")
+    assert seat.get("error") is None
+    parent_sid = "aaaa5eed-0000-4000-8000-000000000000"
+    parent_agent = f"agent:{parent_sid[:8]}"
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=parent_agent, source="test")
+    parent_uuid = "10000000-0000-4000-8000-000000000000"
+    _write_transcript_lines(proj_dir / f"{parent_sid}.jsonl", [
+        {"type": "assistant", "uuid": parent_uuid, "cwd": seat_cwd,
+         "message": {"content": [{"type": "text", "text": "spawn turn"}]}},
+    ])
+    spawned = await automount(actions, session_id=parent_sid, cwd=seat_cwd,
+                              actor="analyst:operator", root=transcripts,
+                              jobs_home=tmp_path / "jobs", source="startup")
+    assert spawned["agent"] == parent_agent
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1", parent_agent) == 1
+
+    # --- RESUME: the same session id returns — rebind, never a twin ---
+    resumed = await automount(actions, session_id=parent_sid, cwd=seat_cwd,
+                              actor="analyst:operator", root=transcripts,
+                              jobs_home=tmp_path / "jobs", source="resume")
+    assert resumed["agent"] == parent_agent
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent'") == 1  # still just the one soul
+
+    # --- FORK: a --fork-session copy shares the parent's own first record uuid ---
+    fork_sid = "bbbb0f01-0000-4000-8000-000000000000"
+    _write_transcript_lines(proj_dir / f"{fork_sid}.jsonl", [
+        {"type": "assistant", "uuid": parent_uuid, "cwd": seat_cwd,
+         "message": {"content": [{"type": "text", "text": "spawn turn"}]}},
+    ])
+    forked = await automount(actions, session_id=fork_sid, cwd=seat_cwd,
+                             actor="analyst:operator", root=transcripts,
+                             jobs_home=tmp_path / "jobs", source="startup")
+    assert forked["agent"] != parent_agent          # never the parent's own identity object
+    fork_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", forked["agent"])
+    assert fork_oid is not None                     # a real object — never anonymous
+    parent_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", parent_agent)
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='spawned_by'",
+        fork_oid, parent_oid) == 1                   # linked to its parent, never orphaned
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND type='holds'", fork_oid) is None  # no seat
+
+    # --- COMPACT: a manual /compact mints the lineage's own next generation ---
+    receipt_uuid = "20000000-0000-4000-8000-000000000000"
+    receipt_file = tmp_path / "receipt-session.jsonl"
+    _write_transcript_lines(receipt_file, [
+        {"type": "assistant", "uuid": receipt_uuid,
+         "message": {"content": [{"type": "text",
+                     "text": f'mount receipt {{"agent":"{parent_agent}","project":"probehouse"}}'
+                             " logged"}]}},
+    ])
+    store = SoulStore(actions.pool)
+    await store.ingest_path(str(receipt_file), anchor_sid=parent_sid[:8])
+
+    compact_sid = "cccc0c01-0000-4000-8000-000000000000"
+    _write_transcript_lines(proj_dir / f"{compact_sid}.jsonl", [
+        {"parentUuid": None, "logicalParentUuid": receipt_uuid, "isSidechain": False,
+         "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+         "cwd": seat_cwd},
+    ])
+    compacted = await automount(actions, session_id=compact_sid, cwd=seat_cwd,
+                                actor="analyst:operator", root=transcripts,
+                                jobs_home=tmp_path / "jobs", source="startup")
+    assert compacted["agent"] == f"{parent_agent}-ii"  # the lineage's own next generation
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1",
+        f"agent:{compact_sid[:8]}") == 0                # no phantom root either
+
+    # ZERO anonymous, unlinked Agent objects landed across all four boundaries
+    orphans = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Agent' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id "
+        "AND l.type IN ('holds','spawned_by'))")
+    assert orphans == 0
 
 
 async def test_record_bridge_anchor_serializes_concurrent_writers(actions: Actions) -> None:
