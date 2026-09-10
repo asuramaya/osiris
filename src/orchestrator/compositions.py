@@ -1513,6 +1513,23 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
+    """FIX (e), METRON'S MECHANISM REPORT (mail 8890/8921/8922): the fleet-wide number
+    the report itself asked for — "an audit for 'threads whose newest note post-dates
+    the summary' would size it fleet-wide in one query." Every ACTIVE Thread where
+    `CONTESTED_SQL` (capture.py, the one shared definition fixes (b)/(c)/(d) all import)
+    holds. Shared by graph_lint's own 'contested-summary' check and any caller that just
+    wants the number — one derivation, never two drifting copies of the same query."""
+    from src.orchestrator.capture import CONTESTED_SQL
+
+    rows = await pool.fetch(
+        f"SELECT o.id, o.canonical FROM objects o "
+        f"WHERE o.status='active' AND o.type='Thread' AND {CONTESTED_SQL} "
+        "ORDER BY o.canonical")
+    return {"rows": [{"id": r["id"], "canonical": r["canonical"]} for r in rows],
+           "total": len(rows)}
+
+
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
     the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
@@ -1570,7 +1587,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     findings/counts, carry the by-type rollup — an object already carrying a durable
     `derivation_abstained_*` record names an ACKNOWLEDGED disconnection, distinct from
     one nobody has ever examined; `orphan_census` is the shared derivation preflight's
-    own weekly line reads too, never a second copy).
+    own weekly line reads too, never a second copy), CONTESTED-SUMMARY (warn: an active
+    Thread whose newest note post-dates its own last summary correction — a headline the
+    fleet has already disproved on the record but not yet fixed; fix (e), Metron's
+    mechanism report, mail 8890/8921/8922 — `contested_summary_audit` is the shared
+    query this check and `CONTESTED_SQL` (capture.py) both anchor on, never a second
+    derivation of "which summary wins, and is it stale").
 
     `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
     LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
@@ -2496,6 +2518,17 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "genuinely unexamined")}
         for r in orphans["rows"]])
 
+    # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
+    # active Thread whose newest note post-dates its own last summary touch — a false
+    # headline the fleet has already disproved but not yet corrected on the record.
+    contested = await contested_summary_audit(pool)
+    land("contested-summary", "warn", [
+        {"subject": r["canonical"],
+         "detail": "a note newer than this thread's own last summary correction "
+                   "disputes it — correct_summary or annotate(corrected_summary=) to "
+                   "clear it"}
+        for r in contested["rows"]])
+
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
         # a per-check ask paginates ONE check's full set — "capped" now names how much of
@@ -2762,7 +2795,13 @@ async def open_thread_wall(
     `current_assertions` itself resolves "current" by — a thread re-annotated last week
     outranks one merely minted yesterday and never touched again. `untouched` already
     proves this is never null for a WALL row (an untouched thread is an echo, not a wall
-    entry)."""
+    entry).
+
+    `contested` (fix (b), Metron's mechanism report, mail 8890/8921/8922) is present and
+    True on any row whose newest note post-dates its own last summary correction -- a
+    reader sees the disagreement here, on the wall, before deciding whether to open it."""
+    from src.orchestrator.capture import CONTESTED_SQL
+
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
         f" {_SUMMARY_DISPLAY_SQL} AS summary, "
@@ -2781,7 +2820,8 @@ async def open_thread_wall(
         " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
         "   AND sa.evidence_class='self_declared') AS last_touched, "
         " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
-        "   AND sa.evidence_class='self_declared') AS untouched "
+        "   AND sa.evidence_class='self_declared') AS untouched, "
+        f" {CONTESTED_SQL} AS contested "
         "FROM objects o JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
@@ -2817,7 +2857,8 @@ async def open_thread_wall(
             " (SELECT max(sa.observed_at) FROM assertions sa WHERE sa.object_id=o.id "
             "   AND sa.evidence_class='self_declared') AS last_touched, "
             " NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
-            "   AND sa.evidence_class='self_declared') AS untouched "
+            "   AND sa.evidence_class='self_declared') AS untouched, "
+            f" {CONTESTED_SQL} AS contested "
             "FROM objects o "
             "WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
             "  AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
@@ -2855,6 +2896,8 @@ async def open_thread_wall(
             item["arc"] = r["arc"]
         if r["is_handoff"]:  # Thoth DM 3090: orient()'s own _cap_text reads this to exempt
             item["is_handoff"] = r["is_handoff"]  # a handoff record from the 160-char cap
+        if r["contested"]:  # fix (b), mail 8890: a newer note disputes this summary
+            item["contested"] = True
         # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (ruling 61c1b20d, extended from the desk
         # to the wall — 2026-07-12, the operator: "it's a snowball to hell").
         #
@@ -4154,7 +4197,9 @@ async def _fn_obligation_backlog(
         past_window = sum(
             1 for it in items
             if it["stale_after"] and datetime.fromisoformat(it["stale_after"]) <= now)
-        oldest = [{"id": str(it["id"])[:8], "summary": it["summary"]} for it in items[:3]]
+        oldest = [{"id": str(it["id"])[:8], "summary": it["summary"],
+                   **({"contested": True} if it.get("contested") else {})}
+                 for it in items[:3]]
         seat_rows.append({"seat": seat, "open": len(items), "past_window": past_window,
                           "oldest": oldest})
     seat_rows.sort(key=lambda r: (-r["open"], r["seat"]))

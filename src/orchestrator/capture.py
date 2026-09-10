@@ -4328,7 +4328,8 @@ def _append_property_name(prefix: str) -> str:
 
 
 async def annotate_thread(
-    actions: Actions, ref: str, note: str, *, source: str = _SOURCE,
+    actions: Actions, ref: str, note: str, *, corrected_summary: str | None = None,
+    because: str | None = None, source: str = _SOURCE,
 ) -> uuid.UUID | None:
     """Add to a thread's record WITHOUT closing it — the fifth door (`resolve_thread` closes;
     `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `status` is never
@@ -4344,11 +4345,20 @@ async def annotate_thread(
     note from `current_assertions`, the loss this verb exists to prevent. Read the whole
     record back, in the order it was understood, with `thread_notes`.
 
-    This is not `resolve_thread`'s `because`, and it is not a correction: annotate_thread has
-    no parameter that can change `summary`, `status`, or any existing property — it can only
-    ADD. A caller who means "the earlier understanding was wrong" wants a different verb
-    entirely (open a fresh thread, or fold the correction into whatever answers this one);
-    nothing here revises anything.
+    `corrected_summary` (optional, Metron's mechanism report, mail 8890/8921/8922: fix (b)
+    — "let annotate carry corrected_summary in the same call"): ONE call fixes the headline
+    instead of requiring a caller to already know `correct_thread_summary` is a second,
+    separate verb — the exact affordance gap the report named ("the affordance points at
+    the wrong action by default"). Writes through the SAME shared helper `correct_thread_
+    summary` itself calls (`_write_corrected_summary`), never a second copy of that
+    property-write. `because` rides beside it, same meaning as `correct_thread_summary`'s
+    own `because` — ignored (never written) when `corrected_summary` is not given.
+
+    This is not `resolve_thread`'s `because` used alone: without `corrected_summary`,
+    annotate_thread still has no parameter that can change `summary`/`status`/any existing
+    property — it can only ADD. A caller who means "the earlier understanding was wrong"
+    and does NOT pass `corrected_summary` wants a different verb entirely; nothing here
+    revises anything unless that parameter is given.
 
     Returns the thread id, or None if `ref` matched nothing (same convention as
     `resolve_thread`/`assign_thread`/`defer_thread`). Raises ValueError on a blank note —
@@ -4362,6 +4372,10 @@ async def annotate_thread(
     observed = datetime.now(UTC)
     await actions.assert_property(tid, _append_property_name("note"), note, source, observed,
                                   _CONF, evidence_class=_EC)
+    if corrected_summary is not None:
+        await _write_corrected_summary(
+            actions, tid, corrected_summary, because=because, source=source,
+            observed=observed)
     # A TOUCH RENEWS THE WINDOW (Imhotep 2026-09-08, mail 8102): the stop hook's stale-
     # obligation gate names "annotate, resolve, or reclassify" as the three touches that
     # carry a stale duty, but only ever read `stale_after` — an honest dated note left the
@@ -4438,6 +4452,36 @@ async def open_or_annotate_persisting_alarm(
         source=source, unlinked_because=unlinked_because))
 
 
+# THE CONTESTED-SUMMARY LAW, fixes (b)/(c)/(d) (Metron's mechanism report, mail 8890,
+# Thoth dispatch 8921/8922): a thread's own `summary` can be proven false by a LATER
+# note, yet nothing anywhere marks the disagreement before a reader decides whether to
+# open it — a false headline survived a week, through a stale-sweep nudge and a full
+# obligation crunch, because two annotations discharged the hygiene duty without ever
+# fixing it. A thread is CONTESTED when its newest `note:*` annotation post-dates the
+# LAST summary touch (`corrected_summary` if one exists, else the original `summary`).
+#
+# ONE SHARED SQL FRAGMENT, never re-derived per surface (the exact failure this whole
+# report is about, one level up: five near-identical COALESCE copies already exist for
+# "which summary wins" alone — no_regrow.py, obligation_hygiene.py, compositions.py,
+# digest.py, mcp_server.py's threads() — a sixth hand-rolled boolean would be the same
+# mistake at a higher stakes table). Every consumer (threads(render='text'), the
+# backlog band, orient's wall, the stale nudge, no_regrow's own exclusion, the fleet
+# audit) imports this rather than writing its own. ASSUMES the calling query aliases
+# the Thread object as `o` — the same convention every COALESCE fragment above already
+# assumes.
+LAST_SUMMARY_TOUCH_SQL = (
+    "COALESCE("
+    "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='corrected_summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), "
+    "(SELECT a.observed_at FROM current_assertions a WHERE a.object_id=o.id "
+    " AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1))"
+)
+CONTESTED_SQL = (
+    "EXISTS (SELECT 1 FROM current_assertions n WHERE n.object_id=o.id "
+    "AND n.name LIKE 'note:%' AND n.observed_at > " + LAST_SUMMARY_TOUCH_SQL + ")"
+)
+
+
 async def correct_thread_summary(
     actions: Actions, ref: str, corrected_summary: str, *, because: str | None = None,
     source: str = _SOURCE,
@@ -4476,20 +4520,33 @@ async def correct_thread_summary(
 
     Returns the thread id, or None if `ref` matched nothing (same convention as
     `resolve_thread`/`annotate_thread`). Raises ValueError on a blank corrected_summary."""
+    tid = await _find_thread(actions.pool, ref)
+    if tid is None:
+        return None
+    await _write_corrected_summary(
+        actions, tid, corrected_summary, because=because, source=source,
+        observed=datetime.now(UTC))
+    return tid
+
+
+async def _write_corrected_summary(
+    actions: Actions, tid: uuid.UUID, corrected_summary: str, *, because: str | None,
+    source: str, observed: datetime,
+) -> None:
+    """The property-write `correct_thread_summary` and `annotate_thread`'s own
+    `corrected_summary=` param both share — one write, never a second copy drifting from
+    the first (the exact failure Metron's report is about, one level down: two callers
+    writing "the same fix" slightly differently is how a headline survives a correction).
+    Raises ValueError on a blank corrected_summary — an empty correction is not testimony."""
     corrected_summary = corrected_summary.strip()
     if not corrected_summary:
         raise ValueError(
             "corrected_summary must not be blank — an empty correction is not testimony")
-    tid = await _find_thread(actions.pool, ref)
-    if tid is None:
-        return None
-    observed = datetime.now(UTC)
     await actions.assert_property(tid, "corrected_summary", corrected_summary, source, observed,
                                   _CONF, evidence_class=_EC)
     if because:
         await actions.assert_property(tid, "corrected_because", because.strip(), source,
                                       observed, _CONF, evidence_class=_EC)
-    return tid
 
 
 async def amend_decision(

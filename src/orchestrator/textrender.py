@@ -107,7 +107,10 @@ def render_obligation_backlog_text(result: dict[str, Any]) -> str:
 
 def _render_seat_backlog_row(row: dict[str, Any]) -> str:
     past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
-    oldest = ", ".join(o["id"] for o in (row.get("oldest") or []))
+    # a leading `!` marks a CONTESTED oldest item (fix (b), mail 8890): a note newer than
+    # its own last summary correction disputes that headline.
+    oldest = ", ".join(f"{'!' if o.get('contested') else ''}{o['id']}"
+                       for o in (row.get("oldest") or []))
     return f"  {row['seat']}: {row['open']} open{past} — oldest: {oldest}"
 
 
@@ -224,11 +227,16 @@ THREADS_BAND_CAP = 30
 def render_threads_text(rows: list[dict[str, Any]]) -> str:
     """One line per thread, already ordered by the caller (threads()'s own oldest-first
     query) — caps and formats only, never reorders. Caps at `THREADS_BAND_CAP`, the
-    remainder folded into one trailing count line."""
+    remainder folded into one trailing count line.
+
+    A leading `!` marks a CONTESTED thread (fix (b), Metron's mechanism report, mail
+    8890): a note newer than the last summary correction disputes this headline — read
+    it as disputed, not as settled fact."""
     shown, remainder = rows[:THREADS_BAND_CAP], max(0, len(rows) - THREADS_BAND_CAP)
     if not shown:
         return "threads: none open in your name here"
-    lines = [f"{r['id']} [{r['kind'] or '?'}] {r['summary']}" for r in shown]
+    lines = [f"{'! ' if r.get('contested') else ''}{r['id']} [{r['kind'] or '?'}] "
+            f"{r['summary']}" for r in shown]
     if remainder:
         lines.append(f"+{remainder} more thread(s)")
     return "\n".join(lines)

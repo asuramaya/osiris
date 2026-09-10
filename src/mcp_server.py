@@ -5379,13 +5379,17 @@ async def threads(project: str | None = None, render: str | None = None,
     point; call again with an explicit `project` for another repo you govern.
 
     `render='text'`: returns only {"text": <str>} -- one line per thread, capped at
-    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered."""
+    `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered.
+
+    `contested` (fix (b), Metron's mechanism report, mail 8890): present and `True` when
+    a newer note has disputed this summary and nobody has corrected it yet — marked with
+    a leading `!` in both the JSON row and the text render."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     if ident is None or proj is None:
         return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>"}
-    from src.orchestrator.capture import _resolve_repo
+    from src.orchestrator.capture import CONTESTED_SQL, _resolve_repo
     proj_id = await _resolve_repo(pool, proj)
     if proj_id is None:
         return {"error": f"no project {proj!r}", "threads": []}
@@ -5403,7 +5407,8 @@ async def threads(project: str | None = None, render: str | None = None,
         "     AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1)) "
         "    AS summary, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind "
+        "   AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
+        f"  {CONTESTED_SQL} AS contested "
         "FROM objects o "
         "JOIN links l ON l.from_id=o.id AND l.type='in_repo' AND l.to_id=$1 "
         "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -5417,7 +5422,8 @@ async def threads(project: str | None = None, render: str | None = None,
         "    '')) = ANY($2::text[]) "
         "ORDER BY o.created_at ASC",
         proj_id, owners)
-    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"]}
+    mine = [{"id": str(r["id"])[:8], "summary": r["summary"], "kind": r["kind"],
+             **({"contested": True} if r["contested"] else {})}
            for r in rows]
     if render == "text":
         return {"text": render_threads_text(mine)}
@@ -9532,7 +9538,7 @@ THREAD_INPUT_SCHEMA: dict[str, Any] = {
         }, ["action", "ref"]),
         _dispatcher_action_schema({
             "action": _action_const("annotate"), "ref": _s(), "note": _s(),
-            **_SUBAGENT_TRIO,
+            "corrected_summary": _opt_s(), "because": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "ref", "note"]),
         _dispatcher_action_schema({
             "action": _action_const("correct_summary"), "ref": _s(),
@@ -9548,7 +9554,7 @@ _HAND_BUILT_SCHEMAS["thread"] = THREAD_INPUT_SCHEMA
 
 _THREAD_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "resolve": (["ref", "because", "artifact", "dry_run"], ["ref"]),
-    "annotate": (["ref", "note"], ["ref", "note"]),
+    "annotate": (["ref", "note", "corrected_summary", "because"], ["ref", "note"]),
     "correct_summary": (["ref", "corrected_summary", "because"], ["ref", "corrected_summary"]),
     "reclassify": (["ref", "kind", "because", "owner", "arc"], ["ref", "kind"]),
 }
@@ -9620,12 +9626,17 @@ async def _thread_action_impl(
         assert isinstance(ref, str)
         assert note is not None
         try:
-            tid = await capture.annotate_thread(Actions(pool), ref, note, source=actor)
+            tid = await capture.annotate_thread(
+                Actions(pool), ref, note, corrected_summary=corrected_summary,
+                because=because, source=actor)
         except ValueError as e:
             return {"error": str(e)}
         if tid is None:
             return {"error": f"no thread matches {ref!r}"}
-        return {"id": str(tid), "note": note.strip(), "status": "annotated"}
+        out = {"id": str(tid), "note": note.strip(), "status": "annotated"}
+        if corrected_summary:
+            out["corrected_summary"] = corrected_summary.strip()
+        return out
     if action == "correct_summary":
         assert isinstance(ref, str)
         assert corrected_summary is not None
@@ -9711,7 +9722,9 @@ async def thread(
         writing — pass `dry_run=False` explicitly to actually close the batch — and the
         whole batch refuses if any ref does not resolve to exactly one thread.
       annotate: add `note` WITHOUT closing it or touching `summary`/`status` (ref, note)
-        — each call appends independently, never supersedes an earlier note.
+        — each call appends independently, never supersedes an earlier note. Optional
+        `corrected_summary`/`because` fix the headline in the same call, same as
+        correct_summary below.
       correct_summary: replace the headline in place via `corrected_summary` (ref,
         corrected_summary — `summary` itself, the dedup key, is never touched);
         re-calling supersedes the prior correction rather than piling up notes.

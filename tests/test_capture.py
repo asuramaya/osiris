@@ -6485,6 +6485,39 @@ async def test_annotate_thread_leaves_a_resolved_thread_resolved(actions: Action
     assert props["status"] == "resolved"
 
 
+async def test_annotate_thread_can_fix_the_headline_in_the_same_call(actions: Actions) -> None:
+    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): the affordance used to
+    point at the wrong action by default — a caller who just proved a summary false had
+    to already know correct_thread_summary exists as a SEPARATE verb. One call now does
+    both: the note lands AND the headline corrects, through the same shared write
+    correct_thread_summary itself uses (never a second copy)."""
+    t = await open_thread(actions, "the master limiter's gain reduction is exposed but "
+                                   "nothing renders it")
+    await annotate_thread(
+        actions, str(t), "checked the tree: MasterBand.tsx DOES render it",
+        corrected_summary="MasterBand.tsx renders the gain reduction via .mband-gr",
+        because="verified against the live tree")
+    props = await _props(actions.pool, t)
+    assert props["summary"] == ("the master limiter's gain reduction is exposed but "
+                                "nothing renders it")  # the dedup key, untouched
+    assert props["corrected_summary"] == "MasterBand.tsx renders the gain reduction via .mband-gr"
+    assert props["corrected_because"] == "verified against the live tree"
+    notes = await thread_notes(actions.pool, t)
+    assert [n["note"] for n in notes] == ["checked the tree: MasterBand.tsx DOES render it"]
+
+
+async def test_annotate_thread_without_corrected_summary_never_touches_it(
+    actions: Actions,
+) -> None:
+    """The omitted-by-default case: a plain annotate (no corrected_summary=) must not
+    write the property at all — nothing here regresses annotate_thread's own pre-existing
+    "addition only" contract when the new parameter is simply not used."""
+    t = await open_thread(actions, "a thread annotated the old way, no correction given")
+    await annotate_thread(actions, str(t), "just a note, no correction")
+    props = await _props(actions.pool, t)
+    assert "corrected_summary" not in props
+
+
 async def test_correct_thread_summary_supersedes_without_touching_the_original(
     actions: Actions,
 ) -> None:

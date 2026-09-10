@@ -1425,7 +1425,17 @@ TOOL_CONTRACT_EXPECTED_COUNT = 77
 # (practice's own PRACTICE_INPUT_SCHEMA branch plus both dispatcher docstrings) mirroring
 # record_decision/open_thread's own existing shape. No new tool, load-bearing growth per
 # this file's own escape valve. Measured exact (119,302), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 119302
+# 118,328 -> 118,628 (2026-09-10, Thoth mail 8921/8922, Metron's mechanism report):
+# thread(action='annotate') gains optional corrected_summary/because -- one call now
+# fixes a proven-false headline instead of requiring a caller to already know
+# correct_summary is a separate verb (the exact affordance gap the report named). No
+# new tool, load-bearing growth per this file's own escape valve. Measured exact
+# (118,628), not estimated.
+# 118,628 -> 118,856 (2026-09-10, Thoth mail 8921/8922, Metron's mechanism report, fix
+# (b)): threads()'s own docstring gains one paragraph naming the new `contested` field
+# and its `!` marker. No new tool, load-bearing growth per this file's own escape valve.
+# Measured exact (118,856), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 119830
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

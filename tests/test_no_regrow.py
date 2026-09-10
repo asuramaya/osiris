@@ -92,6 +92,26 @@ async def test_past_stale_after_and_past_the_grace_window_with_no_touch_would_re
     assert _find(out["no_action"], t) is None
 
 
+# ═══ fix (d), Metron's mechanism report (mail 8890/8921/8922): a CONTESTED thread is
+# excluded from reclassify even past the grace window ════════════════════════════════
+
+async def test_a_contested_obligation_never_reclassifies_even_past_the_grace_window(
+    actions: Actions,
+) -> None:
+    stale_after = NOW - timedelta(days=N_GRACE_DAYS + 1)
+    summary_touch = stale_after - timedelta(days=2)
+    note_touch = stale_after - timedelta(days=1)  # after the summary, still before stale_after
+    t = await _mk_obligation(actions, "noregrow-contested", owner="agent:nr-contested",
+                             stale_after=stale_after, touched_at=summary_touch)
+    await actions.assert_property(t, "note:1", "checked: no longer true", "test-source",
+                                  note_touch, 0.9, evidence_class="self_declared")
+
+    out = await plan_no_regrow(actions.pool, now=NOW)
+    assert _find(out["would_reclassify"], t) is None
+    row = _find(out["no_action"], t)
+    assert row is not None and "CONTESTED" in row["reason"]
+
+
 # ═══ a genuine touch after stale_after resets the window ════════════════════════════════
 
 async def test_a_touch_after_stale_after_resets_the_window_even_when_old(
