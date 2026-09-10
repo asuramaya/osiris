@@ -1037,6 +1037,89 @@ async def resolve_practice_orphans(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+async def resolve_superstition_orphans(
+    actions: Actions, *, actor: str = "provenance-sweep:agent",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """PROVENANCE SWEEP, WAVE 15, SUPERSTITION LANE (mail 8840): links every
+    zero-live-in_repo Superstition to its project, resolved from ITS OWN `killed_by`
+    property — "the decision that killed it" (mail 8840's own words) — one hop, never a
+    guess. `kill_superstition` (this module) already passes the killing call's own `repo`
+    straight through when one is given; an orphan Superstition is exactly the case where
+    that call had none, same "missing at write time" gap the Decision/Thread lanes above
+    close for their own objects. `killed_by` names either a Decision id or a commit hash
+    (`kill_superstition`'s own docstring) — resolved via the SAME `_resolve_ref` ladder
+    every other identifier-shaped reference in this module uses, `require_identifier=True`
+    so a malformed value refuses rather than falls through to a fuzzy text search.
+
+    LIVE-MEASURED (2026-09-09): all 4 real orphans share one `killed_by` (a single
+    Decision, itself already linked to one project) — a clean, unambiguous mint for every
+    one of them, the "single-candidate, linked" shape mail 8840's own acceptance criteria
+    names.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds nothing to scan once an object is linked."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "  AND a.name='killed_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS killed_by "
+        "FROM objects o WHERE o.type='Superstition' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()))")
+    plan: list[dict[str, Any]] = []
+    minted = 0
+    abstained = 0
+    for row in rows:
+        killed_by = (row["killed_by"] or "").strip()
+        killer: uuid.UUID | None = None
+        if killed_by:
+            killer = await _resolve_ref(pool, "Decision", killed_by, text_field="summary",
+                                        require_identifier=True)
+            if killer is None:
+                killer = await _resolve_ref(pool, "Commit", killed_by, text_field="subject",
+                                            require_identifier=True)
+        candidate_ids: list[uuid.UUID] = []
+        reason: str | None = None
+        if killer is None:
+            reason = (f"killed_by {killed_by!r} does not resolve to any live "
+                      "Decision/Commit — no signal to derive from" if killed_by else
+                      "no killed_by property recorded at all")
+        else:
+            proj_rows = await pool.fetch(
+                "SELECT DISTINCT p.id, p.canonical FROM links l "
+                "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+                "WHERE l.from_id=$1 AND l.type='in_repo' "
+                "AND (l.valid_until IS NULL OR l.valid_until > now())", killer)
+            candidate_ids = [p["id"] for p in proj_rows]
+            if len(candidate_ids) > 1:
+                names = sorted({p["canonical"].removeprefix("repo:") for p in proj_rows})
+                reason = (f"the killing decision/commit itself names {len(names)} distinct "
+                          f"projects ({', '.join(names)}) — not a unique lookup, never "
+                          "guessed")
+            elif not candidate_ids:
+                reason = "the killing decision/commit carries no project link of its own yet"
+        if len(candidate_ids) == 1:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
+                     "to": str(candidate_ids[0]), "killed_by": killed_by}
+            minted += 1
+        else:
+            entry = {"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": reason, "killed_by": killed_by,
+                     "candidate_count": len(candidate_ids)}
+            abstained += 1
+        if not dry_run:
+            await derive_or_abstain(actions, row["id"], "in_repo", candidate_ids, actor,
+                                    why_if_ambiguous=reason)
+        plan.append(entry)
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
+           "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
+
+
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
     """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
     name this codebase's own generic listing/describe queries already key on across
