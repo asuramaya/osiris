@@ -61,6 +61,55 @@ async def test_assert_property_supersedes_within_source_but_keeps_set(
     assert {v["value"] for v in vals} == {"Namecheap", "MarkMonitor"}
 
 
+async def test_assert_property_no_ops_a_same_source_same_value_reassertion(
+    actions: Actions, case_id: str,
+) -> None:
+    """The write-side no-op guard (operator ruling on thread 2a280e07, mail 9240): a
+    reassertion carrying the SAME value, confidence, and evidence_class from the SAME
+    source as its own current row writes no NEW row — the returned id is the existing
+    row's, unchanged (the id itself is the no-op receipt) — but a genuinely NEWER
+    observed_at still bumps the existing row's own observed_at in place (last_touched/
+    recency reads must still see it — test_wall's own touch-ranking specimen), never a
+    new supersession link. A changed value still writes and supersedes; a different
+    source still writes (same-source-only supersession, unaffected by this guard); a
+    changed confidence or evidence_class ALSO still writes even at an unchanged value —
+    that combination is real information (test_lap_lint's coin-flip specimen), not noise."""
+    obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
+    first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
+
+    later = datetime(2026, 5, 28, tzinfo=UTC)
+    reasserted = await actions.assert_property(
+        obj, "registrar", "GoDaddy", "helper:rdap", later, 0.9)
+    assert reasserted == first
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='registrar'", obj
+    ) == 1
+    bumped_observed_at = await actions.pool.fetchval(
+        "SELECT observed_at FROM assertions WHERE id=$1", first)
+    assert bumped_observed_at == later  # the no-op still moved the row's own recency
+
+    # a same-value reassertion at a DIFFERENT confidence is real information, not noise
+    reweighted = await actions.assert_property(
+        obj, "registrar", "GoDaddy", "helper:rdap", later, 0.4, evidence_class="derived")
+    assert reweighted != first
+    assert await actions.pool.fetchval(
+        "SELECT supersedes FROM assertions WHERE id=$1", reweighted
+    ) == first
+
+    # a genuinely changed value still writes and supersedes
+    changed = await actions.assert_property(
+        obj, "registrar", "Namecheap", "helper:rdap", later, 0.9)
+    assert changed not in (first, reweighted)
+    assert await actions.pool.fetchval(
+        "SELECT supersedes FROM assertions WHERE id=$1", changed
+    ) == reweighted
+
+    # a different source asserting the identical value still writes (own triple, own row)
+    other_source = await actions.assert_property(
+        obj, "registrar", "Namecheap", "helper:whois", later, 0.7)
+    assert other_source not in (first, reweighted, changed)
+
+
 async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
     actions: Actions, case_id: str,
 ) -> None:
