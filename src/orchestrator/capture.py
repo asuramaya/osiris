@@ -1685,6 +1685,39 @@ async def link_repo(
 _REQUIRED_LINK_KIND_TABLE = {"repo": "in_repo", "grounds": "grounded_by", "resolves": "answers"}
 
 
+async def _confess_abstention(
+    a: Actions, obj_id: uuid.UUID, kinds_in_scope: tuple[str, ...], unlinked_because: str,
+    source: str, observed: datetime,
+) -> None:
+    """THE HATCH DUAL-WRITES (Thoth's ruling, DM 8919/thread 8861, widening #189's gate to
+    every object-minting door): `unlinked_because`/`unlinked_because_kind` stay exactly as
+    they are — the countable hatch `adoption_meter._hatch_counts` already reads, untouched.
+    This ALSO writes a `derivation_abstained_<link_type>` record per link kind in this
+    door's own `kinds_in_scope`, in the same shape `derive_or_abstain` already uses (see
+    above), so orphan_census/graph_lint's 'orphan' check and any future miner see ONE
+    abstention shape regardless of whether the hand that abstained was a derivation join
+    or a caller's own declared reason — never two conventions a reader has to know apart.
+
+    Written unconditionally for every kind in `kinds_in_scope`, not gated on whether this
+    type's `required_link_kinds` currently arms that kind — the same principle the
+    `unlinked_because` hatch itself already follows a few lines below this call: arming
+    enforcement later must never retroactively silence a gap that was already confessed.
+
+    `candidate_count=0, candidates=[]`: this is a DECLARED reason, not an ambiguous lookup
+    with a real candidate set — there is nothing to keep for a future miner to re-visit,
+    unlike derive_or_abstain's own abstention. Graded SELF_DECLARED (`_CONF`/`_EC`, this
+    module's own top-level constants), not derive_or_abstain's DIRECT_OBSERVATION tier —
+    a caller confessing a gap is a declaration, not a deterministic join over facts the
+    graph already asserts."""
+    for kind in kinds_in_scope:
+        link_type = _REQUIRED_LINK_KIND_TABLE[kind]
+        await a.assert_property(
+            obj_id, f"derivation_abstained_{link_type}",
+            {"link_type": link_type, "candidate_count": 0, "reason": unlinked_because,
+             "candidates": []},
+            source, observed, _CONF, evidence_class=_EC)
+
+
 async def _enforce_required_links(
     a: Actions, obj_id: uuid.UUID, type_name: str, *, kinds_in_scope: tuple[str, ...],
     unlinked_because: str | None, source: str, observed: datetime,
@@ -1715,7 +1748,13 @@ async def _enforce_required_links(
     never re-derived here from the string. Defaults to `"standalone"` when omitted (every
     other caller of this function — open_thread has no extension-link params of its own
     to be pending on).
-    counts, per Thoth's explicit instruction (msg 5790/5797)."""
+    counts, per Thoth's explicit instruction (msg 5790/5797).
+
+    DUAL-WRITE (Thoth's ruling, DM 8919/thread 8861 — THE ORPHAN LAWS item 2): every hatch
+    fire (both branches below) also writes `derivation_abstained_<link_type>` for each kind
+    in `kinds_in_scope`, via `_confess_abstention` — see its own docstring. `unlinked_because`
+    /`unlinked_because_kind` themselves are UNCHANGED, still the metric adoption_meter
+    reads; this is an addition, never a replacement, no wholesale rename."""
     # ONE bound connection for this WHOLE call, catalog read included — a.pool.
     # object_type/fetchval would acquire a DIFFERENT connection from the SAME pool while
     # this atomic() caller's own connection is still held open, and under concurrent
@@ -1754,6 +1793,8 @@ async def _enforce_required_links(
                 await a.assert_property(obj_id, "unlinked_because_kind",
                                         unlinked_because_kind or "standalone", source,
                                         observed, _CONF, evidence_class=_EC)
+                await _confess_abstention(a, obj_id, kinds_in_scope, unlinked_because,
+                                          source, observed)
             return  # unenforced for this type (the common case in this pass), or
                     # nothing this door can even attest to — not this call's problem
         # REAL LINKS CHECKED FIRST, the hatch only as a fallback (Thoth's condition 2,
@@ -1774,6 +1815,8 @@ async def _enforce_required_links(
         await a.assert_property(obj_id, "unlinked_because_kind",
                                 unlinked_because_kind or "standalone", source, observed,
                                 _CONF, evidence_class=_EC)
+        await _confess_abstention(a, obj_id, kinds_in_scope, unlinked_because, source,
+                                  observed)
         return
     raise ValueError(
         f"{type_name} refused: none of its required link kinds ({', '.join(required)}) "
@@ -2497,6 +2540,7 @@ async def ingest_reference(
     repo: str | None = None, source: str = _SOURCE,
     cites: list[uuid.UUID] | None = None,
     repo_evidence_class: str | None = None,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> tuple[uuid.UUID, str]:
     """An agent turns something it READ into a first-class Reference node (Soundwave VI's
     ask, obligation ecc8d58e): a paper, a vendor doc, a spec — findable by search, linkable
@@ -2513,6 +2557,15 @@ async def ingest_reference(
     own parameter of the same name: SELF_DECLARED (default) when the caller typed `repo=`,
     DIRECT_OBSERVATION when the MCP wrapper defaulted it from the caller's own mount state
     rather than the caller asserting it about this specific Reference.
+
+    `unlinked_because`/`unlinked_because_kind` (Thoth's ruling, DM 8919/thread 8861 —
+    widening #189's declare-or-refuse gate to this door): same shape record_decision/
+    open_thread already use — a real `in_repo` link satisfies the gate outright,
+    `unlinked_because` is the mandatory countable hatch otherwise, and refusing without
+    either raises before this Reference ever lands (`_enforce_required_links`, in scope
+    for `("repo",)` only — the sole link kind this door mints inside its own atomic
+    block; `cites` is deliberately NOT in scope here, a root Reference legitimately
+    cites nothing).
 
     Returns (id, canonical)."""
     observed = datetime.now(UTC)
@@ -2544,6 +2597,10 @@ async def ingest_reference(
                 await a.create_link(ref, cited, "cites", source, observed, _CONF,
                                     evidence_class=_EC,
                                     properties={"origin": "declared"})
+        await _enforce_required_links(
+            a, ref, "Reference", kinds_in_scope=("repo",),
+            unlinked_because=unlinked_because, source=source, observed=observed,
+            unlinked_because_kind=unlinked_because_kind)
     return ref, canon
 
 
@@ -3823,6 +3880,7 @@ async def record_practice(
     actions: Actions, statement: str, *, failure_prevented: str | None = None,
     surface: str | None = None, repo: str | None = None,
     witnesses: list[uuid.UUID] | None = None, source: str = _SOURCE,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> uuid.UUID:
     """Capture a TRANSFERABLE TECHNIQUE — Superstition's positive twin (operator ruling
     1e6d7367, from Alfred IX's filing msg 1418: the graph could hold what to STOP believing
@@ -3835,23 +3893,37 @@ async def record_practice(
     Decisions/Commits/Threads that are this Practice's evidence AT BIRTH; `confirms=` on a
     LATER record_decision call is how a re-encounter adds one more (see practice_confirmed_
     count — `confirmed` is that link count, never a separate stored number). Idempotent on
-    the normalized statement."""
+    the normalized statement.
+
+    `unlinked_because`/`unlinked_because_kind` (Thoth's ruling, DM 8919/thread 8861 —
+    widening #189's declare-or-refuse gate to this door): a real `in_repo` link satisfies
+    the gate, `unlinked_because` is the hatch otherwise, `_enforce_required_links` in scope
+    for `("repo",)` only — a Practice is deliberately repo-agnostic (timeless, may span
+    every project a lesson applies to), so this scope stays INERT (no refusal) unless and
+    until this Type's own `required_link_kinds` is armed to include `"repo"`; wiring it now
+    only establishes the same convention every other capture-a-fact door already carries,
+    never a new requirement sprung on an existing caller."""
     observed = datetime.now(UTC)
     key = " ".join(statement.split()).lower()
-    p = await actions.create_or_find_object("Practice", _canon("practice", key), source)
-    await actions.assert_property(p, "statement", statement.strip(), source, observed, _CONF,
-                                  evidence_class=_EC)
-    if failure_prevented:
-        await actions.assert_property(p, "failure_prevented", failure_prevented, source,
-                                      observed, _CONF, evidence_class=_EC)
-    if surface:
-        await actions.assert_property(p, "surface", surface, source, observed, _CONF,
-                                      evidence_class=_EC)
-    if repo:
-        await link_repo(actions, p, repo, observed, source=source, evidence_class=_EC,
-                        confidence=_CONF)
-    for w in witnesses or []:
-        await _witness_link(actions, p, w, source, observed)
+    async with actions.atomic() as a:
+        p = await a.create_or_find_object("Practice", _canon("practice", key), source)
+        await a.assert_property(p, "statement", statement.strip(), source, observed, _CONF,
+                                evidence_class=_EC)
+        if failure_prevented:
+            await a.assert_property(p, "failure_prevented", failure_prevented, source,
+                                    observed, _CONF, evidence_class=_EC)
+        if surface:
+            await a.assert_property(p, "surface", surface, source, observed, _CONF,
+                                    evidence_class=_EC)
+        if repo:
+            await link_repo(a, p, repo, observed, source=source, evidence_class=_EC,
+                            confidence=_CONF)
+        for w in witnesses or []:
+            await _witness_link(a, p, w, source, observed)
+        await _enforce_required_links(
+            a, p, "Practice", kinds_in_scope=("repo",),
+            unlinked_because=unlinked_because, source=source, observed=observed,
+            unlinked_because_kind=unlinked_because_kind)
     return p
 
 
