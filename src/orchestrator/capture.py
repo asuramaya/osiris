@@ -821,9 +821,20 @@ async def resolve_agent_orphans(
     reading the SAME on-disk session directories that property names). Zero or
     2+ distinct projects abstains via `derive_or_abstain`, candidate ids kept whole.
 
+    THE DUAL-WRITE (Thoth mail 9054, from Sekhmet's multi-phase pass 9047): an
+    abstention here also asserts `unlinked_because`/`unlinked_because_kind` — the SAME
+    door-side hatch `_enforce_required_links` writes — so `adoption_meter`'s hatch
+    count (an unscoped, all-object read of `unlinked_because`, not limited to
+    SCOPED_TYPES) sees this sweep's confessions too. `derive_or_abstain`'s own
+    `derivation_abstained_works_in` property is a DIFFERENT fact (candidate ids kept,
+    namespaced by link_type) and is written regardless; this hatch write is additive,
+    fires only on the abstain branch, and is `kind="standalone"` — a sweep confession
+    names no pending extension link.
+
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once an object is linked or already carries a
-    live abstention that `derive_or_abstain` itself dedupes against."""
+    live abstention that `derive_or_abstain` itself dedupes against; `assert_property`'s
+    own within-source supersession makes a repeat hatch write equally safe."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling without a because is an un-audited repair — cite "
                          "the evidence/ruling that authorizes it"}
@@ -876,6 +887,14 @@ async def resolve_agent_orphans(
         if not dry_run:
             await derive_or_abstain(actions, row["id"], "works_in", candidate_ids, actor,
                                     why_if_ambiguous=reason)
+            if len(candidate_ids) != 1:
+                hatch_observed = datetime.now(UTC)
+                await actions.assert_property(
+                    row["id"], "unlinked_because", reason or "no candidate resolved",
+                    actor, hatch_observed, _CONF, evidence_class=_EC)
+                await actions.assert_property(
+                    row["id"], "unlinked_because_kind", "standalone", actor,
+                    hatch_observed, _CONF, evidence_class=_EC)
         plan.append(entry)
     return {"dry_run": dry_run, "scanned": len(rows), "to_mint": minted,
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
@@ -1172,6 +1191,87 @@ async def resolve_seat_orphans(
            "to_abstain": confessed, "plan": plan, "because": because if not dry_run else None}
 
 
+async def resolve_project_orphans(
+    actions: Actions, *, actor: str = "provenance-sweep:project",
+    dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """PROVENANCE SWEEP, SOFTWAREPROJECT LANE (Thoth mail 9054, from Sekhmet's multi-phase
+    pass 9047): SoftwareProject has no single mint door — five separate auto-vivifying
+    `create_or_find_object("SoftwareProject", ...)` call sites, each a side effect of some
+    OTHER caller resolving its own `repo=` string — so unlike this module's other lanes it
+    was never covered by any sweep either. Confesses every zero-live-link SoftwareProject.
+
+    NOT a `derive_or_abstain` candidate lookup, SAME SHAPE as `resolve_seat_orphans`
+    above (Sekhmet, DM 9018/thread 9004): a friendless SoftwareProject has no ambiguous
+    candidate SET to resolve from its own properties — by construction, if a real
+    self-declared `in_repo`/`works_in`/`governs` link to it existed, it would not be
+    zero-live-link in the first place. So `to_mint` is always 0 here; `to_abstain` counts
+    real confessions, via the SAME `confirm_or_confess_link` primitive `resolve_seat_
+    orphans` uses (real link checked first, then already-confessed, then the dual hatch
+    write) — ONE primitive for every confession in this module, per Thoth's own word
+    (msg 9071) once her post-mint invariant branch landed it on main (9c97d91). An
+    earlier build of this lane (5b5689c) wrote the hatch directly because that primitive
+    wasn't merged yet; this rebase refactors onto it.
+
+    THE EVIDENCE SEARCH (mail 9054's own words — "evidence being the commits, decisions
+    or references that name the project") is PURELY DESCRIPTIVE, never a mint: this scans
+    Commit.subject / Decision.summary / Reference.topic for the project's bare name
+    (`canonical` minus its `repo:` prefix) so the confession's own `reason` text can
+    distinguish "mentioned in prose somewhere, just never linked" from "nothing in the
+    graph names this project at all" — a genuinely useful triage signal for whoever reads
+    the abstention later — but a textual mention is never treated as a candidate to link
+    against; asserting a real edge off a prose match would be exactly the guess `derive_
+    or_abstain`'s whole contract refuses, and this lane never does it.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    `confirm_or_confess_link` itself skips an already-linked or already-confessed row."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.id, o.canonical FROM objects o WHERE o.type='SoftwareProject' "
+        "AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())) "
+        "AND NOT EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
+        "AND (ca.name='unlinked_because' OR "
+        "     (ca.name='derivation_abstained_in_repo' AND NOT (ca.value ? 'resolved'))))")
+    plan: list[dict[str, Any]] = []
+    confessed = 0
+    for row in rows:
+        name = row["canonical"].removeprefix("repo:")
+        named_by = await pool.fetchval(
+            "SELECT count(*) FROM ("
+            "  SELECT 1 FROM objects c WHERE c.type='Commit' AND c.status='active' "
+            "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=c.id "
+            "    AND a.name='subject' AND a.value #>> '{}' ILIKE '%' || $1 || '%') "
+            "  UNION ALL "
+            "  SELECT 1 FROM objects d WHERE d.type='Decision' AND d.status='active' "
+            "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=d.id "
+            "    AND a.name='summary' AND a.value #>> '{}' ILIKE '%' || $1 || '%') "
+            "  UNION ALL "
+            "  SELECT 1 FROM objects r WHERE r.type='Reference' AND r.status='active' "
+            "  AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=r.id "
+            "    AND a.name='topic' AND a.value #>> '{}' ILIKE $1 || '%')"
+            ") named", name)
+        reason = (f"named by {named_by} commit/decision/reference row(s) in prose, but "
+                  "none carries a live link to this project" if named_by else
+                  "no commit, decision, or reference names this project at all")
+        plan.append({"id": str(row["id"]), "canonical": row["canonical"],
+                     "verdict": "abstain", "reason": reason, "named_by": named_by})
+        if not dry_run:
+            wrote = await confirm_or_confess_link(
+                actions, row["id"], "in_repo", direction="to", reason=reason,
+                source=actor, observed=datetime.now(UTC))
+            if wrote:
+                confessed += 1
+        else:
+            confessed += 1
+    return {"dry_run": dry_run, "scanned": len(rows), "to_mint": 0,
+           "to_abstain": confessed, "plan": plan, "because": because if not dry_run else None}
+
+
 _PROVENANCE_SWEEP_BECAUSE = (
     "classification_laws_heartbeat: provenance sweep self-heal (wave 15, mail 8840) — "
     "every lane below is cardinality-1-mint-or-abstain via derive_or_abstain, never a "
@@ -1190,8 +1290,9 @@ async def apply_provenance_sweep_heartbeat(
     links` + its at-write-time sibling), Reference (`resolve_reference_orphans`),
     Practice (`resolve_practice_orphans`), Superstition (`resolve_superstition_orphans`)
     — plus the post-mint invariant's own heartbeat half, Seat (`resolve_seat_orphans`,
-    Thoth's ruling DM 9018/thread 9004) — for real (`dry_run=False`), each independently,
-    under ONE fixed `because` (this
+    Thoth's ruling DM 9018/thread 9004), and SoftwareProject (`resolve_project_orphans`,
+    mail 9054) — for real (`dry_run=False`), each independently, under ONE fixed
+    `because` (this
     module's `_PROVENANCE_SWEEP_BECAUSE`): every lane is cardinality-1-mint-or-abstain
     by construction, so there is nothing here for a human to authorize per-run that
     the lane's own contract doesn't already guarantee.
@@ -1238,6 +1339,11 @@ async def apply_provenance_sweep_heartbeat(
             actions, actor=actor, dry_run=False, because=because)
     except Exception as exc:
         lanes["seat_error"] = repr(exc)
+    try:
+        lanes["project"] = await resolve_project_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["project_error"] = repr(exc)
     return {"lanes": lanes,
            "total_minted": sum(v.get("to_mint", 0) for v in lanes.values()
                                if isinstance(v, dict)),
@@ -1747,10 +1853,15 @@ async def link_repo(
 # _enforce_required_links itself (they mint across more than one phase, no single
 # actions.atomic() block to refuse-and-rollback inside), but they still write
 # derivation_abstained_<link_type> through the same _confess_abstention helper, which reads
-# this table for every kind it is given.
+# this table for every kind it is given. resolve_project_orphans (mail 9054) adds a THIRD
+# identity entry, "in_repo": "in_repo" — its own confirm_or_confess_link call already uses
+# "repo"'s target link type directly (a SoftwareProject orphan has no per-door "repo" kind
+# of its own to name), so it needs the same "kind == link_type" shape the other two use,
+# not the existing "repo"->"in_repo" entry (that one's KEY is the door-side kind word
+# record_decision's callers pass, never the bare link type this lane already has in hand).
 _REQUIRED_LINK_KIND_TABLE = {
     "repo": "in_repo", "grounds": "grounded_by", "resolves": "answers",
-    "holds": "holds", "works_in": "works_in",
+    "holds": "holds", "works_in": "works_in", "in_repo": "in_repo",
 }
 
 

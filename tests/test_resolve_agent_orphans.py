@@ -116,3 +116,51 @@ async def test_dry_run_never_writes(actions: Actions, tmp_path: Path) -> None:
 async def test_apply_without_because_refuses(actions: Actions, tmp_path: Path) -> None:
     out = await resolve_agent_orphans(actions, root=tmp_path, dry_run=False)
     assert "error" in out
+
+
+async def test_an_abstention_also_writes_the_door_side_hatch(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth mail 9054 (Sekhmet's multi-phase pass 9047): resolve_agent_orphans used to
+    write only derivation_abstained_works_in — the adoption meter's hatch count
+    (adoption_meter._hatch_counts) reads unlinked_because/unlinked_because_kind, an
+    entirely separate property, so a sweep confession was invisible to it."""
+    await _orphan_agent(actions, "agent:hatch001", "deadbeef")
+
+    await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:hatch001'")
+    because = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", row["id"])
+    kind = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because_kind'", row["id"])
+    assert because is not None
+    assert kind == "standalone"
+
+
+async def test_a_mint_never_writes_the_hatch(actions: Actions, tmp_path: Path) -> None:
+    session_uuid = "dddddddd-0000-4000-8000-000000000005"
+    _write_session_dir(tmp_path, "-home-x-code-nohatch", session_uuid, "nohatch1")
+    await _orphan_agent(actions, "agent:nohatch1", session_uuid)
+
+    await resolve_agent_orphans(actions, root=tmp_path, dry_run=False, because="test")
+
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:nohatch1'")
+    because = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", row["id"])
+    assert because is None
+
+
+async def test_dry_run_never_writes_the_hatch_either(actions: Actions, tmp_path: Path) -> None:
+    await _orphan_agent(actions, "agent:dryhatch1", "deadbeef")
+
+    await resolve_agent_orphans(actions, root=tmp_path)  # dry_run=True default
+
+    [row] = await actions.pool.fetch("SELECT id FROM objects WHERE canonical='agent:dryhatch1'")
+    because = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='unlinked_because'", row["id"])
+    assert because is None

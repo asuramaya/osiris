@@ -446,6 +446,53 @@ def test_format_orphan_weekly_line_shows_the_five_biggest_types_only() -> None:
     assert "Type2:2" not in line and "Type1:1" not in line
 
 
+# THE WEEKLY ABSTENTION DIGEST, beside the orphan band (Thoth mail 8960 item 2, msg 9071) ---
+
+def test_abstention_delta_is_none_on_the_first_run() -> None:
+    from scripts.osiris_preflight import _abstention_delta
+
+    assert _abstention_delta(7, None) is None
+
+
+def test_abstention_delta_is_the_arithmetic_difference() -> None:
+    from scripts.osiris_preflight import _abstention_delta
+
+    assert _abstention_delta(10, "7") == 3
+    assert _abstention_delta(4, "9") == -5
+    assert _abstention_delta(5, "5") == 0
+
+
+def test_format_abstention_weekly_line_names_first_run() -> None:
+    from scripts.osiris_preflight import _format_abstention_weekly_line
+
+    line = _format_abstention_weekly_line(
+        {"total": 42, "delta": None,
+         "split": {"extension_link_pending": 5, "standalone_other": 37}})
+    assert "42 declared hatch confession(s) fleet-wide" in line
+    assert "first run, no prior week to compare" in line
+    assert "extension=5 standalone=37" in line
+
+
+def test_format_abstention_weekly_line_signs_a_positive_and_negative_delta() -> None:
+    from scripts.osiris_preflight import _format_abstention_weekly_line
+
+    up = _format_abstention_weekly_line(
+        {"total": 12, "delta": 3, "split": {"extension_link_pending": 0,
+                                            "standalone_other": 12}})
+    down = _format_abstention_weekly_line(
+        {"total": 9, "delta": -3, "split": {"extension_link_pending": 0,
+                                            "standalone_other": 9}})
+    assert "+3 since last week" in up
+    assert "-3 since last week" in down
+
+
+def test_format_abstention_weekly_line_reports_unsplit_when_split_is_none() -> None:
+    from scripts.osiris_preflight import _format_abstention_weekly_line
+
+    line = _format_abstention_weekly_line({"total": 5, "delta": 0, "split": None})
+    assert "unsplit — reason constant not on this build" in line
+
+
 async def _no_transcripts_root(tmp_path: Path) -> int | None:
     from scripts.osiris_preflight import collect_soul_store_coverage
 

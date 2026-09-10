@@ -147,6 +147,7 @@ def _canon_like_sections(text: str) -> list[tuple[str, str]]:
 async def ingest_log(
     actions: Actions, path: str, *, topic: str, case_id: uuid.UUID | None = None,
     source: str = "ref:osiris", repo: str | None = None,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> dict[str, Any]:
     """Ingest a build log as per-entry `Reference` nodes (canonical
     `ref:<topic>-[<date>-]<title-slug>`), SELF_DECLARED (our own record of our own work).
@@ -163,8 +164,22 @@ async def ingest_log(
     only gets split because someone was working a project and the doc mattered to it —
     that context exists at call time and must not be thrown away). `bootstrap_project`
     already resolves the project it's onboarding before calling this; it now passes it
-    through instead of dropping it. Never refuses when omitted (the bare-CLI case still
-    has no project to give)."""
+    through instead of dropping it.
+
+    THE DECLARE-OR-REFUSE GATE WIDENS HERE (Thoth mail 8960 item 2, msg 9071): `repo` used
+    to be silently optional — the exact gap `resolve_reference_orphans` (capture.py)
+    already found and named: every one of its 56 real orphans carried a bare `topic` with
+    no project signal in its own data at all, because this door let them through with
+    neither a link nor a confession. Now REQUIRES `repo=` or `unlinked_because=` before a
+    SINGLE entry is minted — checked once, call-scoped rather than per-entry (one call
+    names one project, or one gap, for every entry it produces; refusing up front avoids
+    a partial-ingest orphan the same way `_enforce_required_links`'s own atomic-block
+    refusal does for its callers, without needing a per-entry transaction here)."""
+    if not repo and not (unlinked_because or "").strip():
+        raise ValueError(
+            "Reference refused: no repo= given and no unlinked_because= hatch either — "
+            "link one, or pass unlinked_because=<reason> to record the gap as a "
+            "countable hatch")
     ec = EvidenceClass.SELF_DECLARED
     conf, now = confidence_for(ec), datetime.now(UTC)
     source_id = source
@@ -186,12 +201,20 @@ async def ingest_log(
         if repo:
             await link_repo(actions, ref, repo, now, source=source_id,
                             evidence_class=ec.value, confidence=conf)
+        else:
+            await actions.assert_property(ref, "unlinked_because", unlinked_because,
+                                          source_id, now, conf, case_id=case_id,
+                                          evidence_class=ec.value)
+            await actions.assert_property(
+                ref, "unlinked_because_kind", unlinked_because_kind or "standalone",
+                source_id, now, conf, case_id=case_id, evidence_class=ec.value)
         ids.append(ref)
     return {"entries": len(ids), "topic": topic, "path": path}
 
 
 async def ingest_reference_doc(
     actions: Actions, path: str, *, case_id: uuid.UUID | None = None, repo: str | None = None,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> dict[str, Any]:
     """Ingest one markdown doc as a `Reference` object (canonical `ref:<stem-slug>`),
     idempotent on the canonical. Vendor → AUTHORITATIVE_API, own → SELF_DECLARED.
@@ -199,7 +222,16 @@ async def ingest_reference_doc(
     `repo` links the doc `in_repo` to its project when the caller has one (operator
     ruling, 2026-08-27 — same reasoning as `ingest_log`'s own `repo`: an essay only gets
     ingested because someone was working a project, and that context must not be thrown
-    away at the door). Never refuses when omitted."""
+    away at the door).
+
+    THE DECLARE-OR-REFUSE GATE WIDENS HERE too (Thoth mail 8960 item 2, msg 9071), same
+    shape and same reason as `ingest_log`'s own widening just above: REQUIRES `repo=` or
+    `unlinked_because=` before minting, never a silent omission."""
+    if not repo and not (unlinked_because or "").strip():
+        raise ValueError(
+            "Reference refused: no repo= given and no unlinked_because= hatch either — "
+            "link one, or pass unlinked_because=<reason> to record the gap as a "
+            "countable hatch")
     doc = parse_doc(_read(path))
     vendor = doc.get("vendor", "osiris")
     ec = EvidenceClass.AUTHORITATIVE_API if vendor != "osiris" else EvidenceClass.SELF_DECLARED
@@ -219,6 +251,12 @@ async def ingest_reference_doc(
     if repo:
         await link_repo(actions, ref, repo, now, source=source_id,
                         evidence_class=ec.value, confidence=conf)
+    else:
+        await actions.assert_property(ref, "unlinked_because", unlinked_because, source_id,
+                                      now, conf, case_id=case_id, evidence_class=ec.value)
+        await actions.assert_property(
+            ref, "unlinked_because_kind", unlinked_because_kind or "standalone", source_id,
+            now, conf, case_id=case_id, evidence_class=ec.value)
     return {"id": ref, "canonical": canon, "title": doc["title"], "vendor": vendor,
             "grounds": doc.get("grounds", "")}
 
@@ -226,11 +264,18 @@ async def ingest_reference_doc(
 async def ingest_reference_dir(
     actions: Actions, directory: str = "docs/reference", *, case_id: uuid.UUID | None = None,
     repo: str | None = None,
+    unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Ingest every markdown doc in a directory (sorted, deterministic)."""
+    """Ingest every markdown doc in a directory (sorted, deterministic). `repo`/
+    `unlinked_because`/`unlinked_because_kind` pass straight through to
+    `ingest_reference_doc`'s own declare-or-refuse gate for every doc in the directory —
+    ONE project or ONE gap named for the whole directory, matching `ingest_log`'s own
+    call-scoped (not per-file) gate check."""
     out = []
     for p in _md_files(directory):
-        out.append(await ingest_reference_doc(actions, p, case_id=case_id, repo=repo))
+        out.append(await ingest_reference_doc(
+            actions, p, case_id=case_id, repo=repo, unlinked_because=unlinked_because,
+            unlinked_because_kind=unlinked_because_kind))
     return out
 
 
@@ -243,12 +288,18 @@ async def ingest_canon(
     `project` defaults to "osiris" — the only real caller (`src/init.py`'s own docstring:
     "run it from the repo root", ALWAYS this repo's own docs) — but is a real parameter,
     not a hardcode with no door out, so a future non-osiris canon ingest is not
-    structurally blocked. See `_wire_informs`."""
-    vendor_refs = await ingest_reference_dir(actions, case_id=case_id)
+    structurally blocked. See `_wire_informs`.
+
+    `repo=project` now threads through both ingest calls below (Thoth mail 8960 item 2,
+    msg 9071 — `ingest_reference_doc`/`ingest_reference_dir` widened their own
+    declare-or-refuse gate to require it): `project` was already resolved right here,
+    at this call's own top — the identical "the project was right here" fix bootstrap_
+    project already applied to `ingest_log`, just never threaded through THIS caller."""
+    vendor_refs = await ingest_reference_dir(actions, case_id=case_id, repo=project)
     # ALL of docs/*.md (non-recursive — docs/reference/ is the vendor canon, ingested above)
     # plus the handful of root-level docs that are still "own" canon.
     own_paths = [*_OWN_DOCS_ROOT, *_md_files("docs")]
-    own = [await ingest_reference_doc(actions, p, case_id=case_id)
+    own = [await ingest_reference_doc(actions, p, case_id=case_id, repo=project)
            for p in _existing(own_paths)]
     # the true self-referential link: COMPOSER cites the canon it was grounded in
     composer = next((o for o in own if o["canonical"] == "ref:composer"), None)
