@@ -194,6 +194,38 @@ async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change
     assert healed_url == "git@newhost:x/withremote.git"
 
 
+async def test_census_trees_no_ops_when_resolve_repo_keeps_missing_an_existing_object(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
+    when `_resolve_repo`'s own lookup keeps missing an object that already exists (here,
+    forced via a non-'active' status — the same shape a stray fold/merge produces live),
+    every census sweep fell into the "existing is None" mint branch and used to reassert
+    discovered/on_disk_path/remote_url unconditionally, live-measured at 3,140 identical
+    rows apiece across seven disk-census objects. A repeat sweep must write nothing new
+    once the object already carries these values."""
+    from src.orchestrator.neighborhoods import census_trees
+    _real_git_repo(tmp_path, "missedcensus", "git@github.com:x/missedcensus.git")
+
+    first = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert first["minted"] == ["missedcensus"]
+    obj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:missedcensus'")
+    for prop in ("discovered", "on_disk_path", "remote_url"):
+        assert await actions.pool.fetchval(
+            "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2", obj, prop
+        ) == 1
+
+    # force _resolve_repo to keep missing it, same as a stray fold/merge would live
+    await actions.pool.execute("UPDATE objects SET status='merged' WHERE id=$1", obj)
+    second = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert second["minted"] == ["missedcensus"]  # still routes through the mint branch
+    for prop in ("discovered", "on_disk_path", "remote_url"):
+        assert await actions.pool.fetchval(
+            "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2", obj, prop
+        ) == 1  # unchanged — no reassertion on the repeat sweep
+
+
 async def test_census_trees_reconnects_a_renamed_directory_by_remote_url(
     actions: Actions, tmp_path: Path,
 ) -> None:

@@ -95,6 +95,15 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='authored_by'") == 2
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 2
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='follows'") == 1
+    # the source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the
+    # sources"): one dev's own name/email is one value for the whole run and across
+    # reruns — 2 commits ingested 4 times total (1 fresh + 3 reruns) must never write
+    # more than the single genuine name/email row each, not 8.
+    dev = await p.fetchval("SELECT id FROM objects WHERE canonical='dev:ada@x.io'")
+    assert await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", dev) == 1
+    assert await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='email'", dev) == 1
 
 
 async def test_ingest_walks_every_branch_not_just_head(

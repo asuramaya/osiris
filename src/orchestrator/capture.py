@@ -1805,8 +1805,19 @@ async def _mint_or_find_repo(
     proj = await _resolve_repo(actions.pool, name)
     if proj is None:  # a stub the eventual gitlog ingest will land on (same repo: canonical)
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source)
-        await actions.assert_property(proj, "name", name, source, observed, confidence,
-                                      evidence_class=evidence_class)
+        # create_or_find_object is idempotent on canonical — when `_resolve_repo`'s own
+        # (narrower) lookup keeps missing an object that already exists under this exact
+        # canonical (operator ruling, thread 2a280e07, mail 9240), this branch runs on
+        # EVERY call for it, reasserting the identical `name` every time. Check the
+        # current value first so a repeat call against an already-named object writes
+        # nothing.
+        current_name = await actions.pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='name' AND a.source_id=$2 LIMIT 1",
+            proj, source)
+        if current_name != name:
+            await actions.assert_property(proj, "name", name, source, observed, confidence,
+                                          evidence_class=evidence_class)
     return proj
 
 
