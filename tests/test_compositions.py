@@ -19,6 +19,7 @@ from src.orchestrator.compositions import (
     _fn_desk_project,
     _fn_echoes,
     _fn_lint,
+    _fn_practices,
     _fn_project,
     _fn_triage,
     _fn_wall,
@@ -1468,6 +1469,97 @@ async def test_overhead_composition_end_to_end(actions: Actions) -> None:
     res = await run_composition(actions.pool, "overhead")
     assert res["kind"] == "data"          # a dict, not a list — no rows reclassification
     assert res["items"]["totals"]["sessions"] == 0
+
+
+# --- _fn_practices: `id` (bypasses ranking), `recent` (last-touched first) --------------
+# Thread 55e5ac72, Thoth dispatch msg 9123: the default confirmed-first ranking
+# systematically hides exactly the practices most in need of a second look.
+
+async def test_practices_id_bypasses_the_ranked_window(
+    actions: Actions,
+) -> None:
+    """The shape amend_practice's own receipt uses: a single practice by id, found
+    regardless of its confirmed rank — the exact gap thread 55e5ac72 named (a just-
+    amended practice is the least-confirmed shape by construction, so it sorted
+    outside the default limit=50 window on the very next read)."""
+    from src.orchestrator.capture import record_practice
+
+    # buried past the default limit=50 window by a pile of well-confirmed practices
+    for i in range(60):
+        p = await record_practice(actions, f"a well-confirmed baseline practice #{i}")
+        witness = await actions.create_or_find_object(
+            "Thread", f"thread:practices-id-baseline-{i}", "test")
+        await actions.create_link(p, witness, "witnesses", "test", NOW, 0.9)
+    low_rank = await record_practice(
+        actions, "a freshly-minted practice nobody has confirmed yet", surface="deploy")
+
+    default_window = await _fn_practices(actions.pool, None, {})
+    assert str(low_rank) not in {r["id"] for r in default_window}, (
+        "sanity check: the default ranked window really does bury the unconfirmed row")
+
+    rows = await _fn_practices(actions.pool, None, {"id": str(low_rank)})
+    assert len(rows) == 1
+    assert rows[0]["id"] == str(low_rank)
+
+
+async def test_practices_id_matching_nothing_returns_an_empty_list(actions: Actions) -> None:
+    import uuid as uuid_mod
+
+    rows = await _fn_practices(actions.pool, None, {"id": str(uuid_mod.uuid4())})
+    assert rows == []
+
+
+async def test_practices_recent_orders_by_last_touch_not_confirmed(
+    actions: Actions,
+) -> None:
+    """A heavily-witnessed old practice must NOT out-rank a just-amended one under
+    `recent=True` — the exact reversal the default confirmed-first ranking can't give."""
+    from src.orchestrator.capture import amend_practice, record_practice
+
+    old_well_confirmed = await record_practice(
+        actions, "an old, well-established practice everyone already knows")
+    t = await actions.create_or_find_object("Thread", "thread:practices-recent-witness", "test")
+    await actions.create_link(old_well_confirmed, t, "witnesses", "test", NOW, 0.9)
+
+    fresh = await record_practice(actions, "a brand new practice, zero confirmations")
+    await amend_practice(actions, str(fresh), "narrowed moments after minting", source="test")
+
+    default_order = await _fn_practices(actions.pool, None, {})
+    default_ids = [r["id"] for r in default_order]
+    assert default_ids.index(str(old_well_confirmed)) < default_ids.index(str(fresh)), (
+        "sanity check: the default ranking really does put the confirmed one first")
+
+    recent_order = await _fn_practices(actions.pool, None, {"recent": True})
+    recent_ids = [r["id"] for r in recent_order]
+    assert recent_ids.index(str(fresh)) < recent_ids.index(str(old_well_confirmed)), (
+        "recent=True must surface the just-amended practice first"
+    )
+    fresh_row = next(r for r in recent_order if r["id"] == str(fresh))
+    assert fresh_row["last_touch"] is not None
+
+
+async def test_amend_practice_mcp_receipt_carries_the_amended_row(actions: Actions) -> None:
+    """Thread 55e5ac72, half 1: `practice(action='amend')`'s own receipt is never
+    invisible on itself — it carries the row `practices()` would render, fetched via
+    `id=` so it lands regardless of confirmed rank."""
+    from src import mcp_server as srv
+    from src.orchestrator.capture import record_practice
+
+    p = await record_practice(actions, "always run the full suite before a hub-module commit")
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv._practice_impl(
+            "amend", ref=str(p), amendment="confirmed live, gate_hook's own fan-out cap")
+    finally:
+        srv._pool = saved_pool
+
+    assert out["status"] == "amended"
+    assert "practice" in out
+    assert out["practice"]["id"] == str(p)
+    assert out["practice"]["amendments"] == [
+        "confirmed live, gate_hook's own fan-out cap"]
 
 
 # --- desk_overview / desk_project (task #91, ruling d42c543b, msg 1959) — /desk's READ side

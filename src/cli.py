@@ -2937,7 +2937,10 @@ async def cmd_amend_practice(
     mirrors the MCP wrapper's own {"id", "amendment", "status"} / {"error": ...} shape by
     hand, since capture.amend_practice itself returns a bare UUID | None and raises
     ValueError rather than shaping either receipt itself — the MCP tool's own try/except
-    and None-check are duplicated here on purpose, not softened."""
+    and None-check are duplicated here on purpose, not softened. Also mirrors the MCP
+    receipt's own `practice` row (thread 55e5ac72, msg 9123, the SAME `practices` Function
+    both doors read through) — printed after the confirmation line, so this door's write
+    is never invisible on its own receipt either."""
     from src.actions.core import Actions
     from src.orchestrator.capture import amend_practice
 
@@ -2958,12 +2961,17 @@ async def cmd_amend_practice(
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
+    row: dict[str, object] | None = None
     try:
         try:
             pid = await amend_practice(Actions(pool), ref, amendment, source=actor)
         except ValueError as e:
             print(f"osiris amend-practice: refused — {e}", file=sys.stderr)
             return 1
+        if pid is not None:
+            from src.orchestrator import compositions as comp
+            rows = await comp._fn_practices(pool, None, {"id": str(pid)})
+            row = rows[0] if rows else None
     finally:
         if owns_pool:
             await pool.close()
@@ -2972,6 +2980,8 @@ async def cmd_amend_practice(
               file=sys.stderr)
         return 1
     print(f"amended {pid}: {amendment.strip()}")
+    if row is not None:
+        print(f"practice now reads: {row['statement']} (confirmed={row['confirmed']})")
     return 0
 
 
