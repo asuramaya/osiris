@@ -1394,6 +1394,26 @@ async def test_mining_view_reads_through_the_cold_tier(store: SoulStore, tmp_pat
     assert after is not None and len(after) == 5
 
 
+async def test_raw_lines_re_materialize_and_mining_view_refuse_a_tampered_cold_blob(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """READ-PATH CONSOLIDATION (Thoth mail 9134, operator ruling on thread 773d633a):
+    the deliberate, disclosed widening — before this fold, `_all_raw_lines`'s own cold
+    branch never verified the chain at all, so raw_lines/re_materialize/mining_view
+    would have silently returned a tampered cold blob's content as if it were clean.
+    After folding all three readers onto the shared `_iter_verified_lines`, a tampered
+    cold row is caught the same way `rematerialize_to_disk` already caught it."""
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rtc0tmp01")
+    await store.fold_to_cold_tier("rtc0tmp01")
+    await store.pool.execute(
+        "UPDATE soul_lines_cold SET last_hash='deadbeef' WHERE anchor_sid='rtc0tmp01'")
+
+    assert await store.raw_lines("rtc0tmp01") is None
+    assert await store.re_materialize("rtc0tmp01") is None
+    assert await store.mining_view("rtc0tmp01") is None
+
+
 async def test_verify_chain_true_after_a_fold(store: SoulStore, tmp_path: Path) -> None:
     """THE ACCEPTANCE TEST NAMED IN THE DISPATCH: 'the hash chain verifies across the
     fold' — the same chain that was true before folding must still be true after,
