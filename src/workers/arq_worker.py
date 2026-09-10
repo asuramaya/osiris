@@ -845,8 +845,17 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     py's module docstring for why). PLUS the stacked-header office sub-sweep (thread
     658c2152, folded into 07ca68ca): every active seat's CLAUDE.md checked for a leading
     duplicate header before its compiled marker span, healed through reissue_office
-    (adopt=True) — same failure discipline as its three siblings above."""
+    (adopt=True) — same failure discipline as its three siblings above.
+
+    AND THE PROVENANCE SWEEP HEARTBEAT (wave 15, mail 8840, `apply_provenance_sweep_
+    heartbeat` in capture.py): every cardinality-1-mint-or-abstain orphan lane the wave
+    built (Agent/Decision/Thread/Reference/Practice/Superstition, each mechanically
+    derived, never a guess) re-applied on the same cadence — "so a stranger's install
+    self-heals" (the dispatch's own words), never a coordinator re-running a backfill
+    script by hand. One lane failing is reported under its own key, never sinks its
+    siblings — same discipline this cron already gives its other four sub-sweeps."""
     from src.orchestrator.boot_compiler import sweep_stacked_office_headers
+    from src.orchestrator.capture import apply_provenance_sweep_heartbeat
     from src.orchestrator.fleet_prune import prune_execute
     from src.orchestrator.house_hygiene import apply_ghost_house_sweep
     from src.orchestrator.migration_0060 import apply_migration_0060
@@ -902,7 +911,18 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     if healed_offices or headers.get("skipped"):
         _log.info("stacked-header office sub-sweep: %s", headers)
 
-    return acted + retired + ghosts_retired + dropped + bound + healed_offices
+    try:
+        provenance = await apply_provenance_sweep_heartbeat(
+            actions, actor="cron:classification_laws_heartbeat")
+    except Exception as exc:  # a DB hiccup must not kill the cron
+        _log.warning("provenance sweep heartbeat failed: %r", exc)
+        provenance = {}
+    provenance_minted = int(provenance.get("total_minted", 0))
+    if provenance_minted or any(k.endswith("_error") for k in provenance.get("lanes", {})):
+        _log.info("provenance sweep heartbeat: %s", provenance)
+
+    return (acted + retired + ghosts_retired + dropped + bound + healed_offices
+           + provenance_minted)
 
 
 async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:

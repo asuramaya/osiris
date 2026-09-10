@@ -1120,6 +1120,72 @@ async def resolve_superstition_orphans(
            "to_abstain": abstained, "plan": plan, "because": because if not dry_run else None}
 
 
+_PROVENANCE_SWEEP_BECAUSE = (
+    "classification_laws_heartbeat: provenance sweep self-heal (wave 15, mail 8840) — "
+    "every lane below is cardinality-1-mint-or-abstain via derive_or_abstain, never a "
+    "guess, so an unattended cron running it is exactly as safe as a supervised one"
+)
+
+
+async def apply_provenance_sweep_heartbeat(
+    actions: Actions, *, actor: str = "cron:classification_laws_heartbeat",
+) -> dict[str, Any]:
+    """THE PROVENANCE SWEEP'S OWN HEARTBEAT SUB-SWEEP (wave 15, mail 8840: "so a
+    stranger's install self-heals" — same unconditional, mechanical, zero-hand-pass
+    discipline `classification_laws_heartbeat`'s other siblings already carry, never a
+    coordinator re-running a backfill script by hand). Applies every lane this wave
+    built — Agent (`resolve_agent_orphans`), Decision/Thread (`backfill_lineage_repo_
+    links` + its at-write-time sibling), Reference (`resolve_reference_orphans`),
+    Practice (`resolve_practice_orphans`), Superstition (`resolve_superstition_orphans`)
+    — for real (`dry_run=False`), each independently, under ONE fixed `because` (this
+    module's `_PROVENANCE_SWEEP_BECAUSE`): every lane is cardinality-1-mint-or-abstain
+    by construction, so there is nothing here for a human to authorize per-run that
+    the lane's own contract doesn't already guarantee.
+
+    ONE LANE'S FAILURE NEVER SINKS ANOTHER'S (same discipline as `classification_laws_
+    heartbeat`'s own siblings): each call is individually try/excepted; a DB hiccup on
+    one lane is reported under its own key (`"<lane>_error"`) and the sweep continues.
+    Idempotent: a lane with nothing left to scan just reports zero scanned/minted, same
+    as running it by hand twice."""
+    lanes: dict[str, Any] = {}
+    because = _PROVENANCE_SWEEP_BECAUSE
+    try:
+        lanes["agent"] = await resolve_agent_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:  # a DB hiccup on one lane must not sink the others
+        lanes["agent_error"] = repr(exc)
+    try:
+        lanes["decision_thread"] = await backfill_lineage_repo_links(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["decision_thread_error"] = repr(exc)
+    try:
+        lanes["decision_thread_at_write_time"] = await backfill_lineage_repo_links_at_write_time(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["decision_thread_at_write_time_error"] = repr(exc)
+    try:
+        lanes["reference"] = await resolve_reference_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["reference_error"] = repr(exc)
+    try:
+        lanes["practice"] = await resolve_practice_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["practice_error"] = repr(exc)
+    try:
+        lanes["superstition"] = await resolve_superstition_orphans(
+            actions, actor=actor, dry_run=False, because=because)
+    except Exception as exc:
+        lanes["superstition_error"] = repr(exc)
+    return {"lanes": lanes,
+           "total_minted": sum(v.get("to_mint", 0) for v in lanes.values()
+                               if isinstance(v, dict)),
+           "total_abstained": sum(v.get("to_abstain", 0) for v in lanes.values()
+                                  if isinstance(v, dict))}
+
+
 async def _describe(pool: asyncpg.Pool, obj_id: uuid.UUID) -> tuple[str | None, str | None]:
     """Best-effort (type, summary) for a bare id — `summary` is the universal text-field
     name this codebase's own generic listing/describe queries already key on across
