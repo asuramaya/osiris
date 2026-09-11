@@ -79,6 +79,7 @@ from src.cli import (
     cmd_show,
     cmd_smoke_chaos,
     cmd_smoke_reboot,
+    cmd_soul_key_init,
     cmd_status,
     cmd_sweep_seat_trees,
     cmd_team,
@@ -434,6 +435,40 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
     assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
     seeded = await actions.pool.fetchval("SELECT count(*) FROM compositions")
     assert seeded > 0
+
+
+# --- cmd_soul_key_init: no pool, pure filesystem/key generation --------------------------------
+
+async def test_cmd_soul_key_init_writes_and_reports_the_path(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    import getpass
+
+    from src.ingest import soul_crypto
+
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
+    assert await cmd_soul_key_init() == 0
+    assert key_file.is_file()
+    out = capsys.readouterr().out
+    assert str(key_file) in out
+
+
+async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    import getpass
+
+    from cryptography.fernet import Fernet
+    from src.ingest import soul_crypto
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
+    assert await cmd_soul_key_init() == 1
+    assert "refused" in capsys.readouterr().err
 
 
 # --- cmd_launch: a real pool for seat facts, a fake manager so nothing is ever really spawned ---

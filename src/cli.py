@@ -8,6 +8,10 @@ EXISTING verb rather than re-deriving it:
                                      the operator was handed before this build)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
   osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
+  osiris soul-key-init [--owner]    mint the soul-store encryption key — the ONE
+                                     generator (Thoth DM 9245, wave 17); run once, by a
+                                     human, in their own terminal, before starting
+                                     osiris-worker/osiris-mcp
   osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
              [--debug]              following trigger.launch_seat's own flip, rulings
                                      0fe36e59 + 33d6a2eb clause 3) — every body lands in the
@@ -1016,6 +1020,31 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
         if owns_pool:
             await pool.close()
     _print_next_steps(result)
+    return 0
+
+
+# --- soul-key-init ----------------------------------------------------------------------------
+
+async def cmd_soul_key_init(*, owner: str | None = None, as_json: bool = False) -> int:
+    """osiris soul-key-init [--owner USER] — the ONE door that mints the soul-store
+    encryption key (Thoth DM 9245, wave 17): a thin wrapper over
+    `src.ingest.soul_crypto.soul_key_init`, unchanged, meant to be run ONCE by a human in
+    their own terminal — never by the worker or MCP server, which only ever READ an
+    existing key and fail loudly at their own boot when none exists (naming this exact
+    command in the error). No Postgres involved — this is pure filesystem/key
+    generation, no `pool` argument."""
+    from src.ingest.soul_crypto import soul_key_init
+
+    out = soul_key_init(owner=owner)
+    if as_json:
+        from src import cli_render as render
+        render.emit(out, as_json=True)
+        return 1 if "error" in out else 0
+    if "error" in out:
+        print(f"osiris soul-key-init: refused — {out['error']}", file=sys.stderr)
+        return 1
+    print(f"soul-store encryption key generated at {out['path']} (owner: {out['owner']})")
+    print(out["systemd_note"])
     return 0
 
 
@@ -7394,8 +7423,9 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
-                        fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
+  operate               deploy, migrate, seed, soul-key-init, bootstrap, retention,
+                        rematerialize, fleet-reconcile, fleet-prune, backfill,
+                        graph-migrate, layout
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -7562,6 +7592,18 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "--compositions-only")
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
+
+    p_soul_key_init = sub.add_parser("soul-key-init", description=_d(
+        "mint the soul-store encryption key — the ONE generator; run once, in your own "
+        "terminal, as the osiris service user (or with --owner as root)"),
+        epilog="example: osiris soul-key-init\nexample: sudo osiris soul-key-init "
+               "--owner osiris")
+    p_soul_key_init.add_argument("--owner", default=None,
+                                 help="chown the key file + directory to this user after "
+                                      "writing (for running as root before the service "
+                                      "user exists to run this itself)")
+    p_soul_key_init.add_argument("--json", action="store_true", dest="as_json",
+                                 help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
         "body a seat with a fresh, persistent `claude --bg` process — always shows up "
@@ -9075,6 +9117,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_audit(args.name, as_json=args.as_json))
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
+    if args.command == "soul-key-init":
+        return asyncio.run(cmd_soul_key_init(owner=args.owner, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "resume":

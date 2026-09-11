@@ -1417,6 +1417,77 @@ async def test_rotation_a_legacy_key_still_decrypts_old_rows(
     assert Fernet(new_key.encode()).decrypt(bytes(row))  # the new primary opens it fine
 
 
+async def test_hot_read_falls_back_to_legacy_plaintext(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """LEGACY-PLAINTEXT READ FALLBACK (Thoth DM 9194/9245, wave 17): a row written
+    before encrypt_existing_soul_lines ever ran must still read — the SAME simulate
+    used by test_encrypt_existing_soul_lines_migrates_plaintext_rows (decrypt one real
+    row, write its own plaintext straight back — the hash chain was always computed
+    over plaintext, so this stays chain-valid), but here proving the READ side, not
+    the migration."""
+    fernet = get_soul_fernet()
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "legacyhot1")
+    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyhot1' AND line_idx=2"))
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyhot1' AND line_idx=2",
+        plaintext_line)
+
+    assert await store.verify_chain("legacyhot1") is True
+    raw = await store.raw_lines("legacyhot1")
+    assert raw is not None and len(raw) == 5
+    assert raw[2] == plaintext_line.decode("utf-8")
+    materialized = await store.re_materialize("legacyhot1")
+    assert materialized is not None
+    assert plaintext_line.decode("utf-8") in materialized
+
+
+async def test_cold_read_falls_back_to_legacy_plaintext(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE COLD TIER'S OWN VERSION: a session folded BEFORE encryption ever existed has
+    a `content_gzip` blob that is plain gzip, never Fernet-wrapped — simulated here by
+    folding normally, then decrypting the blob back to its own pre-encryption bytes and
+    writing those straight back (encrypt-after-gzip in reverse)."""
+    fernet = get_soul_fernet()
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "legacycold1")
+    await store.fold_to_cold_tier("legacycold1")
+    encrypted_blob = await store.pool.fetchval(
+        "SELECT content_gzip FROM soul_lines_cold WHERE anchor_sid='legacycold1'")
+    plain_gzip_blob = fernet.decrypt(bytes(encrypted_blob))  # still gzip-compressed
+    await store.pool.execute(
+        "UPDATE soul_lines_cold SET content_gzip=$1 WHERE anchor_sid='legacycold1'",
+        plain_gzip_blob)
+
+    assert await store.verify_chain("legacycold1") is True
+    raw = await store.raw_lines("legacycold1")
+    assert raw is not None and len(raw) == 4
+
+
+async def test_verify_round_trip_sample_reports_the_legacy_count(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """verify_round_trip_sample reports HOW MANY of its own sample were still legacy
+    plaintext (Thoth DM 9194) — the round trip itself stays clean (fallback-tolerant),
+    so legacy_count is the only signal a caller has that the migration isn't done."""
+    fernet = get_soul_fernet()
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "legacyrt01")
+    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyrt01' AND line_idx=0"))
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyrt01' AND line_idx=0",
+        plaintext_line)
+
+    report = await store.verify_round_trip_sample(n=1)
+    assert report.legacy_count == 1
+    assert not report  # still a clean pass — the fallback verified it fine
+
+
 async def test_fold_to_cold_tier_refuses_a_broken_chain(
     store: SoulStore, tmp_path: Path,
 ) -> None:

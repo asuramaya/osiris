@@ -95,6 +95,13 @@ NO_MCP_EQUIVALENT = {
                  "default and the act is deliberately kept off the agent-callable surface, "
                  "same class as deploy/migrate",
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
+    "soul-key-init": "operator devops bootstrap act (Thoth DM 9194/9245, wave 17) — the "
+        "ONE generator for the soul-store encryption key, meant to be run ONCE by a "
+        "human in their own terminal so the mandatory offline recovery secret prints "
+        "in front of a person, never inside a daemon's log; an MCP tool would put key "
+        "generation behind an agent call, exactly the shape this door exists to "
+        "refuse. No Postgres involved either — same class as attach's own human-only "
+        "act above.",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
     "correct-agent-house": "NOT actually MCP-less — correct_agent_house is hidden from "

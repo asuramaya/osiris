@@ -40,7 +40,7 @@ from cryptography.fernet import InvalidToken
 
 from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
-from src.ingest.soul_crypto import get_soul_fernet
+from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
 
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
@@ -509,11 +509,18 @@ class RoundTripReport:
     each line's own `cwd` field, deliberately preserving mtime (so `skipped_live`'s own
     guard never catches it) — a byte mismatch that STILL matches once every `cwd` field
     is normalized out is this named, benign class, never folded into `failures` (a real
-    corruption/tamper alarm) or silently into a clean pass either."""
+    corruption/tamper alarm) or silently into a clean pass either.
+
+    `legacy_count` (Thoth DM 9194): how many of THIS sample's sessions were still legacy
+    plaintext — the round-trip check itself is fallback-tolerant, so a legacy row
+    verifies clean same as an encrypted one; this count is the ONLY signal in this
+    receipt that the migration (`encrypt_existing_soul_lines`) still has work left, so a
+    caller never reads a clean pass as "fully encrypted" when it isn't yet."""
 
     failures: list[dict[str, str]] = field(default_factory=list)
     skipped_live: int = 0
     cwd_rewrites: int = 0
+    legacy_count: int = 0
 
     def __bool__(self) -> bool:
         """Truthy iff there are real failures — lets a caller write `if report:` for
@@ -1078,8 +1085,9 @@ class SoulStore:
         fernet = get_soul_fernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            lines = _split_cold_content(
-                gzip.decompress(fernet.decrypt(bytes(cold["content_gzip"]))))
+            cold_blob = bytes(cold["content_gzip"])
+            plaintext_blob = fernet.decrypt(cold_blob) if is_encrypted(cold_blob) else cold_blob
+            lines = _split_cold_content(gzip.decompress(plaintext_blob))
             if not lines:
                 return None
             total, count, lines_total, lb, ll = _accumulate_resume_diagnostics(
@@ -1102,7 +1110,8 @@ class SoulStore:
             if not rows:
                 break
             seen_any = True
-            raws = [fernet.decrypt(bytes(row["raw_line"])) for row in rows]
+            raws = [(fernet.decrypt(rl) if is_encrypted(rl) else rl)
+                    for rl in (bytes(row["raw_line"]) for row in rows)]
             total, count, lines_total, last_boundary_bytes, last_boundary_lines = (
                 _accumulate_resume_diagnostics(
                     raws, total, count, lines_total, last_boundary_bytes, last_boundary_lines))
@@ -1167,13 +1176,28 @@ class SoulStore:
         fernet = get_soul_fernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            try:
-                content = gzip.decompress(fernet.decrypt(bytes(cold["content_gzip"])))
-            except InvalidToken:
-                raise _ChainBroken({
-                    "error": "cold tier decryption failed — no configured key opens "
-                             "this blob (wrong or rotated-out key)",
-                    "verified_through": -1}) from None
+            cold_blob = bytes(cold["content_gzip"])
+            if is_encrypted(cold_blob):
+                try:
+                    content = gzip.decompress(fernet.decrypt(cold_blob))
+                except InvalidToken:
+                    raise _ChainBroken({
+                        "error": "cold tier decryption failed — no configured key opens "
+                                 "this blob (wrong or rotated-out key)",
+                        "verified_through": -1}) from None
+            else:
+                try:
+                    content = gzip.decompress(cold_blob)  # legacy plaintext, pre-migration
+                except (OSError, EOFError):
+                    # NEITHER a Fernet token NOR valid gzip — genuinely corrupted, not a
+                    # legacy row this fallback was ever meant to explain away (the gAAAA
+                    # check, Thoth DM 9194, is a heuristic, not proof); the same honest
+                    # _ChainBroken every other corruption already gets, never an
+                    # unhandled gzip traceback.
+                    raise _ChainBroken({
+                        "error": "cold tier chain broken — the stored blob is neither a "
+                                 "valid Fernet token nor valid gzip (corrupted)",
+                        "verified_through": -1}) from None
             lines_cold = _split_cold_content(content)
             if not lines_cold:
                 return
@@ -1207,13 +1231,17 @@ class SoulStore:
                         "error": f"chain broken at line {i} — prev_hash does not "
                                  "match the prior line's own hash",
                         "verified_through": i - 1})
-                try:
-                    plaintext = fernet.decrypt(bytes(row["raw_line"]))
-                except InvalidToken:
-                    raise _ChainBroken({
-                        "error": f"decryption failed at line {i} — no configured key "
-                                 "opens this row (wrong or rotated-out key)",
-                        "verified_through": i - 1}) from None
+                raw = bytes(row["raw_line"])
+                if is_encrypted(raw):
+                    try:
+                        plaintext = fernet.decrypt(raw)
+                    except InvalidToken:
+                        raise _ChainBroken({
+                            "error": f"decryption failed at line {i} — no configured key "
+                                     "opens this row (wrong or rotated-out key)",
+                            "verified_through": i - 1}) from None
+                else:
+                    plaintext = raw  # legacy plaintext, pre-migration
                 if _chain_hash(row["prev_hash"], plaintext) != row["line_hash"]:
                     raise _ChainBroken({
                         "error": f"chain broken at line {i} — stored hash does not "
@@ -1343,11 +1371,18 @@ class SoulStore:
         fernet = get_soul_fernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
+            cold_blob = bytes(cold["content_gzip"])
+            if is_encrypted(cold_blob):
+                try:
+                    decrypted = fernet.decrypt(cold_blob)
+                except InvalidToken:
+                    return False
+            else:
+                decrypted = cold_blob  # legacy plaintext, pre-migration
             try:
-                decrypted = fernet.decrypt(bytes(cold["content_gzip"]))
-            except InvalidToken:
-                return False
-            lines = _split_cold_content(gzip.decompress(decrypted))
+                lines = _split_cold_content(gzip.decompress(decrypted))
+            except (OSError, EOFError):
+                return False  # neither a Fernet token nor valid gzip — corrupted
             if not lines:
                 return True  # vacuous, same as the hot path's zero-rows case
             _, _, final_hash = _hash_rows(harness, anchor_sid, lines, 0, None)
@@ -1367,10 +1402,14 @@ class SoulStore:
                     return False  # a gap in the sequence
                 if row["prev_hash"] != expected_prev:
                     return False
-                try:
-                    plaintext = fernet.decrypt(bytes(row["raw_line"]))
-                except InvalidToken:
-                    return False
+                raw = bytes(row["raw_line"])
+                if is_encrypted(raw):
+                    try:
+                        plaintext = fernet.decrypt(raw)
+                    except InvalidToken:
+                        return False
+                else:
+                    plaintext = raw  # legacy plaintext, pre-migration
                 if _chain_hash(row["prev_hash"], plaintext) != row["line_hash"]:
                     return False
                 expected_prev = row["line_hash"]
@@ -1837,6 +1876,7 @@ class SoulStore:
         failures: list[dict[str, str]] = []
         skipped_live = 0
         cwd_rewrites = 0
+        legacy_count = 0
         for row in rows:
             anchor_sid, source_path = row["anchor_sid"], row["source_path"]
             src = Path(source_path)
@@ -1846,6 +1886,21 @@ class SoulStore:
             if mtime > row["last_ingested_at"]:
                 skipped_live += 1  # still being appended to — a moving target, not a defect
                 continue
+            # LEGACY-PLAINTEXT COUNT (Thoth DM 9194): a cheap peek at whichever tier
+            # holds this session — this round-trip check is fallback-tolerant (a legacy
+            # row verifies byte-identical same as an encrypted one), so this count is
+            # the ONLY place this receipt surfaces that the migration still has work
+            # left on the sessions it happened to sample.
+            cold_peek = await self._cold_row(harness, anchor_sid)
+            if cold_peek is not None:
+                if not is_encrypted(bytes(cold_peek["content_gzip"])):
+                    legacy_count += 1
+            else:
+                first = await self.pool.fetchval(
+                    "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+                    "ORDER BY line_idx ASC LIMIT 1", harness, anchor_sid)
+                if first is not None and not is_encrypted(bytes(first)):
+                    legacy_count += 1
             with tempfile.TemporaryDirectory() as tmpdir:
                 scratch = Path(tmpdir) / f"{anchor_sid}.roundtrip"
                 result = await self.rematerialize_to_disk(
@@ -1865,7 +1920,8 @@ class SoulStore:
                                  f"{src_hash[:12]}…",
                     })
         return RoundTripReport(
-            failures=failures, skipped_live=skipped_live, cwd_rewrites=cwd_rewrites)
+            failures=failures, skipped_live=skipped_live, cwd_rewrites=cwd_rewrites,
+            legacy_count=legacy_count)
 
     async def verify_crush_round_trip_sample(self, *, n: int = 20) -> RoundTripReport:
         """THE ROUND-TRIP PROOF, CRUSH'S OWN VERSION (wave 13 item 2): `verify_round_

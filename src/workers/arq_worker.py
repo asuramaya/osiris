@@ -189,6 +189,20 @@ async def startup(ctx: dict[str, Any]) -> None:
     # service, and the live hand-installed dev unit once updated) — never inferred from
     # cwd or branch ancestry, which is exactly the guessing #113 was refused for tonight.
     if settings.osiris_worker_role == "primary":
+        # THE SOUL-KEY BOOT GATE (Thoth DM 9194/9245, wave 17): fail LOUDLY at START, not
+        # at the first soul_store read/write some real cascade task happens to trigger
+        # minutes or hours later against an operator who has moved on. Scoped to the real
+        # primary worker only, same reasoning as the deploy-ordering guard just below —
+        # an ad hoc dev `arq` invocation never carries this role and is never blocked by
+        # it. UNLIKE that guard, this is a genuine refusal, not a soft alarm: a worker
+        # with no soul key cannot correctly read or write soul_lines/soul_lines_cold at
+        # all, so starting it anyway would only defer the failure to a worse moment.
+        # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key-init`
+        # command) when neither OSIRIS_SOUL_KEY nor the key file is present — left
+        # UNCAUGHT here on purpose, propagating out of startup() to crash the boot.
+        from src.ingest.soul_crypto import get_soul_fernet
+
+        get_soul_fernet()
         # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
         # deploy_guard's own module docstring for why. Wrapped defensively here too, on top
         # of check_schema_drift's own internal fail-open: nothing here may ever block a boot.

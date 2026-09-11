@@ -29,7 +29,7 @@ from cryptography.fernet import InvalidToken
 
 from src.actions.core import Actions
 from src.ingest.sessions import locate_current_transcript
-from src.ingest.soul_crypto import get_soul_fernet
+from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
 from src.ingest.transcript_store import identity_reading
 from src.orchestrator import forks, mounts
 from src.orchestrator.agents import register_agent, resolve_identity
@@ -153,10 +153,14 @@ async def _find_anchor_sid_containing(
         if not rows:
             return None
         for row in rows:
-            try:
-                plaintext = fernet.decrypt(bytes(row["raw_line"]))
-            except InvalidToken:
-                continue
+            raw = bytes(row["raw_line"])
+            if is_encrypted(raw):
+                try:
+                    plaintext = fernet.decrypt(raw)
+                except InvalidToken:
+                    continue
+            else:
+                plaintext = raw  # legacy plaintext, pre-migration (Thoth DM 9194)
             if needle_bytes in plaintext:
                 return str(row["anchor_sid"])
         last = rows[-1]
@@ -246,10 +250,15 @@ async def compact_seat(
         "ORDER BY line_idx DESC LIMIT $2", owner_sid, _COMPACT_SEAT_TAIL_LINES)
     lines = []
     for r in reversed(rows):
-        try:
-            lines.append(fernet.decrypt(bytes(r["raw_line"])).decode("utf-8", errors="replace"))
-        except InvalidToken:
-            continue
+        raw = bytes(r["raw_line"])
+        if is_encrypted(raw):
+            try:
+                plaintext = fernet.decrypt(raw)
+            except InvalidToken:
+                continue
+        else:
+            plaintext = raw  # legacy plaintext, pre-migration (Thoth DM 9194)
+        lines.append(plaintext.decode("utf-8", errors="replace"))
     act_signature, _whisper = newest_signatures(lines)
     if act_signature is None:
         return None  # nothing signed in the owning session's own tail — refuse, never guess

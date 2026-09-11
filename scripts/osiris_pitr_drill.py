@@ -104,17 +104,25 @@ def _soul_round_trip_check(container: str) -> str | None:
     specific check, the same "not activated here is not a failure" law this module's
     own `drill_pitr` caller already holds for a missing base backup."""
     from cryptography.fernet import InvalidToken
-    from src.ingest.soul_crypto import get_soul_fernet
+    from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
 
+    # SAMPLE SEVERAL, SKIP LEGACY PLAINTEXT (Thoth DM 9194): a single random row can land
+    # on a not-yet-migrated row (encrypt_existing_soul_lines's own backward pass, run
+    # separately) — decrypting THAT would fail for a reason that has nothing to do with
+    # whether the currently-configured key actually opens real ciphertext, a false
+    # "round-trip FAILED" this check exists to never report. Widens the sample instead
+    # of narrowing the proof: the first ENCRYPTED row found is the one this checks.
     out = subprocess.run(
         ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
-         "SELECT encode(raw_line, 'base64') FROM soul_lines ORDER BY random() LIMIT 1"],
+         "SELECT encode(raw_line, 'base64') FROM soul_lines ORDER BY random() LIMIT 50"],
         capture_output=True, text=True, timeout=30)
-    b64 = out.stdout.strip()
-    if not b64:
-        return None
+    raws = [base64.b64decode(line) for line in out.stdout.splitlines() if line.strip()]
+    encrypted = next((r for r in raws if is_encrypted(r)), None)
+    if encrypted is None:
+        return None  # empty restore, or every sampled row still legacy plaintext — not
+                     # this check's own failure to report (encrypt_existing_soul_lines's)
     try:
-        get_soul_fernet().decrypt(base64.b64decode(b64))
+        get_soul_fernet().decrypt(encrypted)
     except InvalidToken:
         return ("soul-store round-trip FAILED: a real row from the restored copy does "
                 "not decrypt under the key currently configured on this box — a "
