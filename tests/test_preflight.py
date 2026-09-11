@@ -446,6 +446,31 @@ def test_format_orphan_weekly_line_shows_the_five_biggest_types_only() -> None:
     assert "Type2:2" not in line and "Type1:1" not in line
 
 
+def test_format_orphan_weekly_line_names_the_visit_split_on_agent() -> None:
+    """9dc3ce8b, THE DESK LINE: "Agent:N" alone re-introduces the exact fiction the
+    Great Fold's read-side adoption exists to stop — the weekly line must name how many
+    of an Agent bucket's orphans are visit-class doorbell rings, not real minds. Any
+    OTHER type carrying no `visit` key (the shape every non-Agent bucket has) is
+    untouched — plain `Type:N`, no parenthetical."""
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    line = _format_orphan_weekly_line(
+        {"total": 15, "abstained_total": 0, "delta": 0,
+         "by_type": {"Agent": {"count": 12, "abstained": 0, "visit": 9},
+                     "Thread": {"count": 3, "abstained": 0}}})
+    assert "Agent:12 (9 visit)" in line
+    assert "Thread:3" in line and "Thread:3 (" not in line
+
+
+def test_format_orphan_weekly_line_agent_with_no_visits_stays_plain() -> None:
+    from scripts.osiris_preflight import _format_orphan_weekly_line
+
+    line = _format_orphan_weekly_line(
+        {"total": 5, "abstained_total": 0, "delta": 0,
+         "by_type": {"Agent": {"count": 5, "abstained": 0, "visit": 0}}})
+    assert "Agent:5" in line and "visit)" not in line
+
+
 # THE TRACEABILITY BAND, beside the orphan band (Graph-Engineering, operator decision
 # f47d14a7, thread 7f547426, item 3/3) ------------------------------------------------------
 

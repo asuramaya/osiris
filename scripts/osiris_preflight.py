@@ -569,7 +569,17 @@ def _format_orphan_weekly_line(m: dict[str, Any]) -> str:
     delta = m["delta"]
     delta_text = ("first run, no prior week to compare" if delta is None else
                   f"{'+' if delta >= 0 else ''}{delta} since last week")
-    top_types = ", ".join(f"{t}:{c['count']}" for t, c in
+    # THE VISIT CLASS (9dc3ce8b): "Agent:N" alone re-introduces the exact fiction the
+    # Great Fold's read-side adoption exists to stop — orphan_census's own `by_type`
+    # already carries the visit-class sub-count (compositions.py's shared predicate),
+    # this just prints it when Agent makes the top-5 cut.
+    def _type_label(t: str, c: dict[str, int]) -> str:
+        visit = c.get("visit", 0)
+        if t == "Agent" and visit:
+            return f"{t}:{c['count']} ({visit} visit)"
+        return f"{t}:{c['count']}"
+
+    top_types = ", ".join(_type_label(t, c) for t, c in
                           sorted(m["by_type"].items(), key=lambda kv: -kv[1]["count"])[:5]
                           ) or "none"
     return (f"ORPHAN BAND — {m['total']} disconnected object(s) fleet-wide "

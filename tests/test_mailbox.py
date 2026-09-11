@@ -19,6 +19,7 @@ from src.orchestrator.mailbox import (
     in_flight,
     project_deliverable_count,
     read_inbox,
+    read_seat_mail,
     send_message,
     unread_count,
     unread_counts,
@@ -1137,6 +1138,58 @@ async def test_lease_is_visible_to_the_group(actions: Actions) -> None:
     await read_inbox(p, "handlingtheloop", reader_agent="agent:ux")  # ux leases it
     flight = await in_flight(p, "handlingtheloop", reader_agent="agent:engine")
     assert len(flight) == 1 and flight[0]["leased_by"] == "agent:ux"
+
+
+# ── MAIL IS UNSURFACEABLE (9dc3ce8b/c56f3d94): read_seat_mail, the read-only door ────────
+
+async def test_read_seat_mail_finds_the_dm_and_never_leases_it(actions: Actions) -> None:
+    p = actions.pool
+    await send_message(p, from_agent="agent:boss", from_project="osiris",
+                       to_agent="agent:worker1", body="do the thing")
+    msgs = await read_seat_mail(p, target_agent="agent:worker1")
+    assert len(msgs) == 1
+    assert msgs[0]["body"] == "do the thing"
+    assert msgs[0]["settled"] is False
+    # NEVER leases — a genuine read_inbox() call for this same agent must still see it
+    # fresh, unmarked by the coordinator's own read.
+    own = await read_inbox(p, "osiris", reader_agent="agent:worker1")
+    assert len(own) == 1
+
+
+async def test_read_seat_mail_marks_settled_after_the_target_reads_it(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    await send_message(p, from_agent="agent:boss", from_project="osiris",
+                       to_agent="agent:worker2", body="ship it")
+    (m,) = await read_inbox(p, "osiris", reader_agent="agent:worker2")
+    await ack_messages(p, "osiris", [m["id"]], reader_agent="agent:worker2")
+    settled = await read_seat_mail(p, target_agent="agent:worker2")
+    assert settled[0]["settled"] is True
+    unsettled_only = await read_seat_mail(p, target_agent="agent:worker2",
+                                          include_settled=False)
+    assert unsettled_only == []
+
+
+async def test_read_seat_mail_finds_a_dm_to_an_earlier_generation(actions: Actions) -> None:
+    """LINEAGE-AWARE, same law as read_inbox's own rollup — a DM parked on a prior
+    generation is still this soul's mail."""
+    p = actions.pool
+    await send_message(p, from_agent="agent:boss", from_project="osiris",
+                       to_agent="agent:worker3", body="the old ask")
+    msgs = await read_seat_mail(p, target_agent="agent:worker3-ii")
+    assert len(msgs) == 1
+
+
+async def test_read_seat_mail_never_surfaces_a_broadcast(actions: Actions) -> None:
+    """Broadcasts are deliberately excluded — already visible to anyone reading that
+    project's own inbox; only DMs are the genuinely unsurfaceable half."""
+    p = actions.pool
+    await _seed(p, "coordination-check")
+    await send_message(p, from_agent="agent:x", from_project="a",
+                       to_project="coordination-check", body="group note")
+    msgs = await read_seat_mail(p, target_agent="agent:someone-in-coordination-check")
+    assert msgs == []
 
 
 # ── THE ORGANIZED DESK (operator direction, 2026-07-11: "my desk is full — fix it") ──────

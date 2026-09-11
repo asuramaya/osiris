@@ -1024,6 +1024,57 @@ async def read_inbox(
     ]
 
 
+async def read_seat_mail(
+    pool: asyncpg.Pool, *, target_agent: str, include_settled: bool = True, limit: int = 50,
+) -> list[dict[str, Any]]:
+    """MAIL IS UNSURFACEABLE, read-only half (9dc3ce8b/c56f3d94): every DM addressed to
+    `target_agent` — its exact id, its whole lineage, or any seat it currently holds —
+    for a CHARTER-GATED coordinator to read. NEVER a broadcast: a project's shared mail
+    is already visible to anyone reading that project's own inbox, so the genuinely
+    unsurfaceable half is DMs, the only thing this widens. NEVER writes message_
+    recipients — no lease, no settlement, purely observational, unlike `read_inbox`
+    above (which this deliberately does not share a query with, despite the
+    overlapping deliverability shape, precisely BECAUSE that shape always leases).
+
+    `include_settled=True` (the default) also surfaces mail the target has ALREADY
+    dealt with, marked `settled` per row — the whole reason a coordinator reads
+    another seat's mail is auditing what happened, not queuing new work for
+    themselves; `settled=False` narrows to only what the target has never marked read.
+
+    Authorization (does the caller govern this seat's project) is the MCP tool's own
+    job, not this function's — a pure read, trusting the caller already checked."""
+    from src.orchestrator.agents import _generation
+
+    base = _generation(target_agent)[0]
+    rows = await pool.fetch(
+        "SELECT m.id, m.from_agent, m.from_project, m.to_agent, m.body, m.created_at, "
+        "m.reply_to, m.thread_id, m.grade, "
+        "EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+        "  AND (r.agent_id=$1 OR r.agent_id=$3 OR r.agent_id LIKE $3 || '-%') "
+        "  AND r.read_at IS NOT NULL) AS settled "
+        "FROM fleet_messages m "
+        "WHERE m.to_agent IS NOT NULL AND ("
+        " m.to_agent = $1 "
+        " OR (m.to_agent = $3 OR m.to_agent LIKE $3 || '-%') "
+        " OR (m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
+        "     JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
+        "     WHERE hf.canonical = $1 AND ht.canonical = m.to_agent AND hl.type='holds' "
+        "     AND (hl.valid_until IS NULL OR hl.valid_until > now())))) "
+        "ORDER BY m.created_at DESC LIMIT $2",
+        target_agent, limit, base)
+    if not include_settled:
+        rows = [r for r in rows if not r["settled"]]
+    return [
+        {"id": r["id"], "from": r["from_agent"], "from_project": r["from_project"],
+         "body": r["body"], "when": r["created_at"].isoformat(),
+         "thread": r["thread_id"] or r["id"],
+         **({"grade": r["grade"]} if r["grade"] else {}),
+         **({"reply_to": r["reply_to"]} if r["reply_to"] is not None else {}),
+         "settled": bool(r["settled"])}
+        for r in rows
+    ]
+
+
 async def in_flight(
     pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900
 ) -> list[dict[str, Any]]:
