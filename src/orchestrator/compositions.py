@@ -6018,6 +6018,13 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                 {"name": "canonical", "property": "canonical"},
                 {"name": "status", "property": "status"},
                 {"name": "on_disk_path", "property": "on_disk_path"},
+                # OBJECT COUNT (Thoth dispatch 9507, 588148bb's page-conversion series,
+                # piece 1 of 4 before the projects swap): the old /projects route's own
+                # object_count — every object reached via in_repo, no type filter, same
+                # rollup shape as commits/files below but object_type omitted (_rollup's
+                # own "optionally filtered to object_type" — the whole-link-set count).
+                {"name": "object_count", "rollup": {"direction": "in", "link_type": "in_repo",
+                                                    "of": "count"}},
                 {"name": "commits", "rollup": {"direction": "in", "link_type": "in_repo",
                                                "object_type": "Commit", "of": "count"}},
                 {"name": "files", "rollup": {"direction": "in", "link_type": "in_repo",

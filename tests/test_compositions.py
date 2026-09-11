@@ -772,6 +772,26 @@ async def test_projects_composition_surfaces_status_and_includes_retired_rows(
     assert retired_row["status"] == "retired"
 
 
+async def test_projects_composition_surfaces_object_count(actions: Actions) -> None:
+    """Thoth dispatch 9507, piece 1 of 4 before the projects swap: the old /projects
+    route's own object_count column — every object reached via in_repo, ANY type, not
+    just commits/files (the two rollups the composition already had)."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:objcounttest", "test")
+    await actions.assert_property(proj, "name", "objcounttest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    commit = await actions.create_or_find_object("Commit", "commit:objcounttest@abc", "test")
+    thread = await actions.create_or_find_object("Thread", "thread:objcounttest-obj", "test")
+    await actions.create_link(commit, proj, "in_repo", "test", now, 0.9)
+    await actions.create_link(thread, proj, "in_repo", "test", now, 0.9)
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["project"] == "objcounttest")
+    assert row["object_count"] == 2       # both a Commit and a Thread — no type filter
+    assert row["commits"] == 1            # unchanged: the type-filtered rollup still works
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
