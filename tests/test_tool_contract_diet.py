@@ -1519,7 +1519,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # established. A genuinely new capability (the visitor-to-soul collapse for a THIRD
 # PARTY, operator/manager/ruling-gated), not prose creep; raised deliberately, measured
 # exact.
-TOOL_CONTRACT_CEILING_CHARS = 130100
+# 130100 -> 130102 (2026-09-11, Khnum, Thoth mail 9541 item 3, cc05c70c, HOUSE VOCABULARY):
+# seat()'s own ACTION TABLE line for establish_office corrected from "Osiris-owned home"
+# to "Osiris-owned office" — matching its sweep_disk neighbor's own wording and every CLI
+# description of the identical ceremony (a real vocabulary-drift specimen an audit found,
+# not padding). Two characters, measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 130102
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

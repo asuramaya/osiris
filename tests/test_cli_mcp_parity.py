@@ -1873,3 +1873,49 @@ async def test_cmd_attach_detach_seat_are_real_inverse_calls(actions: Actions) -
                                  actor="test")
     assert out2 == 0
     assert await manager_of_seat(actions.pool, worker) is None
+
+
+# ============================================================================================
+# HOUSE VOCABULARY, NOT JUST NAMES (wave 18 item 3, mail 9541 cc05c70c): decision 0b29f1cbcc5a
+# ("ONE ACT, ONE NAME, ONE VOCABULARY") already governs the tests above — same act, same verb,
+# same params. This is the sibling gap that check never covered: the WORDS a description uses
+# for a house CONCEPT (office, seat, charter, desk), which can drift even when the verb and
+# params line up perfectly. A full pairwise CLI-help-vs-MCP-docstring text diff is exactly the
+# kind of brittle, false-positive-prone check this house avoids (a legitimate word — "homeless"
+# in `osiris new`'s own --house help, ruling 68fba2e4 — contains the substring "home" with no
+# relation to an office at all); this pins the one real specimen an audit actually found (Thoth
+# mail 9541, agent audit a50d035379cb89dd8) — seat()'s own action-table line for
+# `establish_office` said "Osiris-owned home" while every sibling line beside it (sweep_disk)
+# and every CLI description of the identical ceremony already said "office" — as an EXACT
+# anchored phrase check, never a bare word ban, so it catches a real recurrence of THIS drift
+# without flagging unrelated legitimate uses of "home".
+# ============================================================================================
+
+_FORBIDDEN_OFFICE_SYNONYM_RE = re.compile(r"Osiris-owned home\b")
+
+
+def test_seat_docstring_never_calls_the_office_a_home() -> None:
+    """The exact specimen (mcp_server.py:3846, offices.py:1): `establish_office`'s own
+    action-table line described the identical ceremony `sweep_disk`'s neighboring line
+    already calls an "office" — the one house-term divergence a real audit found. Reads
+    the live docstrings (never a hand-copied string that could itself drift from the
+    source), so a future re-introduction of "Osiris-owned home" fails here instead of
+    waiting for the next audit."""
+    import inspect
+
+    from src.mcp_server import seat
+    from src.orchestrator.offices import establish_office
+
+    seat_doc = inspect.getdoc(seat) or ""
+    assert not _FORBIDDEN_OFFICE_SYNONYM_RE.search(seat_doc), (
+        "seat()'s own docstring calls the office a 'home' again — establish_office's "
+        "action-table line drifted from its sweep_disk neighbor's own 'office' wording")
+    offices_doc = inspect.getdoc(establish_office) or ""
+    # establish_office's own function docstring is a one-liner forwarding to the module
+    # docstring's own ceremony description in prose elsewhere in offices.py — checked
+    # directly against the module's own top-of-file text, not this function's doc alone.
+    import src.orchestrator.offices as offices_mod
+    module_doc = offices_mod.__doc__ or ""
+    assert not _FORBIDDEN_OFFICE_SYNONYM_RE.search(module_doc), (
+        "orchestrator/offices.py's own module docstring calls the office a 'home' again")
+    assert not _FORBIDDEN_OFFICE_SYNONYM_RE.search(offices_doc)
