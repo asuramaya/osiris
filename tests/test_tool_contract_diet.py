@@ -1531,7 +1531,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # to "Osiris-owned office" — matching its sweep_disk neighbor's own wording and every CLI
 # description of the identical ceremony (a real vocabulary-drift specimen an audit found,
 # not padding). Two characters, measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 131547
+# 131545 -> 131805 (2026-09-11, Sekhmet, thread 6d01f21e, wave 18 item 1, "closed_by real
+# sources"): `backfill`'s own docstring gains one new `target=` clause
+# (closed_by_real_sources) documenting the sixth dispatch branch — a genuinely new
+# capability (the compensating fold for the retired placeholder-Agent shape), not a new
+# @mcp.tool() (tool count unchanged; dispatched through the existing `backfill` door, same
+# as `lineage_repo_links`/`agent_project_links` before it). No prose growth on any other
+# tool. Measured exact (131,805).
+TOOL_CONTRACT_CEILING_CHARS = 131807
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

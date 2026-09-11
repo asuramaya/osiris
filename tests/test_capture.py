@@ -19,6 +19,8 @@ from src.actions.core import Actions
 from src.ingest.mined import consolidate_memory
 from src.mcp_server import _project_briefing
 from src.orchestrator.capture import (
+    _OPERATOR_PERSON_CANONICAL,
+    _SYSTEM_SOURCE_CANONICAL,
     ARC_DEFINITIONS,
     ARCS,
     _decision_snapshot,
@@ -1791,6 +1793,70 @@ async def test_resolve_thread_mints_only_resolved_by_when_artifact_resolves(
         "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t) == d
     assert await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND type='closed_by'", t) is None
+
+
+async def test_resolve_thread_closed_by_a_real_agent_string_is_unchanged(
+    actions: Actions,
+) -> None:
+    """Thread 6d01f21e: a real `agent:<id>` source string still mints/finds a plain
+    Agent object exactly as before — the new routing in `_mint_closed_by` only branches
+    for the two placeholder specimens, never for the common case."""
+    t = await open_thread(actions, "a thread closed by a real agent")
+    await resolve_thread(actions, str(t), because="moot", source="agent:closer-real")
+    row = await actions.pool.fetchrow(
+        "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='closed_by'", t)
+    assert row["type"] == "Agent"
+    assert row["canonical"] == "agent:closer-real"
+
+
+async def test_resolve_thread_closed_by_analyst_operator_resolves_to_the_real_person(
+    actions: Actions,
+) -> None:
+    """Thread 6d01f21e, Thoth's wave-18 reversal of his own 2026-08-01 deferral: the REST
+    route's 'analyst:operator' attribution no longer mints a placeholder Agent under that
+    literal string — it resolves to the real operator Person object."""
+    t = await open_thread(actions, "a thread closed via the REST route", source="session")
+    await resolve_thread(actions, str(t), because="moot", source="analyst:operator")
+    row = await actions.pool.fetchrow(
+        "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='closed_by'", t)
+    assert row["type"] == "Person"
+    assert row["canonical"] == _OPERATOR_PERSON_CANONICAL
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical='analyst:operator'") is None
+
+
+async def test_resolve_thread_closed_by_other_operator_actors_also_resolve_to_the_person(
+    actions: Actions,
+) -> None:
+    """`_OPERATOR_ACTORS` (seats.py) is one notion everywhere else in this codebase — the
+    same set routes here too, not just the one specimen named on the thread."""
+    for edge_source in ("operator", "console"):
+        t = await open_thread(actions, f"a thread closed by {edge_source!r}")
+        await resolve_thread(actions, str(t), because="moot", source=edge_source)
+        row = await actions.pool.fetchrow(
+            "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='closed_by'", t)
+        assert row["type"] == "Person"
+        assert row["canonical"] == _OPERATOR_PERSON_CANONICAL
+
+
+async def test_resolve_thread_closed_by_bare_session_default_resolves_to_system_source(
+    actions: Actions,
+) -> None:
+    """Thread 6d01f21e: a caller who never passed source= (the module's own 'session'
+    default) no longer mints a placeholder Agent under the literal string 'session' — it
+    resolves to the singleton SystemSource object."""
+    t = await open_thread(actions, "a thread closed with no source= at all")
+    await resolve_thread(actions, str(t), because="moot")  # source defaults to 'session'
+    row = await actions.pool.fetchrow(
+        "SELECT o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='closed_by'", t)
+    assert row["type"] == "SystemSource"
+    assert row["canonical"] == _SYSTEM_SOURCE_CANONICAL
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical='session'") is None
 
 
 async def test_resolve_thread_artifact_resolves_a_type_prefixed_short_id(
