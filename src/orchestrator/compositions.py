@@ -986,6 +986,45 @@ async def _fn_project(
     }
 
 
+async def _fn_project_worktrees(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """WORKTREE NESTING (Thoth dispatch 9542, 588148bb's projects-composition series,
+    piece 3 of 4): every live Worktree's own name+branch, grouped by its parent
+    SoftwareProject's id via `worktree_of` — the old /projects route's own nested sub-
+    rows (thread 922d920c/55992ca9: a worktree is never a project of its own), now a
+    Function-backed column (table's own "function" column, piece 2's mechanism) rather
+    than a bespoke client-side join. Subject-free — the projects composition wants every
+    project's worktrees in one read, batched, same discipline every other function-column
+    call already follows.
+
+    FRONTEND FOLLOW-UP, NOT BUILT HERE (flagged, not silently absorbed): the generic
+    table() renderer already shows a nested list-of-dicts column as flattened prose
+    (_flatVal, task #109's own "neither render_composition nor osiris.js's table()
+    recurse into a nested list/dict CELL value" fix) — real information, not lost, but
+    not the indented sub-row treatment the old hardcoded page had. That needs its own
+    change to the shared, frozen table() renderer, used by every composition in the
+    system — too wide a blast radius to fold into this backend piece."""
+    rows = await pool.fetch(
+        "SELECT p.id AS project_id, w.canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=w.id AND a.name='name' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS name, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=w.id AND a.name='branch' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS branch "
+        "FROM links l "
+        "JOIN objects w ON w.id=l.from_id AND w.type='Worktree' AND w.status='active' "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type='worktree_of' AND (l.valid_until IS NULL OR l.valid_until > now())"
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        grouped.setdefault(str(r["project_id"]), []).append(
+            {"name": r["name"] or r["canonical"], "branch": r["branch"]})
+    return [{"id": pid, "worktrees": wts} for pid, wts in grouped.items()]
+
+
 _WORD = re.compile(r"[a-z][a-z0-9_+]{3,}")   # a term ≥4 chars — the derivation's unit
 _EXT = re.compile(r"\.([a-z0-9]{1,6})$")     # a file extension
 
@@ -4533,6 +4572,7 @@ _FUNCTIONS: dict[str, Function] = {
     "portfolio": _fn_portfolio,
     "pulse": _fn_pulse,
     "project": _fn_project,
+    "project_worktrees": _fn_project_worktrees,
     "lap": _fn_lap,
     "lint": _fn_lint,
     "roadmap_open": _fn_roadmap_open,
@@ -4567,7 +4607,8 @@ _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "puls
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
                  "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
-                 "closure_health", "reference_catalog", "census", "obligation_backlog"}
+                 "closure_health", "reference_catalog", "census", "obligation_backlog",
+                 "project_worktrees"}
 
 
 def list_functions() -> list[str]:
@@ -6089,6 +6130,13 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                                                                   "object_type": "SoftwareProject",
                                                                   "limit": 2000},
                                                          "field": "contradicted_on"}},
+                # WORKTREE NESTING (Thoth dispatch 9542, piece 3 of 4): every live
+                # Worktree's own name+branch, grouped by parent — see
+                # _fn_project_worktrees' own docstring for the frontend follow-up this
+                # backend piece deliberately does not build (the shared table() renderer
+                # already shows this as flattened prose via _flatVal, not indented rows).
+                {"name": "worktrees", "function": {"name": "project_worktrees", "args": {},
+                                                   "field": "worktrees"}},
             ],
         },
     },
