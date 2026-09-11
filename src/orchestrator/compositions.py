@@ -4396,7 +4396,20 @@ async def _triage_type_gaps(
     `no_label_rule` (kind='object' only — a link type has no field of its own to label;
     blank/missing `label_field`), else `normal`. Same pagination/no-silent-caps contract
     as the generic path; never called directly (`_triage_buckets` is the one dispatch
-    point, same discipline as that function's own docstring)."""
+    point, same discipline as that function's own docstring).
+
+    `contradicted` (820730c8, follow-up to #102 deliberately scoped out at build time):
+    the generic path's own bucket (this file, `contradicted_props`/`contradicted_objs`,
+    GROUP BY (object_id, name) HAVING count(DISTINCT value) > 1 over ALL properties) is a
+    SEPARATE branch from this one, so a live multi-source disagreement on a Type's own
+    kind/description/label_field never surfaced here — a Type row could carry two
+    sources' differing `description` and this check would just read whichever won by
+    confidence/recency, same silent-collapse task #102 named for every other object.
+    Scoped to exactly these three fields (unlike the generic bucket's all-properties
+    scan) since they are the only ones this function's own bucket logic reads; ranks
+    ABOVE undescribed/no_label_rule (same priority tier the generic path's own
+    `contradicted` sits at, `_TRIAGE_BUCKET_PRIORITY`) — a Type in live disagreement
+    about its OWN description is a worse state than one that simply has none."""
     rows = await pool.fetch("""
         WITH per_type AS (
             SELECT o.id, o.canonical, o.created_at AS born,
@@ -4413,21 +4426,38 @@ async def _triage_type_gaps(
                                            WHERE a.object_id = o.id)) AS last_touch
             FROM objects o
             WHERE o.type = 'Type' AND o.status = $1
+        ),
+        contradicted_props AS (
+            SELECT ca.object_id, ca.name
+            FROM current_assertions ca
+            JOIN per_type pt ON pt.id = ca.object_id
+            WHERE ca.name IN ('kind', 'description', 'label_field')
+            GROUP BY ca.object_id, ca.name
+            HAVING count(DISTINCT (ca.value #>> '{}')) > 1
+        ),
+        contradicted_objs AS (
+            SELECT object_id, array_agg(DISTINCT name ORDER BY name) AS props
+            FROM contradicted_props GROUP BY object_id
         )
-        SELECT id, canonical, born, last_touch, kind,
+        SELECT pt.id, pt.canonical, pt.born, pt.last_touch, pt.kind,
+               cont.props AS contradicted_on,
                CASE
-                 WHEN description IS NULL OR btrim(description) = '' THEN 'undescribed'
-                 WHEN kind = 'object' AND (label_field IS NULL OR btrim(label_field) = '')
+                 WHEN cont.props IS NOT NULL THEN 'contradicted'
+                 WHEN pt.description IS NULL OR btrim(pt.description) = '' THEN 'undescribed'
+                 WHEN pt.kind = 'object'
+                      AND (pt.label_field IS NULL OR btrim(pt.label_field) = '')
                      THEN 'no_label_rule'
                  ELSE 'normal'
                END AS bucket
-        FROM per_type
-        ORDER BY canonical
+        FROM per_type pt
+        LEFT JOIN contradicted_objs cont ON cont.object_id = pt.id
+        ORDER BY pt.canonical
     """, status)
     bucketed = sorted(rows, key=lambda r: (_TRIAGE_BUCKET_PRIORITY[r["bucket"]], r["canonical"]))
     page = bucketed[offset:offset + limit]
     listed = [
         {"id": str(r["id"]), "canonical": r["canonical"], "bucket": r["bucket"],
+         **({"contradicted_on": list(r["contradicted_on"])} if r["contradicted_on"] else {}),
          "kind": r["kind"], "born": r["born"].isoformat(),
          "last_touch": r["last_touch"].isoformat()}
         for r in page
