@@ -4132,6 +4132,34 @@ async def get_status(render: str | None = None, ctx: Context | None = None) -> d
     return result
 
 
+@mcp.tool()
+async def pulse(ctx: Context | None = None) -> dict[str, Any]:
+    """A HARNESS-NEUTRAL LIVENESS REFRESH (thread 879c97b9 piece 3, "VENDOR-NEUTRAL
+    DOOR"): call this periodically to stay reading as LIVE (roster, co_agents, DM
+    delivery, claim_name's own live-holder guard) without paying mount()'s full
+    re-attach ceremony — no whisper hook, no statusline, no Claude transcript required.
+    A Claude Code session already gets this for free from its own statusline heartbeat
+    and from every mount()/automount() re-attach; this tool exists for everyone else — a
+    GLM/GPT harness speaking plain MCP that wants the same freshness on its own terms.
+
+    SELF-SCOPED, ALWAYS: touches only the CALLING identity's own `agent_mounts` rows —
+    there is no `target` parameter, so this can never refresh another mind's liveness.
+    Refuses if you haven't mounted (nothing to refresh). `touched=0` (mounted, but no
+    durable job_dir on record) is a legal, reportable no-op, never an error.
+
+    THE 5-MINUTE WINDOW (Thoth's own guard, mail 9559): a non-Claude harness's liveness
+    reads True from a pulse fresher than 5 minutes — call this at least that often if you
+    want your own DMs to route as live and your name safe from a genuine live-holder
+    collision. Call it less often and you read cold, honestly, exactly like a quiet Claude
+    session would — this is a freshness check, never a blanket exemption."""
+    ident = await _ident_for(ctx)
+    if ident is None:
+        return {"error": "mount first — pulse refreshes YOUR OWN liveness, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
+    from src.orchestrator.mounts import pulse_mount
+    return await pulse_mount(await _pool_get(), agent_id=ident.agent_id)
+
+
 async def _charter_scoped_project_ids(
     pool: asyncpg.Pool, ctx: Context | None, project: str, proj_id: Any,
 ) -> tuple[list[Any], list[str]]:

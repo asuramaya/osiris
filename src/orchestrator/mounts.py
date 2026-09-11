@@ -205,17 +205,41 @@ async def registry_census(
     mounts.py (imported early, by agents.py among others) and trigger.py/census.py
     (themselves importing agents.py). Fails open on a harness read failure — a census that
     could not run reports `verified: []`, `blind: true`, never a false-empty population
-    read as "nothing is live" (same law as census.py's own pgrep=None handling)."""
+    read as "nothing is live" (same law as census.py's own pgrep=None handling).
+
+    PULSE-LIVE, A DISTINCT POPULATION (thread 879c97b9 piece 3, Thoth's guard #3): the
+    Claude-only harness registry above can never confirm a non-Claude body by construction
+    — `pulse_live` names the agents a non-Claude harness's OWN self-reported freshness
+    (`pulse_mount`, below) currently backs, kept SEPARATE from `matched` on purpose (a
+    census-confirmed body and a self-reported-fresh one are different grades of evidence;
+    conflating them into one list would erase exactly the visibility this guard exists
+    for). Scoped to agents whose own stamped `harness` property (mount()'s own
+    `assert_property(..., "harness", ...)`) reads anything but 'claude-code' — a Claude
+    session's liveness is answered by the census above alone, unchanged. A 5-minute
+    freshness window, STRICTER than the 15-minute mount-staleness window the census path
+    rides on elsewhere (resolve_seat), since a self-report is weaker evidence than a
+    verified census match and earns a tighter leash."""
     from src.orchestrator import census as _census
     from src.orchestrator.trigger import _claude_agents_json
 
     agents_json = agents_json or _claude_agents_json
     read_exe = read_exe or _census._proc_exe
     read_cwd = read_cwd or _census._proc_cwd
+    pulse_rows = await pool.fetch(
+        "SELECT o.canonical AS agent_id, m.job_dir, m.last_seen FROM agent_mounts m "
+        "JOIN objects o ON o.type='Agent' AND o.canonical=m.agent_id AND o.status='active' "
+        "WHERE COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+        "  WHERE a.object_id=o.id AND a.name='harness' "
+        "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+        "  NOT IN ('', 'claude-code') "
+        "AND m.last_seen > now() - interval '5 minutes'")
+    pulse_live = [{"agent_id": r["agent_id"], "job_dir": r["job_dir"],
+                  "last_seen": r["last_seen"].isoformat()} for r in pulse_rows]
     try:
         rows = await agents_json()
     except (OSError, TimeoutError, ValueError):
         return {"blind": True, "verified": [], "matched": [], "rowless": [],
+                "pulse_live": pulse_live, "pulse_live_count": len(pulse_live),
                 "note": "the harness registry read failed — cannot census, not empty"}
     verified: list[dict[str, Any]] = []
     for r in rows:
@@ -246,7 +270,31 @@ async def registry_census(
             rowless.append(v)
     return {"blind": False, "verified": verified, "matched": matched, "rowless": rowless,
             "verified_count": len(verified), "matched_count": len(matched),
-            "rowless_count": len(rowless)}
+            "rowless_count": len(rowless), "pulse_live": pulse_live,
+            "pulse_live_count": len(pulse_live)}
+
+
+async def pulse_mount(pool: asyncpg.Pool, *, agent_id: str) -> dict[str, Any]:
+    """THE HARNESS-NEUTRAL PULSE (thread 879c97b9 piece 3, Thoth's guard #1): a
+    lightweight, SELF-SCOPED liveness refresh any MCP client can call directly, no
+    whisper hook or statusline required. Touches ONLY `agent_id`'s OWN `agent_mounts`
+    rows — there is no `target` parameter, by construction, so a caller can never refresh
+    another mind's row; the caller's own resolved identity is the entire address space.
+    A well-behaved non-Claude client that simply calls mount() periodically already gets
+    this for free (`save_mount`'s own upsert already bumps `last_seen`); this exists for
+    the cheaper, more frequent case — a client that wants to stay fresh without paying
+    mount()'s full re-attach ceremony every time.
+
+    Feeds `registry_census`'s own `pulse_live` population above, the ONLY thing that
+    changes for a non-Claude harness's own liveness reading (`is_occupied_by_a_live_body`)
+    — the Claude census path is entirely untouched. Zero rows touched (an agent_id with no
+    durable mount row at all) is a legal, reportable no-op, never an error."""
+    rows = await pool.fetch(
+        "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1 "
+        "RETURNING job_dir, last_seen", agent_id)
+    newest = max((r["last_seen"] for r in rows), default=None)
+    return {"agent": agent_id, "touched": len(rows),
+            "last_seen": newest.isoformat() if newest else None}
 
 
 _MOUNT_COLS = (

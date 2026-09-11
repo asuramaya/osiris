@@ -1759,7 +1759,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
     class, made a standing tripwire), PHANTOM-TWIN (an anonymous un-spawned agent mounted
     at a Seat's office beside a different holder lineage — a resumed soul wearing a second
-    row; the one identity degradation that must never be silent), PARALLEL-LIVES (a
+    row; the one identity degradation that must never be silent), PULSE-ONLY-LIVENESS
+    (info: a non-Claude-harness agent whose liveness reads entirely off a self-reported
+    pulse, never a census-verified body — thread 879c97b9 piece 3, Thoth's guard #3;
+    named so the population riding the weaker signal stays visible, never a defect),
+    PARALLEL-LIVES (a
     generation minted while a different door of its own lineage held a live pulse — the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
     the mint, thread 4bcd6541), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
@@ -2189,6 +2193,35 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for c in sorted(status_of)
             if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
             and status_of.get(props[c]["succeeded_by"]) == "active"])
+
+        # PULSE-ONLY-LIVENESS (thread 879c97b9 piece 3, Thoth's guard #3 — "graph_lint
+        # gains a 'pulse-only-liveness' count so the population this guard covers is
+        # always readable"): a non-Claude harness's `is_occupied_by_a_live_body` (agents.py)
+        # can NEVER be confirmed by the Claude-only census (`registry_census`'s `matched`
+        # set shells out to `claude agents --json` and verifies a claude binary) — every
+        # such agent's liveness rides ENTIRELY on its own self-reported pulse instead
+        # (`mounts.pulse_mount`, the harness-neutral MCP tool). INFO-grade, not damage: this
+        # names the population whose liveness signal is structurally weaker (self-report,
+        # never census-verified), so it stays visible rather than indistinguishable from an
+        # ordinary Claude session once it reads live. Pure SQL, same 5-minute freshness
+        # window `registry_census`'s own `pulse_live` uses (a live process census is not
+        # available inside this report-only function).
+        land("pulse-only-liveness", "info", [
+            {"subject": r["agent_id"],
+             "detail": "this agent's own harness is not claude-code — its liveness reads "
+                       "ENTIRELY off a self-reported pulse (mounts.pulse_mount), never a "
+                       "census-verified body; listed so the population relying on the "
+                       "weaker signal stays visible"}
+            for r in await pool.fetch(
+                "SELECT o.canonical AS agent_id FROM agent_mounts m "
+                "JOIN objects o ON o.type='Agent' AND o.canonical=m.agent_id "
+                "  AND o.status='active' "
+                "WHERE COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
+                "  WHERE a.object_id=o.id AND a.name='harness' "
+                "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') "
+                "  NOT IN ('', 'claude-code') "
+                "AND m.last_seen > now() - interval '5 minutes' "
+                "ORDER BY o.canonical")])
 
         # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
         # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance

@@ -518,6 +518,39 @@ async def test_lint_status_regression_catches_an_exact_timestamp_tie(
     assert "IDENTICAL timestamp" in reg[0]["detail"]
 
 
+async def test_lint_pulse_only_liveness_names_a_fresh_non_claude_agent(
+    actions: Actions,
+) -> None:
+    """Piece 3 (thread 879c97b9, Thoth's guard #3): a non-Claude-harness agent with a
+    fresh mount row is counted — info-grade, a population to stay visible, never a
+    defect. A Claude-harness agent (or one never stamped at all) never appears here,
+    same disjoint-population law `registry_census`'s own `pulse_live` keeps."""
+    t = "agent:teller"
+    non_claude = await actions.create_or_find_object("Agent", "agent:pl0000001", t)
+    await actions.assert_property(non_claude, "harness", "crush", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/pl0000001", agent_id="agent:pl0000001",
+        project="osiris", cwd="/repo/osiris", model=None, session_key="s1")
+
+    claude_agent = await actions.create_or_find_object("Agent", "agent:pl0000002", t)
+    await actions.assert_property(claude_agent, "harness", "claude-code", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/pl0000002", agent_id="agent:pl0000002",
+        project="osiris", cwd="/repo/osiris", model=None, session_key="s2")
+
+    await actions.create_or_find_object("Agent", "agent:pl0000003", t)
+    await mounts.save_mount(
+        actions.pool, job_dir="/x/jobs/pl0000003", agent_id="agent:pl0000003",
+        project="osiris", cwd="/repo/osiris", model=None, session_key="s3")
+
+    out = await _fn(actions, "lint", {})
+    found = _by_check(out, "pulse-only-liveness")
+    assert [f["subject"] for f in found] == ["agent:pl0000001"]
+    assert out["severity"]["pulse-only-liveness"] == "info"
+
+
 async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> None:
     t = "agent:teller"
     # a live link into a retired corpse

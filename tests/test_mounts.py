@@ -2571,3 +2571,152 @@ async def test_harness_backfill_heartbeat_never_touches_an_already_stamped_agent
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
         "ON o.id = a.object_id WHERE o.canonical=$1 AND a.name='harness'", agent_id)
     assert harness == "crush"  # untouched, never overwritten
+
+
+# ═══ pulse_mount + registry_census's pulse_live — piece 3 (thread 879c97b9, "VENDOR-
+# NEUTRAL DOOR"): a harness-neutral liveness refresh, and the census-side population it
+# feeds, kept DISTINCT from the Claude-only census `matched` set (Thoth's guard #3) ═══
+
+async def test_pulse_mount_refreshes_only_the_callers_own_rows(actions: Actions) -> None:
+    """Guard #1: no `target` param, by construction — touches ONLY the given agent_id's
+    own rows, never another mind's, even one mounted at the exact same instant."""
+    p = actions.pool
+    stale = datetime.now(UTC) - timedelta(minutes=10)
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/mine', 'agent:pulseme01', 'z', '/z', $1, $1)", stale)
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/other', 'agent:pulseother1', 'z', '/z', $1, $1)", stale)
+
+    out = await mounts.pulse_mount(p, agent_id="agent:pulseme01")
+
+    assert out["agent"] == "agent:pulseme01"
+    assert out["touched"] == 1
+    mine = await p.fetchval("SELECT last_seen FROM agent_mounts WHERE job_dir='/j/mine'")
+    other = await p.fetchval("SELECT last_seen FROM agent_mounts WHERE job_dir='/j/other'")
+    assert mounts.is_live(mine)
+    assert other == stale  # untouched — a different agent's row
+
+
+async def test_pulse_mount_on_a_never_mounted_agent_is_a_legal_no_op(actions: Actions) -> None:
+    out = await mounts.pulse_mount(actions.pool, agent_id="agent:neverseen01")
+    assert out == {"agent": "agent:neverseen01", "touched": 0, "last_seen": None}
+
+
+async def _stamp_harness(actions: Actions, agent_id: str, harness: str) -> None:
+    obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(
+        obj, "harness", harness, agent_id, datetime.now(UTC), 0.9, evidence_class=_SD)
+
+
+async def test_registry_census_reports_a_fresh_non_claude_pulse_as_pulse_live(
+    actions: Actions,
+) -> None:
+    p = actions.pool
+    await _stamp_harness(actions, "agent:glm00001", "crush")
+    await mounts.save_mount(p, job_dir="/x/jobs/glm00001", agent_id="agent:glm00001",
+                            project="osiris", cwd="/repo/osiris", model=None,
+                            session_key="s1")
+
+    out = await mounts.registry_census(p, agents_json=_fake_agents_json([]))
+
+    assert out["pulse_live_count"] == 1
+    assert out["pulse_live"][0]["agent_id"] == "agent:glm00001"
+    # never conflated with the Claude-only census population
+    assert out["matched"] == []
+
+
+async def test_registry_census_excludes_a_stale_non_claude_pulse(actions: Actions) -> None:
+    """Guard #2's own stricter window: 5 minutes, not the 15-minute mount-staleness
+    window the Claude path rides on elsewhere — a pulse 6 minutes old does not count."""
+    p = actions.pool
+    await _stamp_harness(actions, "agent:glm00002", "crush")
+    stale = datetime.now(UTC) - timedelta(minutes=6)
+    await p.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/x/jobs/glm00002', 'agent:glm00002', 'osiris', '/repo/osiris', $1, $1)",
+        stale)
+
+    out = await mounts.registry_census(p, agents_json=_fake_agents_json([]))
+
+    assert out["pulse_live"] == []
+
+
+async def test_registry_census_never_reports_a_claude_harness_as_pulse_live(
+    actions: Actions,
+) -> None:
+    """A Claude session's own liveness is answered by the census alone — an agent
+    stamped harness='claude-code' (or never stamped at all) never appears in
+    `pulse_live`, even with a fresh mount row, so the two populations stay disjoint."""
+    p = actions.pool
+    await _stamp_harness(actions, "agent:cc0000001", "claude-code")
+    await mounts.save_mount(p, job_dir="/x/jobs/cc0000001", agent_id="agent:cc0000001",
+                            project="osiris", cwd="/repo/osiris", model=None,
+                            session_key="s2")
+    await mounts.save_mount(p, job_dir="/x/jobs/unstamped1", agent_id="agent:unstamped1",
+                            project="osiris", cwd="/repo/osiris", model=None,
+                            session_key="s3")
+
+    out = await mounts.registry_census(p, agents_json=_fake_agents_json([]))
+
+    assert out["pulse_live"] == []
+
+
+# ═══ the pulse() MCP tool — self-scoped, no target param by construction (guard #1) ═══
+
+class _PulseCtx:
+    class request_context:  # noqa: N801
+        request = None
+        session = object()
+
+
+async def test_mcp_pulse_refuses_unmounted(actions: Actions) -> None:
+    from src import mcp_server as srv
+
+    ctx = _PulseCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.pulse(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert "mount first" in out["error"]
+
+
+async def test_mcp_pulse_refreshes_only_the_mounted_callers_own_row(
+    actions: Actions,
+) -> None:
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    stale = datetime.now(UTC) - timedelta(minutes=10)
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/pulsemcp1', 'agent:pulsemcp01', 'z', '/z', $1, $1)", stale)
+    await actions.pool.execute(
+        "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, mounted_at, last_seen) "
+        "VALUES ('/j/pulsemcp2', 'agent:pulsemcp02', 'z', '/z', $1, $1)", stale)
+
+    ctx = _PulseCtx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:pulsemcp01", session="pulsemcpsession", project="z",
+        model=None, cwd=None)
+    try:
+        out = await srv.pulse(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "error" not in out
+    assert out["agent"] == "agent:pulsemcp01"
+    assert out["touched"] == 1
+    mine = await actions.pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/j/pulsemcp1'")
+    other = await actions.pool.fetchval(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir='/j/pulsemcp2'")
+    assert mounts.is_live(mine)
+    assert other == stale  # a different agent's row, untouched

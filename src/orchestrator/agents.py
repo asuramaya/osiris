@@ -2535,12 +2535,27 @@ async def is_occupied_by_a_live_body(
     Injectable (`agents_json`/`read_exe`/`read_cwd`), same seam discipline as
     `registry_census` itself — the real defaults fire on every production mint, an
     accepted cost (a subprocess + a bounded /proc walk) for a safety-critical check on a
-    path that is not a hot loop."""
+    path that is not a hot loop.
+
+    THE ONE LIVENESS AUTHORITY, EXTENDED FOR A NON-CLAUDE BODY (thread 879c97b9 piece 3,
+    Thoth's guard #2): the Claude-only harness registry `matched` set can never confirm a
+    non-Claude process by construction — it shells out to `claude agents --json` and
+    verifies the pid IS the claude binary. Rather than teach `registry_census` to verify
+    arbitrary foreign binaries via /proc (fragile, one-off per harness), a body the census
+    structurally cannot see gets its OWN path: `registry_census`'s `pulse_live` (a
+    self-reported freshness, 5-minute window — STRICTER than the Claude path's 15-minute
+    mount-staleness window this function's own callers gate liveness with, since a
+    self-report is weaker evidence than a verified census match). A stale non-Claude seat
+    (no pulse within 5 minutes) reads cold exactly like a stale Claude one — this is a
+    genuine freshness check, not a blanket exemption for anything non-Claude. The Claude
+    path (`matched`) is entirely unchanged."""
     from src.orchestrator.mounts import registry_census
 
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
-    return agent_id in {m.get("agent_id") for m in census.get("matched", [])}
+    if agent_id in {m.get("agent_id") for m in census.get("matched", [])}:
+        return True
+    return agent_id in {m.get("agent_id") for m in census.get("pulse_live", [])}
 
 
 async def _fold_zero_turn_ancestors(
