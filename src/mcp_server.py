@@ -8476,6 +8476,7 @@ async def record_decision(
     cites: list[str] | None = None,
     ack_prior_art: bool = False,
     unlinked_because: str | None = None,
+    operator_authorized: bool = False,
     subagent_id: str | None = None,
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
@@ -8499,6 +8500,10 @@ async def record_decision(
       bears_on     speak to an open Thread without closing it
     `ack_prior_art=True` records a dismissed prior_art_flag instead of a silent shrug.
     `unlinked_because` supplies a real reason through declare-or-refuse's link-kind gate.
+    `operator_authorized=True` (decision 12efe065): this decision carries the operator's
+    OWN authority, not just this caller's own scoped judgment — mints a `ruled_by`
+    edge to the operator's Person object. An explicit, self-declared act, never inferred
+    from who's calling; set it only when this decision really is the operator's ruling.
     consult_canon('record_decision') for more.
 
     `content_landed`: present when `rationale`/`protocol` was passed — a read-back
@@ -8761,6 +8766,7 @@ async def record_decision(
             refute_id=refute_id, obsoletes=obsoletes,
             unlinked_because_kind=("extension_link_pending" if is_extension_pending
                                    else None),
+            operator_authorized=operator_authorized,
         )
     except ValueError as e:  # task #107: e.g. a path-shaped repo — refuse clean, no traceback
         return {"error": str(e)}

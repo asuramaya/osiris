@@ -1498,7 +1498,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # 126448 -> 128772 (2026-09-11, Sekhmet, thread 9d2aaf4d, decision c6d25164, Thoth DM
 # 9377/9383, CITATION SHAPE): two new doors, cite_transcript and read_citation (see
 # TOOL_CONTRACT_EXPECTED_COUNT's own 81->83 log entry just above). Measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 128772
+# 126448 -> 126865 (2026-09-11, decision 12efe065, thread 9d2aaf4d, "THE OPERATOR AS AN
+# OBJECT"): record_decision gains one new param, `operator_authorized` — a rulings-carry-
+# authority-to-a-real-Person-object mechanism, plus its own one-paragraph docstring entry
+# and a matching docstring sentence on `authorized_by`'s widened LinkType. No new tool,
+# load-bearing growth per this file's own escape valve. Measured exact (126,865).
+TOOL_CONTRACT_CEILING_CHARS = 129189
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
