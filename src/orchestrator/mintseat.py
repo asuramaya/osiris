@@ -49,7 +49,12 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.orchestrator.agents import _GEN_SUFFIX_ALTERNATION
-from src.orchestrator.boot_compiler import compile_managed_body, template_version, wrap_managed
+from src.orchestrator.boot_compiler import (
+    compile_managed_body,
+    scaffold_boot_file,
+    template_version,
+    wrap_managed,
+)
 from src.orchestrator.charter import charter_of
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _default_office_root
 from src.orchestrator.seats import (
@@ -195,8 +200,10 @@ async def _scaffold_office(
         pin_state = "written"
         project_declared = bool(project)
     orders = office / "CLAUDE.md"
+    agents = office / "AGENTS.md"
     orders_state = "left in place"
-    if not orders.exists():
+    agents_state = "left in place"
+    if not orders.exists() or not agents.exists():
         if manager_seat_id is not None:
             role, charter_block = "worker", (
                 "Your charter was never formally declared — it lives only in prose. First "
@@ -214,8 +221,14 @@ async def _scaffold_office(
             # a FRESH mint can never yet carry a peer_of edge (offices.py's own
             # establish_office is where a peer bonded later gets picked up live)
             peer_block="\n", role=role, manager_seat_id=manager_seat_id)
-        orders.write_text(wrap_managed(body, template_version()))
-        orders_state = "written"
+        wrapped = wrap_managed(body, template_version())
+        # existing_note="left in place" preserves this site's own pre-existing, tested
+        # short convention (unlike offices.py's two sites, which already used the
+        # longer descriptive form before this helper existed).
+        orders_state = scaffold_boot_file(orders, wrapped, label="standing orders",
+                                          existing_note="left in place")
+        agents_state = scaffold_boot_file(
+            agents, wrapped, label="its own compiled standing orders (vendor-neutral)")
     charter = office / "charter.md"
     charter_state = "left in place"
     if not charter.exists():
@@ -229,7 +242,8 @@ async def _scaffold_office(
         grant_state = "written"
     return {"office": str(office), "osiris_pin": pin_state,
             "osiris_pin_project_declared": project_declared,
-            "standing_orders": orders_state, "charter_file": charter_state,
+            "standing_orders": orders_state, "agents_md": agents_state,
+            "charter_file": charter_state,
             "permission_grant": grant_state}
 
 

@@ -880,11 +880,14 @@ async def _establish_pure_seat_office(
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
         peer_addendum = _peer_addendum(peer_seat, peer_handle)
     orders = office / "CLAUDE.md"
-    if orders.exists():
+    agents = office / "AGENTS.md"
+    if orders.exists() and agents.exists():
         orders_state = "left in place — the office already has standing orders"
+        agents_state = "left in place — the office already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
+            scaffold_boot_file,
             template_version,
             wrap_managed,
         )
@@ -892,8 +895,10 @@ async def _establish_pure_seat_office(
         body = await compile_managed_body(
             actions, seat_id=seat_id, handle=handle, house=house, office=str(office),
             seat_line=seat_line, charter_block=charter_block, peer_block=peer_addendum)
-        orders.write_text(wrap_managed(body, template_version()))
-        orders_state = "written"
+        wrapped = wrap_managed(body, template_version())
+        orders_state = scaffold_boot_file(orders, wrapped, label="standing orders")
+        agents_state = scaffold_boot_file(
+            agents, wrapped, label="its own compiled standing orders (vendor-neutral)")
     charter_file = office / "charter.md"
     if charter_file.exists():
         charter_file_state = "left in place — the seat's own live state, never overwritten"
@@ -910,6 +915,7 @@ async def _establish_pure_seat_office(
         "seat": seat_id,
         "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
+        "agents_md": agents_state,
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
@@ -1064,11 +1070,14 @@ async def establish_office(
                 "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
             peer_addendum = _peer_addendum(peer_seat, peer_handle)
     orders = office / "CLAUDE.md"
-    if orders.exists():
+    agents = office / "AGENTS.md"
+    if orders.exists() and agents.exists():
         orders_state = "left in place — the office already has standing orders"
+        agents_state = "left in place — the office already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
+            scaffold_boot_file,
             template_version,
             wrap_managed,
         )
@@ -1077,8 +1086,10 @@ async def establish_office(
             actions, seat_id=bound["seat_id"] if bound else None, handle=handle,
             house=house, office=str(office), seat_line=seat_line,
             charter_block=charter_block, peer_block=peer_addendum)
-        orders.write_text(wrap_managed(body, template_version()))
-        orders_state = "written"
+        wrapped = wrap_managed(body, template_version())
+        orders_state = scaffold_boot_file(orders, wrapped, label="standing orders")
+        agents_state = scaffold_boot_file(
+            agents, wrapped, label="its own compiled standing orders (vendor-neutral)")
     # THE CHARTER FILE, never clobbered (d80621a7 piece 3): an occupied office's charter is
     # the seat's own hand-maintained live state — alfred's stays his, exactly like CLAUDE.md.
     charter_file = office / "charter.md"
@@ -1106,6 +1117,7 @@ async def establish_office(
         "seat": bound["seat_id"] if bound else None,
         "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
+        "agents_md": agents_state,
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
