@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1825,6 +1827,168 @@ async def test_verify_crush_round_trip_sample_skips_a_vanished_db(
     await store.ingest_crush_session(str(db), "sess-rt3", "sess-rt3")
     db.unlink()
     report = await store.verify_crush_round_trip_sample(n=5)
+    assert report.failures == []
+
+
+# --- ingest_dsh_session / backfill_dsh / verify_dsh_round_trip_sample -------------------------
+# (wave 18 item 1, mail 9541 7b8bb398: soul_sessions held zero dsh rows even though
+# harness_turns ingested all six cleanly — this closes the same gap crush's own build
+# above closed, mirroring its shape)
+
+_ZSTD_NOT_ON_PATH = pytest.mark.skipif(
+    shutil.which("zstd") is None, reason="zstd CLI not on PATH")
+
+
+def _make_dsh_session(
+    path: Path, *, session_id: str, n: int, start: int = 0,
+) -> Path:
+    """A minimal, real zstd-compressed DSH session file — a `type: session` header
+    line plus `n` user/assistant message events, `start` offsetting each event's own
+    index so a second call against the SAME path can append genuinely NEW lines
+    (incremental-ingest tests) while the earlier lines stay byte-identical (matching
+    how the harness itself only ever grows a session's content before recompressing
+    the whole file fresh)."""
+    lines = []
+    if start == 0:
+        lines.append(json.dumps({"type": "session", "id": session_id, "cwd": "/tmp/x"}))
+    for i in range(start, start + n):
+        role = "user/message" if i % 2 == 0 else "assistant/message"
+        lines.append(json.dumps({
+            "type": role, "time": 1700000000000 + i * 1000,
+            "data": {"role": "user" if i % 2 == 0 else "assistant",
+                     "message": {"content": f"line {i}"}},
+        }))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = ("\n".join(lines) + "\n").encode("utf-8")
+    if start == 0:
+        subprocess.run(["zstd", "-f", "-q", "-o", str(path)], input=raw, check=True)
+    else:
+        # append the NEW lines to whatever this path already decompresses to, then
+        # recompress the whole thing fresh — the harness's own real rewrite shape,
+        # never an in-place zstd frame append (zstd has no such operation).
+        existing = subprocess.run(
+            ["zstd", "-dc", str(path)], capture_output=True, check=True).stdout
+        combined = existing + raw
+        subprocess.run(["zstd", "-f", "-q", "-o", str(path)], input=combined, check=True)
+    return path
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_ingest_dsh_session_stores_every_line_verbatim(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-a", n=4)
+    n = await store.ingest_dsh_session(str(zst), "dsha0000")
+    assert n == 5  # 1 header line + 4 message lines
+    rows = await store.pool.fetch(
+        "SELECT line_idx, raw_line FROM soul_lines WHERE harness='dsh' "
+        "AND anchor_sid='dsha0000' ORDER BY line_idx")
+    assert [r["line_idx"] for r in rows] == list(range(5))
+    header = json.loads(bytes(rows[0]["raw_line"]))
+    assert header == {"type": "session", "id": "sess-a", "cwd": "/tmp/x"}
+    first_msg = json.loads(bytes(rows[1]["raw_line"]))
+    assert first_msg["data"]["message"]["content"] == "line 0"
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_ingest_dsh_session_is_idempotent_and_resumes(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    zst = tmp_path / "session.jsonl.zstd"
+    _make_dsh_session(zst, session_id="sess-b", n=3)
+    first = await store.ingest_dsh_session(str(zst), "dshb0000")
+    assert first == 4  # 1 header + 3 messages
+    second = await store.ingest_dsh_session(str(zst), "dshb0000")
+    assert second == 0  # nothing new
+
+    _make_dsh_session(zst, session_id="sess-b", n=2, start=3)  # 2 more messages appended
+    third = await store.ingest_dsh_session(str(zst), "dshb0000")
+    assert third == 2
+    assert await store.verify_chain("dshb0000", harness="dsh") is True
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_ingest_dsh_session_zero_when_file_missing_or_undecompressable(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    assert await store.ingest_dsh_session(str(tmp_path / "nope.zstd"), "dshx0000") == 0
+    garbage = tmp_path / "garbage.zstd"
+    garbage.write_bytes(b"not really zstd content")
+    assert await store.ingest_dsh_session(str(garbage), "dshy0000") == 0
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_backfill_dsh_ingests_every_discovered_session(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import Any
+
+    from src.ingest.harness import SessionLocator
+
+    zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-bf", n=4)
+    locator = SessionLocator(
+        anchor_sid="dshbf000", session_id="sess-bf", harness="dsh",
+        source_path=str(zst), cwd=str(tmp_path), project="t", anchored=True)
+
+    def _fake_enumerate(self: Any, *, root: Path | None = None) -> Any:
+        yield locator
+
+    monkeypatch.setattr(
+        "src.ingest.harness.dsh.DshSessionAdapter.enumerate", _fake_enumerate)
+
+    counts = await store.backfill_dsh()
+    assert counts == {str(zst): 1}
+    rows = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines WHERE harness='dsh' AND anchor_sid='dshbf000'")
+    assert rows == 5  # 1 header + 4 messages
+
+    # a second sweep with nothing new touches no sessions
+    counts2 = await store.backfill_dsh()
+    assert counts2 == {}
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_verify_dsh_round_trip_sample_clean_when_file_matches_store(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-rt1", n=4)
+    await store.ingest_dsh_session(str(zst), "dshrt0001")
+    report = await store.verify_dsh_round_trip_sample(n=5)
+    assert report.failures == []
+
+
+def _rewrite_dsh_session_mutated(zst: Path) -> None:
+    """A sync helper (ASYNC221: no blocking subprocess call inline in an async test
+    body) — rewrites the zstd file's own content in place, same shape `_make_dsh_
+    session` uses, so a divergence test can mutate the LIVE source after ingest."""
+    new_content = ("\n".join([
+        json.dumps({"type": "session", "id": "sess-rt2", "cwd": "/tmp/x"}),
+        json.dumps({"type": "user/message", "time": 1700000000000,
+                    "data": {"role": "user", "message": {"content": "MUTATED"}}}),
+    ]) + "\n").encode("utf-8")
+    subprocess.run(["zstd", "-f", "-q", "-o", str(zst)], input=new_content, check=True)
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_verify_dsh_round_trip_sample_catches_a_live_divergence(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-rt2", n=3)
+    await store.ingest_dsh_session(str(zst), "dshrt0002")
+    # rewrite the LIVE zstd file after ingest — the store now disagrees with the source
+    _rewrite_dsh_session_mutated(zst)
+    report = await store.verify_dsh_round_trip_sample(n=5)
+    assert any(f["anchor_sid"] == "dshrt0002" for f in report.failures)
+
+
+@_ZSTD_NOT_ON_PATH
+async def test_verify_dsh_round_trip_sample_skips_a_vanished_file(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-rt3", n=2)
+    await store.ingest_dsh_session(str(zst), "dshrt0003")
+    zst.unlink()
+    report = await store.verify_dsh_round_trip_sample(n=5)
     assert report.failures == []
 
 

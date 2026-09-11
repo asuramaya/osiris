@@ -175,6 +175,38 @@ def _decompress(path: Path) -> list[str] | None:
         return None
 
 
+def _decompress_bytes(path: Path) -> bytes | None:
+    """RAW-BYTE decompress (wave 18 item 1, mail 9541 7b8bb398) — the soul store's own
+    verbatim-ingest law (0052: a real transcript line can carry a literal NUL byte,
+    which `subprocess.run(..., text=True)` + `str.splitlines()` both silently mangle —
+    text mode forces a decode, and `.splitlines()` also splits on far more than `\\n`
+    (`\\r`, `\\v`, `\\x1c`-`\\x1e`, U+2028/U+2029), any of which a JSON string can
+    legally embed). `_decompress` above stays exactly as it is — every existing caller
+    (discovery, `read_turns`) only ever needs text lines and must not change shape —
+    this is a SEPARATE decompress for the one caller (`SoulStore.ingest_dsh_session`)
+    that needs the same byte-exactness claude-code's own `ingest_path` already holds
+    for a direct file read. Returns the full decompressed content as ONE bytes blob
+    (never pre-split — `_split_lines`'s own live-write safety law, at the soul-store
+    layer, decides where the last complete line ends), or None on any failure (missing
+    file, zstd unavailable, a nonzero exit, a timeout) — a skip, never a raised
+    exception, matching `_decompress`'s own tolerance."""
+    if not path.is_file():
+        return None
+    zstd_path = shutil.which("zstd")
+    if zstd_path is None:
+        return None
+    try:
+        result = subprocess.run(
+            [zstd_path, "-dc", str(path)],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def _normalize_model(raw: str) -> str:
     """Normalize DSH model names: 'deepseek/deepseek-v4-flash' -> 'deepseek-v4-flash'.
     Strips provider prefix if present."""

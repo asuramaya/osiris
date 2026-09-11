@@ -343,6 +343,15 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
     # one-switch-one-cost law — ingest_crush_session resumes from last_line_idx, so a
     # steady-state tick with nothing new costs one SQLite query per known session.
     soul_crush = await SoulStore(ctx["pool"]).backfill_crush()
+    # DSH sessions become canonical too (wave 18 item 1, mail 9541 7b8bb398): the same
+    # gap crush closed above — DshSessionAdapter feeds harness_turns cleanly via
+    # transcript_store's own backfill, but soul_store's own backfill() deliberately
+    # excludes it (ingest_path raw-byte-splits on the source file, which would mangle
+    # a zstd-compressed DSH session); ingest_dsh_session resumes from last_line_idx
+    # the same way, so a steady-state tick with nothing new still pays one decompress
+    # per known session (no cheaper stat-gate exists for a compressed file, see
+    # backfill_dsh's own docstring)
+    soul_dsh = await SoulStore(ctx["pool"]).backfill_dsh()
     # the disk census too (thread 5e37630b): a free walk that makes 'exists on disk'
     # a graph fact — observation only, never the watch list
     roots = [r for r in get_settings().osiris_census_roots.split(":") if r.strip()]
@@ -356,7 +365,8 @@ async def backfill_transcripts(ctx: dict[str, Any]) -> int:
                      ", ".join(r["name"] for r in cs["refused"]))
     return ((sum(out.values()) if out else 0) + tel
             + (sum(soul.values()) if soul else 0)
-            + (sum(soul_crush.values()) if soul_crush else 0) + len(cs["minted"]))
+            + (sum(soul_crush.values()) if soul_crush else 0)
+            + (sum(soul_dsh.values()) if soul_dsh else 0) + len(cs["minted"]))
 
 
 async def sweep_doors(ctx: dict[str, Any]) -> int:
