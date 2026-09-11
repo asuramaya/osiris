@@ -1412,7 +1412,7 @@ _LINT_CHECK_NAMES = [
     "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
     "stale-off-head-link", "stale-current-flag", "kindless-open-thread",
     "unresolvable-owner", "zero-recipient-dm", "orphan", "untraceable-output",
-    "contested-summary",
+    "contested-summary", "unverified-citation",
 ]
 
 
@@ -1559,8 +1559,8 @@ async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
     flagged-but-still-failing state.
 
     THE FOUR LEGS:
-      run      — an incoming `produced` edge from some AgentRun, or a confession on
-                 THIS object under `derivation_abstained_produced`.
+      run      — an incoming `produced` edge from some Agent generation, or a
+                 confession on THIS object under `derivation_abstained_produced`.
       plan     — the PRODUCING RUN's own outgoing `authorized_by` edge to a Decision or
                  Thread, or a confession on THAT RUN (not this object) under
                  `derivation_abstained_authorized_by`. With no producing run at all
@@ -1692,6 +1692,45 @@ async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
         "ORDER BY o.canonical")
     return {"rows": [{"id": r["id"], "canonical": r["canonical"]} for r in rows],
            "total": len(rows)}
+
+
+async def citation_verification_census(pool: asyncpg.Pool) -> dict[str, Any]:
+    """CITATION SHAPE's own acceptance test (operator ruling c6d25164, thread
+    9d2aaf4d): every LIVE `cites` edge targeting an Agent (a transcript citation,
+    `mint_transcript_citation`'s own shape — never a prose-derived `cites` edge,
+    which structurally never targets Agent, see `_resolve_cited_object`) re-verified
+    against the soul store's own hash chain, one derivation shared by graph_lint's
+    'unverified-citation' check and any other reader (orphan_census's own
+    precedent — never two drifting copies of the same query)."""
+    from src.orchestrator.capture import _verify_transcript_line
+    from src.orchestrator.dossier import _jsonb
+
+    rows = await pool.fetch(
+        "SELECT l.from_id, l.to_id, l.properties, o.canonical AS agent_canonical "
+        "FROM links l JOIN objects o ON o.id = l.to_id "
+        "WHERE l.type='cites' AND o.type='Agent' AND o.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    findings: list[dict[str, Any]] = []
+    for r in rows:
+        props = _jsonb(r["properties"])
+        line_idx = props.get("line_idx")
+        if line_idx is None:
+            continue  # a non-transcript `cites` edge to an Agent — not this population
+        session = await pool.fetchval(
+            "SELECT a.value #>> '{}' FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='session'", r["to_id"])
+        if not session:
+            findings.append({"from_id": str(r["from_id"]), "agent": r["agent_canonical"],
+                             "line_idx": line_idx,
+                             "reason": "cited Agent no longer carries a session property"})
+            continue
+        v = await _verify_transcript_line(pool, "claude-code", str(session), line_idx)
+        if not v["verified"] or v["line_hash"] != props.get("line_hash"):
+            findings.append({"from_id": str(r["from_id"]), "agent": r["agent_canonical"],
+                             "line_idx": line_idx,
+                             "reason": v.get("reason")
+                             or "stored line_hash no longer matches the store"})
+    return {"rows": findings, "total": len(findings)}
 
 
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
@@ -2730,6 +2769,18 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "disputes it — correct_summary or annotate(corrected_summary=) to "
                        "clear it"}
             for r in contested["rows"]])
+
+        # UNVERIFIED-CITATION — CITATION SHAPE's own acceptance test (operator ruling
+        # c6d25164, thread 9d2aaf4d): a transcript citation whose stored line_hash no
+        # longer verifies against the soul store's own chain means either tampering or
+        # a broken pointer — both a genuine integrity failure, error-severity like
+        # attribution/lineage-cycle, never a mere warn.
+        citation_result = await citation_verification_census(pool)
+        land("unverified-citation", "error", [
+            {"subject": r["agent"],
+             "detail": f"citing object {r['from_id']} line {r['line_idx']}: "
+                       f"{r['reason']}"}
+            for r in citation_result["rows"]])
     except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
         # other: a genuinely distinct could-not-evaluate state (ruling on thread
         # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call

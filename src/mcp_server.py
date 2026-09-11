@@ -9384,12 +9384,12 @@ async def record_evaluation(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Capture a VERDICT against an AgentRun or Artifact — a test suite result, a code
-    review finding, a gate_hook pass/fail (Graph-Engineering arc, thread 7f547426,
+    """Capture a VERDICT against an Agent generation or Artifact — a test suite result,
+    a code review finding, a gate_hook pass/fail (Graph-Engineering arc, thread 7f547426,
     decision fba38e62, Thoth DM 9136). `rubric` (which standard/check was applied) is
     MANDATORY and non-blank — refused clean (an {"error": ...} receipt, never a
     traceback) rather than minting an unverifiable verdict. `subject` (a UUID/short-id/
-    canonical ref to an already-minted AgentRun or Artifact) mints the `evaluated_by`
+    canonical ref to an already-minted Agent generation or Artifact) mints the `evaluated_by`
     edge in the same call — a miss is reported, never fatal. `value`/`unit` are
     Metric's own shape (with `measured_at` stamped as this call's own observed time),
     stored as PROPERTIES on this SAME Evaluation object, never a linked child node.
@@ -9426,10 +9426,11 @@ async def record_artifact(
     """Mint an Artifact — a build/deploy/document output Commit does not already cover
     (Graph-Engineering arc, thread 7f547426, decision f47d14a7). Refuses at the door
     (an `{"error": ...}` receipt, never a traceback) unless it carries its authoring
-    AgentRun's own `produced` edge OR `unlinked_because=<reason>` is given — artifact-
-    has-authoring-run-plus-version. `authoring_run` is a soul_session_id (never a
-    resolved id): the AgentRun pointer mints lazily, in the same transaction, so its
-    `produced` edge satisfies the gate before the gate runs. `revises` (linking a
+    Agent generation's own `produced` edge OR `unlinked_because=<reason>` is given —
+    artifact-has-authoring-run-plus-version. `authoring_run` is a reference (UUID/
+    short-id/canonical) to an EXISTING Agent generation (CITATION SHAPE, decision
+    c6d25164: the session object IS the Agent generation, no separate AgentRun pointer
+    exists to lazily mint) — refuses if it doesn't resolve. `revises` (linking a
     predecessor version) is a separate call, `mint_revises`, after this one returns —
     a first version legitimately has none."""
     pool = await _pool_get()
@@ -9441,6 +9442,63 @@ async def record_artifact(
     except ValueError as err:
         return {"error": str(err)}
     return {"id": str(art), "key": key}
+
+
+@mcp.tool()
+async def cite_transcript(
+    ref: str, agent: str, line_idx: int, because: str,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """An EXPLICIT citation of one line of an Agent generation's own transcript
+    (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d) — a `cites` edge from
+    `ref` (a Decision, Thread, or Evaluation) to the Agent `agent` resolves to,
+    carrying `line_idx`/`line_hash`/`said_at` as edge properties, a chain of custody
+    verified against the soul store's own hash chain at mint time.
+
+    NO AUTO-CITE, EVER: `because` is mandatory and non-blank — refused clean (an
+    `{"error": ...}` receipt, never a traceback) rather than minting an unreasoned
+    citation. NEVER TARGETS A HUMAN NODE: `agent` must resolve to a real, active
+    Agent object — the literal 'operator' string or anything else refuses exactly
+    like an unresolved ref. `line_idx` must resolve to a real, chain-verified
+    soul_lines row for that Agent's own session — refuses on a bad index or a broken
+    chain link, never a silent guess."""
+    pool = await _pool_get()
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    from_id = await _resolve(pool, ref)
+    if from_id is None:
+        return {"error": f"{ref!r} does not resolve to any object — a citation "
+                          "needs a real citing Decision/Thread/Evaluation"}
+    try:
+        result = await capture.mint_transcript_citation(
+            Actions(pool), from_id, agent, line_idx, because, source=actor)
+    except ValueError as err:
+        return {"error": str(err)}
+    return result
+
+
+@mcp.tool()
+async def read_citation(
+    ref: str, agent: str,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """THE READ DOOR for an existing transcript citation (CITATION SHAPE, operator
+    ruling c6d25164, thread 9d2aaf4d): finds the live `cites` edge from `ref` to the
+    Agent `agent` resolves to, RE-VERIFIES its stored line_hash against the soul
+    store's own chain (never trusting the edge property alone), and returns the
+    actual cited line's text. Refuses (an `{"error": ...}` receipt) on a missing
+    edge, an unresolved `agent`, or a hash mismatch — a tampered or stale citation
+    never returns a line silently."""
+    pool = await _pool_get()
+    from_id = await _resolve(pool, ref)
+    if from_id is None:
+        return {"error": f"{ref!r} does not resolve to any object"}
+    try:
+        result = await capture.read_transcript_citation(pool, from_id, agent)
+    except ValueError as err:
+        return {"error": str(err)}
+    return result
 
 
 @mcp.tool()

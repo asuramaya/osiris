@@ -4264,15 +4264,12 @@ async def record_practice(
 # are mintable. Items 2 (the incoming-direction declare-or-refuse gate for
 # artifact-has-authoring-run-plus-version) and 3 (traceability_census + graph_lint
 # 'untraceable-output' + the weekly desk line) are separate, later commits.
-async def ensure_agent_run(
-    actions: Actions, soul_session_id: str, source: str = _SOURCE,
-) -> uuid.UUID:
-    """Find-or-mint the AgentRun pointer for a soul_session — LAZY, the first time
-    something needs to link to it (a `produced`/`authorized_by` edge), never a
-    wholesale backfill of every historical session. The soul_session itself (alembic/
-    0050_soul_store.py) stays the detail store of record outside the graph; this is
-    only the graph-facing pointer, canonical run:<soul_session_id>."""
-    return await actions.create_or_find_object("AgentRun", f"run:{soul_session_id}", source)
+#
+# ensure_agent_run RETIRED (CITATION SHAPE, decision c6d25164, thread 9d2aaf4d): the
+# AgentRun pointer it lazily minted folded into Agent — "the session object IS the
+# Agent generation." record_artifact's own `authoring_run` param below now resolves
+# an EXISTING Agent generation directly (_resolve_ref, never a mint) instead of
+# lazily minting a second pointer object for the same session.
 
 
 async def ensure_artifact(actions: Actions, key: str, source: str = _SOURCE) -> uuid.UUID:
@@ -4333,7 +4330,7 @@ async def mint_authorized_by(
 async def mint_evaluated_by(
     actions: Actions, subject_id: uuid.UUID, evaluation_id: uuid.UUID, source: str = _SOURCE,
 ) -> bool:
-    """An AgentRun/Artifact pointing AT the Evaluation that judged it — the
+    """An Agent generation/Artifact pointing AT the Evaluation that judged it — the
     traceability invariant's EVALUATOR leg. Idempotent: returns whether a NEW link was
     minted."""
     exists = await actions.pool.fetchval(
@@ -4369,8 +4366,8 @@ async def record_evaluation(
     unit: str | None = None, measured_at: datetime | None = None,
     source: str = _SOURCE,
 ) -> uuid.UUID:
-    """Capture a VERDICT against an AgentRun or Artifact — a test suite result, a code
-    review finding, a gate_hook pass/fail — none of which were minted as objects
+    """Capture a VERDICT against an Agent generation or Artifact — a test suite result,
+    a code review finding, a gate_hook pass/fail — none of which were minted as objects
     before this Graph-Engineering arc (they lived only as commit-message prose).
     Distinct from Practice's own `witnesses` links (record_decision(confirms=…)/
     record_practice(witnesses=…)): that mechanism answers 'is this RULE still true',
@@ -4387,8 +4384,8 @@ async def record_evaluation(
     SAME object (the operator's own ruling, DM 9136, over an earlier draft design's
     separate Metric node) — there is no Metric ObjectType.
 
-    `subject`, when given, mints the `evaluated_by` edge FROM the AgentRun/Artifact
-    being judged TO this Evaluation (the traceability invariant's own EVALUATOR leg) in
+    `subject`, when given, mints the `evaluated_by` edge FROM the Agent generation/
+    Artifact being judged TO this Evaluation (the traceability invariant's own EVALUATOR leg) in
     the same transaction. Omitted, the Evaluation still mints — a caller who evaluates
     before the subject exists can link it later via `mint_evaluated_by`.
 
@@ -4431,19 +4428,26 @@ async def record_artifact(
 ) -> uuid.UUID:
     """Mint an Artifact — a build/deploy/document output Commit does not already cover
     (Graph-Engineering arc, thread 7f547426, decision f47d14a7, item 2/3). Refuses (or
-    confesses) at the door unless it carries its authoring AgentRun's own `produced`
-    edge — artifact-has-authoring-run-plus-version, the operator's own ruling — via
-    `_enforce_required_links`' new INCOMING direction (`"authoring_run"` above), the
-    same declare-or-refuse discipline record_decision/open_thread/ingest_reference/
-    record_practice already use, extended for the first time to a kind this door
-    can only ever see as a link pointing AT it, never one it asserts itself.
+    confesses) at the door unless it carries its authoring Agent generation's own
+    `produced` edge — artifact-has-authoring-run-plus-version, the operator's own
+    ruling — via `_enforce_required_links`' new INCOMING direction (`"authoring_run"`
+    above), the same declare-or-refuse discipline record_decision/open_thread/
+    ingest_reference/record_practice already use, extended for the first time to a
+    kind this door can only ever see as a link pointing AT it, never one it asserts
+    itself.
 
-    `authoring_run`, when given, is a soul_session_id (never a resolved UUID — the
-    AgentRun pointer is lazily minted right here, `ensure_agent_run`'s own canonical
-    scheme, inside this SAME atomic block, so the `produced` edge it mints satisfies
-    the gate before the gate ever runs). Omitted, the gate falls straight to its
-    `unlinked_because` hatch or refuses — the same two-branch shape every other door
-    already has.
+    `authoring_run`, when given, is a reference (UUID/short-id/canonical) to an
+    EXISTING Agent generation — resolved via `_resolve_ref`, `require_identifier=True`
+    (an addressing path, never a fuzzy text search), REFUSING if it doesn't resolve
+    (CITATION SHAPE, decision c6d25164: "the session object IS the Agent generation" —
+    there is no longer a separate AgentRun pointer to lazily mint; the run this
+    Artifact is attributed to must already be a real, existing generation, not a
+    string this door would otherwise have to take on faith). Resolved BEFORE the
+    atomic block (a plain read against `actions.pool`, never `a.pool` inside
+    `atomic()` — the same connection-exhaustion risk `_enforce_required_links`' own
+    comment already documents for a nested pool acquisition). Omitted, the gate falls
+    straight to its `unlinked_because` hatch or refuses — the same two-branch shape
+    every other door already has.
 
     "PLUS-VERSION": a first version legitimately has no predecessor — `revises` is
     never itself gated here, only ever optional (thread 7f547426 annotation 1/5: "an
@@ -4460,16 +4464,172 @@ async def record_artifact(
     then every Artifact mints freely, same as before this arc existed."""
     observed = datetime.now(UTC)
     canon = f"artifact:{key}"
+    run_id: uuid.UUID | None = None
+    if authoring_run:
+        run_id = await _resolve_ref(actions.pool, "Agent", authoring_run,
+                                    text_field="name", require_identifier=True)
+        if run_id is None:
+            raise ValueError(f"record_artifact refused: authoring_run={authoring_run!r} "
+                              "does not resolve to a real, existing Agent generation")
     async with actions.atomic() as a:
         art = await a.create_or_find_object("Artifact", canon, source)
-        if authoring_run:
-            run_id = await ensure_agent_run(a, authoring_run, source)
+        if run_id is not None:
             await a.create_link(run_id, art, "produced", source, observed, _CONF,
                                 evidence_class=_EC)
         await _enforce_required_links(
             a, art, "Artifact", kinds_in_scope=("authoring_run",),
             unlinked_because=unlinked_because, source=source, observed=observed)
     return art
+
+
+# THE CITATION SHAPE (operator ruling c6d25164, thread 9d2aaf4d, Thoth DM 9377/9383):
+# "the graph never mints a turn for having happened" — everything said stays in the
+# soul store (alembic/0050_soul_store.py), verbatim and hash-chained; a citation is an
+# explicit `cites` edge from a Decision/Thread/Evaluation to an Agent generation,
+# carrying line_idx/line_hash/said_at as edge properties, never auto-minted from
+# prose (that stays `mint_cites`'s own separate, untouched lane, which never targets
+# an Agent — verified live: every existing caller of `mint_cites`/
+# `_mint_prose_citations` only ever resolves References/Decisions/Threads by id, never
+# an Agent canonical scheme).
+async def _verify_transcript_line(
+    pool: asyncpg.Pool, harness: str, anchor_sid: str, line_idx: int,
+) -> dict[str, Any]:
+    """Re-derive one `soul_lines` row's own chain link LOCALLY — two rows, O(1), never
+    a full walk from genesis (that's `SoulStore.rematerialize`'s own job, a different
+    question). Verifies (a) this row's own `line_hash` really is
+    sha256(prev_hash_bytes + raw_line_bytes) (`soul_store._chain_hash`, reused not
+    reinvented — one derivation of the hash, not two that could quietly drift), and
+    (b) its `prev_hash` matches the immediately preceding line's own `line_hash` — a
+    gap or a substituted predecessor breaks the chain locally even without re-walking
+    to line 0. Returns `{"verified": bool, "raw_line": str, "line_hash": str,
+    "said_at": datetime, "reason": str | None}` — `said_at` is the store's own
+    `ingested_at` (piece 1 stores raw bytes only, no semantic parse of an embedded
+    per-line timestamp; this is the store's own observation time, not a claim about
+    when the words were first typed)."""
+    from src.ingest.soul_store import _chain_hash
+    row = await pool.fetchrow(
+        "SELECT raw_line, line_hash, prev_hash, ingested_at FROM soul_lines "
+        "WHERE harness=$1 AND anchor_sid=$2 AND line_idx=$3", harness, anchor_sid,
+        line_idx)
+    if row is None:
+        return {"verified": False, "reason": f"no soul_lines row at harness={harness!r}, "
+                f"anchor_sid={anchor_sid!r}, line_idx={line_idx}"}
+    raw_line = bytes(row["raw_line"])
+    if line_idx > 0:
+        prior_hash = await pool.fetchval(
+            "SELECT line_hash FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+            "AND line_idx=$3", harness, anchor_sid, line_idx - 1)
+        if prior_hash is None:
+            return {"verified": False, "reason": f"chain broken — no row at line_idx "
+                    f"{line_idx - 1}, this line's own prev_hash cannot be checked"}
+        if row["prev_hash"] != prior_hash:
+            return {"verified": False, "reason": "chain broken — prev_hash does not "
+                    "match the preceding line's own hash (tampered or a gap)"}
+    elif row["prev_hash"] is not None:
+        return {"verified": False, "reason": "chain broken — line 0 must carry a null "
+                "prev_hash"}
+    if _chain_hash(row["prev_hash"], raw_line) != row["line_hash"]:
+        return {"verified": False, "reason": "chain broken — stored line_hash does not "
+                "match this line's own content (tampered or corrupted)"}
+    return {"verified": True, "raw_line": raw_line.decode("utf-8", errors="replace"),
+            "line_hash": row["line_hash"], "said_at": row["ingested_at"], "reason": None}
+
+
+async def mint_transcript_citation(
+    actions: Actions, from_id: uuid.UUID, agent_ref: str, line_idx: int, because: str,
+    source: str = _SOURCE, *, harness: str = "claude-code",
+) -> dict[str, Any]:
+    """An EXPLICIT citation of one line of an Agent generation's own transcript — a
+    `cites` edge from `from_id` (a Decision, Thread, or Evaluation) to the Agent
+    `agent_ref` resolves to, carrying `line_idx`/`line_hash`/`said_at` as edge
+    properties, a chain of custody verifiable against the soul store's own hash chain.
+
+    NO AUTO-CITE, EVER (the operator's own words): `because` is mandatory and
+    non-blank — a citation is a deliberate act with a stated reason, never inferred
+    from prose. Distinct from `mint_cites`'s own prose-derived lane, never reused for
+    this purpose and never widened to reach it.
+
+    NEVER TARGETS A HUMAN NODE: `agent_ref` must resolve (via `_resolve_ref`,
+    `require_identifier=True` — an addressing path, never a fuzzy text search) to a
+    real, active Agent object. The literal 'operator' string, a Seat, a Person, or
+    anything else refuses exactly like an unresolved ref — this function only ever
+    knows how to check "is this a real Agent", which is sufficient: nothing that
+    represents a human is ever typed Agent in this graph."""
+    if not because or not because.strip():
+        raise ValueError("mint_transcript_citation refused: `because` is mandatory and "
+                          "non-blank — a citation is a deliberate act with a reason, "
+                          "never inferred from prose")
+    agent_id = await _resolve_ref(actions.pool, "Agent", agent_ref, text_field="name",
+                                  require_identifier=True)
+    if agent_id is None:
+        raise ValueError(f"mint_transcript_citation refused: {agent_ref!r} does not "
+                          "resolve to a real Agent generation — a citation never "
+                          "targets a human/operator node or anything else")
+    session = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='session'", agent_id)
+    if not session:
+        raise ValueError(f"mint_transcript_citation refused: Agent {agent_ref!r} "
+                          "carries no `session` property — nothing to cite")
+    verification = await _verify_transcript_line(actions.pool, harness, str(session),
+                                                 line_idx)
+    if not verification["verified"]:
+        raise ValueError(f"mint_transcript_citation refused: {verification['reason']}")
+    observed = datetime.now(UTC)
+    await actions.create_link(
+        from_id, agent_id, "cites", source, observed, _CONF, evidence_class=_EC,
+        properties={"line_idx": line_idx, "line_hash": verification["line_hash"],
+                    "said_at": verification["said_at"].isoformat(), "because": because,
+                    "origin": "declared"})
+    return {"agent_id": str(agent_id), "line_idx": line_idx,
+            "line_hash": verification["line_hash"]}
+
+
+async def read_transcript_citation(
+    pool: asyncpg.Pool, from_id: uuid.UUID, agent_ref: str, *,
+    harness: str = "claude-code",
+) -> dict[str, Any]:
+    """The verified read-back for an existing transcript citation: finds the live
+    `cites` edge from `from_id` to the Agent `agent_ref` resolves to, RE-VERIFIES its
+    stored `line_hash` against the soul store's own chain (never trusting the edge
+    property alone — a tampered edge property would otherwise silently "verify"
+    against itself), and returns the actual cited line. Refuses loudly on a missing
+    edge, an unresolved `agent_ref`, or a hash mismatch — never a stale/wrong line
+    returned silently."""
+    agent_id = await _resolve_ref(pool, "Agent", agent_ref, text_field="name",
+                                  require_identifier=True)
+    if agent_id is None:
+        raise ValueError(f"read_transcript_citation refused: {agent_ref!r} does not "
+                          "resolve to a real Agent generation")
+    edge = await pool.fetchrow(
+        "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites' "
+        "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", from_id, agent_id)
+    if edge is None:
+        raise ValueError(f"read_transcript_citation refused: no live citation from "
+                          f"{from_id} to {agent_ref!r}")
+    from src.orchestrator.dossier import _jsonb
+    props = _jsonb(edge["properties"])
+    line_idx = props.get("line_idx")
+    if line_idx is None:
+        raise ValueError("read_transcript_citation refused: the citation edge carries "
+                          "no line_idx — not a transcript citation")
+    session = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a "
+        "WHERE a.object_id=$1 AND a.name='session'", agent_id)
+    if not session:
+        raise ValueError(f"read_transcript_citation refused: Agent {agent_ref!r} "
+                          "carries no `session` property")
+    verification = await _verify_transcript_line(pool, harness, str(session), line_idx)
+    if not verification["verified"]:
+        raise ValueError(f"read_transcript_citation refused: {verification['reason']} "
+                          "— the cited line no longer verifies against the soul "
+                          "store's own chain")
+    if verification["line_hash"] != props.get("line_hash"):
+        raise ValueError("read_transcript_citation refused: the citation's own "
+                          "recorded line_hash does not match the store's current "
+                          "line_hash — tampering or a stale citation")
+    return {"line_idx": line_idx, "raw_line": verification["raw_line"],
+            "line_hash": verification["line_hash"], "said_at": props.get("said_at")}
 
 
 async def mint_implements(

@@ -262,14 +262,16 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
     # ruling recorded on 7f547426, Thoth DM 9136): osiris is rich on KNOWLEDGE-lineage
     # (Decision/Thread/supersedes above) but was thin on WORK-lineage — no first-class
     # record of a run producing an output, an output tracing to its source, or an
-    # output being evaluated. These three types plus the five edges below close that gap.
-    ObjectType("AgentRun", "Software", "#ff7b72", "ellipse",
-               "A single agent session/execution — the graph-facing pointer to a "
-               "soul_session (the verbatim-bytes archive, alembic/0050_soul_store.py, "
-               "which stays outside the graph and is never duplicated). Canonical "
-               "run:<soul_session_id>; minted LAZILY, the first time something needs to "
-               "link to it (a produced/authorized_by edge), never backfilled wholesale "
-               "for every historical session.", ("run:",)),
+    # output being evaluated. These two types plus the five edges below close that gap.
+    #
+    # AgentRun RETIRED (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d,
+    # Thoth DM 9377/9383): "the session object IS the Agent generation... the freshly
+    # landed AgentRun type FOLDS INTO Agent before anything cites a run" — a second
+    # graph-facing pointer to the same session Agent already anchors (via its own
+    # `session` property) was never load-bearing and nothing had minted one yet
+    # (ensure_agent_run, capture.py, had exactly one caller — record_artifact's own
+    # `authoring_run` param — no live AgentRun object ever existed to compensate for).
+    # The three edges below now hang off Agent directly.
     ObjectType("Artifact", "Software", "#56d4dd", "round-rectangle",
                "A build/deploy/document output this graph did not already have a home "
                "for — a compiled binary, a deployed service version, a generated report. "
@@ -277,7 +279,8 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                "own type, never aliased or replaced): Artifact exists only for outputs "
                "outside git's own history.", ("artifact:",)),
     ObjectType("Evaluation", "Software", "#79c0ff", "triangle",
-               "A verdict against an AgentRun or Artifact — a test suite result, a code "
+               "A verdict against an Agent generation or Artifact — a test suite "
+               "result, a code "
                "review finding, a gate_hook pass/fail — none of which were minted as "
                "objects before this (they lived only as commit-message prose). Distinct "
                "from Practice's own `witnesses` links (record_decision(confirms=…)/"
@@ -454,9 +457,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "only): this is the weaker, general claim that an author's own text merely "
              "points at another object, on either end. `self_referential` (a property "
              "on the link itself) marks an author citing their own earlier work, kept "
-             "separate from real cross-author structure.",
-             ("Reference", "Decision", "Thread"),
-             ("Reference", "Decision", "Thread", "Practice", "Superstition")),
+             "separate from real cross-author structure. An Agent RANGE target (CITATION "
+             "SHAPE, decision c6d25164, thread 9d2aaf4d) is a DIFFERENT, narrower sense: "
+             "an explicit, reasoned citation of one line of that generation's own "
+             "transcript (`mint_transcript_citation`, never `mint_cites`'s own prose-"
+             "derived lane — NO AUTO-CITE, ever), carrying `line_idx`/`line_hash`/"
+             "`said_at` as edge properties, a chain of custody verified against the "
+             "soul store's own hash chain. Never targets a human/operator node.",
+             ("Reference", "Decision", "Thread", "Evaluation"),
+             ("Reference", "Decision", "Thread", "Practice", "Superstition", "Agent")),
     LinkType("informs", "This reference grounds / informs that artifact.",
              ("Reference",), ("SoftwareProject", "Commit")),
     LinkType("mentions", "This object names/references that entity — a decision, thread, "
@@ -538,10 +547,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     # Work-lineage edges (Graph-Engineering arc, thread 7f547426, decision fba38e62,
     # Thoth DM 9136) — see the AgentRun/Artifact/Evaluation ObjectType comment above.
     LinkType("produced", "The run's own output — the traceability invariant's FIRST leg "
-             "(every output traces to its run). Broad range by design, mirrors `cites`' "
-             "own breadth: a run can produce an Artifact, a Commit, or (for a run whose "
-             "own work was a ruling or a filed obligation) a Decision or Thread.",
-             ("AgentRun",), ("Artifact", "Commit", "Decision", "Thread")),
+             "(every output traces to its run). The run IS the Agent generation "
+             "(CITATION SHAPE, decision c6d25164 — AgentRun folded in here). Broad "
+             "range by design, mirrors `cites`' own breadth: a generation can produce "
+             "an Artifact, a Commit, or (for work that was a ruling or a filed "
+             "obligation) a Decision or Thread.",
+             ("Agent",), ("Artifact", "Commit", "Decision", "Thread")),
     LinkType("derived_from", "An Artifact's own SOURCE material — the traceability "
              "invariant's SOURCE leg. Artifact-to-source ONLY (the operator's own ruling, "
              "explicitly rejecting an earlier draft that also overloaded this edge with "
@@ -549,15 +560,18 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "never this one).", ("Artifact",), ("Artifact", "Reference", "Commit")),
     LinkType("authorized_by", "The run's own authorizing PLAN or OBJECTIVE — the "
              "traceability invariant's PLAN/OBJECTIVE leg (the operator's own chosen "
-             "split, msg/DM 9136, over folding this sense into derived_from). A Decision "
-             "(a ruling that dispatched the work) or a Thread (an obligation the run is "
-             "discharging).", ("AgentRun",), ("Decision", "Thread")),
-    LinkType("evaluated_by", "The traceability invariant's EVALUATOR leg — an AgentRun "
-             "or Artifact pointing AT the Evaluation that judged it. Deliberately the "
-             "opposite direction from `witnesses` (which points FROM the confirming "
-             "object): evaluated_by's own subject — 'what evaluates artifact X' — is "
-             "read far more often than the reverse.",
-             ("AgentRun", "Artifact"), ("Evaluation",)),
+             "split, msg/DM 9136, over folding this sense into derived_from). Domain is "
+             "the Agent generation doing the work (CITATION SHAPE, decision c6d25164 — "
+             "AgentRun folded in here); range is a Decision (a ruling that dispatched "
+             "the work) or a Thread (an obligation the run is discharging).",
+             ("Agent",), ("Decision", "Thread")),
+    LinkType("evaluated_by", "The traceability invariant's EVALUATOR leg — an Agent "
+             "generation or an Artifact pointing AT the Evaluation that judged it "
+             "(CITATION SHAPE, decision c6d25164 — AgentRun folded into Agent here). "
+             "Deliberately the opposite direction from `witnesses` (which points FROM "
+             "the confirming object): evaluated_by's own subject — 'what evaluates "
+             "artifact X' — is read far more often than the reverse.",
+             ("Agent", "Artifact"), ("Evaluation",)),
     LinkType("revises", "A later Artifact version supersedes an earlier one — the "
              "version DAG, same self-referential shape as Commit's own `follows` edge.",
              ("Artifact",), ("Artifact",)),

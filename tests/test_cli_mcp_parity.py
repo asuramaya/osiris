@@ -1270,6 +1270,13 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # plus-version). Same shape as record_evaluation just above — single write, no
     # existing door names an authoring-run requirement as one of its own params.
     "record_artifact": {"binding_verb": False},
+    # cite_transcript / read_citation — CITATION SHAPE (operator ruling c6d25164,
+    # thread 9d2aaf4d, Thoth DM 9377/9383): the explicit, reasoned citation door and
+    # its verified read-back for one line of an Agent generation's own transcript.
+    # Not a seat/office/project binding-mover; single-write and single-read shapes,
+    # no existing door names a soul-store line citation as one of its own params.
+    "cite_transcript": {"binding_verb": False},
+    "read_citation": {"binding_verb": False},
     # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.
