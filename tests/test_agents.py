@@ -4171,6 +4171,52 @@ async def test_retire_agent_releases_seat_and_mount_when_not_live(actions: Actio
     assert still_held is None
 
 
+async def test_retire_agent_of_a_superseded_ancestor_never_evicts_the_live_heir(
+    actions: Actions,
+) -> None:
+    """MOUNT ROW VANISHED (c7524a2b, Thoth mail 9873): retire_agent's own seat-vacate step
+    used `held_seat` — LINEAGE-WIDE by design (any generation sharing the base, newest
+    wins) — to find WHAT SEAT the agent being retired holds. That's right for a live
+    mind asking about its own current seat, but wrong here: an ancestor already
+    succeeded away (its own `holds` link long invalidated by `bind_holder`) shares its
+    heir's base, so `held_seat(ancestor_id)` resolved to the SEAT THE HEIR CURRENTLY,
+    RIGHTFULLY HOLDS — and retire_agent then called `vacate_holder` on it, evicting the
+    live heir's own holds link (and, downstream, its seat-resolved mount identity) as a
+    side effect of retiring a generation that had nothing left to retire seat-wise.
+
+    Synthetic lineage: agent:mrv0 (ancestor) held seat:mrv, superseded by agent:mrv0-ii
+    (the live heir, holding it now, with its own live mount row) via the same
+    `bind_holder` re-link a real succession uses. `agent_liveness` is deliberately
+    lineage-wide (the SOUL, not the numeral, is what's live), so retiring the long-dead
+    ancestor numeral while its heir is alive today correctly needs `override_live=True`
+    — a real caller cleaning up old generations already knows this. What must NOT happen
+    even then is the heir's own holds link AND agent_mounts row getting torn down as a
+    side effect of retiring an ancestor that held nothing itself by this point."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import retire_agent
+    from src.orchestrator.seats import bind_holder
+
+    await actions.create_or_find_object("Seat", "seat:mrv", "test")
+    await bind_holder(actions, seat_id="seat:mrv", agent_id="agent:mrv0", source="test")
+    await bind_holder(actions, seat_id="seat:mrv", agent_id="agent:mrv0-ii", source="test")
+    await mounts.save_mount(actions.pool, job_dir="/j/mrv0ii", agent_id="agent:mrv0-ii",
+                            project="osiris", cwd="/x", model=None, session_key="k")
+
+    out = await retire_agent(actions, agent_id="agent:mrv0", actor="agent:witness",
+                             because="ancestor generation, long superseded",
+                             override_live=True)
+
+    assert out["retired"] == "agent:mrv0"
+    assert "seat_vacated" not in out  # the ancestor itself held nothing by the time it retired
+    heir_still_holds = await actions.pool.fetchval(
+        "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE f.canonical='agent:mrv0-ii' "
+        "AND t.canonical='seat:mrv' AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())")
+    assert heir_still_holds == 1
+    assert await mounts.find_mount(actions.pool, job_dir="/j/mrv0ii") is not None
+
+
 async def test_retire_agent_clears_the_harnesss_stale_stopped_record(
     actions: Actions, monkeypatch: Any,
 ) -> None:

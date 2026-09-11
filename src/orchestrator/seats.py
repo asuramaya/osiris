@@ -305,6 +305,25 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
     return {"seat_id": best["seat_id"], "handle": best["handle"], "house": house}
 
 
+async def held_seat_exact(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """`held_seat`'s EXACT-GENERATION twin (MOUNT ROW VANISHED, c7524a2b, Thoth mail
+    9873): lineage-wide resolution — any generation sharing the base, newest wins — is
+    right for a live mind asking "what seat do I sit in", but wrong for a THIRD-PARTY
+    act on a SPECIFIC named generation, like `retire_agent`'s own seat-vacate step. An
+    ancestor already succeeded away (its own `holds` link long invalidated by
+    `bind_holder`) shares its heir's base, so the lineage-wide query resolved to the
+    seat the HEIR currently, rightfully holds — and retire_agent then vacated it,
+    evicting a live mind as a side effect of retiring a generation that held nothing of
+    its own. Returns the seat canonical ONLY when `agent_id` ITSELF — no base, no `-%`
+    widening — carries a live `holds` link; None otherwise, even if its lineage holds
+    plenty."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT t.canonical FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE f.canonical=$1 AND l.type='holds' AND t.type='Seat' AND t.status='active' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", agent_id)
+
+
 async def seat_by_handle(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | None:
     """A bare handle -> its Seat, by NAME alone (case-insensitive exact match), no liveness
     or holder involved -- `held_seat`'s own counterpart for the case an agent id is not
