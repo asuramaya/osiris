@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from src.actions.core import Actions
 from src.orchestrator.agents import claim_name
-from src.orchestrator.walkin import walk_in_named
+from src.orchestrator.walkin import promote_visitor, walk_in_named
 
 
 async def _mounted(actions: Actions, agent_id: str, *, project: str = "stopslop") -> None:
@@ -152,6 +152,203 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
     assert not (tmp_path / "seats").exists()                 # never reached establish_office
 
 
+# ═══════════ PIECE 2 (thread 879c97b9): promote_visitor, the THIRD-PARTY collapse ═══════════
+
+async def _visitor_seen(
+    actions: Actions, agent_id: str, *, project: str = "stopslop", job_dir: str | None = None,
+) -> None:
+    """A genuine VISITOR's own real shape: an `agent_mounts` row and NOTHING ELSE — no
+    `objects` row of type Agent at all (the #48-gate's own third state). Also mints the
+    SoftwareProject `charter_for` needs to find real (its own `_resolve_repo` refusal)."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.mounts import save_mount
+
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", "test")
+    await actions.assert_property(proj, "name", project, "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir=job_dir or f"/j/{agent_id}", agent_id=agent_id,
+                     project=project, cwd=f"/w/{agent_id}", model=None, session_key=None)
+
+
+async def _a_manager(actions: Actions, agent_id: str) -> None:
+    """Seats `agent_id` as the manager of a real worker seat — `promote_visitor`'s own
+    "manager's word" authorization leg (`seats.seats_managed_by` non-empty)."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    mgr = await ensure_seat(actions, house="stopslop", handle=agent_id.split(":")[-1],
+                            source="test")
+    await bind_holder(actions, seat_id=mgr["seat_id"], agent_id=agent_id, source="test")
+    worker = await ensure_seat(actions, house="stopslop", handle=f"{agent_id}-worker",
+                               source="test")
+    from datetime import UTC, datetime
+    await actions.create_link(
+        await actions.create_or_find_object("Seat", worker["seat_id"], "test"),
+        await actions.create_or_find_object("Seat", mgr["seat_id"], "test"),
+        "managed_by", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+
+async def test_promote_visitor_the_whole_ceremony(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    await _visitor_seen(actions, "agent:vis00001")
+
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00001", handle="Newbie",
+        because="operator ruling: onboarding a recurring visitor", actor="operator")
+
+    assert "error" not in out
+    assert out["promoted"] == "agent:vis00001"
+    assert out["was_visitor"] is True
+    assert out["handle"] == "Newbie"
+    assert out["claim_name"]["claimed"] == "Newbie"
+    assert out["charter_for"]["charter"] == ["stopslop"]
+    assert out["establish_office"]["office"] == str(tmp_path / "seats" / "newbie")
+    assert out["authorized_by"]["via"] == "operator"
+    assert (tmp_path / "seats" / "newbie" / "CLAUDE.md").is_file()
+    # the end-state really did land: a real Agent object now exists where none did before
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", "agent:vis00001")
+
+
+async def test_promote_visitor_refuses_a_blank_because(actions: Actions) -> None:
+    await _visitor_seen(actions, "agent:vis00002")
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00002", handle="Newbie", because="  ",
+        actor="operator")
+    assert "error" in out
+    assert "because is required" in out["error"]
+
+
+async def test_promote_visitor_refuses_without_authorization(actions: Actions) -> None:
+    await _visitor_seen(actions, "agent:vis00003")
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00003", handle="Newbie",
+        because="just because I felt like it", actor="agent:randomer1")
+    assert "error" in out
+    assert "not authorized" in out["error"]
+
+
+async def test_promote_visitor_authorizes_via_a_managers_word(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    await _visitor_seen(actions, "agent:vis00004")
+    await _a_manager(actions, "agent:mgr00001")
+
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00004", handle="Newbie2",
+        because="a manager's own call — welcoming a recurring visitor", actor="agent:mgr00001")
+
+    assert "error" not in out
+    assert out["authorized_by"]["via"] == "manager"
+
+
+async def test_promote_visitor_authorizes_via_a_ruling_citation(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.orchestrator.capture import record_decision
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    await _visitor_seen(actions, "agent:vis00005")
+    # verify_ruling's own three checks: resolves, kind=='ruling' (record_decision's
+    # own default), and the text must literally NAME the write it authorizes.
+    ruling_id = await record_decision(
+        actions, "operator ruling: promote_visitor is authorized for this recurring "
+        "visitor", source="test")
+
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00005", handle="Newbie3",
+        because="citing the ruling that approved this", actor="agent:randomer2",
+        ruling=str(ruling_id))
+
+    assert "error" not in out
+    assert out["authorized_by"]["via"] == "ruling"
+    assert out["authorized_by"]["ruling"] == str(ruling_id)
+
+
+async def test_promote_visitor_refuses_a_ruling_that_does_not_resolve(actions: Actions) -> None:
+    await _visitor_seen(actions, "agent:vis00006")
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00006", handle="Newbie4",
+        because="citing a ruling", actor="agent:randomer3", ruling="not-a-real-ruling-id")
+    assert "error" in out
+    # verify_ruling's own specific refusal, propagated verbatim (never re-derived)
+    assert "no such decision" in out["error"]
+
+
+async def test_promote_visitor_refuses_a_ruling_that_does_not_name_the_write(
+    actions: Actions,
+) -> None:
+    """A real ruling, about something else entirely, cannot silently authorize this
+    write just because a caller cited it — verify_ruling's own third check."""
+    from src.orchestrator.capture import record_decision
+
+    await _visitor_seen(actions, "agent:vis00010")
+    ruling_id = await record_decision(
+        actions, "Osiris HAS HANDS, admitted and governed", source="test")
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00010", handle="Newbie10",
+        because="citing an unrelated ruling", actor="agent:randomer4",
+        ruling=str(ruling_id))
+    assert "error" in out
+    assert "does not name" in out["error"]
+
+
+async def test_promote_visitor_refuses_an_already_real_agent(actions: Actions) -> None:
+    await _mounted(actions, "agent:real00001")
+    out = await promote_visitor(
+        actions.pool, target="agent:real00001", handle="Newbie5",
+        because="operator ruling", actor="operator")
+    assert "error" in out
+    assert "already has an Agent object" in out["error"]
+
+
+async def test_promote_visitor_refuses_a_target_never_seen(actions: Actions) -> None:
+    out = await promote_visitor(
+        actions.pool, target="agent:ghost0001", handle="Newbie6",
+        because="operator ruling", actor="operator")
+    assert "error" in out
+    assert "never mounted" in out["error"]
+
+
+async def test_promote_visitor_refuses_when_no_project_is_known_and_none_given(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/j/vis00007", agent_id="agent:vis00007",
+                     project=None, cwd="/w/vis00007", model=None, session_key=None)
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00007", handle="Newbie7",
+        because="operator ruling", actor="operator")
+    assert "error" in out
+    assert out["step"] == "charter_for"
+    assert "never guesses a charter" in out["error"]
+
+
+async def test_promote_visitor_stops_on_claim_name_refusal(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SEAT-LABEL name (a numeral suffix, e.g. "Newbie VIII") refuses at claim_name —
+    the substrate assigns generations, a caller may not claim one — and promote_visitor
+    stops there, never proceeding to charter_for/establish_office under a name that never
+    landed (same stop-on-refusal law walk_in_named already keeps)."""
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    await _visitor_seen(actions, "agent:vis00008")
+
+    out = await promote_visitor(
+        actions.pool, target="agent:vis00008", handle="Newbie VIII",
+        because="operator ruling", actor="operator")
+
+    assert "error" in out
+    assert out["step"] == "claim_name"
+    assert "steps_so_far" in out
+    assert not (tmp_path / "seats").exists()
+
+
 # ═══════════ THE MCP TOOL LAYER — THE MOUNT HALF ═══════════
 # Same technique test_lift.py already established: fake a mounted connection by injecting
 # an AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the
@@ -205,3 +402,48 @@ async def test_mcp_walk_in_skips_mount_for_an_already_mounted_caller(
     assert out["agent"] == "agent:ooblek002"
     assert out["claim_name"]["ran"] is True
     assert out["establish_office"]["ran"] is True
+
+
+async def test_mcp_seat_promote_visitor_end_to_end(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher door itself (`seat(action='promote_visitor')`), mounted as the
+    operator, promoting a THIRD-PARTY visitor — not itself."""
+    import src.mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
+    await _visitor_seen(actions, "agent:vis00009")
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="operator", session="operatorsession", project="stopslop",
+        model=None, cwd=None)
+    try:
+        out = await srv.seat(
+            action="promote_visitor", target="agent:vis00009", handle="Newbie9",
+            because="operator's own hand, via the seat dispatcher", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+    assert "error" not in out
+    assert out["promoted"] == "agent:vis00009"
+    assert out["authorized_by"]["via"] == "operator"
+
+
+async def test_mcp_seat_promote_visitor_refuses_unmounted(actions: Actions) -> None:
+    import src.mcp_server as srv
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.seat(
+            action="promote_visitor", target="agent:whoever1", handle="Whoever",
+            because="reason", ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+    assert "error" in out
+    assert "mount first" in out["error"]

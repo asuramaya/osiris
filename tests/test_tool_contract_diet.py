@@ -1509,7 +1509,17 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # authority-to-a-real-Person-object mechanism, plus its own one-paragraph docstring entry
 # and a matching docstring sentence on `authorized_by`'s widened LinkType. No new tool,
 # load-bearing growth per this file's own escape valve. Measured exact (126,865).
-TOOL_CONTRACT_CEILING_CHARS = 129471
+# 126448 -> 127077 (2026-09-11, thread 879c97b9 piece 2, Thoth mail 9465, "PROMOTION"):
+# seat(action='promote_visitor') — a NEW dispatcher action, not a new @mcp.tool() (tool
+# count unchanged), so all of this growth is a new oneOf branch on `seat`'s own
+# inputSchema plus a two-line ACTION TABLE entry, never prose on an existing branch. The
+# verb's own detailed reasoning (authorization gate, why it calls set_charter rather
+# than charter_for) lives in src/orchestrator/walkin.py's docstring, which this ratchet
+# does not measure — same split the tree_cwd/bind_seat_tree precedent above already
+# established. A genuinely new capability (the visitor-to-soul collapse for a THIRD
+# PARTY, operator/manager/ruling-gated), not prose creep; raised deliberately, measured
+# exact.
+TOOL_CONTRACT_CEILING_CHARS = 130100
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
