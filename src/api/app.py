@@ -743,8 +743,20 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  FROM current_assertions WHERE name='graph_y') gy ON gy.object_id = pm.object_id "
             "GROUP BY pm.project_id, pm.project_canonical"
         )
+        # NAME, NEVER THE RAW repo: CANONICAL (Thoth dispatch 9563/9769, browse's own graph
+        # mode standing lane): the retired Atlas showed `project_canonical` verbatim — the
+        # operator's own ruling elsewhere ("project never repo") never reached this endpoint.
+        # Reuses the SAME resolve_label chain /objects and the projects composition already
+        # use, never a second name notion; a genuinely unnamed project falls to its own
+        # canonical here exactly as resolve_label always does for any other type — no
+        # bespoke repo:-stripping in this shared function (that policy lives on the
+        # projects composition's own `name_fallback` column, not the graph endpoints).
+        label_props = await fetch_label_props(p, [r["project_id"] for r in rows])
         supernodes = [
-            {"id": str(r["project_id"]), "label": r["project_canonical"],
+            {"id": str(r["project_id"]),
+             "label": resolve_label(
+                 "SoftwareProject", label_props.get(r["project_id"], {}),
+                 r["project_canonical"]).label,
              "count": int(r["n"]), "orphans": int(r["orphans"]),
              "x": r["x"], "y": r["y"]}
             for r in rows
