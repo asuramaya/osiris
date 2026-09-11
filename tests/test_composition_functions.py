@@ -115,7 +115,8 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
                                 "family_drift", "fleet_live", "fleet_live_agents",
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",
                                 "mail_threads", "obligation_backlog", "overhead", "portfolio",
-                                "practices", "project", "pulse", "reference_catalog",
+                                "practices", "project", "project_worktrees", "pulse",
+                                "reference_catalog",
                                 "roadmap_open", "screen_network", "search", "subject_report",
                                 "triage", "wall"]
 

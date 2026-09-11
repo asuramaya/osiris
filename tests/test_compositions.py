@@ -863,6 +863,32 @@ async def test_projects_composition_retired_project_bucket_degrades_to_none(
     assert row["bucket"] is None
 
 
+async def test_projects_composition_surfaces_worktrees(actions: Actions) -> None:
+    """Thoth dispatch 9542, piece 3 of 4: the old /projects route's own nested worktree
+    sub-rows — grouped by parent via worktree_of, name+branch per Worktree."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    parent = await actions.create_or_find_object("SoftwareProject", "repo:wttest", "test")
+    await actions.assert_property(parent, "name", "wttest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    wt = await actions.create_or_find_object("Worktree", "worktree:wttest-feature", "test")
+    await actions.assert_property(wt, "name", "feature-branch-checkout", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.assert_property(wt, "branch", "feature/x", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(wt, parent, "worktree_of", "test", now, 0.9)
+
+    lonely = await actions.create_or_find_object("SoftwareProject", "repo:wtlonely", "test")
+    await actions.assert_property(lonely, "name", "wtlonely", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["project"] == "wttest")
+    assert row["worktrees"] == [{"name": "feature-branch-checkout", "branch": "feature/x"}]
+    lonely_row = next(r for r in out["items"] if r["project"] == "wtlonely")
+    assert lonely_row["worktrees"] is None  # no worktree_of edges — honest absence
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
