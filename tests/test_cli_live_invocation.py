@@ -13,22 +13,28 @@ NO_WRITE_INVOCATIONS below is either (a) an EXISTING refusal-shaped call already
 proven safe by a passing test elsewhere in this suite (test_cli.py or test_cli_json_
 promise.py — this file never reinvents those, it reuses the exact same args), or
 (b) safe BY CONSTRUCTION via an explicit dry-run/apply/execute=False default in the
-command's own signature, true regardless of what ref is passed. Roughly half the CLI
-surface — mostly seat/project lifecycle commands with a single string ref + actor and
-NO declared dry-run flag — has no such proof in this codebase today; calling any of
-them for real, even with a deliberately-nonexistent ref, is UNVERIFIED (this house's
-own convention is "resolve first, refuse honestly" everywhere it's been checked, but
-"everywhere it's been checked" is not "everywhere," and three of them — mint-seat, new,
-bootstrap — mint or spawn something for real with no confirmed refusal path at all).
-NEEDS_SAFE_INVOCATION below names each one with a real reason, and the completeness
-gate requires every live subcommand to be in ONE of the two dicts — so a name can
-never silently fall through either as untested or as wrongly presumed safe.
+command's own signature, true regardless of what ref is passed, or (c) — the class
+this file's own second wave (mail 9382 item 6) added — a resolve-first-then-refuse
+path CONFIRMED by reading the wrapped orchestrator function's own body: an unknown/
+nonexistent ref hits a named refusal (an "unknown seat"/"unknown project"/etc. return)
+strictly BEFORE any write, verified line-by-line rather than assumed from this house's
+general convention. NEEDS_SAFE_INVOCATION below names every command where that same
+close reading found the OPPOSITE — either the body genuinely writes unconditionally
+(mint-seat/new/bootstrap/create-project mint for real every time; decide always
+records a fresh Decision; smoke/deploy/seed touch real infra with no dry-run switch),
+or — the one specimen this reading actually caught, not merely presumed —
+resync-seat-house's own third-party verb has NO existence check at all: it
+find-or-CREATES the Seat object it's told to correct, so a "safe" nonexistent-ref call
+would silently mint a stray Seat rather than refuse. The completeness gate requires
+every live subcommand to be in ONE of the two dicts — so a name can never silently
+fall through either as untested or as wrongly presumed safe.
 """
 from __future__ import annotations
 
 import argparse
 import io
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -39,24 +45,46 @@ from src.cli import (
     cmd_amend_practice,
     cmd_annotate_thread,
     cmd_attach,
+    cmd_attach_seat,
     cmd_backlog,
+    cmd_bind_seat_tree,
     cmd_boot_status,
+    cmd_charter_for,
+    cmd_correct_agent_house,
+    cmd_correct_pin_value,
     cmd_desk,
+    cmd_detach_seat,
+    cmd_establish_office,
     cmd_fleet,
     cmd_fleet_prune,
     cmd_fleet_reconcile,
+    cmd_fold_project,
+    cmd_fork_project,
     cmd_heal_seat_anchor,
     cmd_heal_seat_transcript,
     cmd_inbox,
     cmd_launch,
+    cmd_merge,
+    cmd_migrate,
+    cmd_promote,
+    cmd_proposal,
     cmd_rebind_seat,
+    cmd_reconcile_merge,
+    cmd_reconcile_seat_identity,
+    cmd_reissue_office,
     cmd_rematerialize,
     cmd_rename_project,
+    cmd_rename_seat,
     cmd_resume,
     cmd_retention,
+    cmd_retire_agent,
+    cmd_retire_project,
+    cmd_retire_seat,
     cmd_roster,
     cmd_search,
     cmd_send,
+    cmd_set_project_tag,
+    cmd_set_seat_attended,
     cmd_show,
     cmd_smoke_chaos,
     cmd_status,
@@ -67,7 +95,10 @@ from src.cli import (
     cmd_threads,
     cmd_transition_seat_project,
     cmd_unmerge,
+    cmd_vacate_seat,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _subparsers() -> dict[str, argparse.ArgumentParser]:
@@ -175,6 +206,62 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         actor="operator", pool=a.pool),
     "retention": lambda a: cmd_retention(
         "not-a-real-table", days=30, execute=False, pool=a.pool),
+    "migrate": lambda a: cmd_migrate(
+        check=True, repo_root=_REPO_ROOT, pool=a.pool),
+    # --- wave 2 (mail 9382 item 6): each of these was proven refusal-only by reading
+    # --- the wrapped orchestrator function's own body — an unknown ref hits a named
+    # --- refusal strictly before any write, not merely assumed from house convention.
+    "merge": lambda a: cmd_merge(
+        "no-such-dupe-anywhere", "no-such-into-anywhere", "test evidence",
+        actor="operator", pool=a.pool),
+    "fold-project": lambda a: cmd_fold_project(
+        "no-such-dupe-anywhere", "no-such-into-anywhere", "test evidence",
+        actor="operator", pool=a.pool),
+    "reconcile-merge": lambda a: cmd_reconcile_merge(
+        "no-such-dupe-anywhere", "no-such-into-anywhere", actor="operator", pool=a.pool),
+    "retire-agent": lambda a: cmd_retire_agent(
+        "no-such-agent-anywhere", "test", actor="operator", pool=a.pool),
+    "attach-seat": lambda a: cmd_attach_seat(
+        "no-such-worker-anywhere", "no-such-manager-anywhere", "test evidence",
+        actor="operator", pool=a.pool),
+    "detach-seat": lambda a: cmd_detach_seat(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "promote": lambda a: cmd_promote(
+        "no-such-target-anywhere", ["no-such-worker-anywhere"], "test",
+        actor="operator", pool=a.pool),
+    "vacate-seat": lambda a: cmd_vacate_seat(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "retire-seat": lambda a: cmd_retire_seat(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "bind-seat-tree": lambda a: cmd_bind_seat_tree(
+        "no-such-seat-anywhere", "/tmp/does-not-matter", "test",
+        actor="operator", pool=a.pool),
+    "rename-seat": lambda a: cmd_rename_seat(
+        "no-such-seat-anywhere", "still-no-such-handle", "test",
+        actor="operator", pool=a.pool),
+    "set-seat-attended": lambda a: cmd_set_seat_attended(
+        "no-such-seat-anywhere", "worker", "test", actor="operator", pool=a.pool),
+    "reissue-office": lambda a: cmd_reissue_office(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "establish-office": lambda a: cmd_establish_office(
+        "no-such-seat-or-agent-anywhere", actor="operator", pool=a.pool),
+    "reconcile-seat-identity": lambda a: cmd_reconcile_seat_identity(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "retire-project": lambda a: cmd_retire_project(
+        "no-such-project-anywhere", "test", actor="operator", pool=a.pool),
+    "fork-project": lambda a: cmd_fork_project(
+        "no-such-project-anywhere", "still-no-such-project-anywhere", "test",
+        actor="operator", pool=a.pool),
+    "set-project-tag": lambda a: cmd_set_project_tag(
+        "no-such-project-anywhere", "ZZ", "test", actor="operator", pool=a.pool),
+    "charter-for": lambda a: cmd_charter_for(
+        "no-such-seat-anywhere", [], "test", actor="operator", pool=a.pool),
+    "correct-pin-value": lambda a: cmd_correct_pin_value(
+        "no-such-handle-anywhere", "some_key", "some_value", "test", pool=a.pool),
+    "correct-agent-house": lambda a: cmd_correct_agent_house(
+        "no-such-handle-anywhere", actor="operator", pool=a.pool),
+    "proposal": lambda a: cmd_proposal(
+        "propose", candidate="not valid json{", pool=a.pool),
 }
 
 # CLI commands the population gate below knows are NOT in NO_WRITE_INVOCATIONS, each
@@ -189,49 +276,31 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
     "smoke": "needs a live osiris-mcp pool + real chrome routes per its own docstring "
              "(\"8 chrome routes + the live mcp pool\") — a different, heavier infra "
              "assumption than the plain MCP search/fleet calls above",
-    "deploy": "11 injectable callables (git_status/restart/chaos gate/etc); every "
-              "existing test replaces ALL of them with fakes — assembling that set here "
-              "risks missing one and running a real restart/kill",
-    "migrate": "check=True is the declared dry-run mode, but needs a real repo_root + "
-               "alembic env; no existing test exercises check=True at all (every test "
-               "injects a fake `state`/`run_migrations` instead) — same operator-only "
-               "class as deploy",
+    "deploy": "11 injectable callables (git_status/restart/chaos gate/etc), every one "
+              "defaulting to the REAL side-effecting callable (own body read, wave 2): "
+              "assembling a full fake set here risks missing one and running a real "
+              "restart/kill",
     "seed": "genuinely writes (compositions/canon) even with compositions_only=True; "
             "no dry-run flag — already declared an operator devops bootstrap act "
             "elsewhere (NO_MCP_EQUIVALENT)",
-    "merge": "no dry-run flag; no existing test calls it with a nonexistent dupe/into "
-             "pair — resolve-first-then-refuse is this house's convention but unproven "
-             "here specifically",
-    "fold-project": "same underlying write as merge, same gap",
-    "charter-for": "no existing nonexistent-seat-id test; own body not yet read to "
-                   "confirm an early refusal",
-    "correct-pin-value": "no existing nonexistent-handle test; writes a real .osiris "
-                         "pin file on the filesystem if it doesn't refuse first",
-    "correct-agent-house": "no existing nonexistent-handle test",
-    "reconcile-merge": "no existing nonexistent-ref test",
-    "retire-agent": "no existing nonexistent-ref test — retirement is hard to undo",
-    "attach-seat": "no existing nonexistent-worker/manager test",
-    "detach-seat": "no existing nonexistent-seat test",
-    "promote": "no existing nonexistent-target test — mints a manager relationship",
-    "vacate-seat": "no existing nonexistent-seat test",
-    "retire-seat": "no existing nonexistent-seat test — retirement is hard to undo",
-    "bind-seat-tree": "no existing nonexistent-seat test",
-    "rename-seat": "no existing nonexistent-seat test",
-    "set-seat-attended": "no existing nonexistent-seat test",
-    "reissue-office": "no existing nonexistent-seat test — writes real office files",
-    "establish-office": "no existing nonexistent-seat test — writes real office files",
-    "resync-seat-house": "no existing nonexistent-seat test",
-    "reconcile-seat-identity": "no existing nonexistent-seat test",
-    "create-project": "no existing test — mints a real SoftwareProject",
-    "set-project-tag": "no existing nonexistent-project test",
-    "retire-project": "no existing nonexistent-project test — retirement is hard to undo",
-    "fork-project": "no existing test — mints a real forked SoftwareProject",
-    "decide": "grounds=[\"not-a-uuid\"] in the one existing near-miss test may trigger a "
-              "citation-resolution refusal OR a partial write with a warning — not "
-              "confirmed either way without reading that test's own asserts",
-    "proposal": "no existing test at all; a malformed candidate JSON is a plausible "
-                "safe invocation (hits the parse-error return before any write) but "
-                "unconfirmed",
+    "resync-seat-house": "CONFIRMED UNSAFE, wave 2 own-body read: "
+                         "resync_seat_house_third_party never checks the seat exists at "
+                         "all — it calls actions.create_or_find_object('Seat', seat_id, "
+                         "source) and then writes the house property unconditionally, so "
+                         "a nonexistent-seat 'safe' invocation would silently MINT a "
+                         "stray Seat rather than refuse (contrast reconcile-seat-identity, "
+                         "its own precedent-named sibling, which DOES refuse — read "
+                         "separately, moved to NO_WRITE_INVOCATIONS)",
+    "create-project": "own body read, wave 2: create_project is a genuine find-OR-CREATE "
+                      "(never a mint-a-twin door, but a never-before-seen name mints "
+                      "fresh every time) — no refusal-only shape exists for any name "
+                      "guaranteed not to collide",
+    "decide": "own body read, wave 2: record_decision unconditionally mints a fresh "
+              "Decision on any valid summary/kind — there is no ref to fail to resolve. "
+              "The one near-miss (grounds=['not-a-uuid']) does avoid the write, but only "
+              "by raising SystemExit from this CLI door's own pre-call UUID validation "
+              "(_uuids()), not by returning a clean int — the wrong shape for this file's "
+              "own thunk contract, so still no usable no-write invocation",
     "mint-seat": "genuinely mints a seat; no confirmed refusal-only path — every "
                  "existing test mints for real",
     "new": "genuinely spawns/mints a seat for real; no confirmed refusal-only path",
