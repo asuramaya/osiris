@@ -50,6 +50,13 @@ _MARKER_RE = re.compile(r"#\s*unbounded-wait-ok\b")
 # call site that's genuinely unbounded-by-necessity, either mark it inline (preferred —
 # names the actual reason at the actual line) or raise this by exactly the number you
 # added, with a comment saying why here rather than at 182 call sites.
+# src/cli.py: 67 -> 68 (2026-09-11, Khnum, WAVE 21 item 1, encryption rebase onto
+# f22e404): the new `osiris soul-key-init` dispatch line adds one more
+# `asyncio.run(cmd_soul_key_init(...))` to main()'s own dispatch table, same shape as
+# every sibling `asyncio.run(cmd_x(...))` line already absorbed into this baseline —
+# this scanner's `name in ("run", "communicate")` match is subprocess-import-gated but
+# not subprocess-CALLEE-gated, so it counts asyncio.run alongside subprocess.run; no
+# genuine unbounded subprocess call was added here.
 _SUBPROCESS_BASELINE: dict[str, int] = {
     # 67 -> 68 (2026-09-12, Imhotep, thread f4498ab304e4, THE SETTINGS MENU piece 1):
     # one new `asyncio.run(cmd_settings(...))` dispatch line for the new `settings`
@@ -119,7 +126,11 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # (draining an already-killed process, genuinely near-instant) IS inline-marked
     # instead, same as that precedent's own sibling — both are safe, this one just
     # isn't textually markable without hiding the real timeout.
-    "src/cli.py": 89,
+    # 89 -> 90 (2026-09-22, Khnum, KEY CUSTODY REWRITTEN, ruling e0b98ff2, rebased onto
+    # Imhotep's own raise above — sum of both, not a replacement): one new dispatch
+    # line, `asyncio.run(cmd_soul_key(...))`, same false-positive class as every
+    # comment above — not a genuine new unbounded subprocess call.
+    "src/cli.py": 90,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new
