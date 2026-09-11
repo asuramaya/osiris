@@ -103,11 +103,14 @@
     <div id="stage">
       <div id="cy">
         <div class="graph-canvas-controls">
+          <button class="iconbtn" id="graph-mode-btn" onclick="toggleGraphMode()">Whole Graph</button>
+          <button class="iconbtn" id="graph-zoomout-btn" style="display:none" onclick="wholeGraphZoomOut()">Zoom Out</button>
+          <span id="graph-level-badge" class="o-faint" style="align-self:center;font-size:11px;padding:0 4px"></span>
           <button class="iconbtn" onclick="board.fit()">Fit</button>
-          <button class="iconbtn" onclick="board.layout(false)">Re-layout</button>
+          <button class="iconbtn" id="graph-relayout-btn" onclick="board.layout(false)">Re-layout</button>
           <button class="iconbtn" onclick="clearAll()">Clear</button>
-          <button class="iconbtn" onclick="expandFocusOneHop()">Expand</button>
-          <button class="iconbtn" onclick="collapseFocusOneHop()">Collapse</button>
+          <button class="iconbtn" id="graph-expand-btn" onclick="expandFocusOneHop()">Expand</button>
+          <button class="iconbtn" id="graph-collapse-btn" onclick="collapseFocusOneHop()">Collapse</button>
         </div>
         <div class="graph-search-row">
           <input id="graph-search" class="filter" placeholder="Find a node…" autocomplete="off"

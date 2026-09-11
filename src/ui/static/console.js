@@ -18,9 +18,47 @@ function ensureBoard() {
   if (!board && typeof Osiris !== "undefined" && Osiris.makeBoard) {
     board = Osiris.makeBoard($("cy"),
       function(id, deep, type) { return deep ? primaryAction(id, type) : inspectOnly(id); },
-      function(id, type, ev) { return ev && showActionMenu(ev.clientX, ev.clientY, id, type); });
+      function(id, type, ev) { return ev && showActionMenu(ev.clientX, ev.clientY, id, type); },
+      function(level) { setGraphLevelBadge(level); });
   }
   return board;
+}
+
+// WHOLE-GRAPH LOD (Thoth dispatch 9563, folded from the retired Atlas into browse's own
+// graph mode — "keep working the graph view on browse," the operator's own word): a second
+// mode over the SAME #cy canvas/board, never a second surface. `renderEntityExplorerStage()`
+// (below) leaves the board alone while this is 'whole' — whole-graph mode owns the canvas
+// until the toggle explicitly hands it back.
+var GRAPH_MODE = 'neighborhood'; // 'neighborhood' | 'whole'
+function toggleGraphMode() {
+  if (GRAPH_MODE === 'whole') {
+    GRAPH_MODE = 'neighborhood';
+    (ensureBoard()).exitWholeGraph();
+    setGraphModeUI();
+    renderEntityExplorerStage(); // repopulate the neighborhood board fresh
+  } else {
+    GRAPH_MODE = 'whole';
+    (ensureBoard()).loadSupernodes();
+    setGraphModeUI();
+  }
+}
+function setGraphModeUI() {
+  var whole = GRAPH_MODE === 'whole';
+  var modeBtn = $('graph-mode-btn'); if (modeBtn) modeBtn.textContent = whole ? 'Neighborhood' : 'Whole Graph';
+  var zoomBtn = $('graph-zoomout-btn'); if (zoomBtn) zoomBtn.style.display = whole ? '' : 'none';
+  // Re-layout/Expand/Collapse are neighborhood-only verbs (a whole-graph position came
+  // from the server; re-laying it out client-side would fight the heartbeat every render).
+  ['graph-relayout-btn', 'graph-expand-btn', 'graph-collapse-btn'].forEach(function(id) {
+    var el = $(id); if (el) el.style.display = whole ? 'none' : '';
+  });
+  setGraphLevelBadge(whole ? 'supernodes' : '');
+}
+function setGraphLevelBadge(level) {
+  var el = $('graph-level-badge'); if (!el) return;
+  el.textContent = level === 'supernodes' ? 'projects' : (level === 'clusters' ? 'types' : (level === 'nodes' ? 'objects' : ''));
+}
+function wholeGraphZoomOut() {
+  var b = ensureBoard(); b.wholeGraphZoomOut(); setGraphLevelBadge(b.wholeGraphLevel());
 }
 
 // WAVE B (thread 8839): the Atlas — sigma.js's own full-graph renderer, a separate
@@ -51,6 +89,12 @@ function showPanel() { $('stage').classList.add('panel'); }
 // ── Surface Switching ────────────────────────────────────────────────────────
 async function switchSurface(surface) {
   if (surface !== 'pane') closePaneStream();  // never leak an open SSE connection off-pane
+  // whole-graph mode lives only inside browse's own #cy controls — leaving browse with it
+  // still on would strand the toggle in a state its own controls no longer show.
+  if (ACTIVE_SURFACE === 'browse' && surface !== 'browse' && GRAPH_MODE === 'whole') {
+    GRAPH_MODE = 'neighborhood';
+    (ensureBoard()).exitWholeGraph();
+  }
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
@@ -327,7 +371,16 @@ function renderSwitcher() {
 }
 function renderEntityExplorerStage() {
   const filtered = getFilteredEntities(); setStatus(filtered.length + ' of ' + SET.length + ' entities');
-  if (ENTITY_VIEW_MODE === 'graph') { showBoard(); (ensureBoard()).clear(); if (filtered.length) (ensureBoard()).placeObjects(filtered.slice(0, 200).map(o => ({ id: o.id, type: o.type, label: o.display_label || o.name || o.canonical || o.id }))); return; }
+  if (ENTITY_VIEW_MODE === 'graph') {
+    showBoard();
+    // whole-graph mode owns the canvas until toggleGraphMode() explicitly hands it back —
+    // an incidental filter/search change while it's on must not silently repopulate the
+    // neighborhood board underneath it.
+    if (GRAPH_MODE === 'whole') return;
+    (ensureBoard()).clear();
+    if (filtered.length) (ensureBoard()).placeObjects(filtered.slice(0, 200).map(o => ({ id: o.id, type: o.type, label: o.display_label || o.name || o.canonical || o.id })));
+    return;
+  }
   const container = $('result');
   if (ENTITY_VIEW_MODE === 'board') { renderBoardProjection(container, filtered); showPanel(); return; }
   renderTableProjection(container, filtered); showPanel();
