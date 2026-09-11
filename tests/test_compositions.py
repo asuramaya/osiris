@@ -2656,6 +2656,60 @@ async def test_triage_buckets_link_kind_type_never_flagged_no_label_rule(
     assert row["kind"] == "link"
 
 
+async def test_triage_buckets_flags_type_metadata_contradiction(actions: Actions) -> None:
+    """820730c8, follow-up to #102 (deliberately scoped out at build time): the generic
+    path's own `contradicted` bucket (GROUP BY (object_id, name) HAVING count(DISTINCT
+    value) > 1) is a SEPARATE branch from Type's own gap surface, so two sources'
+    differing `description` on the same Type never surfaced here before — the reader
+    just silently saw whichever won by confidence/recency, the exact "storage layer
+    holds it correctly, nothing NAMED it" gap task #102 closed for every other type.
+
+    RETIRES ITS OWN SPECIMEN AFTER ASSERTING (unlike ordinary Organization-type
+    contradiction tests elsewhere in this file): Type rows are DELIBERATELY SPARED from
+    the per-test reset (conftest.py's own catalog-survives-the-reset design, `actions`
+    fixture) so the seeded ontology persists across the whole suite — a genuine,
+    unhealed multi-source contradiction left on an ACTIVE Type row would otherwise leak
+    into every later test in the same worker that scans `_fn_lint`'s own generic
+    contradiction check (which is also `o.status='active'`-scoped), a real cross-test
+    pollution this test caught live before landing."""
+    await ensure_type(actions, name="GapContradicted", kind="object", actor="source-a",
+                      description="described one way", label_field="handle")
+    await ensure_type(actions, name="GapContradicted", kind="object", actor="source-b",
+                      description="described a DIFFERENT way")
+    try:
+        rows = await _fn_triage(actions.pool, None,
+                                {"mode": "buckets", "object_type": "Type"})
+        row = next(r for r in rows if r["canonical"] == "type:object:GapContradicted")
+        assert row["bucket"] == "contradicted"
+        assert row["contradicted_on"] == ["description"]
+    finally:
+        await actions.pool.execute(
+            "UPDATE objects SET status='retired' WHERE canonical='type:object:GapContradicted'")
+
+
+async def test_triage_buckets_type_contradiction_outranks_no_label_rule(
+    actions: Actions,
+) -> None:
+    """A Type in live disagreement about its own description never quietly falls back
+    to 'no_label_rule' just because label_field also happens to be genuinely missing —
+    contradicted ranks first, same priority tier the generic path's own `contradicted`
+    bucket sits at. Retires its own specimen after asserting — see the sibling test
+    above for why (Type rows are never reset between tests)."""
+    await ensure_type(actions, name="GapPriority", kind="object", actor="source-a",
+                      description="one telling")
+    await ensure_type(actions, name="GapPriority", kind="object", actor="source-b",
+                      description="a different telling")  # label_field left unset by both
+    try:
+        rows = await _fn_triage(actions.pool, None,
+                                {"mode": "buckets", "object_type": "Type"})
+        row = next(r for r in rows if r["canonical"] == "type:object:GapPriority")
+        assert row["bucket"] == "contradicted"
+        assert row["contradicted_on"] == ["description"]
+    finally:
+        await actions.pool.execute(
+            "UPDATE objects SET status='retired' WHERE canonical='type:object:GapPriority'")
+
+
 async def test_triage_buckets_names_valid_types_when_object_type_missing_or_unknown(
     actions: Actions,
 ) -> None:
