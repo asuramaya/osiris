@@ -1098,6 +1098,25 @@ async def automount(
     except Exception as e:  # noqa: BLE001 — the whisper never dies of a heal
         heal = {"error": f"TRANSCRIPT HEAL FAILED — {str(e)[:200]}; the mount stands; "
                          "moved sessions may still refuse to resume here"}
+    # THE SOUL STORE FOLLOWS THE HEAL (thread 6e56cf7e, item 5): a rewritten cwd is a
+    # real, in-place edit to lines the soul store may already have chained — the ONLY
+    # place this store's own append-only invariant bends, and only for exactly this
+    # sanctioned tool's own edit shape (SoulStore.forget_and_reingest's own docstring
+    # names why ingest_path alone can never repair it). Best-effort, fail-open, same
+    # posture as the heal call just above it — a reconciliation failure here must never
+    # break the mount or the resume it's fixing.
+    if heal and heal.get("healed_paths"):
+        from src.ingest.soul_store import SoulStore
+
+        reingested: dict[str, Any] = {}
+        store = SoulStore(actions.pool)
+        for healed_sid, healed_path in heal["healed_paths"].items():
+            try:
+                reingested[healed_sid[:8]] = await store.forget_and_reingest(
+                    healed_path, healed_sid)
+            except Exception as e:  # noqa: BLE001 — never sinks the mount over a reconcile
+                reingested[healed_sid[:8]] = {"error": str(e)[:200]}
+        heal["reingested"] = reingested
     # graded asks travel beside the total (f9449d8d) so the whisper can lead with what is
     # actionable; ungraded mail keeps the plain count — never guessed into a band. One
     # combined query (thread 72e45258's residual) instead of the same predicate run twice.

@@ -631,6 +631,10 @@ def test_heal_slug_transcripts_converges_the_listed_directory(tmp_path: Path) ->
                                 skip_sids={"cccc3333-me"}, skip_sid_prefixes={"dddd4444"})
 
     assert out["healed"] == {"aaaa1111": 2}
+    # FULL anchor_sid -> resolved path, beside `healed`'s own 8-char-prefix keys (thread
+    # 6e56cf7e item 5) — a reconciling caller (forget_and_reingest) needs the exact
+    # (harness, anchor_sid) key, never a truncated prefix.
+    assert out["healed_paths"] == {"aaaa1111-moved": str(slug / "aaaa1111-moved.jsonl")}
     assert out["skipped_live"] == 2
     assert out["deferred_fresh"] == 1
     assert _cwds_of(slug / "aaaa1111-moved.jsonl") == ["/w/office", "/w/office"]

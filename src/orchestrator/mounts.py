@@ -1171,6 +1171,7 @@ def heal_slug_transcripts(
     if not slug_dir.is_dir():
         return {}
     healed: dict[str, int] = {}
+    healed_paths: dict[str, str] = {}
     skipped_live = deferred_fresh = 0
     errors: list[str] = []
     now = time.time()
@@ -1193,11 +1194,19 @@ def heal_slug_transcripts(
                                         expect=(st.st_size, st.st_mtime_ns))
             if n:
                 healed[sid[:8]] = n
+                healed_paths[sid] = str(entry)
         except OSError as e:
             errors.append(f"{entry.name}: {str(e)[:120]}")
     out: dict[str, Any] = {}
     if healed:
         out["healed"] = healed
+        # FULL anchor_sid -> resolved path, beside `healed`'s own 8-char-prefix keys
+        # (thread 6e56cf7e, item 5) — `healed` itself stays exactly as every existing
+        # caller/test already reads it (tests/test_rebind.py's own receipt shape
+        # assertions); a caller that needs to target the soul store's own (harness,
+        # anchor_sid) key — never a prefix — AND the file to re-ingest, reads this
+        # instead, never re-deriving `_harness_slug`'s own path convention a second time.
+        out["healed_paths"] = healed_paths
     if skipped_live:
         out["skipped_live"] = skipped_live
     if deferred_fresh:
