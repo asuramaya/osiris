@@ -38,6 +38,12 @@ dev = [
                           # suite across worker PROCESSES; tests/conftest.py shares ONE
                           # Postgres container across them (PYTEST_XDIST_WORKER_COUNT/
                           # workerinput), not one per worker
+    "pytest-timeout>=2.3",  # THE DEADLOCK FIX (operator's word 2026-09-11, mail 9658): a
+                            # per-test wall-clock ceiling — see ini_options `timeout` below.
+                            # This alone does not cover an xdist CONTROLLER hung waiting on
+                            # dead/hung workers (the seshat 2.5h specimen, futex_do_wait with
+                            # no worker processes visible) — that shape is conftest.py's own
+                            # session watchdog, a separate daemon thread.
     "testcontainers[postgres]>=4.8",  # real Postgres in Docker for tests (not SQLite, not mocks)
     "ruff>=0.8",
     "mypy>=1.13",
@@ -104,7 +110,23 @@ pythonpath = ["."]
 # skipped/0 failed. Confirmed a small targeted run (the CLAUDE.md-prescribed dev-loop
 # hot path) is not slower or more ceremonial under this default: tests/test_semantics.py
 # alone, 10.83s without vs 11.20s with -n 4 — noise, not a real cost.
-addopts = "-n 4"
+# --max-worker-restart=2 (THE DEADLOCK FIX, mail 9658): a worker that dies mid-run is
+# restarted up to twice rather than leaving the controller waiting on a process that will
+# never report again — the other named half of the seshat hang shape, alongside the
+# session watchdog in conftest.py (the controller-side case that isn't a worker restart
+# at all: futex_do_wait forever, zero worker processes visible).
+addopts = "-n 4 --max-worker-restart=2"
+# THE DEADLOCK FIX (operator's word 2026-09-11, mail 9658): "a timeout still costs 25
+# minutes to find" — a per-test ceiling so a hung test fails FAST and LOUD instead of
+# silently eating the run. timeout_method=thread dumps every thread's stack via
+# faulthandler before killing the test (the trace a bare `timeout 1500` on the whole
+# process never gives you — that wrapper stays as the last-resort backstop, unchanged).
+# faulthandler_timeout is pytest core's own built-in (no extra package): a slower,
+# independent net catching anything that outlives 120s even before pytest-timeout's own
+# per-test enforcement fires, since the two mechanisms watch different clocks.
+timeout = 300
+timeout_method = "thread"
+faulthandler_timeout = 120
 
 [tool.uv]
 package = true

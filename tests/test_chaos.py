@@ -134,6 +134,7 @@ def _free_port() -> int:
     standard OS-assigned-port trick (a TOCTOU window exists in principle; in practice the
     OS does not hand out the same free port to two concurrent binds often enough to matter
     for a test fixture, and this is never used for anything security-sensitive)."""
+    # unbounded-wait-ok: bind+getsockname only, never connect/accept/recv — cannot block
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
