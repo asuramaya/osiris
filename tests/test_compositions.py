@@ -1368,6 +1368,27 @@ async def test_fleet_live_pulse_and_wake_ledger(actions: Actions) -> None:
     assert any(w["project"] == "osiris" and w["by"] == "agent:x" for w in out["wake_ledger"])
 
 
+async def test_browse_composition_is_registered_and_runs_newest_first(
+    actions: Actions,
+) -> None:
+    """BROWSE'S FIRST PROOF (Thoth dispatch 9436, page conversions off 588148bb): the
+    entity explorer's own object-set load, proven as a composition — kind="objects",
+    newest-first, so it renders through Osiris.renderResult exactly like any other saved
+    composition (piece 2's composer shell already runs/renders any saved spec)."""
+    older = await actions.create_or_find_object("Thread", "thread:browse-comp-older", "test")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = now() - interval '2 hours' WHERE id=$1", older)
+    newer = await actions.create_or_find_object("Thread", "thread:browse-comp-newer", "test")
+
+    await save_composition(actions.pool, "browse", DEFAULT_COMPOSITIONS["browse"])
+    res = await run_composition(actions.pool, "browse")
+    assert res["kind"] == "objects"
+    ids = [str(i["id"]) for i in res["items"]]
+    assert str(newer) in ids and str(older) in ids
+    assert ids.index(str(newer)) < ids.index(str(older))  # newest first
+    assert len(res["items"]) <= 200
+
+
 async def test_fleet_live_composition_is_registered_and_runs_end_to_end(
     actions: Actions,
 ) -> None:

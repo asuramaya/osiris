@@ -85,6 +85,11 @@ ROOM_COMPOSITIONS: dict[str, tuple[str, ...]] = {
         # the type catalog osiris SHIPS (task #111, thread 26694d10) — same room as
         # design-canon/decision-log: a developer project-memory lens, not an entity one.
         "reference",
+        # BROWSE'S FIRST PROOF (Thoth dispatch 9436, page conversions off 588148bb) — the
+        # entity explorer's own object-set load, proven as a composition. Engineer room,
+        # not analyst: this is the console's own dev-facing object browser, same class as
+        # fleet/projects, not a public-record entity lens.
+        "browse",
     ),
     "analyst": (
         "who-is-this", "operational-vs-disclosed-geography", "co-investment-ties",
