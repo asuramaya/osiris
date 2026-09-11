@@ -1498,7 +1498,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # 126448 -> 128772 (2026-09-11, Sekhmet, thread 9d2aaf4d, decision c6d25164, Thoth DM
 # 9377/9383, CITATION SHAPE): two new doors, cite_transcript and read_citation (see
 # TOOL_CONTRACT_EXPECTED_COUNT's own 81->83 log entry just above). Measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 128772
+# 126448 -> 126736 (2026-09-11, Khnum, Thoth mail 9382 item 3, 93b25ddc): seat()'s own
+# ACTION TABLE entry for charter_for gains a clause naming the new ruling=<decision id>
+# escape hatch (act under a standing operator ruling instead of manager authority,
+# refused unless the ruling actually names charter_for) — the only prose growth in this
+# fix; a genuinely new capability on an existing door, not padding. Measured exact
+# (126,736), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 129060
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

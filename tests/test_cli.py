@@ -3703,6 +3703,29 @@ async def test_cmd_charter_for_refuses_a_non_manager(actions: Actions) -> None:
     assert await charter_of(actions.pool, worker["seat_id"]) == []
 
 
+async def test_cmd_charter_for_ruling_bypasses_the_manager_check(actions: Actions) -> None:
+    """`osiris charter-for <seat> --ruling <decision id>` — the console-script's own
+    plumbing for Thoth mail 9382 item 3 (93b25ddc), CLI side."""
+    from src.orchestrator.capture import record_decision
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    await _cli_repo(actions, "osiris")
+    worker = await ensure_seat(actions, house="clihouse", handle="CliWorker3", source="test")
+    stranger = await ensure_seat(actions, house="clihouse", handle="CliStranger3",
+                                 source="test")
+    await bind_holder(actions, seat_id=stranger["seat_id"], agent_id="agent:clistranger3")
+    ruling_id = await record_decision(
+        actions, "workers may declare a charter for an undeclared seat via charter_for, "
+                "citing this ruling", kind="ruling")
+
+    out = await cmd_charter_for(worker["seat_id"], ["osiris"], "authorized by ruling",
+                                actor="agent:clistranger3", ruling=str(ruling_id),
+                                pool=actions.pool)
+    assert out == 0
+    assert await charter_of(actions.pool, worker["seat_id"]) == ["osiris"]
+
+
 async def test_cmd_charter_for_operator_actor_bypasses_managed_by(actions: Actions) -> None:
     import io
     from contextlib import redirect_stdout

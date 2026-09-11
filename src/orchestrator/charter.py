@@ -183,6 +183,7 @@ async def set_charter(
 
 async def charter_for(
     actions: Actions, seat_id: str, repos: list[str], *, because: str, actor: str,
+    ruling: str | None = None,
 ) -> dict[str, Any]:
     """THE MANAGER-INVOKED SIBLING (thread 2446), not a widening of `charter()`: the
     operator's own model, 2026-07-31 — "a seat with no manager should be able to
@@ -199,9 +200,15 @@ async def charter_for(
     "manager/operator-invoked" claim is not actually checked in their code; this one
     checks): `actor` must be either one of `seats._OPERATOR_ACTORS`'s sentinels, OR the
     seat `actor`'s own lineage currently holds must BE the target seat's manager
-    (`manager_of_seat`'s live `managed_by` edge). Refuses loudly otherwise, naming both
-    who the caller resolved to and who the seat's actual manager is (or that it has
-    none on record) — never a bare permission-denied.
+    (`manager_of_seat`'s live `managed_by` edge), OR `ruling` names a standing operator
+    ruling that authorizes THIS write (Thoth mail 9382 item 3, 93b25ddc — see
+    `verify_ruling`'s own three-part check: the ref resolves, its kind is 'ruling', and
+    its own text names 'charter_for'). Refuses loudly otherwise, naming both who the
+    caller resolved to and who the seat's actual manager is (or that it has none on
+    record) — never a bare permission-denied. A `ruling` that fails any of
+    `verify_ruling`'s checks refuses on THAT error directly — it never silently falls
+    through to the manager check, which would let a caller probe two unrelated
+    authorization paths in one call.
 
     `because` is required, same testimony discipline `rename_seat` runs: declaring a
     charter on someone else's behalf is a deliberate act, not a routine one. Every write
@@ -233,31 +240,47 @@ async def charter_for(
     if not because:
         return {"error": "because is required — a charter declared on another seat's "
                          "behalf is testimony, same discipline rename_seat runs"}
+    ruling_id = None
     if actor not in _OPERATOR_ACTORS:
-        # RESOLVED FIRST, same as set_charter's own seat_id (the Tantra specimen, thread
-        # c851c81b, one level up): the authorization check used to run manager_of_seat
-        # against the caller's raw, unresolved spelling of `seat_id` — a handle never
-        # matches manager_of_seat's exact-canonical lookup, so a real bond read as "no
-        # manager on record" purely because of how the target was spelled.
-        target_row = await _resolve_active_seat(actions.pool, seat_id)
-        if target_row is None:
-            return {"error": f"no such active seat: {seat_id!r} — a charter is declared "
-                             "for a seat, and this one doesn't exist (or isn't active)"}
-        resolved_seat_id = str(target_row["canonical"])
-        caller_seat = await held_seat(actions.pool, actor)
-        caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
-        manager_seat_id = await manager_of_seat(actions.pool, resolved_seat_id)
-        if caller_seat_id is None or caller_seat_id != manager_seat_id:
-            caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
-                          else f"{actor} (holds no seat)")
-            manager_desc = manager_seat_id or "no manager on record"
-            return {"error": f"{caller_desc} is not authorized to declare a charter for "
-                             f"{resolved_seat_id} — its manager is {manager_desc}, and "
-                             f"{actor} is neither that manager nor an operator actor"}
+        if ruling:
+            from src.orchestrator.capture import verify_ruling
+
+            check = await verify_ruling(actions.pool, ruling, write_name="charter_for")
+            if not check["ok"]:
+                return {"error": check["error"]}
+            ruling_id = check["ruling_id"]
+        else:
+            # RESOLVED FIRST, same as set_charter's own seat_id (the Tantra specimen,
+            # thread c851c81b, one level up): the authorization check used to run
+            # manager_of_seat against the caller's raw, unresolved spelling of
+            # `seat_id` — a handle never matches manager_of_seat's exact-canonical
+            # lookup, so a real bond read as "no manager on record" purely because of
+            # how the target was spelled.
+            target_row = await _resolve_active_seat(actions.pool, seat_id)
+            if target_row is None:
+                return {"error": f"no such active seat: {seat_id!r} — a charter is "
+                                 "declared for a seat, and this one doesn't exist (or "
+                                 "isn't active)"}
+            resolved_seat_id = str(target_row["canonical"])
+            caller_seat = await held_seat(actions.pool, actor)
+            caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
+            manager_seat_id = await manager_of_seat(actions.pool, resolved_seat_id)
+            if caller_seat_id is None or caller_seat_id != manager_seat_id:
+                caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
+                              else f"{actor} (holds no seat)")
+                manager_desc = manager_seat_id or "no manager on record"
+                return {"error": f"{caller_desc} is not authorized to declare a "
+                                 f"charter for {resolved_seat_id} — its manager is "
+                                 f"{manager_desc}, and {actor} is neither that manager "
+                                 "nor an operator actor (cite a standing ruling via "
+                                 "ruling=<decision id> to act under operator authority "
+                                 "instead)"}
     out = await set_charter(actions, seat_id, repos, actor=actor)
     if "error" not in out:
         out["because"] = because
         out["declared_by"] = actor
+        if ruling_id is not None:
+            out["ruling"] = str(ruling_id)
     return out
 
 

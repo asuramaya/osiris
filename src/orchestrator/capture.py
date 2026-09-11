@@ -2560,6 +2560,46 @@ async def _decision_snapshot(pool: asyncpg.Pool, decision_id: uuid.UUID) -> dict
     return {"summary": row["summary"], "rationale": row["rationale"]}
 
 
+async def verify_ruling(
+    pool: asyncpg.Pool, ruling_ref: str, *, write_name: str,
+) -> dict[str, Any]:
+    """THE RULING-CITATION DOOR (Thoth mail 9382 item 3, 93b25ddc): a worker write
+    normally gated to the operator (or a seat's own manager, where that escape exists —
+    `charter_for`'s own shape) may instead cite an operator's own standing ruling and
+    act UNDER that ruling's authority, provided the ruling actually says so. Three
+    checks, in order, each naming exactly what failed: (1) `ruling_ref` resolves to a
+    real Decision (`_find_decision`'s own by-uuid/canonical/short-id/summary-substring
+    ladder — never a guess); (2) that decision's own `kind` property reads 'ruling', not
+    'decision' or anything else — an ordinary decision is not standing authority to act
+    on, only a ruling is; (3) the ruling's own summary OR rationale text actually NAMES
+    `write_name` (a case-insensitive substring match) — a ruling about something else
+    entirely cannot silently authorize an unrelated write just because a caller cited
+    it. Returns `{"ok": True, "ruling_id", "summary"}` on success, `{"ok": False,
+    "error"}` naming which of the three failed otherwise — a caller passes the error
+    straight through as its own refusal, never re-derives the reason."""
+    did = await _find_decision(pool, ruling_ref)
+    if did is None:
+        return {"ok": False,
+                "error": f"no such decision: {ruling_ref!r} — a ruling citation must "
+                        "resolve to a real Decision"}
+    kind = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
+        "AND a.name='kind' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", did)
+    if kind != "ruling":
+        return {"ok": False,
+                "error": f"{ruling_ref!r} resolves to a decision of kind {kind!r}, not "
+                        "a ruling — only a ruling is standing authority to act under"}
+    snap = await _decision_snapshot(pool, did)
+    text = f"{snap.get('summary') or ''} {snap.get('rationale') or ''}".lower()
+    if write_name.lower() not in text:
+        return {"ok": False,
+                "error": f"the ruling at {ruling_ref!r} does not name {write_name!r} in "
+                        "its own summary or rationale — citing a ruling to act under "
+                        "operator authority requires the ruling's own text to actually "
+                        "authorize THIS write, never inferred from context"}
+    return {"ok": True, "ruling_id": did, "summary": snap.get("summary")}
+
+
 async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | None:
     """The WINNING `summary` for a thread — used to name what a batch resolve closed."""
     return await pool.fetchval(  # type: ignore[no-any-return]

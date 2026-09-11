@@ -760,6 +760,77 @@ async def test_charter_for_refuses_blank_because(actions: Actions) -> None:
     assert await charter_of(actions.pool, worker_seat) == []
 
 
+async def test_charter_for_ruling_bypasses_the_manager_check(actions: Actions) -> None:
+    """Thoth mail 9382 item 3 (93b25ddc): a stranger — neither the seat's manager nor an
+    operator actor — cites a standing ruling that actually names charter_for, and acts
+    under it instead."""
+    from src.orchestrator.capture import record_decision
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker6")
+    await _seated(actions, "agent:stranger6", "Stranger6")
+    ruling_id = await record_decision(
+        actions, "workers may declare a charter for an undeclared seat via charter_for, "
+                "citing this ruling", kind="ruling")
+
+    out = await charter_for(actions, worker_seat, ["osiris"], because="authorized by ruling",
+                            actor="agent:stranger6", ruling=str(ruling_id))
+    assert out["charter"] == ["osiris"]
+    assert out["ruling"] == str(ruling_id)
+    assert await charter_of(actions.pool, worker_seat) == ["osiris"]
+
+
+async def test_charter_for_ruling_refuses_a_nonexistent_decision(actions: Actions) -> None:
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker7")
+    await _seated(actions, "agent:stranger7", "Stranger7")
+    out = await charter_for(actions, worker_seat, ["osiris"], because="try anyway",
+                            actor="agent:stranger7", ruling="no-such-decision-anywhere")
+    assert "no such decision" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
+async def test_charter_for_ruling_refuses_a_non_ruling_decision(actions: Actions) -> None:
+    """A decision that names charter_for but is kind='decision', not 'ruling', is NOT
+    standing authority — kind is checked, not inferred from content alone."""
+    from src.orchestrator.capture import record_decision
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker8")
+    await _seated(actions, "agent:stranger8", "Stranger8")
+    decision_id = await record_decision(
+        actions, "a note about charter_for, not a ruling", kind="decision")
+
+    out = await charter_for(actions, worker_seat, ["osiris"], because="try anyway",
+                            actor="agent:stranger8", ruling=str(decision_id))
+    assert "not a ruling" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
+async def test_charter_for_ruling_refuses_a_ruling_that_never_names_the_write(
+    actions: Actions,
+) -> None:
+    """A real, standing ruling about something else entirely cannot silently authorize
+    an unrelated write just because a caller cited it."""
+    from src.orchestrator.capture import record_decision
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Worker9")
+    await _seated(actions, "agent:stranger9", "Stranger9")
+    unrelated_ruling = await record_decision(
+        actions, "the DM router follows lineage heads now", kind="ruling")
+
+    out = await charter_for(actions, worker_seat, ["osiris"], because="try anyway",
+                            actor="agent:stranger9", ruling=str(unrelated_ruling))
+    assert "does not name" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
+
+
 async def test_charter_for_never_touches_a_legacy_agent_origin_governs_edge(
     actions: Actions,
 ) -> None:
@@ -843,6 +914,40 @@ async def test_charter_for_tool_refuses_a_stranger_through_the_wrapper(
         srv._agents.pop(srv._conn_key(ctx), None)
     assert "not authorized" in out["error"]
     assert await charter_of(actions.pool, worker_seat) == []
+
+
+async def test_charter_for_seat_dispatcher_forwards_ruling(actions: Actions) -> None:
+    """The live door (`seat(action='charter_for', ruling=...)`, `_seat_impl` underneath
+    — the deprecated standalone `charter_for` tool above never carries `ruling` at all,
+    on purpose) actually threads `ruling` through to the orchestrator function, proving
+    the dispatcher-level plumbing (schema, _SEAT_ACTION_PARAMS, the forward call) works
+    end to end, not just the orchestrator function in isolation."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import record_decision
+
+    await _repo(actions, "osiris")
+    worker_seat = await _seat(actions, "Workertool3")
+    await _seated(actions, "agent:strangertool3", "Strangertool3")
+    ruling_id = await record_decision(
+        actions, "workers may declare a charter for an undeclared seat via charter_for, "
+                "citing this ruling", kind="ruling")
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:strangertool3", session="strangertool3", project="strangertoolproj3",
+        model=None, cwd=None)
+    try:
+        out = await srv._seat_impl(
+            "charter_for", target=worker_seat, repos=["osiris"], because="via dispatcher",
+            ruling=str(ruling_id), ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["charter"] == ["osiris"]
+    assert out["ruling"] == str(ruling_id)
 
 
 def test_charter_tool_stays_self_declaration_only() -> None:
