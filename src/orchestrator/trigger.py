@@ -3506,6 +3506,16 @@ async def launch_seat(
                         "body_exists": True, "can_receive": True, "attach": attach,
                         "detail": f"a live body already holds {handle} — not minting a twin"}
 
+        # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): a
+        # NEW body is a real turn, same as a wake/resume — gated here AFTER the idempotency
+        # check above (an "already-live" return costs nothing new, so it must never be
+        # refused for budget) but BEFORE the actual spawn, same dollar wall dispatch_dm/
+        # wake_worker already stand behind. Inert on a subscription (spend_is_metered=False);
+        # bites only on a keyed API backend.
+        ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
+        if not ok:
+            return {"status": "refused-budget", "seat": target_seat, "detail": str(why)}
+
         from src.orchestrator.harness_process import claude_pty_argv
         argv = claude_pty_argv(argv_model)
         # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
@@ -3586,6 +3596,13 @@ async def launch_seat(
                     "seen_via": seen_via,
                     "detail": f"a live body already holds {handle} — not minting a twin "
                               f"(seen via {', '.join(seen_via)})"}
+
+        # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d) — see
+        # the pty lane's own comment on this same check, above. Same gate, same placement
+        # (after idempotency, before the real spawn), the other substrate.
+        ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
+        if not ok:
+            return {"status": "refused-budget", "seat": target_seat, "detail": str(why)}
 
         # NO RESUME CHECK HERE, DELIBERATELY (ruling 41a41437/60c78788, task #199 lane 3C):
         # launch ALWAYS mints fresh now, mirroring the CLI's own osiris launch exactly — the

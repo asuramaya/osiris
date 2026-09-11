@@ -645,6 +645,43 @@ async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
     assert [c["op"] for c in calls] == ["pty_list"]
 
 
+async def test_cmd_launch_pty_refuses_an_over_budget_mint(
+    actions: Actions, monkeypatch: Any,
+) -> None:
+    """Same gate, the debug/PTY fallback door — see the harness-lane test's own docstring
+    for the full rationale; this is launch_seat's two-lanes-two-spawn-sites shape again,
+    one level up at the CLI's own independent PTY implementation."""
+    from src.config.settings import Settings
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    await ensure_seat(actions, house="osiris", handle="overbudget-pty",
+                      anchor_cwd="/home/x/.osiris/seats/overbudget-pty", source="test")
+    for _ in range(12):
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_daily_usd=10.0, osiris_extract_provider="anthropic",
+                         anthropic_api_key="k"))
+
+    async def _fake(req: dict[str, Any]) -> dict[str, Any]:
+        if req["op"] == "pty_list":
+            return {"sessions": []}
+        raise AssertionError("pty_spawn must never be reached — the budget refused first")
+
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("overbudget-pty", model=None, pool=actions.pool,
+                               manager=_fake, debug=True)
+    assert out == 1
+    assert "refused" in buf.getvalue().lower()
+
+
 async def test_cmd_launch_reports_a_dark_manager_after_facts_resolve(actions: Actions) -> None:
     await ensure_seat(actions, house="osiris", handle="darkbody",
                       anchor_cwd="/home/x/.osiris/seats/darkbody", source="test")
@@ -856,6 +893,50 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     assert "spawned" in out_text and "claude --bg" in out_text
     assert "resumed" not in out_text          # launch never speaks of resuming, either way
     assert "min_tail_bytes" not in out_text and "ceiling=" not in out_text
+
+
+async def test_cmd_launch_harness_refuses_an_over_budget_mint(
+    actions: Actions, monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): this
+    door is a SEPARATE implementation from trigger.launch_seat (own docstring), never
+    covered by that verb's own may_spend gate — a new body is a real turn, same dollar
+    wall dispatch_dm/wake_worker already stand behind. `_cmd_launch_harness` reads
+    get_settings() directly (not injectable), so the billed-backend + $12-over-$10 ledger
+    is set up the same way test_the_DAILY_CEILING_stops_the_wake does, then get_settings
+    itself is monkeypatched to the fixture the CLI door will actually read."""
+    from src.config.settings import Settings
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    office = tmp_path / "overbudget-bg"
+    office.mkdir()
+    await ensure_seat(actions, house="osiris", handle="overbudget-bg",
+                      anchor_cwd=str(office), source="test")
+    for _ in range(12):
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_daily_usd=10.0, osiris_extract_provider="anthropic",
+                         anthropic_api_key="k"))
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return []  # the pre-spawn already-live check: nothing there yet
+
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_launch("overbudget-bg", model=None, pool=actions.pool,
+                               spawn=_boom, agents_json=_agents_json)
+    assert out == 1
+    assert "refused" in buf.getvalue().lower()
 
 
 async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
