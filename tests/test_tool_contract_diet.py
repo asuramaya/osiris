@@ -1509,7 +1509,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # authority-to-a-real-Person-object mechanism, plus its own one-paragraph docstring entry
 # and a matching docstring sentence on `authorized_by`'s widened LinkType. No new tool,
 # load-bearing growth per this file's own escape valve. Measured exact (126,865).
-TOOL_CONTRACT_CEILING_CHARS = 129477
+TOOL_CONTRACT_CEILING_CHARS = 129471
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
