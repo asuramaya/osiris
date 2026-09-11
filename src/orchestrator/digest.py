@@ -420,7 +420,14 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
     off each Proposal's own `evidence_pointer` (from_id/link_type), never a new column,
     since the abstention miner's own lane table is keyed by exactly this pair already.
     Generic on purpose (not abstention-miner-specific): ANY future propose() caller whose
-    evidence_pointer resolves cleanly gets grouped the same way, for free."""
+    evidence_pointer resolves cleanly gets grouped the same way, for free.
+
+    `by_lane[*]["by_signal"]` (THE LANE SIGNAL, Thoth ruling, mail 9847, decision
+    2406c9c5): a made-in-window Proposal's own `candidate.signal` (the abstention
+    miner's own "dominance"/"author_tiebreak" naming, opt-in — a `candidate` with no
+    `signal` key, any pre-ruling Proposal or any non-abstention caller, contributes
+    nothing here) counted per lane, so the desk can see WHICH signal is actually
+    producing each lane's proposals without a new column."""
     rows = await actions.pool.fetch(
         "SELECT "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -443,7 +450,10 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
         "   AS expires_at, "
         "  (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='evidence_pointer' ORDER BY a.confidence DESC, a.observed_at DESC "
-        "   LIMIT 1) AS evidence_pointer "
+        "   LIMIT 1) AS evidence_pointer, "
+        "  (SELECT a.value FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='candidate' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS candidate "
         "FROM objects o WHERE o.type='Proposal'")
     now = datetime.now(UTC)
     from_ids = {uuid.UUID(r["evidence_pointer"]["from_id"]) for r in rows
@@ -465,7 +475,7 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
             agg["expired"] += 1
 
     by_pair: dict[tuple[str, str], dict[str, int]] = {}
-    by_lane: dict[str, dict[str, int]] = {}
+    by_lane: dict[str, dict[str, Any]] = {}
     for r in rows:
         if r["miner"] is not None and r["owner"] is not None:
             _bump(by_pair.setdefault((r["miner"], r["owner"]),
@@ -475,8 +485,15 @@ async def _proposal_telemetry(actions: Actions, since: datetime) -> dict[str, An
             from_type = type_by_id.get(uuid.UUID(ep["from_id"]))
             if from_type:
                 lane = f"{from_type}:{ep['link_type']}"
-                _bump(by_lane.setdefault(
-                    lane, {"made": 0, "accepted": 0, "rejected": 0, "expired": 0}), r)
+                agg = by_lane.setdefault(
+                    lane, {"made": 0, "accepted": 0, "rejected": 0, "expired": 0,
+                          "by_signal": {}})
+                _bump(agg, r)
+                if r["made_at"] is not None and r["made_at"] >= since:
+                    signal = (r["candidate"] or {}).get("signal")
+                    if signal:
+                        by_signal: dict[str, int] = agg["by_signal"]
+                        by_signal[signal] = by_signal.get(signal, 0) + 1
     by = [{"miner": miner, "owner": owner, **agg}
           for (miner, owner), agg in sorted(by_pair.items())]
     by_lane_out = [{"lane": lane, **agg} for lane, agg in sorted(by_lane.items())]

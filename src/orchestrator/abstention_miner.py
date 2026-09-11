@@ -24,6 +24,20 @@ re-running the exact check that already gave up. Agent is registered with an EMP
 pool — "never guessing from names" (operator's own words, mail 9130) — so it proposes
 nothing, ever, until a real signal is designed for it.
 
+THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5, 2026-09-11): the FIRST
+DAY's own telemetry (decision 47c24d12) measured the original "exactly one project
+mentioned" gate against real next-in-queue text and found it almost never true — 6, 8,
+0, 0 candidates — so real text was either silent or ambiguous, never singular.
+`_dominant_project` replaces it: the project mentioned most often wins when it leads the
+runner-up by `_DOMINANCE_FACTOR` (2x); a non-dominant or silent read falls back to the
+object's own author's `works_in` project (`_author_works_in`, via the `produced` edge —
+Decision/Thread only, this schema declares no author edge for Practice/Reference);
+neither firing means abstain. Still exactly one candidate into `propose()`, and budget/
+throttle/confidence cap stay exactly as they were — this ruling only ever touches which
+signal picks the candidate, never propose()'s own law. Each proposal's own `candidate`
+carries a `signal` key ("dominance"/"author_tiebreak") so the lane telemetry
+(digest.py's `_proposal_telemetry`) can say which one produced it.
+
 `guarded_miner_tick` (proposals.py, wave 15 item 4) is the failure-receipt-first wrapper
 every miner tick runs inside; this module supplies the tick body, never calls
 `guarded_miner_tick` itself — that is the caller's (the heartbeat wiring's) own job, so
@@ -103,17 +117,18 @@ async def _next_abstained_object(pool: asyncpg.Pool, lane: _Lane) -> uuid.UUID |
 
 
 _WORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
+_DOMINANCE_FACTOR = 2
 
 
-async def _project_mentioned_in_text(
+async def _mention_counts(
     pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
-) -> tuple[list[uuid.UUID], str]:
-    """Read `text_fields` off `obj_id`'s own CURRENT properties, concatenate, and find
-    every LIVE SoftwareProject whose own name appears as a whole-word, case-insensitive
-    mention in that text — word-boundary-anchored so a short project name never matches
-    inside an unrelated longer word (e.g. "os" inside "cosmos"). Returns
-    (candidate_ids, joined_text) — the text is handed back too so a caller/receipt can
-    show what the miner actually read, never a black box."""
+) -> tuple[dict[uuid.UUID, int], str]:
+    """Read `text_fields` off `obj_id`'s own CURRENT properties, concatenate, and count
+    every LIVE SoftwareProject's own whole-word, case-insensitive MENTION COUNT in that
+    text — word-boundary-anchored so a short project name never matches inside an
+    unrelated longer word (e.g. "os" inside "cosmos"). Returns ({project_id: count, ...}
+    with only projects mentioned at least once, joined_text) — the text is handed back
+    too so a caller/receipt can show what the miner actually read, never a black box."""
     parts = []
     for field in text_fields:
         val = await pool.fetchval(
@@ -124,10 +139,10 @@ async def _project_mentioned_in_text(
             parts.append(val)
     text = " ".join(parts)
     if not text.strip():
-        return [], text
+        return {}, text
     projects = await pool.fetch(
         "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
-    hits: list[uuid.UUID] = []
+    counts: dict[uuid.UUID, int] = {}
     for p in projects:
         name = p["canonical"].removeprefix("repo:").strip()
         if not name:
@@ -136,9 +151,55 @@ async def _project_mentioned_in_text(
         if pattern is None:
             pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
             _WORD_RE_CACHE[name] = pattern
-        if pattern.search(text):
-            hits.append(p["id"])
-    return hits, text
+        n = len(pattern.findall(text))
+        if n:
+            counts[p["id"]] = n
+    return counts, text
+
+
+async def _author_works_in(pool: asyncpg.Pool, obj_id: uuid.UUID) -> uuid.UUID | None:
+    """The tie-break signal (Thoth ruling, mail 9847, decision 2406c9c5): `obj_id`'s own
+    author — the Agent generation that `produced` it (capture.py's traceability edge,
+    the only authorship edge this schema declares onto Decision/Thread; Practice/
+    Reference have none, so this always returns None for those lanes) — and that
+    author's own current `works_in` project. None when the object has no author, or the
+    author has no live works_in project; either way the caller abstains."""
+    author_id = await pool.fetchval(
+        "SELECT from_id FROM links WHERE to_id=$1 AND type='produced' "
+        "AND valid_until IS NULL LIMIT 1", obj_id)
+    if author_id is None:
+        return None
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT l.to_id FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='works_in' AND l.valid_until IS NULL "
+        "AND p.status='active' ORDER BY l.created_at DESC LIMIT 1", author_id)
+
+
+async def _dominant_project(
+    pool: asyncpg.Pool, text_fields: tuple[str, ...], obj_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, str, str]:
+    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5, replacing the old
+    "exactly one mention" gate that real text almost never satisfied — decision 47c24d12
+    measured 6/8/0/0 candidates against real next-in-queue objects in every lane):
+    the project mentioned most often in `obj_id`'s own text fields, accepted ONLY when it
+    leads the runner-up by at least `_DOMINANCE_FACTOR`x (a lone mention still counts,
+    since the runner-up is then 0); tied or non-dominant falls back to the object's own
+    author's `works_in` project; neither signal firing means abstain. Returns
+    (candidate_id_or_None, joined_text, signal) where `signal` is "dominance",
+    "author_tiebreak", or "none" — named so the miner's own receipt and the lane
+    telemetry can say which produced (or failed to produce) a proposal, never leave that
+    invisible."""
+    counts, text = await _mention_counts(pool, text_fields, obj_id)
+    if counts:
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        top_id, top_n = ranked[0]
+        runner_n = ranked[1][1] if len(ranked) > 1 else 0
+        if top_n >= _DOMINANCE_FACTOR * runner_n:
+            return top_id, text, "dominance"
+    author_project = await _author_works_in(pool, obj_id)
+    if author_project is not None:
+        return author_project, text, "author_tiebreak"
+    return None, text, "none"
 
 
 def _lanes_off(settings: Any) -> set[str]:
@@ -169,15 +230,15 @@ async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
     if obj_id is None:
         return {"lane": lane.object_type, "action": "none",
                 "reason": "no eligible abstention this tick"}
-    candidates, text = await _project_mentioned_in_text(pool, lane.text_fields, obj_id)
-    if len(candidates) != 1:
+    candidate_id, text, signal = await _dominant_project(pool, lane.text_fields, obj_id)
+    if candidate_id is None:
         return {"lane": lane.object_type, "object": str(obj_id), "action": "skipped",
-                "reason": f"{len(candidates)} candidate(s) mentioned in text, need exactly 1",
+                "reason": "no project dominates the text and no author to tie-break",
                 "text_read": text[:200]}
     out = await propose(
         actions, from_id=obj_id, link_type=lane.link_type,
-        candidate={"kind": "link", "from_id": str(obj_id), "to_id": str(candidates[0]),
-                  "link_type": lane.link_type},
+        candidate={"kind": "link", "from_id": str(obj_id), "to_id": str(candidate_id),
+                  "link_type": lane.link_type, "signal": signal},
         confidence=0.4, owner="operator", miner=_MINER, actor=_ACTOR)
     action = "refused" if "error" in out else "proposed"
     return {"lane": lane.object_type, "object": str(obj_id), "action": action, **out}

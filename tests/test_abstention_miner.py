@@ -62,7 +62,7 @@ async def test_a_lane_with_one_true_candidate_proposes_it(actions: Actions) -> N
         "SELECT a.value FROM current_assertions a WHERE a.object_id="
         "(SELECT id FROM objects WHERE canonical=$1) AND a.name='candidate'", out["proposal"])
     assert candidate == {"kind": "link", "from_id": str(d), "to_id": str(p),
-                         "link_type": "in_repo"}
+                         "link_type": "in_repo", "signal": "dominance"}
     # never a link write — miners remain last resort
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", d)
@@ -87,9 +87,62 @@ async def test_the_empty_agent_lane_proposes_nothing(actions: Actions) -> None:
     assert n == 0
 
 
-async def test_no_or_multiple_candidates_proposes_nothing(actions: Actions) -> None:
-    """Two live projects both mentioned in the text — 'at most one candidate, or nothing'
-    means TWO also writes nothing, same as zero."""
+async def test_a_dominant_mention_proposes_it(actions: Actions) -> None:
+    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5): the project
+    mentioned most often wins when it leads the runner-up by 2x — here widgetfactory
+    (2 mentions) over sidecar (1), a 2x lead, so widgetfactory is proposed with
+    signal='dominance'."""
+    winner = await actions.create_or_find_object("SoftwareProject", "repo:widgetfactory", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:sidecar", "test")
+    d = await _mint_bare(actions, "Decision")
+    await capture.derive_or_abstain(actions, d, "in_repo", [], "test")
+    await actions.assert_property(
+        d, "summary",
+        "widgetfactory's own deploy gate needs a second look, unlike sidecar; "
+        "widgetfactory again tomorrow",
+        "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
+    out = await abstention_miner_tick(actions)
+
+    assert out["action"] == "proposed", out
+    candidate = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND a.name='candidate'", out["proposal"])
+    assert candidate == {"kind": "link", "from_id": str(d), "to_id": str(winner),
+                         "link_type": "in_repo", "signal": "dominance"}
+
+
+async def test_a_tied_mention_is_tie_broken_by_author_works_in(actions: Actions) -> None:
+    """Two live projects mentioned EQUALLY OFTEN — no dominant mention — falls back to
+    the object's own author's `works_in` project (the `produced` edge, Decision/Thread's
+    only authorship edge), proposed with signal='author_tiebreak'."""
+    await actions.create_or_find_object("SoftwareProject", "repo:alpha", "test")
+    beta = await actions.create_or_find_object("SoftwareProject", "repo:beta", "test")
+    author = await actions.create_or_find_object("Agent", "agent:tiebreaker", "test")
+    await actions.create_link(author, beta, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+    d = await _mint_bare(actions, "Decision")
+    await capture.mint_produced(actions, author, d)
+    await capture.derive_or_abstain(actions, d, "in_repo", [], "test")
+    await actions.assert_property(
+        d, "summary", "touches both alpha and beta in the same breath", "test",
+        datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    await set_cursor(actions.pool, _CURSOR_KEY, str(_lane_index("Decision")))
+    out = await abstention_miner_tick(actions)
+
+    assert out["action"] == "proposed", out
+    candidate = await actions.pool.fetchval(
+        "SELECT a.value FROM current_assertions a WHERE a.object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND a.name='candidate'", out["proposal"])
+    assert candidate == {"kind": "link", "from_id": str(d), "to_id": str(beta),
+                         "link_type": "in_repo", "signal": "author_tiebreak"}
+
+
+async def test_neither_signal_firing_abstains(actions: Actions) -> None:
+    """Tied mentions AND no author (or an authorless object) — neither signal fires, so
+    the tick writes nothing, same as the old zero/multiple-candidate case."""
     await actions.create_or_find_object("SoftwareProject", "repo:alpha", "test")
     await actions.create_or_find_object("SoftwareProject", "repo:beta", "test")
     d = await _mint_bare(actions, "Decision")
@@ -102,7 +155,7 @@ async def test_no_or_multiple_candidates_proposes_nothing(actions: Actions) -> N
     out = await abstention_miner_tick(actions)
 
     assert out["action"] == "skipped"
-    assert "2 candidate" in out["reason"]
+    assert "no project dominates" in out["reason"] and "no author" in out["reason"]
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Proposal'")
     assert n == 0
 
