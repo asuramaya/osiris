@@ -1526,7 +1526,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # 129471 -> 130916 (2026-09-11, Imhotep, thread 879c97b9 piece 3, Thoth mail 9559): the
 # new `pulse` tool (see TOOL_CONTRACT_EXPECTED_COUNT's own 83->84 log entry just above) —
 # a genuinely new capability, not prose growth on an existing tool. Measured exact.
-TOOL_CONTRACT_CEILING_CHARS = 131545
+# 130100 -> 130102 (2026-09-11, Khnum, Thoth mail 9541 item 3, cc05c70c, HOUSE VOCABULARY):
+# seat()'s own ACTION TABLE line for establish_office corrected from "Osiris-owned home"
+# to "Osiris-owned office" — matching its sweep_disk neighbor's own wording and every CLI
+# description of the identical ceremony (a real vocabulary-drift specimen an audit found,
+# not padding). Two characters, measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 131547
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

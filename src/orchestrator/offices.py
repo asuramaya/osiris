@@ -1,4 +1,4 @@
-"""THE OFFICE CEREMONY — one act moves a seat into its Osiris-owned home.
+"""THE OFFICE CEREMONY — one act moves a seat into its Osiris-owned office.
 
 The seat-offices ruling (ed5f5ce2): agents sit at ~/.osiris/seats/<handle>/, code stays in
 the repos they GOVERN — the sit-place is Osiris's, stable forever, and the fragile-gitignore

@@ -3843,7 +3843,7 @@ async def seat(
       rename: change a seat's handle, manager/operator-invoked (target, new_handle, because)
       set_attended: stamp a seat 'human'/'worker' (target, attended, because)
       reissue_office: recompile a seat's CLAUDE.md managed section (target, because)
-      establish_office: move a seat into its Osiris-owned home (target)
+      establish_office: move a seat into its Osiris-owned office (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
       rehold: third-party re-hold a seat's `holds` link (target, agent_id, because)
