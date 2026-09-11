@@ -48,7 +48,7 @@ def test_load_viewport_hits_the_bbox_endpoint() -> None:
 
 
 def test_unfiled_supernode_carries_orphan_and_abstention_counts() -> None:
-    assert "function unfiledLabel(u)" in _JS
+    assert "const unfiledLabel = (u) =>" in _JS
     assert "u.orphans" in _JS and "u.abstained" in _JS
     assert 'raw: { ...g.unfiled, label: "unfiled", unfiled: true }' in _JS
 
