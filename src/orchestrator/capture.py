@@ -2558,9 +2558,22 @@ async def _resolve_ref(
         if cid is not None:
             return uuid.UUID(str(cid))
     if re.fullmatch(r"[0-9a-f]{8}[0-9a-f-]*", raw):
+        # ONE ROW PER OBJECT, NEVER PER SOURCE (thread 90ad0592, decision cf3dcd79 — the
+        # fourth sighting of the winning_props/"stuck-open-threads" bug class, migration
+        # 0015 / compositions.py:1990-2001 / compositions.py:1747-1750): a plain
+        # `LEFT JOIN current_assertions ON object_id=o.id AND name=$3` fans out to one row
+        # PER SOURCE when 2+ agents have each asserted/reasserted the same text_field (a
+        # later triage touch re-stating an identical summary, say) — a real, singular
+        # object then double-counts as two joined rows and spuriously raises
+        # RefAmbiguous. The correlated subquery picks ONE winning row per o.id (the
+        # house's own established tiebreak), so multiplicity in current_assertions can
+        # never inflate the object count this ambiguity check is actually testing.
         rows = await pool.fetch(
-            "SELECT o.id, a.value #>> '{}' AS text FROM objects o "
-            "LEFT JOIN current_assertions a ON a.object_id=o.id AND a.name=$3 "
+            "SELECT o.id, "
+            "  (SELECT a.value #>> '{}' FROM current_assertions a "
+            "   WHERE a.object_id=o.id AND a.name=$3 "
+            "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS text "
+            "FROM objects o "
             "WHERE o.type=$1 AND o.status='active' AND o.id::text LIKE $2 || '%' LIMIT 6",
             type_, raw, text_field)
         if len(rows) == 1:
