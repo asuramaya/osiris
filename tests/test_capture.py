@@ -5474,6 +5474,60 @@ async def test_refute_practice_converts_to_superstition_but_stays_active(
     assert await refute_practice(actions, "no-such-practice-ever", killed_by="x") is None
 
 
+async def test_refute_practice_mints_reverse_queryable_edge_when_target_resolves(
+    actions: Actions,
+) -> None:
+    """THE CORRECTIVE ANALOG (5a6b065d): when killed_by resolves to a real graph object,
+    a refuted_by LINK is minted on the Practice (not just the property) — and the fixing
+    Decision's own recall() surfaces it back as practices_refuted, same shape as
+    narrowed_by/bears_on_from. An unresolvable killed_by (the free-text "x" case above)
+    must mint no edge at all — property-only, never a guessed link."""
+    from src.orchestrator.capture import record_practice, refute_practice
+    from src.orchestrator.recall import recall as recall_fn
+
+    fix = await record_decision(actions, "the fix that obsoletes the retry-three-times habit")
+    p = await record_practice(actions, "always retry three times on a timeout")
+    converted = await refute_practice(actions, str(p), killed_by=str(fix)[:8])
+    assert converted is not None
+    row = await actions.pool.fetchrow(
+        "SELECT evidence_class FROM links WHERE from_id=$1 AND to_id=$2 AND type='refuted_by'",
+        p, fix)
+    assert row is not None
+    assert row["evidence_class"] == "self_declared"
+
+    rec = await recall_fn(actions.pool, str(fix))
+    assert rec["practices_refuted"][0]["id"] == str(p)[:8]
+    assert rec["practices_refuted"][0]["statement"] == "always retry three times on a timeout"
+
+    # idempotent — re-refuting with the same target mints no second edge
+    await refute_practice(actions, str(p), killed_by=str(fix)[:8])
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='refuted_by'",
+        p, fix)
+    assert n == 1
+
+
+async def test_kill_superstition_mints_reverse_queryable_edge_when_target_resolves(
+    actions: Actions,
+) -> None:
+    """kill_superstition used to mint NO link at all (killed_by was a plain property) —
+    now, when killed_by resolves, a killed_by LINK lands on the Superstition and the
+    fixing Decision's own recall() surfaces it back as superstitions_killed."""
+    from src.orchestrator.capture import kill_superstition
+    from src.orchestrator.recall import recall as recall_fn
+
+    fix = await record_decision(actions, "the fix that kills the never-dm-by-name workaround")
+    sid = await kill_superstition(actions, "NEVER DM BY NAME", killed_by=str(fix)[:8])
+    row = await actions.pool.fetchrow(
+        "SELECT evidence_class FROM links WHERE from_id=$1 AND to_id=$2 AND type='killed_by'",
+        sid, fix)
+    assert row is not None
+
+    rec = await recall_fn(actions.pool, str(fix))
+    assert rec["superstitions_killed"][0]["id"] == str(sid)[:8]
+    assert rec["superstitions_killed"][0]["statement"] == "NEVER DM BY NAME"
+
+
 async def test_amend_practice_adds_an_amendment_without_touching_statement(
     actions: Actions,
 ) -> None:

@@ -35,7 +35,14 @@ thread on the board.
 NARROWS' OWN READ-BACK (thread e05e439d), same reasoning: a Decision's `narrowed_by`
 list is every live `narrows` edge FROM a later Decision INTO it — `mint_narrows` is
 non-burying by construction, so nothing about the bounded decision's own record would
-otherwise show that a later ruling limited it."""
+otherwise show that a later ruling limited it.
+
+THE CORRECTIVE ANALOG'S OWN READ-BACK (5a6b065d, Thoth wave 18 item 2): refute_practice/
+kill_superstition used to write only a plain `refuted_by`/`killed_by` PROPERTY on the
+Practice/Superstition they closed, no reverse-queryable edge at all — a Decision's own
+record had nothing to show for what it fixed. `practices_refuted`/`superstitions_killed`
+are every live edge of the same name FROM a Practice/Superstition INTO this Decision,
+same shape as narrowed_by/bears_on_from."""
 from __future__ import annotations
 
 import re
@@ -144,6 +151,34 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         record["narrowed_by"] = [
             {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]}
             for r in narrowers]
+        # THE CORRECTIVE ANALOG'S OWN READ-BACK (5a6b065d, Thoth wave 18 item 2):
+        # refute_practice/kill_superstition used to write only a plain killed_by/
+        # refuted_by PROPERTY on the Practice/Superstition they closed, no reverse-
+        # queryable edge — a Decision's own record had nothing to show for what it
+        # refuted or killed. Same live-edges-only shape as narrowed_by/bears_on_from
+        # (an unmerge/retraction must not go on citing a fix that no longer holds).
+        refuted = await pool.fetch(
+            "SELECT p.id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
+            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS statement "
+            "FROM links l JOIN objects p ON p.id=l.from_id AND p.type='Practice' "
+            "WHERE l.to_id=$1 AND l.type='refuted_by' AND l.valid_until IS NULL "
+            "ORDER BY p.created_at", oid)
+        record["practices_refuted"] = [
+            {"id": str(r["id"])[:8], "statement": (r["statement"] or "")[:160]}
+            for r in refuted]
+        killed = await pool.fetch(
+            "SELECT s.id, "
+            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
+            "  AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+            "  AS statement "
+            "FROM links l JOIN objects s ON s.id=l.from_id AND s.type='Superstition' "
+            "WHERE l.to_id=$1 AND l.type='killed_by' AND l.valid_until IS NULL "
+            "ORDER BY s.created_at", oid)
+        record["superstitions_killed"] = [
+            {"id": str(r["id"])[:8], "statement": (r["statement"] or "")[:160]}
+            for r in killed]
     return record
 
 
