@@ -226,7 +226,80 @@ async def test_run_action_dispatches_an_event_instead_of_posting_to_act(
         assert posted["hit"] is False  # never reached /act — it's navigation, not a write
         assert await page.locator("tbody tr").count() == rows_before  # the row is untouched
         seen = await page.evaluate("window.__seen")
-        assert seen == {"name": "mail_threads", "args": {"box": "neo"}}
+        # `subject: None` (Thoth dispatch 9676/9690, 588148bb piece 4) since this row's own
+        # `_action` carries no `subject` — see this module's own bind_subject tests below.
+        assert seen == {"name": "mail_threads", "args": {"box": "neo"}, "subject": None}
+        await browser.close()
+
+
+# --- `bind_subject` (Thoth dispatch 9676/9690, 588148bb piece 4) — a "run:" row_action whose
+# target is an op-tree (browse), not a Function: the row's own object rides as `_action.
+# subject` instead of `args`, so there's nothing to wrap as run-spec's {"op":"function"}. The
+# osiris:run event must carry it as its own `subject` field, distinct from (and alongside) the
+# always-present `args` (empty here — never both templated args AND a bound subject on one
+# action, see compositions.py's own `bind_subject` docstring).
+
+ROWS_WITH_BIND_SUBJECT_ACTION = [
+    {"project": "wttest", "_action": {"action": "run:browse",
+                                      "subject": "3fa85f64-5717-4562-b3fc-2c963f66afa6"}},
+]
+
+
+async def test_bind_subject_action_carries_the_rows_own_object_on_the_run_event(
+    chromium_available: bool,
+) -> None:
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_BIND_SUBJECT_ACTION}
+        await page.evaluate(_RENDER, result)
+
+        await page.evaluate(
+            "window.__seen = null; "
+            "document.addEventListener('osiris:run', (e) => { window.__seen = e.detail; });")
+
+        assert await page.locator("button[data-action]").get_attribute("data-subject") == (
+            "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+        await page.locator("button[data-action]").first.click()
+        await page.wait_for_function("window.__seen !== null")
+
+        seen = await page.evaluate("window.__seen")
+        assert seen == {"name": "browse", "args": {},
+                        "subject": "3fa85f64-5717-4562-b3fc-2c963f66afa6"}
+        await browser.close()
+
+
+async def test_a_plain_run_action_with_no_subject_carries_null_not_a_missing_key(
+    chromium_available: bool,
+) -> None:
+    """The existing args-drill form (mail_overview→mail_threads) must be untouched by this —
+    no `subject` key on the row's own action still reaches the listener as `subject: null`,
+    never `undefined`/absent, so `e.detail.subject || FOCUS` behaves the same as before this
+    piece for every row_action that predates bind_subject."""
+    if not chromium_available:
+        pytest.skip("Chromium can't launch on this host")
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(_HARNESS)
+        await page.add_script_tag(content=_JS + "\nwindow.Osiris = Osiris;")
+        result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_RUN_ACTION}
+        await page.evaluate(_RENDER, result)
+
+        await page.evaluate(
+            "window.__seen = null; "
+            "document.addEventListener('osiris:run', (e) => { window.__seen = e.detail; });")
+        await page.locator("button[data-action]").first.click()
+        await page.wait_for_function("window.__seen !== null")
+
+        seen = await page.evaluate("window.__seen")
+        assert seen == {"name": "mail_threads", "args": {"box": "neo"}, "subject": None}
         await browser.close()
 
 

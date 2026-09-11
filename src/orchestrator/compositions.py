@@ -13,7 +13,16 @@ the ops can't express is a Function (a named transform), never a new op.
 
 Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"subject"}                                 -> the object you're looking at
-  {"op":"select","object_type":?,"where":[...]}    -> objects matching conditions (.filter)
+  {"op":"select","object_type":?,"where":[...],"status":?,"subject_link":?} -> objects
+       matching conditions (.filter). `status` (Thoth dispatch 9490) opt-in: omitted =
+       active-only (the historical default, byte-identical); "any" lifts the filter;
+       an explicit list narrows to exactly those. `subject_link` (Thoth dispatch 9676/
+       9690, 588148bb piece 4) opt-in: `{"link_type":?,"direction":in|out}` narrows to
+       the one-hop neighborhood of the RUNTIME subject via that link (same "in"/"out"
+       convention as `traverse`/`_rollup`) — inert (old behavior, byte-identical)
+       whenever the key is absent OR no subject is bound, so an unfiltered composition
+       like `browse`'s own default run is untouched; only a subject-bound run (e.g. a
+       `bind_subject` row_action's drill-in) narrows.
   {"op":"traverse","from":N,"direction":,"hops":}  -> objects N hops away (.searchAround)
   {"op":"collect","from":N,"properties":[],"transform":?} -> the values of those props
   {"op":"subtract","left":N,"right":N}             -> values in left not in right (.subtract)
@@ -37,6 +46,14 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        {"action":<name>,"args":{<argname>:{"property":P}}}, resolved per-row into a private
        `_action` key the renderer turns into a button — the op-tree only ever DECLARES the
        shape; `/act`'s own registry is what enforces which actions/args are real.
+       `bind_subject:true` (Thoth dispatch 9676/9690, 588148bb piece 4) is a second,
+       mutually-exclusive mode from `args` above: the row's OWN OBJECT becomes the
+       target composition's bound subject (`_action:{"action":,"subject":<id>}`) — for
+       a "run:<name>" target that's an op-tree, not a registered Function, so there's
+       nothing to call via /compositions/run-spec's {"op":"function"} wrapping; the
+       client instead calls the NORMAL /compositions/<name>/run with this subject,
+       exactly as picking a subject by hand already does for "project"/"family"/
+       "portfolio". Use `args` for a Function target, `bind_subject` for an op-tree one.
   {"op":"order","from":N,"by":?,"dir":}            -> rank a set/rows (.orderBy)
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
   {"op":"sections","sections":[{"title":,"body":N},...]} -> stack named sub-compositions into
@@ -4855,6 +4872,29 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             statuses = [str(s) for s in raw_status]
         else:
             statuses = [str(raw_status)]
+        # SUBJECT_LINK (Thoth dispatch 9676/9690, 588148bb piece 4 — browse's click-through):
+        # OPT-IN, same discipline as `status` above — absent (every composition before this
+        # one) or no subject bound (browse's own default, unfiltered top-200 recency) leaves
+        # `link_ids` None and the extra AND clause inert, byte-identical old behavior. Given
+        # AND a subject is bound (a row_action's `bind_subject`, task #164's projects→browse
+        # drill), narrows to the neighborhood one hop from the subject via that link/
+        # direction — same convention `_rollup`/`traverse` already use ("in" = a link
+        # pointing INTO the subject, e.g. in_repo's own object->project direction), so
+        # "browse" scoped to a SoftwareProject subject shows exactly the object_count
+        # column's own set, not a re-derived notion of "this project's objects."
+        subject_link = node.get("subject_link")
+        link_ids: list[uuid.UUID] | None = None
+        if subject_link and subject is not None:
+            ltype = subject_link.get("link_type")
+            direction = subject_link.get("direction", "in")
+            col_to = "to_id" if direction == "in" else "from_id"
+            col_from = "from_id" if direction == "in" else "to_id"
+            link_rows = await pool.fetch(
+                f"SELECT {col_from} AS n FROM links WHERE {col_to}=$1 "
+                "AND ($2::text IS NULL OR type=$2)",
+                subject, ltype,
+            )
+            link_ids = [r["n"] for r in link_rows]
         # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
         # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
         # carried NO order at all, so row order was whatever the planner's physical scan
@@ -4869,8 +4909,9 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE ($3::text[] IS NULL OR status = ANY($3::text[])) "
             "AND ($1::text IS NULL OR type=$1) "
-            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') ORDER BY created_at, id",
-            ot, cp, statuses,
+            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') "
+            "AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[])) ORDER BY created_at, id",
+            ot, cp, statuses, link_ids,
         )
         # the house boundary (6c18709f): a composition selecting Reflections — by type or
         # by an untyped select-all — reads only the caller's own house; the record stays
@@ -5247,13 +5288,24 @@ async def _table(
             else:
                 row[name] = None
         if row_action:
-            row["_action"] = {
-                "action": row_action.get("action"),
-                "args": {
+            action: dict[str, Any] = {"action": row_action.get("action")}
+            if row_action.get("bind_subject"):
+                # THE SUBJECT-BIND MODE (Thoth dispatch 9676/9690, 588148bb piece 4): this
+                # row's OWN object is the target composition's subject, not a set of
+                # per-row args templated into a Function call — a different verb from the
+                # `args` mode above (task #90's mail_overview→mail_threads drill), for a
+                # target that's an op-tree, not a Function (browse has no Function to call
+                # via run-spec). The client runs the NORMAL /compositions/<name>/run with
+                # this subject, exactly as "project"/"family"/"portfolio" already do when a
+                # human picks a subject by hand — never a new client-side notion of what
+                # "browse" is.
+                action["subject"] = str(oid)
+            else:
+                action["args"] = {
                     arg: _col_value(oid, facts, str(spec.get("property")))
                     for arg, spec in (row_action.get("args") or {}).items()
-                },
-            }
+                }
+            row["_action"] = action
         rows.append(row)
     return rows
 
@@ -6203,6 +6255,13 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                 {"name": "worktrees", "function": {"name": "project_worktrees", "args": {},
                                                    "field": "worktrees"}},
             ],
+            # CLICK-THROUGH (Thoth dispatch 9542/9676/9690, piece 4 of 4): the old /projects
+            # route's own openProjectInBrowse — bind_subject, not args, since "browse" is an
+            # op-tree with no Function to drill into via run-spec. The client runs browse's
+            # own saved composition with this row's project as subject; browse's own
+            # subject_link (see its own entry above) narrows to exactly that project's
+            # in_repo set.
+            "row_action": {"action": "run:browse", "bind_subject": True},
         },
     },
     "project": {"op": "function", "name": "project"},
@@ -6237,9 +6296,14 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # this in a Function; scoped here to proving the RENDER path works end-to-end for real
     # object data before touching any of that. The hardcoded page stays live — nothing is
     # cut by this entry.
+    # `subject_link` (Thoth dispatch 9676/9690, 588148bb piece 4): OPT-IN, inert on every
+    # unsubjected run (the entity explorer's own load, every test built against piece 1) —
+    # a subject-bound run (projects' click-through row_action) narrows to that project's own
+    # in_repo neighborhood instead of the global top-200.
     "browse": {"op": "take", "n": 200,
                "from": {"op": "order", "by": "recency", "dir": "desc",
-                        "from": {"op": "select"}}},
+                        "from": {"op": "select",
+                                 "subject_link": {"link_type": "in_repo", "direction": "in"}}}},
 }
 
 # THE SHELF (ruling 923c380f): which sidebar section a lens belongs to + one line of 'when

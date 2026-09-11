@@ -83,9 +83,15 @@ def test_shell_listens_for_osiris_run_scoped_away_from_the_mailbox_surface() -> 
     needle = "document.addEventListener('osiris:run'"
     hits = [i for i in range(len(_JS)) if _JS.startswith(needle, i)]
     assert len(hits) == 2  # renderMailbox's own listener (piece 1) + this general one
-    shell_listener = _JS[hits[1]:hits[1] + 300]
+    shell_listener = _JS[hits[1]:hits[1] + 700]
     assert "if (ACTIVE_SURFACE === 'mailbox') return;" in shell_listener
-    assert "runComposition(e.detail.name, e.detail.args || {}, FOCUS);" in shell_listener
+    # `bind_subject` (Thoth dispatch 9676/9690, 588148bb piece 4): a row_action whose target
+    # is an op-tree, not a Function (browse), carries the row's own object as an `_action.
+    # subject` — the listener must prefer it over the currently-focused node (FOCUS is
+    # unrelated to which row was clicked), never fall back to FOCUS when a real subject rode
+    # along on the event.
+    assert ("runComposition(e.detail.name, e.detail.args || {}, "
+            "e.detail.subject || FOCUS);") in shell_listener
 
 
 def test_author_composition_previews_before_saving() -> None:

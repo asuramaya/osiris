@@ -860,7 +860,11 @@ async function runComposition(name, args, subject) {
 // composition's row (not just mail's) has somewhere to land.
 document.addEventListener('osiris:run', function(e) {
   if (ACTIVE_SURFACE === 'mailbox') return; // owned by renderMailbox's own listener
-  runComposition(e.detail.name, e.detail.args || {}, FOCUS);
+  // e.detail.subject (Thoth dispatch 9676/9690, 588148bb piece 4) — a `bind_subject`
+  // row_action's own target: THIS row's object, not whatever the shell was last focused
+  // on. Falls back to FOCUS for every other "run:" button (args-drill or no subject at
+  // all), unchanged from piece 2's own behavior.
+  runComposition(e.detail.name, e.detail.args || {}, e.detail.subject || FOCUS);
 });
 
 // AUTHOR (the channel Claude composes over MCP already has; this is the human's own door,

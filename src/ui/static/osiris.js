@@ -1011,8 +1011,15 @@ const Osiris = (() => {
   }
   function _actionButton(action, label) {
     const name = action.action || "";
+    // `subject` (Thoth dispatch 9676/9690, 588148bb piece 4) — the row's OWN object as a
+    // "run:" target's bound subject, mutually exclusive with `args` (an op-tree target has
+    // no Function to drill into via run-spec's {"op":"function"} wrapping; see compositions.
+    // py's `bind_subject` docstring). Carried as its own data attribute, never folded into
+    // data-args, so the click delegate can tell the two navigation modes apart.
+    const subjAttr = action.subject ? ` data-subject="${escAttr(action.subject)}"` : "";
     return `<button class="r-act-btn" data-action="${escAttr(name)}" ` +
-      `data-args="${escAttr(JSON.stringify(action.args || {}))}">${esc(label || _actionLabel(name))}</button>`;
+      `data-args="${escAttr(JSON.stringify(action.args || {}))}"${subjAttr}>` +
+      `${esc(label || _actionLabel(name))}</button>`;
   }
   // `_actions` (plural, Thoth msg 1976/2029) — a row that affords MORE than one verb (chrome's
   // /desk: done/not mine/later on one debt). Same click delegate, same POST /act, same button
@@ -1058,7 +1065,7 @@ const Osiris = (() => {
     // it only recognizes the prefix and hands off via a DOM event; the shell does the run.
     if (b.dataset.action.startsWith("run:")) {
       document.dispatchEvent(new CustomEvent("osiris:run",
-        { detail: { name: b.dataset.action.slice(4), args } }));
+        { detail: { name: b.dataset.action.slice(4), args, subject: b.dataset.subject || null } }));
       return;
     }
     const was = b.textContent;
