@@ -416,20 +416,23 @@ def test_run_gates_timing_out_twice_still_refuses_unconditionally(
 
 
 # --- the instrument fix (Thoth's ruling, mail 9017): scale the timeout with load ---------
+# --- wave 19 item 4 (mail 9794/9816): scale it with the scoped file-set's own size too ---
 
 def test_load_scaled_pytest_timeout_stays_at_base_under_the_threshold() -> None:
-    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
-    # whatever this host's real load is, either it's under the threshold (base, unscaled)
-    # or over it (scaled) -- both are legitimate; the contract this proves is just that a
-    # low load never scales UP.
+    # n_files=0 isolates the load factor -- whatever this host's real load is, either
+    # it's under the threshold (base, unscaled) or over it (scaled) -- both legitimate;
+    # the contract this proves is just that a low load never scales UP.
+    timeout, load1, files_scale = gate_hook._load_scaled_pytest_timeout(0)
+    assert files_scale == 1.0
     if load1 is not None and load1 <= gate_hook._PYTEST_LOAD_THRESHOLD:
         assert timeout == gate_hook._PYTEST_TIMEOUT_SECS
 
 
 def test_load_scaled_pytest_timeout_scales_up_over_the_threshold(monkeypatch: Any) -> None:
     monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (16.0, 12.0, 10.0))
-    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    timeout, load1, files_scale = gate_hook._load_scaled_pytest_timeout(0)
     assert load1 == 16.0
+    assert files_scale == 1.0
     assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * 2  # 16 / 8 == 2x
 
 
@@ -437,7 +440,7 @@ def test_load_scaled_pytest_timeout_caps_the_scale_factor(monkeypatch: Any) -> N
     """A hang is still a hang eventually -- tolerance, not blindness, same law the
     retry-once mechanism already holds one layer up."""
     monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (400.0, 300.0, 200.0))
-    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    timeout, load1, _files_scale = gate_hook._load_scaled_pytest_timeout(0)
     assert load1 == 400.0
     assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * gate_hook._PYTEST_TIMEOUT_MAX_SCALE
 
@@ -449,9 +452,53 @@ def test_load_scaled_pytest_timeout_degrades_to_base_without_getloadavg(
         raise AttributeError("no getloadavg on this platform")
 
     monkeypatch.setattr(gate_hook.os, "getloadavg", _no_getloadavg)
-    timeout, load1 = gate_hook._load_scaled_pytest_timeout()
+    timeout, load1, files_scale = gate_hook._load_scaled_pytest_timeout(0)
     assert timeout == gate_hook._PYTEST_TIMEOUT_SECS
     assert load1 is None
+    assert files_scale == 1.0
+
+
+def test_scoped_files_scale_stays_at_base_under_the_threshold(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+    timeout, _load1, files_scale = gate_hook._load_scaled_pytest_timeout(
+        gate_hook._PYTEST_FILES_THRESHOLD)
+    assert files_scale == 1.0
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS
+
+
+def test_scoped_files_scale_grows_past_the_threshold(monkeypatch: Any) -> None:
+    """The live specimen this item was built for: ~90 scoped files, no contention
+    required, a healthy run the fixed cap used to lie about."""
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+    n = gate_hook._PYTEST_FILES_THRESHOLD * 2
+    timeout, _load1, files_scale = gate_hook._load_scaled_pytest_timeout(n)
+    assert files_scale == 2.0
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * 2
+
+
+def test_scoped_files_scale_caps_the_scale_factor(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (1.0, 1.0, 1.0))
+    timeout, _load1, files_scale = gate_hook._load_scaled_pytest_timeout(
+        gate_hook._PYTEST_FILES_THRESHOLD * 100)
+    assert files_scale == gate_hook._PYTEST_FILES_MAX_SCALE
+    assert timeout == int(gate_hook._PYTEST_TIMEOUT_SECS * gate_hook._PYTEST_FILES_MAX_SCALE)
+
+
+def test_load_and_files_scale_combine_multiplicatively(monkeypatch: Any) -> None:
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (16.0, 12.0, 10.0))  # 2x
+    n = gate_hook._PYTEST_FILES_THRESHOLD * 2  # 2x
+    timeout, load1, files_scale = gate_hook._load_scaled_pytest_timeout(n)
+    assert load1 == 16.0 and files_scale == 2.0
+    assert timeout == gate_hook._PYTEST_TIMEOUT_SECS * 4  # 2x * 2x
+
+
+def test_combined_scale_never_exceeds_the_absolute_cap(monkeypatch: Any) -> None:
+    """The fleet's own hand-run last-resort convention (`timeout 1500`, mail 9649) is
+    the outer bound even under BOTH factors maxed at once."""
+    monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (400.0, 300.0, 200.0))
+    timeout, _load1, _files_scale = gate_hook._load_scaled_pytest_timeout(
+        gate_hook._PYTEST_FILES_THRESHOLD * 100)
+    assert timeout == gate_hook._PYTEST_TIMEOUT_ABSOLUTE_CAP
 
 
 def test_run_gates_scales_the_actual_subprocess_timeout_under_high_load(
