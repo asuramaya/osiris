@@ -11,11 +11,6 @@
 <script src="/ui/vendor/cose-base.js"></script>
 <script src="/ui/vendor/cytoscape-fcose.js"></script>
 <script src="/ui/vendor/marked.min.js"></script>
-<!-- WAVE B (thread 8839): the full-graph renderer, vendored beside cytoscape (which stays
-     the neighbourhood board's own renderer) -- sigma.js over graphology, positions never
-     computed client-side (they come from the server: graph_layout.py's heartbeat). -->
-<script src="/ui/vendor/graphology.umd.min.js"></script>
-<script src="/ui/vendor/sigma.min.js"></script>
 <style>
   .pop { position: absolute; z-index: 30; background: var(--panel); border: 1px solid var(--border2); border-radius: 9px; padding: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); font-size: 12px; min-width: 220px; }
   .keyrow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
@@ -93,7 +88,6 @@
           <div class="lens-item" data-surface="projects" id="nav-projects" onclick="switchSurface('projects')"><span class="lens-icon">▦</span><span>Projects</span></div>
           <div class="lens-item" data-surface="mailbox" id="nav-mailbox" onclick="switchSurface('mailbox')"><span class="lens-icon">✉</span><span>Mailbox</span></div>
           <div class="lens-item" data-surface="pane" id="nav-pane" onclick="switchSurface('pane')"><span class="lens-icon">▶</span><span>Pane</span></div>
-          <div class="lens-item" data-surface="atlas" id="nav-atlas" onclick="switchSurface('atlas')"><span class="lens-icon">◈</span><span>Atlas</span></div>
         </div>
         <div class="railhead collect-only" style="display:none">Add to Analysis</div>
         <div class="pad collect-only" style="display:none"><input id="seed" class="filter" placeholder="Paste identifier or name…" /><button class="iconbtn" style="width:100%" onclick="addSeed()">Add &amp; Classify</button><div id="seedmsg" class="o-faint" style="margin-top:6px;font-size:11px"></div></div>
@@ -118,12 +112,6 @@
           <div id="graph-search-dd" class="dd-list" style="display:none"></div>
         </div>
         <div id="graph-breadcrumbs" class="graph-breadcrumbs"></div>
-      </div>
-      <div id="sigma-atlas" style="display:none">
-        <div class="graph-canvas-controls">
-          <button class="iconbtn" onclick="atlasZoomOut()">Zoom Out</button>
-          <span id="atlas-level-badge" class="o-faint" style="align-self:center;font-size:11px;padding:0 4px"></span>
-        </div>
       </div>
       <div id="result"></div>
       <div class="stage-viewsw-footer"><div id="viewsw" class="viewsw-tabs"></div></div>

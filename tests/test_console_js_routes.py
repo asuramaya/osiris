@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _JS = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console.js").read_text()
+_INDEX_HTML = (Path(__file__).parent.parent / "src" / "ui" / "static" / "index.html").read_text()
 
 
 def test_tag_it_posts_to_the_real_tags_route() -> None:
@@ -190,3 +191,24 @@ def test_projects_status_toggle_still_narrows_client_side_over_every_status() ->
     # toggle narrowing stays client-side, same shape as the pre-swap page.
     body = _JS.split("async function renderProjects()", 1)[1].split("\nfunction ", 1)[0]
     assert "PROJECTS_INDEX_STATUS === 'all' || r.status === PROJECTS_INDEX_STATUS" in body
+
+
+# THE ATLAS REMOVAL (Thoth dispatch 9563, 588148bb): "atlas is terrible, it's like browse
+# in graph mode but worse and uglier, I don't think it should exist at all" — the operator's
+# own word. The sigma.js/graphology full-graph surface is gone; its useful backend
+# (/graph/supernodes, /graph/clusters, the heartbeat layout) folds into browse's own graph
+# mode as a separate piece — the removal is frontend-only, backend untouched here.
+
+
+def test_atlas_surface_is_gone_from_console_js() -> None:
+    assert "makeAtlas" not in _JS
+    assert "ensureAtlas" not in _JS
+    assert "atlasZoomOut" not in _JS
+    assert "sigma-atlas" not in _JS
+
+
+def test_atlas_nav_entry_and_vendor_scripts_are_gone_from_index_html() -> None:
+    assert "nav-atlas" not in _INDEX_HTML
+    assert "sigma-atlas" not in _INDEX_HTML
+    assert "sigma.min.js" not in _INDEX_HTML
+    assert "graphology.umd.min.js" not in _INDEX_HTML

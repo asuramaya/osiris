@@ -61,27 +61,6 @@ function wholeGraphZoomOut() {
   var b = ensureBoard(); b.wholeGraphZoomOut(); setGraphLevelBadge(b.wholeGraphLevel());
 }
 
-// WAVE B (thread 8839): the Atlas — sigma.js's own full-graph renderer, a separate
-// instance from the cytoscape board above (never the same object; the two libraries don't
-// share a canvas). `onDrillDown` names what a click just did, purely for the level badge —
-// the actual navigation (which fetch runs next) lives inside makeAtlas itself.
-var atlas = null;
-function ensureAtlas() {
-  if (!atlas && typeof Osiris !== "undefined" && Osiris.makeAtlas) {
-    atlas = Osiris.makeAtlas($("sigma-atlas"), function(kind) { setAtlasLevelBadge(kind === "object" ? "nodes" : kind); });
-  }
-  return atlas;
-}
-function setAtlasLevelBadge(level) {
-  var el = $('atlas-level-badge');
-  if (el) el.textContent = level === 'supernodes' ? 'projects' : (level === 'clusters' ? 'types' : 'objects');
-}
-function atlasZoomOut() {
-  var a = ensureAtlas(); if (!a) return;
-  a.zoomOut();
-  setAtlasLevelBadge(a.level());
-}
-
 function setStatus(s) { $("status").textContent = s; }
 function showBoard() { $("stage").classList.remove("panel"); }
 function showPanel() { $('stage').classList.add('panel'); }
@@ -98,18 +77,9 @@ async function switchSurface(surface) {
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
-  // WAVE B (thread 8839): Atlas is a THIRD stage besides #cy (the neighbourhood board) and
-  // #result (table/mailbox/projects panels) — its own visibility toggle, never routed
-  // through showBoard()/showPanel(), which only ever know about the other two.
-  $('sigma-atlas').style.display = surface === 'atlas' ? 'block' : 'none';
   if (surface === 'browse') {
     $('entity-taxonomy-bar').style.display = 'flex'; $('viewsw').style.display = '';
     if (!SET.length) await loadObjectSet(); renderEntityExplorer();
-  } else if (surface === 'atlas') {
-    $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
-    $('stage').classList.remove('panel');
-    (ensureAtlas()).loadSupernodes();
-    setAtlasLevelBadge('supernodes');
   } else {
     $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
     (ensureBoard()).clear(); showBoard();
