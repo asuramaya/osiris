@@ -1524,6 +1524,54 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    @app.post("/pane/{agent_id}/reply")
+    async def pane_reply(
+        agent_id: str, body: PaneReplyBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3, thread 9d2aaf4d): a turn
+        typed in the pane goes through the seat's own ProcessAdapter.reply() — harness-
+        agnostic by construction (resolve_process_adapter() picks claude/dsh/crush the same
+        way every other door already does), so the pane talks to whatever harness the box
+        is actually running, never assumes claude. A non-claude adapter's reply() already
+        self-refuses by name (harness_process.py's own capability contract) — this route
+        adds no second refusal mechanism, just surfaces whatever the adapter says.
+
+        SPAWNS NOTHING NEW (the ruling's own words: "spawn only through launch's admission
+        with the spend gate from (1)") — reply is a ONE-SHOT headless turn against the
+        seat's OWN already-running session (resume_session=), the same lane wake_worker's
+        own reply dispatch already uses; this route only picks the target session via
+        list_sessions(cwd=...) rather than minting a body. Still a REAL billed turn, so it
+        carries the SAME may_spend gate piece 1 gave every other hand-birth path — a new
+        call site with no gate is exactly the bug piece 1 existed to close, and this would
+        have been a fifth one."""
+        row = await p.fetchrow(
+            "SELECT cwd, job_dir FROM agent_mounts WHERE agent_id=$1 "
+            "ORDER BY last_seen DESC LIMIT 1", agent_id)
+        if row is None:
+            return {"error": f"no live mount for {agent_id!r}"}
+
+        from src.config.settings import get_settings
+        from src.ingest.providers import spend_is_metered
+        from src.orchestrator.ceiling import may_spend
+
+        st = get_settings()
+        ok, why = await may_spend(p, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
+        if not ok:
+            return {"error": str(why)}
+
+        from src.orchestrator.harness_process import resolve_process_adapter
+
+        adapter = resolve_process_adapter(st)
+        cwd = row["cwd"]
+        if not cwd:
+            return {"error": f"{agent_id!r} carries no cwd to reply into"}
+        sessions = await adapter.list_sessions(cwd=cwd)
+        session_id = next(
+            (s.get("sessionId") or s.get("session_id") for s in sessions
+             if isinstance(s, dict) and s.get("cwd") == cwd), None)
+        return await adapter.reply(
+            repo=cwd, prompt=body.prompt, job_dir=row["job_dir"], resume_session=session_id)
+
     @app.post("/subscriptions")
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1946,6 +1994,10 @@ class RunSpecBody(BaseModel):
     spec: dict[str, Any]
     subject: str | None = None
     name: str | None = None
+
+
+class PaneReplyBody(BaseModel):
+    prompt: str
 
 
 class ThreadTriageBody(BaseModel):

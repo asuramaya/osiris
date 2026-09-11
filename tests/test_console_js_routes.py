@@ -135,6 +135,20 @@ def test_pane_stream_error_events_close_the_connection_rather_than_looping_forev
     assert "closePaneStream();" in body
 
 
+# THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): a turn typed in the pane posts
+# through /pane/{agent}/reply — a one-shot turn against the seat's own session, never a
+# new spawn (piece 3's own dispatch line: "spawn only through launch's admission").
+
+
+def test_send_pane_reply_posts_to_the_reply_route_for_the_open_agent() -> None:
+    assert "'/pane/' + encodeURIComponent(PANE_AGENT) + '/reply'" in _JS
+
+
+def test_send_pane_reply_never_calls_the_launch_or_spawn_doors() -> None:
+    body = _JS.split("async function sendPaneReply()", 1)[1].split("\nasync function ", 1)[0]
+    assert "runTool(" not in body and "runComposition(" not in body
+
+
 def test_palette_search_includes_saved_compositions_in_both_search_paths() -> None:
     assert "SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql))" in _JS
     assert "OMNI_ITEMS = toolHits.concat(compHits);" in _JS
