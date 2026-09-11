@@ -1543,7 +1543,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # entry (`agent_classes` — vitals.py's one authority, named_souls/visit_families/
 # unresolved_families beside the raw `count`) — a genuinely new field, not prose padding
 # on an existing one. No new @mcp.tool(). Measured exact (131,996).
-TOOL_CONTRACT_CEILING_CHARS = 131998
+TOOL_CONTRACT_CEILING_CHARS = 131996
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
