@@ -6008,6 +6008,28 @@ async def test_mint_bears_on_cites_a_thread_without_touching_its_status(
     assert count == 1
 
 
+async def test_thread_answering_decisions_is_batched_and_disjoint(actions: Actions) -> None:
+    """The SHARED read-back (recall()'s own `bears_on_from`, obligation_hygiene's own
+    nudge) — one query over MANY thread ids, never one per thread. A thread with no
+    answering decision is simply absent from the returned dict (empty list via
+    `.get(tid, [])`, never a KeyError)."""
+    from src.orchestrator.capture import thread_answering_decisions
+
+    answered = await open_thread(actions, "gets answered", kind="obligation")
+    unanswered = await open_thread(actions, "never gets answered", kind="obligation")
+    d1 = await record_decision(actions, "first finding that speaks to it")
+    d2 = await record_decision(actions, "second finding that also speaks to it")
+    await mint_bears_on(actions, d1, answered)
+    await mint_bears_on(actions, d2, answered)
+
+    out = await thread_answering_decisions(actions.pool, [answered, unanswered])
+
+    assert unanswered not in out
+    assert out[answered] == [
+        {"id": str(d1)[:8], "summary": "first finding that speaks to it"},
+        {"id": str(d2)[:8], "summary": "second finding that also speaks to it"}]
+
+
 async def test_open_obligation_thread_ids_keeps_only_open_obligation_rows(
     actions: Actions,
 ) -> None:
