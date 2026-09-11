@@ -2283,6 +2283,82 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     assert live["agent"] == ancestor and live["live"] is True and "warning" not in live
 
 
+# ═══ is_occupied_by_a_live_body — the non-Claude leg, piece 3 (thread 879c97b9,
+# "VENDOR-NEUTRAL DOOR"): a non-Claude harness's liveness rides on `registry_census`'s
+# `pulse_live` (a self-reported freshness), never the Claude-only census ═══
+
+async def test_is_occupied_by_a_live_body_recognizes_a_fresh_non_claude_pulse(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    from src.orchestrator.mounts import save_mount
+
+    agent_id = "agent:glm0live01"
+    obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(obj, "harness", "crush", agent_id, datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/x/jobs/glm0live01", agent_id=agent_id,
+                     project="osiris", cwd="/repo/osiris", model=None, session_key="s1")
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []  # the Claude census sees NOTHING — this agent is not a claude body
+
+    assert await is_occupied_by_a_live_body(
+        actions.pool, agent_id, agents_json=_empty_agents_json) is True
+
+
+async def test_is_occupied_by_a_live_body_the_grave_delivery_specimen_for_non_claude(
+    actions: Actions,
+) -> None:
+    """THE SAME POSTMORTEM (Atlas II's port report, dead in a corpse's inbox), applied to
+    the non-Claude leg: a stale pulse (older than 5 minutes) reads cold exactly like a
+    stale Claude mount would — guard #2 is a genuine freshness check, never a blanket
+    exemption for anything non-Claude. If this ever read True for a stale non-Claude
+    seat, DM delivery would silently repeat the exact grave-delivery bug for a whole new
+    population."""
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    from src.orchestrator.mounts import save_mount
+
+    agent_id = "agent:glm0dead01"
+    obj = await actions.create_or_find_object("Agent", agent_id, agent_id)
+    await actions.assert_property(obj, "harness", "crush", agent_id, datetime.now(UTC), 0.9,
+                                  evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/x/jobs/glm0dead01", agent_id=agent_id,
+                     project="osiris", cwd="/repo/osiris", model=None, session_key="s2")
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '6 minutes' "
+        "WHERE job_dir='/x/jobs/glm0dead01'")
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    assert await is_occupied_by_a_live_body(
+        actions.pool, agent_id, agents_json=_empty_agents_json) is False
+
+
+async def test_is_occupied_by_a_live_body_the_claude_path_is_unchanged(
+    actions: Actions,
+) -> None:
+    """The Claude leg (`matched`, census AND /proc-verified) is untouched by this piece —
+    a Claude-harness agent with NO harness stamp at all (the common, pre-piece-3 shape)
+    still resolves the exact same way it always did, via a real, verified census match."""
+    from src.orchestrator.agents import is_occupied_by_a_live_body
+    from src.orchestrator.mounts import save_mount
+
+    agent_id = "agent:cc0live0"
+    await save_mount(actions.pool, job_dir="/x/jobs/cc0live0", agent_id=agent_id,
+                     project="osiris", cwd="/repo/osiris", model=None, session_key="s3")
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "cc0live0-1234-5678-9abc-def012345678", "pid": 777,
+                 "cwd": "/repo/osiris", "name": "[OS] Test"}]
+
+    assert await is_occupied_by_a_live_body(
+        actions.pool, agent_id, agents_json=_agents_json,
+        read_exe=lambda pid: "/home/x/.local/share/claude/versions/2.1.210",
+        read_cwd=lambda pid: "/repo/osiris") is True
+
+
 async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
     """Atlas II: send(to_agent='Nebbercracker') resolved to a false_mint [1m] PHANTOM — live=false,
     seen=null, never a real session. Reaching a retired or phantom seat must take an explicit agent

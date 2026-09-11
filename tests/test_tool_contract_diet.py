@@ -915,7 +915,11 @@ def _tool_chars(t: Any) -> int:
 # read_citation (its verified read-back against the soul store's own hash chain).
 # Two genuinely new capabilities, no existing tool names a transcript-line citation
 # as one of its own params.
-TOOL_CONTRACT_EXPECTED_COUNT = 83
+# 83 -> 84 (2026-09-11, Imhotep, thread 879c97b9 piece 3, Thoth mail 9559): pulse — the
+# harness-neutral liveness refresh (self-scoped, no target param) a non-Claude MCP
+# client calls to stay reading as live without a whisper hook or statusline. Genuinely
+# new capability, no existing tool exposes a caller-scoped last_seen refresh.
+TOOL_CONTRACT_EXPECTED_COUNT = 84
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1519,7 +1523,10 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # established. A genuinely new capability (the visitor-to-soul collapse for a THIRD
 # PARTY, operator/manager/ruling-gated), not prose creep; raised deliberately, measured
 # exact.
-TOOL_CONTRACT_CEILING_CHARS = 130100
+# 129471 -> 130916 (2026-09-11, Imhotep, thread 879c97b9 piece 3, Thoth mail 9559): the
+# new `pulse` tool (see TOOL_CONTRACT_EXPECTED_COUNT's own 83->84 log entry just above) —
+# a genuinely new capability, not prose growth on an existing tool. Measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 131545
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

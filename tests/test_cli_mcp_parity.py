@@ -1277,6 +1277,14 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # no existing door names a soul-store line citation as one of its own params.
     "cite_transcript": {"binding_verb": False},
     "read_citation": {"binding_verb": False},
+    # pulse — piece 3 (thread 879c97b9, "VENDOR-NEUTRAL DOOR", Thoth mail 9559): a
+    # harness-neutral liveness refresh, self-scoped (no target param, ever). Not a seat/
+    # office/project binding-mover — it touches only agent_mounts.last_seen, never
+    # `holds`/house/handle/pin/works_in. Not a parameterization of any existing tool —
+    # get_status reads liveness, mount()'s own re-attach already refreshes it as a side
+    # effect of a much heavier ceremony; no existing door offers a lightweight, callable-
+    # on-its-own liveness touch a non-Claude harness could reach for on its own terms.
+    "pulse": {"binding_verb": False},
     # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.
