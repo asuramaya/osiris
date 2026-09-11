@@ -4,7 +4,7 @@ becomes a saved, forkable spec the user owns. Also proves the ops and persistenc
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -718,6 +718,131 @@ async def test_select_status_explicit_list_narrows(actions: Actions) -> None:
     ids = {i["id"] for i in out["items"]}
     assert str(merged) in ids
     assert str(active) not in ids
+
+
+async def test_select_scope_is_inert_when_absent(actions: Actions) -> None:
+    """Thoth dispatch 9838, 588148bb's Browse tab cutover extraction piece: `scope` is
+    OPT-IN, same discipline as `status`/`subject_link` — absent leaves the row fetch
+    exactly as it always was (the pre-existing select tests above already prove this by
+    never declaring `scope` at all; this one is the explicit byte-identical proof)."""
+    now = datetime.now(UTC)
+    obj = await actions.create_or_find_object("Thread", "thread:scope-absent", "test")
+    await actions.assert_property(obj, "summary", "no scope declared", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    spec = {"op": "select", "object_type": "Thread"}
+    out = await run_composition(actions.pool, await _save(actions, "sel-scope-absent", spec))
+    assert str(obj) in {i["id"] for i in out["items"]}
+
+
+async def test_select_scope_project_narrows_to_that_repo(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:scope-proj", "test")
+    inside = await actions.create_or_find_object("Thread", "thread:scope-proj-inside", "test")
+    await actions.assert_property(inside, "summary", "in scope-proj", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(inside, proj, "in_repo", "test", now, 0.9)
+    outside = await actions.create_or_find_object("Thread", "thread:scope-proj-outside", "test")
+    await actions.assert_property(outside, "summary", "not in scope-proj", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "Thread", "scope": {"project": ["scope-proj"]}}
+    out = await run_composition(actions.pool, await _save(actions, "sel-scope-project", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(inside) in ids
+    assert str(outside) not in ids
+
+
+async def test_select_scope_case_id_narrows(actions: Actions) -> None:
+    case_id = await actions.pool.fetchval(
+        "INSERT INTO cases (name, owner) VALUES ('sel-scope-case', 'test') RETURNING id")
+    now = datetime.now(UTC)
+    inside = await actions.create_or_find_object("Thread", "thread:scope-case-inside", "test")
+    await actions.assert_property(inside, "summary", "in the case", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute(
+        "INSERT INTO case_objects (case_id, object_id) VALUES ($1, $2)", case_id, inside)
+    outside = await actions.create_or_find_object("Thread", "thread:scope-case-outside", "test")
+    await actions.assert_property(outside, "summary", "not in the case", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "Thread",
+            "scope": {"case_id": str(case_id)}}
+    out = await run_composition(actions.pool, await _save(actions, "sel-scope-case", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(inside) in ids
+    assert str(outside) not in ids
+
+
+async def test_select_scope_search_is_word_order_proof(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    obj = await actions.create_or_find_object("Thread", "thread:scope-search", "test")
+    await actions.assert_property(obj, "summary", "the atomic claim uses a partial index",
+                                  "test", now, 0.9, evidence_class="self_declared")
+    other = await actions.create_or_find_object("Thread", "thread:scope-search-other", "test")
+    await actions.assert_property(other, "summary", "unrelated content entirely", "test",
+                                  now, 0.9, evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "Thread", "scope": {"q": "claim atomic"}}
+    out = await run_composition(actions.pool, await _save(actions, "sel-scope-search", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(obj) in ids
+    assert str(other) not in ids
+
+
+async def test_select_scope_exclude_types_drops_the_matching_type(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    thread = await actions.create_or_find_object("Thread", "thread:scope-excl", "test")
+    await actions.assert_property(thread, "summary", "a thread", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    agent = await actions.create_or_find_object("Agent", "agent:scope-excl", "test")
+
+    spec = {"op": "select", "scope": {"exclude_types": ["Agent"]}}
+    out = await run_composition(actions.pool, await _save(actions, "sel-scope-excl", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(thread) in ids
+    assert str(agent) not in ids
+
+
+async def test_select_scope_cursor_paginates_strictly_older(actions: Actions) -> None:
+    base = datetime.now(UTC)
+    older = await actions.create_or_find_object("Thread", "thread:scope-cursor-older", "test")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = $1 WHERE id=$2", base - timedelta(hours=2), older)
+    newer = await actions.create_or_find_object("Thread", "thread:scope-cursor-newer", "test")
+    await actions.pool.execute(
+        "UPDATE objects SET created_at = $1 WHERE id=$2", base, newer)
+
+    page1_spec = {"op": "select", "object_type": "Thread", "scope": {"limit": 1}}
+    page1 = await run_composition(actions.pool, await _save(actions, "sel-scope-p1", page1_spec))
+    assert [i["id"] for i in page1["items"]] == [str(newer)]
+
+    row = await actions.pool.fetchrow("SELECT created_at FROM objects WHERE id=$1", newer)
+    page2_spec = {"op": "select", "object_type": "Thread",
+                  "scope": {"limit": 1, "cursor": {
+                      "before_created_at": row["created_at"].isoformat(),
+                      "before_id": str(newer)}}}
+    page2 = await run_composition(actions.pool, await _save(actions, "sel-scope-p2", page2_spec))
+    assert [i["id"] for i in page2["items"]] == [str(older)]
+
+
+async def test_select_scope_composes_with_subject_link_post_filter(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:scope-subj", "test")
+    linked = await actions.create_or_find_object("Thread", "thread:scope-subj-linked", "test")
+    await actions.assert_property(linked, "summary", "linked to subject", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.create_link(linked, proj, "in_repo", "test", now, 0.9)
+    unlinked = await actions.create_or_find_object("Thread", "thread:scope-subj-unlinked",
+                                                    "test")
+    await actions.assert_property(unlinked, "summary", "not linked to subject", "test", now,
+                                  0.9, evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "Thread", "scope": {},
+            "subject_link": {"link_type": "in_repo", "direction": "in"}}
+    saved = await _save(actions, "sel-scope-subj", spec)
+    out = await run_composition(actions.pool, saved, proj)
+    ids = {i["id"] for i in out["items"]}
+    assert ids == {str(linked)}
 
 
 def test_only_projects_opts_into_a_non_default_select_status() -> None:
