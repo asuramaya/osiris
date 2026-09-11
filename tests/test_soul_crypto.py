@@ -106,29 +106,34 @@ def test_soul_key_init_refuses_when_a_key_already_exists(
     key_file = tmp_path / "soul.key"
     key_file.write_bytes(Fernet.generate_key())
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
     out = soul_key_init()
     assert "error" in out
     assert "already exists" in out["error"]
 
 
-def test_soul_key_init_refuses_a_non_service_user_with_no_owner(
+def test_soul_key_init_refuses_as_root_with_no_owner(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Thoth DM 9435: this box's own live units are systemd --user, no dedicated
+    service account at all — refusing every non-root caller (the old behavior) would
+    wrongly block the exact shape that deployment needs (the operator running this as
+    themselves). Only root, with no --owner to disambiguate, is genuinely ambiguous."""
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "soul.key"))
-    monkeypatch.setattr(getpass, "getuser", lambda: "some-random-dev")
+    monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 0)
     out = soul_key_init()
     assert "error" in out
     assert "refusing" in out["error"]
     assert not (tmp_path / "soul.key").exists()
 
 
-def test_soul_key_init_writes_when_running_as_the_service_user(
+def test_soul_key_init_writes_when_running_as_a_normal_user(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Thoth DM 9435: no dedicated service account is assumed — any non-root caller
+    (the operator's own login user, for a systemd --user deploy) proceeds directly."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
+    monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
     out = soul_key_init()
     assert "error" not in out
     assert key_file.is_file()
@@ -148,7 +153,6 @@ def test_soul_key_init_default_path_note_says_no_change_needed(
 ) -> None:
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     monkeypatch.setattr(soul_crypto, "_DEFAULT_KEY_FILE", str(tmp_path / "soul.key"))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
     out = soul_key_init()
     assert "error" not in out
     assert "no env change needed" in out["systemd_note"]
@@ -159,7 +163,6 @@ def test_soul_key_init_non_default_path_names_the_env_line(
 ) -> None:
     key_file = tmp_path / "custom" / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
     out = soul_key_init()
     assert "error" not in out
     assert f"OSIRIS_SOUL_KEY_FILE={key_file}" in out["systemd_note"]

@@ -442,13 +442,10 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
 async def test_cmd_soul_key_init_writes_and_reports_the_path(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import getpass
-
-    from src.ingest import soul_crypto
-
+    """No dedicated service account is assumed (Thoth DM 9435) — the test process's own
+    real, non-root uid is already a valid caller, no getuid/getuser mock needed."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
     assert await cmd_soul_key_init() == 0
     assert key_file.is_file()
     out = capsys.readouterr().out
@@ -458,15 +455,11 @@ async def test_cmd_soul_key_init_writes_and_reports_the_path(
 async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import getpass
-
     from cryptography.fernet import Fernet
-    from src.ingest import soul_crypto
 
     key_file = tmp_path / "soul.key"
     key_file.write_bytes(Fernet.generate_key())
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    monkeypatch.setattr(getpass, "getuser", lambda: soul_crypto._SERVICE_USER)
     assert await cmd_soul_key_init() == 1
     assert "refused" in capsys.readouterr().err
 

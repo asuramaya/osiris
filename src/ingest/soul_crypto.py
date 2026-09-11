@@ -2,10 +2,17 @@
 773d633a; AMENDED by Thoth DM 9245, wave 17): the LIVE soul store (soul_lines/
 soul_lines_cold) is encrypted at rest by osiris itself, one tier above host-disk trust.
 
-`/etc/osiris/soul.key` (overridable via `OSIRIS_SOUL_KEY_FILE`) is the production file
-path, named via the SAME `EnvironmentFile=` both `deploy/osiris-worker.service` and
-`deploy/osiris-mcp.service` already load for `DATABASE_URL` etc — one config file, no
-new deploy step.
+`/etc/osiris/soul.key` (overridable via `OSIRIS_SOUL_KEY_FILE`) is the default, matching
+the SYSTEM-unit deploy shape (`deploy/osiris-worker.service`/`deploy/osiris-mcp.service`,
+`User=osiris`, `EnvironmentFile=/etc/osiris/osiris.env`). THE LIVE DEV BOX RUNS THE OTHER
+SHAPE (Thoth DM 9435, confirmed live 2026-09-11): `deploy/user/osiris-worker.service`/
+`osiris-mcp.service` are systemd --USER units running as the operator's own login user
+(no dedicated service account, no `/opt` tree) — and, critically, carry NO
+`EnvironmentFile=` at all; every var is set inline via `Environment=` lines in the unit
+file itself, so `OSIRIS_SOUL_KEY_FILE` for THIS shape is set the same way (added directly
+to both unit files, not a shared config). `_key_file_path`/`soul_key_init` never assume
+which shape is live — the default path is just a default, and the owner-check below
+never hardcodes a service account name.
 
 NO KEYRING BRANCH (amended off the original design posted to 773d633a): the original
 env-override -> OS-keyring -> file ladder mirrored `src.connectors.leases.get_lease_key`,
@@ -72,9 +79,11 @@ def _key_file_path() -> Path:
 def _init_command_hint(path: Path) -> str:
     return (
         f"no soul-store encryption key found at {path} (and OSIRIS_SOUL_KEY is unset) — "
-        "run `osiris soul-key-init` ONCE, in your own terminal, as the "
-        f"{_SERVICE_USER!r} service user (or as root with `--owner {_SERVICE_USER}` to "
-        "chown the key into place), before starting osiris-worker/osiris-mcp")
+        "run `osiris soul-key-init` ONCE, in your own terminal, as whichever user the "
+        f"worker/MCP service actually runs as (the {_SERVICE_USER!r} account for the "
+        "system-unit deploy shape, or your own login user for a systemd --user deploy — "
+        "the shape osiris-worker/osiris-mcp use today), before starting either unit; "
+        "or as root with --owner <that user> to chown the key into place")
 
 
 def _generate_and_disclose(where: str) -> bytes:
@@ -135,32 +144,33 @@ def soul_key_init(*, owner: str | None = None) -> dict[str, Any]:
     silent re-mint (rotation is `OSIRIS_SOUL_KEY_LEGACY` plus a migration pass, never
     overwriting the primary file in place).
 
-    REFUSES UNLESS EITHER: (a) the CURRENT process is already running as the service
-    user (`_SERVICE_USER`, matching deploy/osiris-worker.service's own `User=`), so the
-    file lands with the right owner by construction with no extra step, or (b) an
-    explicit `owner=` is given, in which case the key file AND its parent directory are
-    chown'd to that user after writing — the real shape for an operator running this as
-    root (or their own login user) before the service user exists to run anything as
-    itself. Neither condition met: refuses, naming both options.
+    REFUSES ONLY THE GENUINELY AMBIGUOUS CASE: running as ROOT with no `owner=` given —
+    root has no natural owner to land the file as (Thoth DM 9435: this box's live units
+    are systemd --USER, no dedicated service account at all, so "the service user" is
+    not even a fixed name to assume). Any NON-root caller proceeds directly, no `owner=`
+    required — the file lands owned by whoever ran this, which is already correct
+    whenever the invoking user is the one the service itself runs as (a `sudo -u osiris`
+    shell for the system-unit shape, or simply the operator's own login for the --user
+    shape this box actually runs). `owner=` stays available for the explicit root-deploy
+    case: the key file AND its parent directory are chown'd to that user after writing.
 
     Prints the mandatory offline recovery secret exactly once (`_generate_and_disclose`),
-    and names the exact systemd env line the worker/MCP units need if the key file isn't
-    already at the default path they assume."""
+    and names the exact env line to add if the key file isn't at the default path — for
+    a systemd --user deploy (no `EnvironmentFile=`), that means directly into each unit's
+    own `Environment=` lines, not a shared config."""
     path = _key_file_path()
     if path.exists():
         return {"error": f"{path} already exists — soul-key-init never overwrites an "
                          "existing key in place; rotate via OSIRIS_SOUL_KEY_LEGACY plus "
                          "a migration pass instead of regenerating here"}
     current_user = getpass.getuser()
-    if current_user != _SERVICE_USER and owner is None:
-        return {"error": f"refusing — running as {current_user!r}, not the service user "
-                         f"{_SERVICE_USER!r} (deploy/osiris-worker.service's own User=). "
-                         f"Either run this as {_SERVICE_USER!r}, or pass "
-                         f"owner={_SERVICE_USER!r} (`--owner {_SERVICE_USER}` on the CLI) "
-                         "to chown the key file and its directory to that user after "
-                         "writing — the shape when this runs as root before the service "
-                         "user can run anything itself"}
-    target_owner = owner or _SERVICE_USER
+    if os.getuid() == 0 and owner is None:
+        return {"error": "refusing — running as root with no --owner given. Root has no "
+                         "natural owner for the key file: pass --owner <user>, naming "
+                         "whichever user the worker/MCP service actually runs as (the "
+                         f"{_SERVICE_USER!r} account for the system-unit deploy shape, "
+                         "or the operator's own login user for a systemd --user deploy)"}
+    target_owner = owner or current_user
     path.parent.mkdir(parents=True, exist_ok=True)
     key = _generate_and_disclose(str(path))
     path.write_bytes(key)
@@ -175,8 +185,16 @@ def soul_key_init(*, owner: str | None = None) -> dict[str, Any]:
     return {
         "path": str(path), "owner": target_owner, "chowned": chowned,
         "systemd_note": (
-            "this is already the default path deploy/osiris-worker.service and "
-            "deploy/osiris-mcp.service assume — no env change needed" if default_path else
-            f"add `OSIRIS_SOUL_KEY_FILE={path}` to /etc/osiris/osiris.env — both units' "
-            "own EnvironmentFile= — since this key file is not at the default path"),
+            "this is already the default path — no env change needed for a system-unit "
+            "deploy (deploy/osiris-worker.service/osiris-mcp.service already assume it); "
+            "a systemd --user deploy (deploy/user/osiris-worker.service/osiris-mcp."
+            "service — the shape with no EnvironmentFile= at all) still needs an explicit "
+            f"`Environment=OSIRIS_SOUL_KEY_FILE={path}` line added to BOTH unit files "
+            "directly, since /etc/osiris is root-owned and unreachable from a --user "
+            "unit regardless" if default_path else
+            f"add `OSIRIS_SOUL_KEY_FILE={path}` — to /etc/osiris/osiris.env (both units' "
+            "own EnvironmentFile=) for a system-unit deploy, or as its own "
+            "`Environment=` line in EACH of deploy/user/osiris-worker.service and "
+            "deploy/user/osiris-mcp.service directly for a systemd --user deploy, which "
+            "carries no shared env file at all"),
     }

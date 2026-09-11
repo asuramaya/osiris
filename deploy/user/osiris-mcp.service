@@ -41,6 +41,13 @@ Environment=OSIRIS_MCP_PORT=8790
 # operator override there is substituted in here by render_units.py on the next deploy
 # or boot-heal pass; this line is only the SHIPPED default.
 Environment=OSIRIS_TRANSCRIPTS=%h/.claude/projects
+# Soul-store encryption (Thoth mail 9134/9194/9245/9435, wave 17): this shape carries no
+# EnvironmentFile= at all, so unlike the system-unit deploy (/etc/osiris/osiris.env) this
+# var lives here, directly, in both this unit and osiris-worker.service. /etc/osiris is
+# root-owned and unreachable from a --user unit regardless of any default this module
+# assumes — %h/.config/osiris/soul.key is the operator's own, matching where
+# `osiris soul-key-init` (run once, by hand, before either unit starts) actually writes.
+Environment=OSIRIS_SOUL_KEY_FILE=%h/.config/osiris/soul.key
 # The LLM provider is resolved with shutil.which('claude') at RUN time, and a user
 # unit does not inherit a login shell's PATH — so the session-miner's provider was a
 # coin flip on whatever PATH the user manager happened to carry. It lost silently for

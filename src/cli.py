@@ -7595,13 +7595,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_soul_key_init = sub.add_parser("soul-key-init", description=_d(
         "mint the soul-store encryption key — the ONE generator; run once, in your own "
-        "terminal, as the osiris service user (or with --owner as root)"),
+        "terminal, as whichever user the worker/MCP service actually runs as (or with "
+        "--owner as root)"),
         epilog="example: osiris soul-key-init\nexample: sudo osiris soul-key-init "
                "--owner osiris")
     p_soul_key_init.add_argument("--owner", default=None,
                                  help="chown the key file + directory to this user after "
-                                      "writing (for running as root before the service "
-                                      "user exists to run this itself)")
+                                      "writing (for running as root, which has no "
+                                      "natural owner of its own to land the file as)")
     p_soul_key_init.add_argument("--json", action="store_true", dest="as_json",
                                  help="machine-readable: one compact JSON line")
 
