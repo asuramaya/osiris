@@ -5904,6 +5904,7 @@ async def inbox(project: str | None = None, peek: bool = False,
                 ack: list[int] | None = None, subagent_id: str | None = None,
                 subagent_type: str | None = None, session_anchor: str | None = None,
                 want_prior_art: bool = False, render: str | None = None,
+                as_seat: str | None = None, include_settled: bool = True,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you. Defaults to your mounted project; pass
     `project` for another's ('operator' reads the human's desk). Reading LEASES a
@@ -5915,6 +5916,18 @@ async def inbox(project: str | None = None, peek: bool = False,
     `want_prior_art=True` returns each message's full prior_art list; default is a
     `prior_art_count` only.
 
+    `as_seat=<seat canonical>` (9dc3ce8b/c56f3d94, MAIL IS UNSURFACEABLE) is a
+    COMPLETELY SEPARATE, READ-ONLY door: a coordinator reading ANOTHER seat's received
+    DMs, never leased, never settled (`ack` is refused alongside it). CHARTER-GATED —
+    you must govern (an active `governs` link) at least one project that seat also
+    charters, or it refuses; a vacant target (no holder has ever existed) returns an
+    empty list, not an error. `include_settled=True` (default) also surfaces mail the
+    target already dealt with, `settled` marked per row — auditing what happened, not
+    queuing new work for yourself; `False` narrows to only what the target never read.
+    Broadcasts are deliberately excluded (already visible to anyone in that project's
+    own inbox) — DMs are the only genuinely unsurfaceable half. Every other parameter
+    above is ignored in this mode.
+
     `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
     Your own mailbox renders one line per ASK message, FYI folded to a single trailing
     count line (`textrender.render_mail_text`). The operator desk renders the backlog
@@ -5924,6 +5937,46 @@ async def inbox(project: str | None = None, peek: bool = False,
     re-call without `render` for the full structured bands first), then `your_queue`
     itemized one line per thread (`textrender.render_desk_text`)."""
     ident = await _ident_for(ctx, session_anchor)
+    pool = await _pool_get()
+    # MAIL IS UNSURFACEABLE (9dc3ce8b/c56f3d94): as_seat switches to a completely
+    # separate, READ-ONLY door — a coordinator reading ANOTHER seat's received DMs
+    # (including already-settled ones, `include_settled=True` by default: the point is
+    # auditing what happened, not queuing new work). Never leases, never accepts `ack`
+    # (a read-only door has nothing to settle) — checked BEFORE the ordinary own-mail
+    # path's own `project` requirement below, since this door needs no mounted project
+    # of the CALLER's own at all (it reads by seat/charter, not by project default).
+    if as_seat is not None:
+        if ack:
+            return {"error": "as_seat is read-only — it never leases, so there is "
+                             "nothing for ack to settle"}
+        if ident is None or subagent_id is not None:
+            return {"error": "as_seat needs your own real seat identity (mount first; "
+                             "a spawn cannot read another seat's mail on your behalf)"}
+        from src.orchestrator.charter import charter_of
+        from src.orchestrator.mailbox import read_seat_mail
+        from src.orchestrator.seats import held_seat, seat_occupancy
+
+        caller_seat = await held_seat(pool, ident.agent_id)
+        if caller_seat is None:
+            return {"error": "you hold no seat — as_seat is charter-gated, and an "
+                             "unbound identity governs nothing to gate against"}
+        caller_projects = set(await charter_of(pool, caller_seat["seat_id"]))
+        target_projects = set(await charter_of(pool, as_seat))
+        if not target_projects:
+            return {"error": f"{as_seat!r} charters no project — nothing to check "
+                             "governance against, and nothing this door will read"}
+        if not (caller_projects & target_projects):
+            return {"error": f"you do not govern any project {as_seat!r} charters "
+                             f"({sorted(target_projects)}) — as_seat is charter-gated, "
+                             "never a bare seat-to-seat read"}
+        occ = await seat_occupancy(pool, as_seat)
+        holder = occ["holder"]
+        if holder is None:
+            return {"as_seat": as_seat, "target_agent": None, "messages": [],
+                    "note": "vacant — no holder has ever existed for this seat"}
+        msgs = await read_seat_mail(pool, target_agent=holder,
+                                    include_settled=include_settled)
+        return {"as_seat": as_seat, "target_agent": holder, "messages": msgs}
     proj = project or (ident.project if ident else None)
     if proj is None:
         # THIS is the bounce that hit Thoth XXVIII tonight — twice — and it carried no diagnostic
@@ -5931,7 +5984,6 @@ async def inbox(project: str | None = None, peek: bool = False,
         # nobody chased it for a week.
         return {"error": "mount(cwd, job_dir=<your anchor>) first, or pass project=<repo>",
                 "why": _anchorless(ctx)}
-    pool = await _pool_get()
     st = get_settings()
     # a SPAWN reads over its parent's shoulder: PEEK only. It must never LEASE the seat's
     # mail (a lease a dying child holds blocks redelivery for the whole lease window) and

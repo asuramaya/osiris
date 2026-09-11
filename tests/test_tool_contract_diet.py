@@ -1543,7 +1543,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # entry (`agent_classes` — vitals.py's one authority, named_souls/visit_families/
 # unresolved_families beside the raw `count`) — a genuinely new field, not prose padding
 # on an existing one. No new @mcp.tool(). Measured exact (131,996).
-TOOL_CONTRACT_CEILING_CHARS = 131998
+# 131998 -> 133019 (2026-09-11, Imhotep, thread c56f3d94, wave 19 item 2, MAIL IS
+# UNSURFACEABLE): `inbox` gains two new params (`as_seat`, `include_settled`) — a
+# genuinely new capability (a charter-gated coordinator read of another seat's mail),
+# not prose growth on an existing param, dispatched through the existing `inbox` door
+# rather than a new @mcp.tool() (tool count unchanged). Measured exact (133,019).
+TOOL_CONTRACT_CEILING_CHARS = 133021
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

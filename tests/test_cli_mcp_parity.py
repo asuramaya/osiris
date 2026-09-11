@@ -399,6 +399,14 @@ MCP_ONLY_PARAMS = {
     ("inbox", "want_prior_art"): "a real gap, named rather than hidden: the CLI's own "
         "render.emit already shows whatever the MCP tool returns, but no --want-prior-art "
         "flag exists yet to ask for the fuller payload. Not yet built.",
+    ("inbox", "as_seat"): "9dc3ce8b/c56f3d94, MAIL IS UNSURFACEABLE: a coordinator's "
+        "charter-gated cross-seat read, an agent-to-agent capability with no terminal-"
+        "side analog -- a human at a console already sees whatever seat they're sitting "
+        "at; reading ANOTHER seat's mail from a bare terminal has no charter identity "
+        "to gate against the way an MCP-mounted caller does. Not a gap: this door is "
+        "deliberately agent-only.",
+    ("inbox", "include_settled"): "same reason as as_seat directly above -- a parameter "
+        "of that same agent-only door, meaningless without it.",
     ("team", "render"): "same reason as backlog's own entry above — the read triangle's "
         "server-side text mode has no terminal-side counterpart to be missing.",
     ("get_status", "render"): "same reason as backlog's own entry above — the read "
