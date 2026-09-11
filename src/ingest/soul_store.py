@@ -482,10 +482,18 @@ class RoundTripReport:
     {"anchor_sid", "error"} dicts) — [] still means every COMPARED session verified
     byte-identical. `skipped_live` is a SEPARATE, named count of sessions still being
     actively appended to at sweep time (never silently folded into "clean") — a caller
-    must report both, e.g. "0 failures, skipped live: 2", not just the failure count."""
+    must report both, e.g. "0 failures, skipped live: 2", not just the failure count.
+    `cwd_rewrites` (thread 6e56cf7e, Thoth mail 9382 item 4): a THIRD, separate count —
+    a session `heal_slug_transcripts`' own sanctioned re-addressing (mounts.py,
+    `_rewrite_transcript_cwd`) touched since it was soul-stored. That tool changes only
+    each line's own `cwd` field, deliberately preserving mtime (so `skipped_live`'s own
+    guard never catches it) — a byte mismatch that STILL matches once every `cwd` field
+    is normalized out is this named, benign class, never folded into `failures` (a real
+    corruption/tamper alarm) or silently into a clean pass either."""
 
     failures: list[dict[str, str]] = field(default_factory=list)
     skipped_live: int = 0
+    cwd_rewrites: int = 0
 
     def __bool__(self) -> bool:
         """Truthy iff there are real failures — lets a caller write `if report:` for
@@ -1587,6 +1595,7 @@ class SoulStore:
         rows = list(cold_rows) + list(hot_rows)
         failures: list[dict[str, str]] = []
         skipped_live = 0
+        cwd_rewrites = 0
         for row in rows:
             anchor_sid, source_path = row["anchor_sid"], row["source_path"]
             src = Path(source_path)
@@ -1605,13 +1614,17 @@ class SoulStore:
                     continue
                 src_hash = await asyncio.to_thread(_hash_file_streamed, src)
                 if src_hash != result["sha256"]:
+                    if await asyncio.to_thread(_differs_only_by_cwd, scratch, src):
+                        cwd_rewrites += 1
+                        continue
                     failures.append({
                         "anchor_sid": anchor_sid,
                         "error": f"byte mismatch — soul_lines reconstructs to "
                                  f"{result['sha256'][:12]}…, the file on disk hashes to "
                                  f"{src_hash[:12]}…",
                     })
-        return RoundTripReport(failures=failures, skipped_live=skipped_live)
+        return RoundTripReport(
+            failures=failures, skipped_live=skipped_live, cwd_rewrites=cwd_rewrites)
 
     async def verify_crush_round_trip_sample(self, *, n: int = 20) -> RoundTripReport:
         """THE ROUND-TRIP PROOF, CRUSH'S OWN VERSION (wave 13 item 2): `verify_round_
@@ -1692,3 +1705,43 @@ def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:
         while chunk := f.read(chunk_size):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def _differs_only_by_cwd(stored: Path, disk: Path) -> bool:
+    """THE NAMED-CLASS CHECK (thread 6e56cf7e, Thoth mail 9382 item 4): does `disk`
+    differ from `stored` in EXACTLY the shape `mounts._rewrite_transcript_cwd` produces
+    — every line either byte-identical, or a JSON object whose ONLY differing top-level
+    key is `cwd`? That function's own re-serialization (`json.dumps(obj, ensure_ascii=
+    False, separators=(",", ":"))`) is reproduced here bit-for-bit so a line it touched
+    always re-normalizes to the SAME bytes `stored` already has, never a near-miss from
+    a different key order or spacing convention.
+
+    Read line-by-line, bounded memory (never the whole file), same discipline every
+    other comparison in this module holds. A LINE COUNT MISMATCH, or any line that
+    differs in something OTHER than `cwd` (a real edit, truncation, tamper), returns
+    False immediately — this check only ever explains away the one known, sanctioned
+    edit shape; anything else falls straight through to the caller's own real-failure
+    path, exactly as before this class existed."""
+    with stored.open("rb") as sf, disk.open("rb") as df:
+        for stored_line, disk_line in zip(sf, df, strict=False):
+            if stored_line == disk_line:
+                continue
+            try:
+                s_obj = json.loads(stored_line)
+                d_obj = json.loads(disk_line)
+            except ValueError:
+                return False
+            if not (isinstance(s_obj, dict) and isinstance(d_obj, dict)):
+                return False
+            if s_obj.get("cwd") == d_obj.get("cwd"):
+                return False  # differs, but NOT in cwd — a real change, not this class
+            d_obj["cwd"] = s_obj.get("cwd")
+            if d_obj != s_obj:
+                return False  # something else changed too — not a pure cwd rewrite
+        # strict=False silently stops at the shorter iterator — a genuine line-count
+        # mismatch (truncation, a real append) must not read as "identical so far"
+        remaining_stored = sf.readline()
+        remaining_disk = df.readline()
+        if remaining_stored or remaining_disk:
+            return False
+    return True

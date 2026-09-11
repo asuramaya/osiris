@@ -305,6 +305,86 @@ async def test_verify_round_trip_sample_catches_a_tampered_session(
     assert "error" in failures[0]
 
 
+def _cwd_lines(n: int, cwd: str) -> list[str]:
+    """Lines shaped like a real Claude Code transcript's own `cwd`-carrying JSON —
+    `_synthetic_lines`'s own shape has none, deliberately never touching this new
+    class of check; these do."""
+    out = []
+    for i in range(n):
+        ts = datetime(2026, 8, 17, 12, 0, i, tzinfo=UTC).isoformat()
+        role = "assistant" if i % 2 else "user"
+        out.append(json.dumps({"type": role, "timestamp": ts, "cwd": cwd,
+                               "message": {"content": f"line {i}"}}))
+    return out
+
+
+def _rewrite_cwd_like_the_healer(path: Path, new_cwd: str) -> None:
+    """Reproduces mounts.py's own `_rewrite_transcript_cwd` exactly: the same
+    re-serialization (`json.dumps(obj, ensure_ascii=False, separators=(",", ":"))`) AND
+    its own deliberate mtime preservation (`os.utime` restore) — the exact mechanism
+    that lets a cwd heal slip past verify_round_trip_sample's skipped_live guard in
+    real life; a test that let mtime advance would never actually reach the check this
+    test exists to prove."""
+    import os
+
+    orig_stat = path.stat()
+    lines = path.read_text().splitlines()
+    out = []
+    for line in lines:
+        obj = json.loads(line)
+        obj["cwd"] = new_cwd
+        out.append(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+    path.write_text("\n".join(out) + "\n")
+    os.utime(path, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
+
+
+async def test_verify_round_trip_sample_names_a_cwd_rewrite_as_its_own_class(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """Thread 6e56cf7e, Thoth mail 9382 item 4: heal_slug_transcripts' own sanctioned
+    re-addressing (mounts._rewrite_transcript_cwd) changes only each line's `cwd` field
+    and deliberately preserves mtime — a byte mismatch this check would otherwise
+    report as an undifferentiated 'byte mismatch' failure, indistinguishable from real
+    corruption. cwd_rewrites names it separately; failures stays empty."""
+    p = _write_transcript(tmp_path / "healed.jsonl", _cwd_lines(4, "/old/path"))
+    await store.ingest_path(str(p), "cwdheal001")
+    _rewrite_cwd_like_the_healer(p, "/new/path")
+
+    report = await store.verify_round_trip_sample()
+    assert report.failures == []
+    assert report.skipped_live == 0
+    assert report.cwd_rewrites == 1
+    assert bool(report) is False  # a clean pass — a named, benign class, never an alarm
+
+
+async def test_verify_round_trip_sample_a_cwd_rewrite_plus_a_real_edit_still_fails(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """The check only ever explains away the ONE sanctioned shape (cwd, and nothing
+    else, changed) — a line that also changed something real falls straight through
+    to the ordinary failure path, never silently waved through as 'just a cwd heal'."""
+    import os
+
+    p = _write_transcript(tmp_path / "healedplus.jsonl", _cwd_lines(4, "/old/path"))
+    await store.ingest_path(str(p), "cwdheal002")
+    orig_stat = p.stat()
+    lines = p.read_text().splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        obj = json.loads(line)
+        obj["cwd"] = "/new/path"
+        if i == 2:
+            obj["message"]["content"] = "TAMPERED CONTENT TOO"
+        out.append(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+    p.write_text("\n".join(out) + "\n")
+    os.utime(p, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
+
+    report = await store.verify_round_trip_sample()
+    assert report.cwd_rewrites == 0
+    assert len(report.failures) == 1
+    assert report.failures[0]["anchor_sid"] == "cwdheal002"
+
+
 async def test_hash_file_streamed_matches_a_plain_whole_file_hash(tmp_path: Path) -> None:
     from src.ingest.soul_store import _hash_file_streamed
 
