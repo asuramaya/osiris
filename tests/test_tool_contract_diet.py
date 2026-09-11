@@ -1489,7 +1489,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 81
 # reclassify receipt fields this same audit added are pure code, no schema/docstring
 # growth of their own. No new tool, load-bearing growth per this file's own escape
 # valve. Measured exact (122,273), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 126448
+# 126448 -> 126736 (2026-09-11, Khnum, Thoth mail 9382 item 3, 93b25ddc): seat()'s own
+# ACTION TABLE entry for charter_for gains a clause naming the new ruling=<decision id>
+# escape hatch (act under a standing operator ruling instead of manager authority,
+# refused unless the ruling actually names charter_for) — the only prose growth in this
+# fix; a genuinely new capability on an existing door, not padding. Measured exact
+# (126,736), not estimated.
+TOOL_CONTRACT_CEILING_CHARS = 126736
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

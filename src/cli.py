@@ -2848,7 +2848,7 @@ async def cmd_retention(
 
 async def cmd_charter_for(
     seat_id: str, repos: list[str], because: str, *, actor: str,
-    pool: asyncpg.Pool | None = None,
+    ruling: str | None = None, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris charter-for <seat> --repos a,b,c --because <text> --actor <who> — the
     console-script door onto charter.charter_for, the SAME function the charter_for MCP
@@ -2887,7 +2887,8 @@ async def cmd_charter_for(
                   f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
-        out = await charter_for(Actions(pool), seat_id, repos, because=because, actor=actor)
+        out = await charter_for(Actions(pool), seat_id, repos, because=because, actor=actor,
+                                ruling=ruling)
     finally:
         if owns_pool:
             await pool.close()
@@ -5584,6 +5585,11 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="who is declaring this charter — must be the seat's "
                                     f"manager or an operator actor; defaults to {_CONSOLE_ACTOR!r} "
                                     "(already an operator actor)")
+    p_charter_for.add_argument("--ruling", default=None,
+                               help="a standing operator ruling's decision id — lets a "
+                                    "non-manager act under that ruling's authority "
+                                    "instead, refused unless the ruling actually names "
+                                    "charter_for")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
         "narrow or correct a LIVE practice's "
@@ -6383,7 +6389,8 @@ def main(argv: list[str] | None = None) -> int:
                                             because=args.because))
     if args.command == "charter-for":
         repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-        return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor))
+        return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor,
+                                           ruling=args.ruling))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     if args.command == "annotate-thread":

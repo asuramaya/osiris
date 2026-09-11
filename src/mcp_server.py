@@ -3085,7 +3085,7 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         }, ["action"]),
         _dispatcher_action_schema({
             "action": _action_const("charter_for"), "target": _s(), "repos": _list_s(),
-            "because": _s(),
+            "because": _s(), "ruling": _opt_s(),
         }, ["action", "target", "repos", "because"]),
         _dispatcher_action_schema({
             "action": _action_const("heal_anchor"), "target": _opt_s(), "because": _opt_s(),
@@ -3193,7 +3193,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "attach": (["target", "manager", "because"], ["target", "manager", "because"]),
     "detach": (["target", "because"], ["target", "because"]),
     "charter": (["repos"], []),
-    "charter_for": (["target", "repos", "because"], ["target", "repos", "because"]),
+    "charter_for": (
+        ["target", "repos", "because", "ruling"], ["target", "repos", "because"]),
     "heal_anchor": (["target", "because", "dry_run"], []),
     "heal_transcript": (
         ["target", "source_paths", "dry_run", "because"], ["target", "source_paths"]),
@@ -3265,6 +3266,7 @@ async def _seat_impl(
     real_project: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, workers: list[str] | None = None,
+    ruling: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `seat` and its 22 hidden single-purpose aliases (mint_seat,
@@ -3479,7 +3481,7 @@ async def _seat_impl(
         from src.orchestrator.charter import charter_for as _charter_for
         pool = await _pool_get()
         result = await _charter_for(Actions(pool), target, repos, because=because,
-                                    actor=ident.agent_id)
+                                    actor=ident.agent_id, ruling=ruling)
         if not result.get("error"):
             # THE INTERESTING CASE: someone else's seat had its charter declared FOR it —
             # `result["seat"]` is set_charter's own RESOLVED canonical (never the caller's
@@ -3782,6 +3784,7 @@ async def seat(
     real_project: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, workers: list[str] | None = None,
+    ruling: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE SEAT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one door,
@@ -3803,7 +3806,10 @@ async def seat(
       attach: create a managed_by edge (target, manager, because)
       detach: remove a managed_by edge (target, because)
       charter: self-declare your own seat's charter (repos, or omit to read)
-      charter_for: declare a charter on another seat's behalf (target, repos, because)
+      charter_for: declare a charter on another seat's behalf (target, repos, because,
+                  optional ruling=<decision id> to act under a standing operator
+                  ruling instead of manager authority — refused unless that ruling
+                  actually names charter_for)
       heal_anchor: reassert the anchor_cwd invariant (target=None means self)
       heal_transcript: splice a fragmented session back into one file (target, source_paths)
       transition_project: move your own seat off a fabricated project binding
@@ -3840,7 +3846,7 @@ async def seat(
         wants_office=wants_office, cwd=cwd, job_dir=job_dir, message=message,
         stale_project=stale_project, fabricated_project=fabricated_project,
         real_project=real_project, subagent_id=subagent_id, subagent_type=subagent_type,
-        session_anchor=session_anchor, workers=workers, ctx=ctx)
+        session_anchor=session_anchor, workers=workers, ruling=ruling, ctx=ctx)
 
 
 @mcp.tool(meta={
