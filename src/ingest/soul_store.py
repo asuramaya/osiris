@@ -42,6 +42,7 @@ from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
 
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
+_DSH_HARNESS = "dsh"
 _CRUSH_ROW_COLUMNS = (
     "id", "session_id", "role", "parts", "model", "provider",
     "created_at", "updated_at", "finished_at", "is_summary_message",
@@ -816,6 +817,104 @@ class SoulStore:
             if new:
                 counts[db_path] = counts.get(db_path, 0) + 1
                 per_db[db_path] = per_db.get(db_path, 0) + 1
+        return counts
+
+    async def ingest_dsh_session(
+        self, source_path: str, anchor_sid: str,
+    ) -> int:
+        """VERBATIM INGEST FOR DSH (wave 18 item 1, mail 9541 7b8bb398): closes the
+        soul_sessions gap `backfill()` deliberately left open — `DshSessionAdapter` is
+        registered in `_default_adapters()` for DISCOVERY (transcript_store.py's own
+        harness_turns sweep already ingests every DSH session cleanly through it), but
+        `backfill()` filters down to `_claude_code_adapters()` only, for the exact
+        reason `ingest_crush_session`'s own docstring already names for Crush:
+        `ingest_path` raw-byte-splits its SOURCE FILE on `\\n`, which would silently
+        mangle a DSH session's zstd-COMPRESSED bytes into garbage "lines" rather than
+        erroring. Confirmed live (Thoth mail 9541): harness_turns held all six DSH
+        sessions on this box; soul_sessions held zero.
+
+        UNLIKE CRUSH, a DSH session's own content IS a real byte-exact JSONL once
+        decompressed — there is no synthetic row to canonicalize, the SAME verbatim-
+        line law `ingest_path` already holds for claude-code, just sourced from `zstd
+        -dc`'s own stdout bytes (`_decompress_bytes` — never `_decompress`'s lossy
+        `str` + `.splitlines()`, which silently mangles a literal NUL byte and splits
+        on far more than `\\n`, exactly the class of bug 0052 named for claude-code's
+        own direct file read) rather than a direct `Path.read_bytes()`.
+
+        RESUMABLE THE SAME WAY `ingest_path` IS: `soul_sessions.last_line_idx` tracks
+        how many decompressed lines are already ingested for `(harness='dsh',
+        anchor_sid)` — the harness rewrites the WHOLE compressed file fresh on every
+        save (there is no way to append to a zstd frame in place), but its own
+        decompressed content only ever GROWS with new lines appended after the ones
+        already chained (confirmed against `read_turns`'s own `since_idx` contract,
+        which depends on exactly this), so slicing `all_lines[idx:]` after a full
+        re-decompress resumes correctly, the same way a re-read of a growing JSONL
+        file does for claude-code — it just always pays the decompress cost, never a
+        partial file read.
+
+        Returns the count of NEW lines ingested — 0 both when the file has no new
+        lines and when `source_path` resolves to nothing decompressible (missing,
+        corrupt, zstd unavailable) — a skip, never a raised exception, matching
+        `backfill`'s own per-session tolerance."""
+        import asyncio
+
+        from src.ingest.harness.dsh import _decompress_bytes
+
+        content = await asyncio.to_thread(_decompress_bytes, Path(source_path))
+        if content is None:
+            return 0
+        all_lines = _split_lines(content)
+        if not all_lines:
+            return 0
+        idx, prev_hash = await self._progress(anchor_sid, harness=_DSH_HARNESS)
+        new_lines = all_lines[idx:]
+        if not new_lines:
+            return 0
+        hashed, next_idx, next_prev = _hash_rows(
+            _DSH_HARNESS, anchor_sid, new_lines, idx, prev_hash)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(
+                    "INSERT INTO soul_lines "
+                    "   (harness, anchor_sid, line_idx, raw_line, line_hash, "
+                    "    prev_hash) "
+                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                    "ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING",
+                    hashed,
+                )
+                await self._checkpoint(
+                    _DSH_HARNESS, anchor_sid, source_path, next_idx, next_prev, conn=conn)
+        return len(new_lines)
+
+    async def backfill_dsh(self, *, limit_per_adapter: int = 0) -> dict[str, int]:
+        """The periodic sweep for DSH, mirroring `backfill_crush`'s own shape over
+        `DshSessionAdapter.enumerate()`'s locators instead of `backfill`'s file-mtime
+        stat-gate — a DSH session's SOURCE FILE mtime moving is a real signal (unlike
+        crush's shared db), but `ingest_dsh_session` must decompress to know whether
+        anything actually grew regardless, so the gate here is the SAME one `ingest_
+        dsh_session` itself already pays for: no separate stat-only fast path, just
+        `ingest_dsh_session`'s own idempotent-resume (0 new lines on an unchanged
+        session) doing the real work.
+
+        One bad session must not abort the sweep (`backfill`'s own per-session
+        try/except law). Returns `{source_path: sessions_touched}` — sessions with at
+        least one new line ingested, matching `backfill_crush`'s own per-source count
+        shape."""
+        from src.ingest.harness.dsh import DshSessionAdapter
+
+        counts: dict[str, int] = {}
+        per_source: dict[str, int] = {}
+        for locator in DshSessionAdapter().enumerate():
+            source_path = locator.source_path
+            if limit_per_adapter and per_source.get(source_path, 0) >= limit_per_adapter:
+                continue
+            try:
+                new = await self.ingest_dsh_session(source_path, locator.anchor_sid)
+            except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
+                continue
+            if new:
+                counts[source_path] = counts.get(source_path, 0) + 1
+                per_source[source_path] = per_source.get(source_path, 0) + 1
         return counts
 
     async def splice_sources(
@@ -1742,6 +1841,53 @@ class SoulStore:
                 failures.append({
                     "anchor_sid": anchor_sid,
                     "error": f"crush live mismatch — {len(stored)} line(s) stored, "
+                             f"{len(live_lines)} live, content diverges",
+                })
+        return RoundTripReport(failures=failures, skipped_live=0)
+
+    async def verify_dsh_round_trip_sample(self, *, n: int = 20) -> RoundTripReport:
+        """THE ROUND-TRIP PROOF, DSH'S OWN VERSION (wave 18 item 1, mail 9541
+        7b8bb398): unlike `verify_round_trip_sample` above, a plain byte comparison
+        against `source_path` on disk would NEVER match — the store holds the
+        DECOMPRESSED lines `ingest_dsh_session` chained, while `source_path` names the
+        zstd-COMPRESSED file. Same live-re-read shape `verify_crush_round_trip_sample`
+        already uses instead: re-decompress the session's own file right now (the SAME
+        `_decompress_bytes` + `_split_lines` pair `ingest_dsh_session` itself uses, so
+        this proves the store agrees with what a real ingest would produce today, not
+        a second, drifting comparison), and compare against what soul_lines (or the
+        cold tier) actually stored.
+
+        A session whose zstd file no longer exists, or no longer decompresses, is
+        SKIPPED — the same law `verify_round_trip_sample`/`verify_crush_round_trip_
+        sample` both already hold: absence is item 4's own concern, never proof the
+        store is wrong. `skipped_live` stays 0 — the harness rewrites the whole file
+        fresh on every save, so there is no meaningful mtime-vs-last-ingest staleness
+        signal the way a growing claude-code JSONL file has; the live re-decompress
+        IS the freshness check."""
+        import asyncio
+
+        from src.ingest.harness.dsh import _decompress_bytes
+
+        rows = await self.pool.fetch(
+            "SELECT anchor_sid, source_path FROM soul_sessions WHERE harness=$1 "
+            "ORDER BY random() LIMIT $2", _DSH_HARNESS, n)
+        failures: list[dict[str, str]] = []
+        for row in rows:
+            anchor_sid, source_path = row["anchor_sid"], row["source_path"]
+            src = Path(source_path)
+            if not _path_is_file(src):
+                continue
+            stored = await self._all_raw_lines(_DSH_HARNESS, anchor_sid)
+            if stored is None:
+                continue
+            content = await asyncio.to_thread(_decompress_bytes, src)
+            if content is None:
+                continue
+            live_lines = _split_lines(content)
+            if live_lines != stored:
+                failures.append({
+                    "anchor_sid": anchor_sid,
+                    "error": f"dsh live mismatch — {len(stored)} line(s) stored, "
                              f"{len(live_lines)} live, content diverges",
                 })
         return RoundTripReport(failures=failures, skipped_live=0)
