@@ -465,22 +465,39 @@ _LIVE_SECS = 900  # the fleet's one liveness window — seats.py, liveness.py, t
 
 async def _resolve_subagent_parent(
     actions: Actions, subagent_oid: uuid.UUID,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """The subagent's direct parent — its spawned_by edge where one exists, else its
     `session` property's root agent id (resolve_parents' own fallback, "a miss means the
     root session spawned it," reapplied at filing time for the tiny slice that predates even
-    that reconstruction). None only when neither exists. Pure read — writes nothing, safe to
-    call during a dry-run classification pass."""
+    that reconstruction). `(None, False)` only when neither exists. Pure read — writes
+    nothing, safe to call during a dry-run classification pass.
+
+    Returns `(parent, verified)` (thread 329236eb): a spawned_by edge is always REAL —
+    `verified=True` — but the session-property fallback SYNTHESIZES an id from a raw string
+    that may never have been registered as an Agent object anywhere, the exact gap that let
+    this function disagree with `identify_agent`/`doors()` (which does real existence
+    resolution and reports zero matches for the same unregistered id). This still returns
+    the synthesized id even when unverified — `file_subagent`'s own mint-on-demand contract
+    for the "7-of-N fleet-wide stragglers" case (a session-only child, no pre-existing parent
+    object) depends on getting a non-None string back to create_or_find_object, not a
+    refusal — only `verified` tells a caller that wants identify_agent-grade honesty
+    (file_subagents' own dry-run classification pass) whether this id is a confirmed object
+    or still just a plausible guess."""
     parent = await actions.pool.fetchval(
         "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='spawned_by' LIMIT 1", subagent_oid)
     if parent:
-        return str(parent)
+        return str(parent), True
     session = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='session' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         subagent_oid)
-    return f"agent:{session}" if session else None
+    if not session:
+        return None, False
+    candidate = f"agent:{session}"
+    verified = bool(await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", candidate))
+    return candidate, verified
 
 
 async def _parent_live(actions: Actions, parent: str) -> bool:
@@ -527,7 +544,7 @@ async def file_subagent(
         return {"error": f"no such subagent: {subagent_id!r}"}
     oid = row["id"]
     now = datetime.now(UTC)
-    parent = await _resolve_subagent_parent(actions, oid)
+    parent, _parent_verified = await _resolve_subagent_parent(actions, oid)
     if not parent:
         return {"error": f"{subagent_id} has neither a spawned_by edge nor a session "
                          "property — cannot attribute to a spawner"}
@@ -613,10 +630,10 @@ async def file_subagents(
 
     candidates = []
     for r in rows:
-        parent = await _resolve_subagent_parent(actions, r["id"])
+        parent, parent_verified = await _resolve_subagent_parent(actions, r["id"])
         candidates.append({"oid": r["id"], "canonical": r["canonical"],
                            "last_active": r["last_active"] or "", "patronym": r["patronym"],
-                           "parent": parent})
+                           "parent": parent, "parent_verified": parent_verified})
     unattributable = [c for c in candidates if not c["parent"]]
     attributable = [c for c in candidates if c["parent"]]
 
@@ -652,8 +669,11 @@ async def file_subagents(
 
     counts = {"attributable_parent_dead": len(parent_dead),
              "attributable_parent_live": len(parent_live_list),
-             "unattributable": len(unattributable)}
+             "unattributable": len(unattributable),
+             "attributable_parent_unverified": sum(
+                 1 for c in attributable if not c["parent_verified"])}
     sample = [{"subagent": c["canonical"], "parent": c["parent"],
+               "parent_verified": c["parent_verified"],
                "will_name": ordinal_plan.get(c["oid"]) is not None,
                "will_flip_historical": not c["parent_live"]}
               for c in attributable[:20]]
