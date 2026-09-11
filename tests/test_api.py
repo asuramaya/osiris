@@ -772,3 +772,55 @@ async def test_object_card_title_uses_resolve_label_not_name_only(actions: Actio
     # the statement still appears in the generic properties list too (unchanged
     # behavior for any field besides `name`, which alone gets excluded)
     assert any(pr["name"] == "statement" for pr in card["properties"])
+
+
+# THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d): /pane/{agent_id}/
+# stream tails a live seat's own transcript over SSE, no writes. Both tests below hit only the
+# EARLY-RETURN refusal branches, which return before the route's own
+# `while not await request.is_disconnected()` loop is ever reached — the same structural limit
+# test_inbox_app.py's own SSE test names ("driving the actual infinite generator through
+# httpx's ASGITransport hangs... no precedent anywhere in this suite for testing an SSE route
+# that way"). The polling loop itself reuses sessions.py's own _read_chunk/distill, already
+# covered by test_sessions.py; this file's job is the route's OWN new resolution logic.
+
+
+async def test_pane_live_lists_only_live_seated_agents(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    # live + seated (a real object behind the canonical) — must appear
+    await actions.create_or_find_object("Agent", "agent:paneseated1", "test")
+    await save_mount(actions.pool, job_dir="/tmp/jobs/paneseated1", agent_id="agent:paneseated1",
+                     project="p", cwd="/tmp/paneseated1", model=None, session_key=None)
+
+    r = await client.get("/pane/live")
+    assert r.status_code == 200
+    rows = r.json()
+    assert any(row["agent_id"] == "agent:paneseated1" for row in rows)
+    for row in rows:
+        assert set(row) == {"agent_id", "seat", "project"}
+
+
+async def test_pane_stream_refuses_honestly_when_no_live_mount_exists(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/pane/agent:nobody-here/stream")
+    assert r.status_code == 200
+    assert "no live mount" in r.text
+    assert "agent:nobody-here" in r.text
+
+
+async def test_pane_stream_refuses_honestly_when_no_transcript_resolves(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/tmp/jobs/no-such-transcript-anywhere",
+                     agent_id="agent:paneless01", project="p",
+                     cwd="/tmp/no-such-cwd-anywhere-either", model=None, session_key=None)
+
+    r = await client.get("/pane/agent:paneless01/stream")
+    assert r.status_code == 200
+    assert "no transcript found" in r.text
+    assert "agent:paneless01" in r.text
