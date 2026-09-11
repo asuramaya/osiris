@@ -502,6 +502,20 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "grounds/obsoletes/supersedes already follow) — `confirmed` is this link's "
              "count, read at query time.",
              ("Practice",), ("Decision", "Commit", "Thread")),
+    LinkType("refuted_by", "THE CORRECTIVE ANALOG (5a6b065d): the fix that refuted this "
+             "Practice — same shape as Thread's resolved_by (022bd24a), same resolver "
+             "(_find_artifact). Minted by refute_practice(killed_by=…) only when killed_by "
+             "resolves to a graph object; the property of the same name always carries the "
+             "raw pointer regardless. A Decision's own recall() surfaces the reverse "
+             "(practices_refuted), same pattern as narrowed_by/bears_on_from.",
+             ("Practice",), ("Commit", "Decision")),
+    LinkType("killed_by", "THE CORRECTIVE ANALOG's other half (5a6b065d): the fix that "
+             "killed this Superstition — kill_superstition minted NO link at all before "
+             "this (killed_by was a plain property, unlike refute_practice's own chained "
+             "call which now also mints refuted_by on the Practice). Same shape/resolver "
+             "as resolved_by/refuted_by. A Decision's own recall() surfaces the reverse "
+             "(superstitions_killed).",
+             ("Superstition",), ("Commit", "Decision")),
     LinkType("implements", "This Decision is a SPECIFIC EXECUTION of that standing ruling "
              "— the parent stays alive, unlike supersedes (thread 169398d6, "
              "prior_art_flag's third path: the commonest true relation to a matched "

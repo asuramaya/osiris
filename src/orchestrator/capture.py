@@ -4238,7 +4238,15 @@ async def kill_superstition(
     announces recent kills fleet-wide (recent_dead_superstitions) so any mind whose memory
     carries the practice strikes it. `statement` is the workaround AS IT PROPAGATES (quote
     the words agents actually inherit, e.g. 'NEVER DM BY NAME'); `killed_by` points at the
-    fix (a decision id, a commit hash). Idempotent on the normalized statement."""
+    fix (a decision id, a commit hash). Idempotent on the normalized statement.
+
+    THE CORRECTIVE ANALOG (5a6b065d, Thoth wave 18 item 2): killed_by used to be a plain
+    property with no reverse-queryable edge -- a Decision's own record had nothing to show
+    for what it killed. When killed_by resolves to a graph object (same resolver as
+    Thread's resolved_by, _find_artifact) a killed_by LINK is minted too, idempotent per
+    (superstition, target); the property always carries the raw pointer regardless of
+    whether it resolved -- same two-tier shape as resolve_thread's resolved_artifact/
+    resolved_by."""
     observed = datetime.now(UTC)
     key = " ".join(statement.split()).lower()
     s = await actions.create_or_find_object("Superstition", _canon("superstition", key), source)
@@ -4251,6 +4259,12 @@ async def kill_superstition(
     if repo:
         await link_repo(actions, s, repo, observed, source=source, evidence_class=_EC,
                         confidence=_CONF)
+    target = await _find_artifact(actions.pool, killed_by)
+    if target is not None and not await actions.pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='killed_by' LIMIT 1",
+            s, target):
+        await actions.create_link(s, target, "killed_by", source, observed, _CONF,
+                                  evidence_class=_EC)
     return s
 
 
@@ -4867,7 +4881,15 @@ async def refute_practice(
     `refuted_by`, because a half-remembered refuted lesson is exactly the thing that must
     stay findable — surfaced WITH the flag, not erased. Returns None (no write) when
     `practice_ref` matches no Practice — same all-or-nothing strictness as `supersedes`/
-    `resolves`: a refutation that can't name its target has not refuted anything."""
+    `resolves`: a refutation that can't name its target has not refuted anything.
+
+    THE CORRECTIVE ANALOG (5a6b065d, Thoth wave 18 item 2): `refuted_by` used to be a
+    plain property, same gap `kill_superstition` had — a Decision's own record had
+    nothing to show for what it refuted. When `killed_by` resolves to a graph object
+    (`_find_artifact`, same resolver Thread's resolved_by uses) a `refuted_by` LINK is
+    minted on the Practice too, idempotent per (practice, target); the chained
+    `kill_superstition` call mints its own `killed_by` link on the fresh Superstition in
+    the same pass. The property always carries the raw pointer regardless of resolution."""
     pool = actions.pool
     pid = await _find_practice(pool, practice_ref)
     if pid is None:
@@ -4877,6 +4899,12 @@ async def refute_practice(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='statement' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", pid)
     await actions.assert_property(pid, "refuted_by", killed_by, source, observed, _CONF,
+                                  evidence_class=_EC)
+    target = await _find_artifact(pool, killed_by)
+    if target is not None and not await pool.fetchval(
+            "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='refuted_by' LIMIT 1",
+            pid, target):
+        await actions.create_link(pid, target, "refuted_by", source, observed, _CONF,
                                   evidence_class=_EC)
     sid = await kill_superstition(actions, statement or practice_ref, killed_by=killed_by,
                                   repo=repo, source=source)
