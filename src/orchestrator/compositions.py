@@ -5971,6 +5971,22 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "echoes": {"op": "function", "name": "echoes"},
     # THE ONE WALL LAW (ruling 923c380f): the graded unresolved view — orient's law as a lens.
     "the-wall": {"op": "function", "name": "wall", "args": {"me": ["operator"]}},
+    # BROWSE'S FIRST PROOF (Thoth dispatch 9436, page conversions off 588148bb — "browse
+    # first"): the entity explorer's own object-set load (console.js's loadObjectSet, a
+    # bespoke /objects?type=... fetch feeding a hand-rolled table/board renderer) proven as
+    # a composition — the newest 200 active objects, no type filter, rendered through
+    # Osiris.renderResult exactly like any other saved composition since piece 2's composer
+    # shell (588148bb) already runs/renders any saved spec generically. DELIBERATELY NARROW,
+    # NOT YET A FULL PORT: type-pill filtering, search, sort-toggle, and room-scoping all
+    # stay Browse-specific UI chrome for now — the op-tree vocabulary has `select`'s own
+    # `object_type`/`where` for the first two, but no "current UI room" concept to express
+    # the third, and a full port would mean either extending the op vocabulary or wrapping
+    # this in a Function; scoped here to proving the RENDER path works end-to-end for real
+    # object data before touching any of that. The hardcoded page stays live — nothing is
+    # cut by this entry.
+    "browse": {"op": "take", "n": 200,
+               "from": {"op": "order", "by": "recency", "dir": "desc",
+                        "from": {"op": "select"}}},
 }
 
 # THE SHELF (ruling 923c380f): which sidebar section a lens belongs to + one line of 'when
@@ -6025,6 +6041,8 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "co-investment-ties": ("casework", "who co-invests with the subject"),
     "who-is-this": ("casework", "the subject's dossier at a glance"),
     "screen-financing-network": ("casework", "the subject's financing network, screened"),
+    "browse": ("memory", "the newest 200 objects, no type filter — browse's own first proof "
+                        "as a composition (588148bb)"),
 }
 
 # AUTO-REFRESH (ruling cf9286b2): absent = MANUAL ONLY, the default for every composition not
