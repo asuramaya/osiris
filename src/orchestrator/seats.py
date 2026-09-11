@@ -2849,7 +2849,10 @@ async def unfold_seat(
     OTHER seat, or a managed_by edge since re-pointed again, is never guessed back). Mail
     was moved by a raw UPDATE (the same as `fold_agent`'s own mail leg) and is never
     reversible — always reported as `estate_unreturnable`, never restored."""
-    from src.orchestrator.folds import _reversible_moved_links
+    from src.orchestrator.folds import (
+        _reversible_moved_links,
+        fold_justification_and_parity_check,
+    )
 
     dupe, because = (dupe or "").strip(), (because or "").strip()
     if not because:
@@ -2868,15 +2871,10 @@ async def unfold_seat(
     into_id = row["merged_into"]
     into_canon = await actions.pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1", into_id)
-    ev = await actions.pool.fetchrow(
-        "SELECT payload, actor, created_at FROM object_events "
-        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
-        row["id"])
-    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
-    if "operator" in original_evidence.lower() and "operator" not in because.lower():
-        return {"error": f"{dupe}'s fold was justified by citing the operator's word "
-                         f"({original_evidence!r}) — an unfold needs the operator's word "
-                         "too; add it to `because` or get it first"}
+    ev, original_evidence, parity_error = await fold_justification_and_parity_check(
+        actions.pool, row["id"], because, label=dupe)
+    if parity_error is not None:
+        return parity_error
 
     holders = await _reversible_moved_links(actions.pool, dupe_id=row["id"], into_id=into_id,
                                             link_type="holds", from_dupe=True)
