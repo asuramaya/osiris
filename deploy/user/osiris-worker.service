@@ -55,8 +55,9 @@ ExecStart=%h/code/osiris/.venv/bin/arq src.workers.arq_worker.WorkerSettings
 Restart=always
 RestartSec=5
 # Contain a runaway expansion here, not in the API (mirrors the system unit's cap; the dev box
-# has generous resources — 2G is ample for the drain/evaluate/reap crons).
-MemoryMax=2G
+# has generous resources). Raised 2G -> 3G (2026-09-11, operator's ruling, WAVE 21 item 2,
+# mail 9869) on both daemon tables (this unit and osiris-mcp.service).
+MemoryMax=3G
 # #175 (2026-08-18): the 19:08:32 CDT system-wide OOM (an UNRELATED process, heinrich
 # companion, at ~21.6GB RSS + a chrome renderer at 7.9GB, drove the box to 49G/61G used +
 # 15G swap) took osiris-worker down with 'oom-kill' alongside osiris-mcp — neither was the
