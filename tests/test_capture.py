@@ -1395,6 +1395,27 @@ async def test_short_id_prefix_collision_raises_ambiguous(actions: Actions) -> N
         assert {c["id"] for c in exc.candidates} == {str(id_a), str(id_b)}
 
 
+async def test_short_id_ref_not_fanned_out_by_a_multi_source_reassertion(
+    actions: Actions,
+) -> None:
+    """Thread 90ad0592/decision cf3dcd79: a REAL, SINGULAR object touched by two different
+    sources on the same text_field (e.g. a later triage pass re-asserting an identical
+    summary) leaves TWO current_assertions rows for one object_id — the short-id leg's old
+    `LEFT JOIN ... ON a.object_id=o.id AND a.name=$3` fanned that out to two joined rows
+    for the SAME object and spuriously raised RefAmbiguous against a real, singular short
+    id. One object, two sources, must resolve cleanly — never ambiguous."""
+    from src.orchestrator.capture import _find_thread
+
+    t = await open_thread(actions, "a thread touched by two different sources")
+    # a second source re-asserts the identical summary on a later pass (a triage/status
+    # touch, not a content change) — current_assertions now carries one row per source
+    await actions.assert_property(t, "summary", "a thread touched by two different sources",
+                                  "second-source-agent", datetime.now(UTC) + timedelta(minutes=5),
+                                  0.9, evidence_class="self_declared")
+    short = str(t)[:8]
+    assert await _find_thread(actions.pool, short) == t
+
+
 async def test_find_decision_resolves_by_canonical_suffix(actions: Actions) -> None:
     import hashlib
 
