@@ -394,6 +394,10 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
               "by raising SystemExit from this CLI door's own pre-call UUID validation "
               "(_uuids()), not by returning a clean int — the wrong shape for this file's "
               "own thunk contract, so still no usable no-write invocation",
+    "soul-key-init": "genuinely writes a real key file to disk for any non-root caller "
+                     "(soul_key_init's own refusal gate fires ONLY when running as root "
+                     "with no --owner given — this test process is never root); no "
+                     "dry-run flag, same operator-devops-bootstrap class as seed/bootstrap",
     "mint-seat": "genuinely mints a seat; no confirmed refusal-only path — every "
                  "existing test mints for real",
     "new": "genuinely spawns/mints a seat for real; no confirmed refusal-only path",
