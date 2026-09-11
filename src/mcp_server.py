@@ -6197,7 +6197,7 @@ async def unwire_informs_fanout(
 
 _BACKFILL_TARGETS = frozenset({
     "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
-    "lineage_repo_links", "agent_project_links",
+    "lineage_repo_links", "agent_project_links", "closed_by_real_sources",
 })
 
 
@@ -6241,6 +6241,12 @@ async def _backfill_impl(
         return await _f_agent_links(
             Actions(pool), actor=ident.agent_id, dry_run=dry_run,
             only_bases=set(only_bases) if only_bases else None)
+    if target == "closed_by_real_sources":
+        from src.orchestrator.capture import (
+            backfill_closed_by_real_sources as _f_closed_by_real_sources,
+        )
+        return await _f_closed_by_real_sources(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
     return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
 
 
@@ -6249,10 +6255,10 @@ async def backfill(
     target: str, dry_run: bool = True, because: str | None = None,
     only_bases: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb, dispatched over `target` — five structurally distinct backfills (no
+    """Repair verb, dispatched over `target` — six structurally distinct backfills (no
     shared logic underneath, only a shared wire shape). Dry run is the default for every
     target; `dry_run=False` requires `because` (except `agent_project_links`, which
-    predates that convention). All five idempotent.
+    predates that convention). All six idempotent.
 
     `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
     Reference to the SoftwareProject its own canonical prefix names) |
@@ -6261,7 +6267,10 @@ async def backfill(
     the Thread it names) | "lineage_repo_links" (links a zero-link Decision/Thread to its
     author's lineage project) | "agent_project_links" (moves works_in/governs off an
     off-head Agent onto its living head; the one target taking `only_bases` to scope the
-    write)."""
+    write) | "closed_by_real_sources" (thread 6d01f21e: re-points a `closed_by` edge off
+    the old 'session'/'analyst:operator' placeholder Agent objects onto the real Person/
+    SystemSource `_mint_closed_by` mints today, then retires the now-edgeless
+    placeholder)."""
     if target not in _BACKFILL_TARGETS:
         return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
     return await _backfill_impl(target, dry_run, because, only_bases, ctx)

@@ -80,6 +80,26 @@ async def ensure_operator_person(actions: Actions, source: str = _SOURCE) -> uui
     return pid
 
 
+# THE OTHER HALF OF THE ACTOR/SOURCE DISTINCTION (thread 6d01f21e, Thoth's wave-18
+# reversal of his own 2026-08-01 "stand for now"): `ensure_operator_person` above gives
+# the operator-attribution family a real target; this gives the module's own bare
+# 'session' default one too — an attributionless, automated write with no specific Agent
+# or Person behind it. ONE singleton, `system:automated-closure`, distinct from a made-up
+# Agent canonical (the old placeholder shape this replaces).
+_SYSTEM_SOURCE_CANONICAL = "system:automated-closure"
+
+
+async def ensure_system_source(actions: Actions, source: str = _SOURCE) -> uuid.UUID:
+    """Idempotent find-or-create for the singleton SystemSource object standing in for
+    an attributionless/automated write (see the module comment above this function).
+    Never mints twice (create_or_find_object's own (type, canonical) uniqueness)."""
+    sid = await actions.create_or_find_object("SystemSource", _SYSTEM_SOURCE_CANONICAL,
+                                               source)
+    await actions.assert_property(sid, "role", "automated-closure-default", source,
+                                  datetime.now(UTC), _CONF, evidence_class=_EC)
+    return sid
+
+
 # task #101: most rulings already cite the commit they landed in, in ENGLISH prose
 # ("commit 238b48f", "Commit: 238b48f.") — this is the only thing standing between that
 # text and a real `decided_in` edge. Requires the word "commit(s)" immediately before the
@@ -4025,21 +4045,127 @@ async def _mint_closed_by(
     actions: Actions, tid: uuid.UUID, source: str, observed: datetime
 ) -> None:
     """The Phase 1a fallback edge (decision cb38d922) — WHO closed a thread, minted whenever
-    resolved_by did not land for this closure. `source` is resolved to its Agent object via
-    the same mint-or-find primitive mount() uses to register an agent in the first place
-    (`create_or_find_object`, idempotent on (type, canonical)): the common case (a mounted
-    caller's `agent:<session>` string) FINDS the object mount() already created; a non-Agent
-    source (the module default 'session', the REST route's hardcoded 'analyst:operator')
-    CREATES a placeholder on first use and finds it on every closure after — a taxonomic
-    stretch (schema.py calls Agent 'a Claude instance'; 'session' and 'analyst:operator' are
-    neither) accepted deliberately so no closer is ever left with nothing to point at.
-    Idempotent per (thread, closer) pair, same check-then-create shape as resolved_by."""
-    closer = await actions.create_or_find_object("Agent", source, source)
+    resolved_by did not land for this closure. `source` resolves to a REAL object of the
+    right type (thread 6d01f21e, Thoth's wave-18 reversal of his own 2026-08-01 "stand for
+    now" — the Actor/Source type distinction he deferred on now exists): a real `agent:<id>`
+    string FINDS the Agent object mount() already created, unchanged, the common case; a
+    member of the operator-attribution family (`_OPERATOR_ACTORS`, seats.py — 'operator',
+    'analyst:operator', 'console', deliberately treated as ONE notion everywhere else in
+    this codebase too, so this does not invent a second) resolves to the real operator
+    Person object (`ensure_operator_person`); the module's own bare 'session' default
+    resolves to the singleton SystemSource (`ensure_system_source`). No source string mints
+    a placeholder Agent under a non-Agent canonical any more — every closer is a real object
+    of a real type, and no closer is ever left with nothing to point at. Idempotent per
+    (thread, closer) pair, same check-then-create shape as resolved_by."""
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+
+    if source in _OPERATOR_ACTORS:
+        closer = await ensure_operator_person(actions, source)
+    elif source == _SOURCE:
+        closer = await ensure_system_source(actions, source)
+    else:
+        closer = await actions.create_or_find_object("Agent", source, source)
     if not await actions.pool.fetchval(
             "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 "
             "AND type='closed_by' LIMIT 1", tid, closer):
         await actions.create_link(tid, closer, "closed_by", source, observed, _CONF,
                                   evidence_class=_EC)
+
+
+_CLOSED_BY_PLACEHOLDER_CANONICALS = ("session", "analyst:operator")
+
+
+async def backfill_closed_by_real_sources(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE COMPENSATING FOLD (thread 6d01f21e): re-points every existing `closed_by` edge
+    still targeting one of the two placeholder Agent objects `_mint_closed_by` used to mint
+    (canonical literally 'session' or 'analyst:operator' — never `agent:`-prefixed, so
+    `merge()` cannot touch them: it dispatches on the ref's OWN string form, agent:/seat:/
+    else, and refuses a cross-type pairing outright; these placeholders are Agent-typed but
+    their correct target is Person or SystemSource, a different type either way) at the
+    real object `_mint_closed_by` would mint today for that same edge's own `source_id`.
+
+    ATTRIBUTION SURVIVES THE FOLD (decision 4fd979a0, same mechanism as projects.py's
+    `_move_project_estate`): the re-pointed edge keeps the ORIGINAL edge's own source_id/
+    confidence/evidence_class — `actor` is passed only to `invalidate_link`'s and
+    `create_link`'s own separate `actor=` kwarg, never used to overwrite what the closure
+    itself was attributed to. Once every closed_by edge off a placeholder is moved, the
+    placeholder is `retire_object`'d (status flip via a compensating event, never a DELETE)
+    — never before every edge off it is moved, so a placeholder is never retired while
+    still load-bearing.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent: a
+    repeat call finds no placeholder-targeted closed_by edges left once the fold is done."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT l.from_id AS thread_id, l.to_id AS placeholder_id, "
+        "  ph.canonical AS placeholder_canonical, l.source_id, l.confidence, "
+        "  l.evidence_class, l.first_seen "
+        "FROM links l JOIN objects ph ON ph.id=l.to_id "
+        "WHERE l.type='closed_by' AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "AND ph.type='Agent' AND ph.canonical = ANY($1::text[])",
+        list(_CLOSED_BY_PLACEHOLDER_CANONICALS))
+    observed = datetime.now(UTC)
+    plan: list[dict[str, Any]] = []
+    by_placeholder: dict[uuid.UUID, list[dict[str, Any]]] = {}
+    for row in rows:
+        source = row["source_id"]
+        if source in _OPERATOR_ACTORS:
+            target_kind = "Person"
+        elif source == _SOURCE:
+            target_kind = "SystemSource"
+        else:
+            # a placeholder minted under 'session'/'analyst:operator' whose OWN edge
+            # source_id is neither — e.g. a caller passed source= explicitly as one of
+            # the two placeholder canonicals themselves. Genuinely ambiguous which real
+            # object this closure should now attribute to; never guessed.
+            plan.append({"thread": str(row["thread_id"])[:8],
+                        "placeholder": row["placeholder_canonical"],
+                        "verdict": "abstain",
+                        "reason": f"edge source_id {source!r} is neither the operator-"
+                                  "attribution family nor the module default — cannot "
+                                  "map to a real target without guessing"})
+            continue
+        entry = {"thread": str(row["thread_id"])[:8], "placeholder": row["placeholder_canonical"],
+                 "source": source, "verdict": "repoint", "to_type": target_kind}
+        plan.append(entry)
+        if not dry_run:
+            new_target = (await ensure_operator_person(actions, source) if target_kind == "Person"
+                         else await ensure_system_source(actions, source))
+            await actions.create_link(row["thread_id"], new_target, "closed_by", source,
+                                      row["first_seen"] or observed, row["confidence"],
+                                      evidence_class=row["evidence_class"])
+            await actions.invalidate_link(row["thread_id"], row["placeholder_id"], "closed_by",
+                                          actor, observed,
+                                          reason="backfill_closed_by_real_sources: re-pointed "
+                                                 "off a placeholder Agent to a real object")
+            by_placeholder.setdefault(row["placeholder_id"], []).append(entry)
+    retired: list[str] = []
+    if not dry_run:
+        for placeholder_id in by_placeholder:
+            remaining = await pool.fetchval(
+                "SELECT 1 FROM links WHERE to_id=$1 AND type='closed_by' "
+                "AND (valid_until IS NULL OR valid_until > now()) LIMIT 1", placeholder_id)
+            if remaining:
+                continue
+            canonical = await pool.fetchval(
+                "SELECT canonical FROM objects WHERE id=$1", placeholder_id)
+            from src.orchestrator.agents import retire_agent
+            result = await retire_agent(actions, agent_id=canonical, actor=actor,
+                                        because=f"{because} (backfill_closed_by_real_sources: "
+                                                "every closed_by edge off this placeholder has "
+                                                "been re-pointed to a real object)")
+            if not result.get("error"):
+                retired.append(canonical)
+    return {"dry_run": dry_run, "scanned": len(rows), "plan": plan,
+           "retired": retired if not dry_run else None,
+           "because": because if not dry_run else None}
 
 
 async def assign_thread(

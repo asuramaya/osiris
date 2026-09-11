@@ -178,6 +178,14 @@ _OBJECT_TYPES: tuple[ObjectType, ...] = (
                # claim. Overriding to `handle` and falling through the chain's own
                # `name` for the pre-claim case gets both right with one field.
                label_field="handle"),
+    ObjectType("SystemSource", "Software", "#484f58", "rectangle",
+               "An attributionless, automated write — the module's own bare 'session' "
+               "default actor when a caller mints something (a closed_by edge, chiefly) "
+               "without a real Agent/Person to point at. Never a live mind: distinct "
+               "from Agent (a Claude instance) and Person (a human, including the "
+               "operator). Exists so a mechanical fallback has something real to point "
+               "at instead of minting a placeholder Agent object under a non-Agent "
+               "canonical (thread 6d01f21e).", ("system:",)),
     ObjectType("Tension", "Software", "#e685b5", "vee",
                "A held POLARITY — two positions in productive tension, neither settled. Unlike a "
                "Decision (which settles) or a Thread (which closes), a tension is HELD: the "
@@ -444,11 +452,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "resolved_by (WHAT closed it, the strong artifact witness): this is the weak edge "
              "that always exists — minted only when resolved_by does NOT land for this closure "
              "(a free-text/unresolvable artifact, or none at all), never both, so a closure "
-             "mints exactly one closure edge. Points at the Agent object resolved from "
-             "resolve_thread's own `source` (mint-or-find, so a non-Agent source string like "
-             "the module default 'session' or the REST route's 'analyst:operator' still "
-             "resolves to SOMETHING rather than leaving the thread edgeless).",
-             ("Thread",), ("Agent",)),
+             "mints exactly one closure edge. Points at the object resolved from resolve_"
+             "thread's own `source` (thread 6d01f21e, the Actor/Source type distinction "
+             "Thoth deferred pending: a real `agent:<id>` source resolves to that Agent, "
+             "unchanged; the operator-attribution family (`_OPERATOR_ACTORS`, seats.py) "
+             "resolves to the real operator Person object (`person:operator`, decision "
+             "12efe065); the module's own bare 'session' default resolves to the singleton "
+             "SystemSource — no source string is ever left minting a placeholder Agent "
+             "again, and no closure is ever left edgeless).",
+             ("Thread",), ("Agent", "Person", "SystemSource")),
     LinkType("cites", "This document cites / draws from that reference — OR (task #189's "
              "derivation lane, decision bb2ddf8a) a Decision/Thread's own prose named "
              "another object by id ('ruling <id>', 'obligation <id>'), minted at the "
