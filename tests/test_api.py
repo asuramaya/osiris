@@ -248,6 +248,25 @@ async def test_graph_supernodes_counts_members_per_project(
     assert row["orphans"] == 0
 
 
+async def test_graph_supernodes_shows_the_projects_name_not_its_raw_canonical(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """Thoth dispatch 9563/9769: the retired Atlas showed `project_canonical` verbatim
+    (repo:foo) — a named project now resolves through the SAME resolve_label chain
+    /objects and the projects composition already use. Unnamed stays canonical (the test
+    above, unchanged) — this is the ONLY new behavior."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-named", "test")
+    await actions.assert_property(proj, "name", "gv-lod-named-display", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    member = await actions.create_or_find_object("Thread", "thread:gv-lod-named-member", "test")
+    await actions.create_link(member, proj, "in_repo", "test", datetime.now(UTC), 1.0)
+
+    r = await client.get("/graph/supernodes")
+    body = r.json()
+    row = next(s for s in body["supernodes"] if s["id"] == str(proj))
+    assert row["label"] == "gv-lod-named-display"
+
+
 async def test_graph_supernodes_unfiled_orphans_are_the_true_zero_link_objects(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
