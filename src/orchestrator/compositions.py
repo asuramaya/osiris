@@ -1412,6 +1412,7 @@ _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 # silently reading as counts[check]==0 (indistinguishable from a genuinely clean pass).
 _LINT_CHECK_NAMES = [
     "contradiction", "status-regression", "laundering", "lineage-cycle", "lineage-dangling",
+    "dangling-succeeded_from",
     "orphan-heir", "retired-live", "false-mint", "false-mint-live",
     "merged-with-live-successor", "orphan-link", "stale-obligation", "rot-candidate",
     "rot-candidate-unscoped", "edgeless-closure-growth", "attribution", "phantom-twin",
@@ -2143,6 +2144,37 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 walked.add(nxt)
         land("lineage-cycle", "error", cycles)
         land("lineage-dangling", "error", dangling)
+
+        # DANGLING-SUCCEEDED_FROM (thread 8322bca8, Khnum specimen #3, decision 0e9c4f1d):
+        # the walk above only follows `succeeded_by` FORWARD (an ancestor's own pointer to
+        # ITS successor) — `succeeded_from` (an heir's own pointer to ITS ancestor) was never
+        # checked in the reverse direction, so a `succeeded_from` value naming a canonical no
+        # Agent object of any status carries slipped past every existing lineage check. Same
+        # "pointer into the void" failure mode as `lineage-dangling`, same `known` set built
+        # above (every registered Agent canonical, any status) — just the other direction,
+        # and no chain to walk (`succeeded_from` names exactly one ancestor, never a further
+        # pointer to follow).
+        #
+        # SCOPE NOTE (measurement discipline, this house's own standing practice): `succeeded_
+        # from` is ALSO a real graph LINK TYPE (compositions.py's neighborhood-expansion query
+        # above, `l.type IN (..., 'succeeded_from', ...)`), stored in parallel with this same-
+        # named property. A prior investigation (thread 8322bca8's own dated-plan note,
+        # 2026-09-05) attempted to cross-validate the LINK against the PROPERTY and got an
+        # inconclusive "format mismatch (text vs raw UUID)" rather than a clean agree/disagree
+        # count — and this build could not re-measure that population live (no DB reachable
+        # from the worktree this was built in) to build it correctly. Deliberately NOT built
+        # here: guessing at a link/property cross-validation query without a live measurement
+        # to verify it against risks exactly the kind of confidently-wrong population claim
+        # this house has been burned by before. This check covers only the property-side
+        # reverse-direction gap, which reuses already-proven logic (`known`, `props`) and
+        # needs no new live measurement to trust. The link-side cross-validation remains a
+        # distinct, still-open follow-up — flag it fresh rather than build it blind.
+        succ_from = {c: p["succeeded_from"] for c, p in props.items() if p.get("succeeded_from")}
+        land("dangling-succeeded_from", "error", [
+            {"subject": c, "detail": f"succeeded_from points at {anc!r}, which no Agent "
+                                     "object of any status carries — a pointer into the void"}
+            for c, anc in sorted(succ_from.items()) if anc not in known])
+
         land("orphan-heir", "warn", [
             {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
                                      "with no recorded ancestor"}

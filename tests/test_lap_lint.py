@@ -149,6 +149,32 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert _by_check(out, "false-mint-live") == []
 
 
+async def test_lint_catches_a_dangling_succeeded_from(actions: Actions) -> None:
+    """DANGLING-SUCCEEDED_FROM (thread 8322bca8, Khnum specimen #3, decision 0e9c4f1d):
+    lineage-dangling above only walks succeeded_by FORWARD — an heir's own succeeded_from
+    pointer, naming a canonical no Agent object carries, was never checked in the reverse
+    direction. Same failure mode, same fix shape, the other way."""
+    t = "agent:teller"
+    # a real, healthy pair — negative control: this must NEVER be flagged
+    anc = await actions.create_or_find_object("Agent", "agent:11110001", t)
+    heir = await actions.create_or_find_object("Agent", "agent:11110001-ii", t)
+    await actions.assert_property(heir, "succeeded_from", "agent:11110001", t, NOW, 0.9,
+                                  evidence_class=_SD)
+    # a succeeded_from pointer into the void — no Agent object of ANY status carries it
+    ghost_heir = await actions.create_or_find_object("Agent", "agent:22220002-ii", t)
+    await actions.assert_property(ghost_heir, "succeeded_from", "agent:no-such-ancestor",
+                                  t, NOW, 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    dangle = _by_check(out, "dangling-succeeded_from")
+    assert len(dangle) == 1
+    assert dangle[0]["subject"] == "agent:22220002-ii"
+    assert "agent:no-such-ancestor" in dangle[0]["detail"]
+    assert dangle[0]["severity"] == "error"
+    # the healthy pair never shows up here
+    assert "agent:11110001-ii" not in [f["subject"] for f in dangle]
+    assert anc and heir  # created only to prove the negative control, never flagged
+
+
 async def test_lint_flags_a_merged_agent_whose_succeeded_by_is_still_active(
     actions: Actions,
 ) -> None:
