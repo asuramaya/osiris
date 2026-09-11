@@ -1469,7 +1469,7 @@ _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 _LINT_CHECK_NAMES = [
     "contradiction", "status-regression", "laundering", "lineage-cycle", "lineage-dangling",
     "dangling-succeeded_from",
-    "orphan-heir", "retired-live", "false-mint", "false-mint-live",
+    "orphan-heir", "succeeded-from-mismatch", "retired-live", "false-mint", "false-mint-live",
     "merged-with-live-successor", "orphan-link", "stale-obligation", "rot-candidate",
     "rot-candidate-unscoped", "edgeless-closure-growth", "attribution", "phantom-twin",
     "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
@@ -2236,6 +2236,41 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                                      "with no recorded ancestor"}
             for c in sorted(canons)
             if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
+
+        # SUCCEEDED-FROM-MISMATCH (decision 1081a782, Khnum's guard-symmetry inventory,
+        # specimen #3 — same root decision 0e9c4f1d as lineage-dangling/orphan-heir above):
+        # every check in this family reads succeeded_by FORWARD; none had ever cross-checked
+        # an heir's own succeeded_from pointer against that SAME ancestor's own succeeded_by —
+        # the exact blindness that hid a live break for twelve days (seat-8187daaa-vii, six
+        # checks all looking the other way down the same relation). Pure Python comparison
+        # over `props`/`succ_by`, already loaded above for the forward walk — no new query.
+        #
+        # NOT A CLEAN DAMAGE SIGNAL (1081a782's own measured population: 660 active agents
+        # carry succeeded_from; 41 disagree; 40 of those are the EXPECTED case — the named
+        # ancestor's own succeeded_by was never asserted, or was phantom-folded blank (see
+        # false-mint/the 'phantom-fold' source name above) rather than naming someone else;
+        # 1 is a genuinely different name, an already-cleared parallel-lives fork; CURRENT
+        # UNREPAIRED LIVE MISMATCHES: ZERO). That 40-vs-1 split IS code-derivable — an absent/
+        # blank ancestor succeeded_by is architecturally different from one naming a THIRD
+        # party — so both shapes land under warn (a candidate for a human's glance, same
+        # tier as orphan-heir/merged-with-live-successor, never error: this is a structural
+        # possibility, not a proven-impossible state), but each finding's own `detail` names
+        # which shape it is rather than flattening them into one undifferentiated claim.
+        land("succeeded-from-mismatch", "warn", [
+            {"subject": c,
+             "detail": (
+                 f"succeeded_from names {a!r} as ancestor, but {a!r}'s own succeeded_by "
+                 + (f"names {succ_by[a]!r} instead — a real disagreement, not an absence"
+                    if succ_by.get(a) else
+                    ("no Agent object of any status carries that canonical at all"
+                     if a not in known else
+                     "was never asserted (or was phantom-folded blank)")
+                    + " — the expected/benign shape per decision 1081a782, still worth a "
+                      "glance, never an alarm"))}
+            for c in sorted(canons)
+            if (a := props.get(c, {}).get("succeeded_from"))
+            and succ_by.get(a) != c])
+
         live = {r["agent_id"] for r in await pool.fetch(
             "SELECT DISTINCT agent_id FROM agent_mounts "
             "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}
