@@ -792,6 +792,77 @@ async def test_projects_composition_surfaces_object_count(actions: Actions) -> N
     assert row["commits"] == 1            # unchanged: the type-filtered rollup still works
 
 
+# table's new "function" column (Thoth dispatch 9542, projects piece 2 of 4): a column
+# whose value comes from a registered Function's own row-shaped output — real domain
+# logic (triage's bucket classification) no property/rollup can express.
+
+
+async def test_projects_composition_surfaces_the_triage_bucket(actions: Actions) -> None:
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    orphan = await actions.create_or_find_object("SoftwareProject", "repo:buckettest-orphan",
+                                                  "test")
+    await actions.assert_property(orphan, "name", "buckettest-orphan", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    linked = await actions.create_or_find_object("SoftwareProject", "repo:buckettest-linked",
+                                                  "test")
+    await actions.assert_property(linked, "name", "buckettest-linked", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    commit = await actions.create_or_find_object("Commit", "commit:buckettest@abc", "test")
+    await actions.create_link(commit, linked, "in_repo", "test", now, 0.9)
+
+    out = await run_composition(actions.pool, "projects")
+    orphan_row = next(r for r in out["items"] if r["project"] == "buckettest-orphan")
+    linked_row = next(r for r in out["items"] if r["project"] == "buckettest-linked")
+    assert orphan_row["bucket"] == "orphan"       # zero live links — triage's own rule
+    assert linked_row["bucket"] != "orphan"       # a real link — never a false orphan
+
+
+async def test_projects_composition_bucket_and_contradicted_on_share_one_triage_call(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bucket and contradicted_on both declare the SAME function+args — _table must call
+    triage ONCE for the whole table, not once per column (the batching discipline the
+    mechanism's own docstring promises)."""
+    from src.orchestrator import compositions as comp_mod
+
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:sharedcalltest", "test")
+    await actions.assert_property(proj, "name", "sharedcalltest", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    calls = 0
+    real_triage = comp_mod._fn_triage
+
+    async def _counting_triage(pool: Any, subject: Any, args: dict[str, Any]) -> Any:
+        nonlocal calls
+        calls += 1
+        return await real_triage(pool, subject, args)
+
+    monkeypatch.setitem(comp_mod._FUNCTIONS, "triage", _counting_triage)
+    await run_composition(actions.pool, "projects")
+    assert calls == 1
+
+
+async def test_projects_composition_retired_project_bucket_degrades_to_none(
+    actions: Actions,
+) -> None:
+    """triage buckets defaults to status="active" (no "any" of its own yet) — a retired
+    project is honestly absent from that read, never a stale or fabricated bucket."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    retired = await actions.create_or_find_object("SoftwareProject", "repo:bucketretired",
+                                                   "test")
+    await actions.assert_property(retired, "name", "bucketretired", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["project"] == "bucketretired")
+    assert row["bucket"] is None
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
