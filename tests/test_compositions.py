@@ -3004,6 +3004,30 @@ async def test_lint_isolates_one_broken_check_from_every_other(
     assert result["orphan_by_type"] == {}
 
 
+async def test_orphan_census_agent_bucket_deflates_visit_class(actions: Actions) -> None:
+    """9dc3ce8b: an orphaned visit-class Agent (a doorbell ring nobody ever linked to
+    anything — exactly the shape most likely to end up here) must not read as an
+    unexplained orphan indistinguishable from a real, forgotten mind. `visit` rides
+    beside `count` on the Agent bucket only; every other type's bucket carries no such
+    key at all."""
+    from src.orchestrator.compositions import orphan_census
+
+    now = datetime.now(UTC)
+    named = await actions.create_or_find_object("Agent", "agent:orphan-named", "test")
+    await actions.assert_property(named, "handle", "OrphanNamed", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    visit = await actions.create_or_find_object("Agent", "agent:orphan-visit", "test")
+    await actions.assert_property(visit, "agent_class", "visit", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    thread = await actions.create_or_find_object("Thread", "thread:orphan-plain", "test")
+    await actions.assert_property(thread, "summary", "an orphaned thread", "test", now,
+                                  0.9, evidence_class="self_declared")
+
+    result = await orphan_census(actions.pool)
+    assert result["by_type"]["Agent"] == {"count": 2, "abstained": 0, "visit": 1}
+    assert result["by_type"]["Thread"] == {"count": 1, "abstained": 0}  # no `visit` key
+
+
 # --- _fn_lint: untraceable-output, THE TRACEABILITY INVARIANT (Graph-Engineering, ---------
 # operator decision f47d14a7, thread 7f547426, item 3/3) --------------------------------
 

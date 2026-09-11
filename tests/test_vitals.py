@@ -45,3 +45,38 @@ async def test_live_counts_a_g_n_generation_as_the_same_soul_not_a_new_one(
 async def test_operator_debts_empty_desk_is_zero(actions: Actions) -> None:
     out = await vitals.operator_debts(actions.pool, hood="osiris")
     assert out == {"owed": 0, "owed_here": 0}
+
+
+async def _mint_agent(actions: Actions, canonical: str, *, handle: str | None = None,
+                      visit: bool = False) -> None:
+    from datetime import UTC, datetime
+
+    oid = await actions.create_or_find_object("Agent", canonical, "test")
+    now = datetime.now(UTC)
+    if handle:
+        await actions.assert_property(oid, "handle", handle, "test", now, 0.9,
+                                      evidence_class="self_declared")
+    if visit:
+        await actions.assert_property(oid, "agent_class", "visit", "test", now, 0.9,
+                                      evidence_class="self_declared")
+
+
+async def test_agent_class_counts_splits_named_visit_and_unresolved(
+    actions: Actions,
+) -> None:
+    """THE VISIT CLASS (9dc3ce8b): a handle-claiming generation is named; an agent_class=
+    'visit' generation (greatfold.py's own doorbell-ring demotion) is a visit family,
+    never counted as a soul; anything with neither is unresolved — not yet examined by
+    a fold pass. A named generation beside an unnamed sibling of the SAME soul (the
+    fold's own generation-suffix folding) still counts as one named soul, not two."""
+    await _mint_agent(actions, "agent:aaaa1111", handle="Alfred")
+    await _mint_agent(actions, "agent:aaaa1111-ii")  # same soul, no handle on this gen
+    await _mint_agent(actions, "agent:bbbb2222", visit=True)
+    await _mint_agent(actions, "agent:cccc3333")  # examined by nobody yet
+    out = await vitals.agent_class_counts(actions.pool)
+    assert out == {"named_souls": 1, "visit_families": 1, "unresolved_families": 1}
+
+
+async def test_agent_class_counts_empty_graph_is_all_zero(actions: Actions) -> None:
+    out = await vitals.agent_class_counts(actions.pool)
+    assert out == {"named_souls": 0, "visit_families": 0, "unresolved_families": 0}
