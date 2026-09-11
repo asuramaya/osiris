@@ -34,9 +34,18 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        per-object aggregate), OR a registered Function's own field. column = {"name":,
        "property":P} | {"name":,"rollup":{"direction":in|out|both,"link_type":?,
        "object_type":?,"of":count|first|max|min|sum|avg,"property":?}} | {"name":,
-       "function":{"name":<fn>,"args":{},"field":F}}. `first` = Notion's show-original
+       "function":{"name":<fn>,"args":{},"field":F}} | {"name":,"name_fallback":
+       {"strip_prefix":?,"field":"name"|"unnamed"}}. `first` = Notion's show-original
        (pluck a single relation's value, incl. an object column like `canonical` — how a
-       linked commit/entity is named). `function` (Thoth dispatch 9542, task #138/#163's
+       linked commit/entity is named). `property:"name"` resolves through resolve_label's
+       rule/chain tiers (Thoth dispatch 9676/9712/9716) — TYPE-NEUTRAL, the same chain
+       /objects itself uses, returning the raw canonical (unstripped) on the canonical
+       tier for every composition alike. `name_fallback` is the opt-in SIBLING for a
+       composition with its OWN naming policy (e.g. the projects composition's "never
+       show a bare repo: canonical" ruling): `strip_prefix` trims a canonical-tier
+       fallback, `field:"unnamed"` picks the honest boolean off the same resolve_label
+       call instead of the display text — one call, two fields, never baked into the
+       shared property path itself. `function` (Thoth dispatch 9542, task #138/#163's
        arc) is for real domain logic no property/rollup can express (triage's bucket
        classification) — called ONCE per distinct (name, args) across the whole table,
        matched back to each row by the Function's own "id" field; an object absent from
@@ -5226,6 +5235,21 @@ def _col_value(oid: uuid.UUID, facts: dict[str, str], prop: str) -> Any:
     own ids)."""
     if prop == "id":
         return str(oid)[:8]
+    if prop == "name":
+        # THE SAME resolve_label CHAIN /objects ITSELF USES (Thoth dispatch 9676/9712/9716,
+        # 588148bb's swap piece), never a second name-resolution notion for compositions:
+        # `facts` already carries every LABEL_CHAIN property (winning_props returns ALL
+        # current properties, not just requested columns — same "already have it, don't
+        # re-fetch" reasoning as `summary` above) plus `type`/`canonical` whenever any
+        # column asked for `property:"name"` (`_table`'s own obj_cols_needed extension).
+        # UNIVERSAL, not type policy (Thoth's own words) — returns the RAW canonical,
+        # unstripped, on the canonical tier: a type-specific "never show the repo: prefix"
+        # rule is SoftwareProject's own UI policy, not this shared function's to encode
+        # (see the `name_fallback` column kind below for where that opt-in policy lives).
+        obj_type, canonical = facts.get("type"), facts.get("canonical")
+        if obj_type and canonical:
+            return resolve_label(str(obj_type), facts, str(canonical)).label
+        return facts.get("name")
     if prop == "summary":
         # THE CORRECTED SUMMARY WINS BY DEFAULT (roadmap ledger-rot stage 3.5, decision
         # c0bc6d33 + Thoth LXXIV's DM 4364): `facts` already carries BOTH properties (winning_
@@ -5267,6 +5291,13 @@ async def _table(
     # `_rollup`'s own `of:"first"` already trusts, reused here rather than re-declared).
     obj_cols_needed = {str(c["property"]) for c in columns
                       if "property" in c and str(c["property"]) in _OBJ_COLS}
+    # NAME RESOLUTION needs `type`+`canonical` too (Thoth dispatch 9676/9712/9716): a
+    # `property:"name"` column or a `name_fallback` column (see `_col_value`/below) calls
+    # resolve_label, which needs this row's own object type and canonical — fetched here
+    # regardless of whether some OTHER column also asked for them explicitly.
+    if any(("property" in c and str(c["property"]) == "name") or "name_fallback" in c
+           for c in columns):
+        obj_cols_needed |= {"type", "canonical"}
     obj_cols: dict[uuid.UUID, dict[str, Any]] = {}
     if obj_cols_needed and objects:
         cols_sql = ", ".join(sorted(obj_cols_needed))
@@ -5320,6 +5351,25 @@ async def _table(
                       + json.dumps(fn_spec.get("args") or {}, sort_keys=True))
                 fn_row = fn_results.get(key, {}).get(str(oid))
                 row[name] = fn_row.get(str(fn_spec.get("field"))) if fn_row else None
+            elif "name_fallback" in col:
+                # THE PROJECTS-SPECIFIC POLICY HALF (Thoth dispatch 9676/9712/9716, kept
+                # OUT of `_col_value`'s own shared "name" resolution on purpose): the
+                # operator's own ruling that a SoftwareProject's `repo:` canonical prefix
+                # must never leak into the UI, plus an honest `unnamed` signal for the
+                # frontend — one resolve_label call, two fields picked off it via `field`
+                # (same convention `function` columns already use for picking a field off
+                # one shared computation). {"strip_prefix":?,"field":"name"|"unnamed"}.
+                spec = col["name_fallback"]
+                obj_type, canonical = facts.get("type"), facts.get("canonical")
+                resolved = (resolve_label(str(obj_type), facts, str(canonical))
+                           if obj_type and canonical else None)
+                if resolved is None:
+                    row[name] = None
+                elif spec.get("field") == "unnamed":
+                    row[name] = resolved.source == "canonical"
+                else:
+                    row[name] = (resolved.label.removeprefix(str(spec.get("strip_prefix", "")))
+                                if resolved.source == "canonical" else resolved.label)
             else:
                 row[name] = None
         if row_action:
@@ -6248,7 +6298,17 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
             # `status` COLUMN below is what the toggle actually reads.
             "from": {"op": "select", "object_type": "SoftwareProject", "status": "any"},
             "columns": [
-                {"name": "project", "property": "name"},
+                # NAME (Thoth dispatch 9676/9712/9716, 588148bb's swap piece): the OLD
+                # /projects route's own "project never repo" ruling — `strip_prefix`
+                # opts into stripping a genuinely-unnamed project's canonical scheme
+                # rather than showing it raw, `unnamed` is the honest sibling flag so the
+                # frontend marks it distinct instead of passing a stripped id off as a
+                # real name. Policy lives HERE (a composition-owned opt-in), never in
+                # `_col_value`'s own shared "name" resolution (every OTHER composition's
+                # `property:"name"` column stays type-neutral, raw canonical on no-match).
+                {"name": "project", "name_fallback": {"strip_prefix": "repo:"}},
+                {"name": "unnamed", "name_fallback": {"strip_prefix": "repo:",
+                                                       "field": "unnamed"}},
                 {"name": "canonical", "property": "canonical"},
                 {"name": "status", "property": "status"},
                 {"name": "on_disk_path", "property": "on_disk_path"},

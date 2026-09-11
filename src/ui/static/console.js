@@ -557,12 +557,33 @@ async function sendPaneReply() {
 }
 
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
+// THE SWAP (Thoth dispatch 9542/9676/9690/9716, 588148bb): the hardcoded /projects fetch
+// + hand-rolled projectRow()/openProjectInBrowse() replaced by the "projects" saved
+// composition, proven complete across 4 pieces first (object_count, bucket badges,
+// worktree nesting, click-through) plus the name-resolution parity gap the swap itself
+// surfaced (compositions.py's `name_fallback` column kind) — per Thoth's own bar, "prove
+// each old view is a composition BEFORE deleting the hardcoded page." The status toggle
+// (NEVER collapse the status dimension to one number, msg 5631) stays client-side, same
+// shape as before, over the composition's own `status:"any"` fetch; the table body now
+// renders through the SAME generic Osiris.renderResult() pipeline every other saved
+// composition uses — bucket/worktrees show as plain columns (the generic table()'s own
+// _flatVal prose for worktrees, same accepted gap as piece 3), click-through is a
+// "run:browse" button per row (piece 4's bind_subject), not a whole-row click.
 var PROJECTS_INDEX_DATA = null, PROJECTS_INDEX_STATUS = 'active';
 async function renderProjects() {
   var container = $('result'); showPanel();
   try {
-    if (!PROJECTS_INDEX_DATA) PROJECTS_INDEX_DATA = await fetch('/projects').then(function(r){return r.json();});
-    var rows = Array.isArray(PROJECTS_INDEX_DATA) ? PROJECTS_INDEX_DATA : [];
+    if (!PROJECTS_INDEX_DATA) {
+      PROJECTS_INDEX_DATA = await fetch('/compositions/projects/run', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subject: null }),
+      }).then(function(r){ return r.json(); });
+    }
+    if (PROJECTS_INDEX_DATA.error) {
+      container.innerHTML = '<div class="o-empty" style="padding:40px">' + esc(PROJECTS_INDEX_DATA.error) + '</div>';
+      return;
+    }
+    var rows = PROJECTS_INDEX_DATA.items || [];
     if (!rows.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No projects.</div>'; return; }
     // NEVER collapse the status dimension to one number (Thoth's own instruction, msg
     // 5631): "what is live" and "what has ever existed" are different questions — a
@@ -571,59 +592,26 @@ async function renderProjects() {
     rows.forEach(function(r){ counts[r.status] = (counts[r.status] || 0) + 1; });
     var allCount = rows.length, activeCount = counts.active || 0;
     var shown = rows.filter(function(r){ return PROJECTS_INDEX_STATUS === 'all' || r.status === PROJECTS_INDEX_STATUS; });
-    shown = shown.slice().sort(function(a, b){ return (b.last_touch || '').localeCompare(a.last_touch || ''); });
-    var head = '<div style="padding:16px 16px 8px;max-width:1100px;margin:0 auto"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+    var head = document.createElement('div');
+    head.style.cssText = 'padding:16px 16px 8px;max-width:1100px;margin:0 auto';
+    head.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
       '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted)">Projects (' + shown.length + ')</h2>' +
       '<div><button class="iconbtn' + (PROJECTS_INDEX_STATUS === 'active' ? ' sel' : '') + '" onclick="setProjectsStatusFilter(\'active\')">Active (' + activeCount + ')</button> ' +
       '<button class="iconbtn' + (PROJECTS_INDEX_STATUS === 'all' ? ' sel' : '') + '" onclick="setProjectsStatusFilter(\'all\')">All (' + allCount + ')</button></div></div>';
-    var table = '<table class="ee-table"><thead><tr><th>Project</th><th style="width:90px">Status</th><th style="width:90px;text-align:right">Objects</th><th style="width:130px">Last Activity</th></tr></thead><tbody>' +
-      shown.map(projectRow).join('') + '</tbody></table></div>';
-    container.innerHTML = head + table;
+    var panel = document.createElement('div');
+    panel.style.padding = '0 16px 16px';
+    var filtered = Object.assign({}, PROJECTS_INDEX_DATA, { items: shown, count: shown.length });
+    await Osiris.renderResult(filtered, { board: null, panel: panel }, Osiris.defaultView(filtered), null, null, null);
+    container.innerHTML = '';
+    container.appendChild(head);
+    container.appendChild(panel);
     setStatus(shown.length + ' of ' + allCount + ' projects');
-  } catch(e) { container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load projects.</div>'; }
+  } catch(e) {
+    console.error('renderProjects failed', e);
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load projects.</div>';
+  }
 }
 function setProjectsStatusFilter(status) { PROJECTS_INDEX_STATUS = status; renderProjects(); }
-function projectRow(r) {
-  var lastTouch = r.last_touch ? String(r.last_touch).slice(0, 10) : '—';
-  // CORRECTED (Sekhmet's per-project pass, decision 3b72b196, msg 5653): link-count is
-  // NOT a phantom test — the one active zero-links project (deepseek-harness) turned out
-  // real, a genuine disk-census-found repo simply never worked yet; the actual phantom
-  // (liveness-fix) carried ONE link, not zero. So this flag surfaces "worth a glance"
-  // ONLY — it must never read as "suspect", which the wording used to imply.
-  // BADGES, NEVER GLUED (console thread, 2026-09-07): concatenating flag onto the name
-  // inside one text node reads as one word on copy/paste and to a screen reader
-  // ("handlingtheloopcontradicted") even though `.proj-flag` already renders as a
-  // visually distinct pill — the CSS chrome never fixed the underlying text-node glue.
-  // A leading space plus each badge's own text keeps them two tokens, however copied.
-  var flags = '';
-  if (r.unnamed) flags += ' <span class="proj-flag" title="no name property resolved — showing the bare canonical id, not a chosen name">unnamed</span>';
-  if (r.bucket === 'orphan') flags += ' <span class="proj-flag" title="zero live links — often just a repo nobody has worked yet, not necessarily a problem (link-count alone is not a phantom test)">no links</span>';
-  else if (r.bucket === 'contradicted') flags += ' <span class="proj-flag" title="' + esc((r.contradicted_on || []).join(', ')) + ' disagrees across sources">contradicted</span>';
-  var nameCell = r.unnamed ? '<em>' + esc(r.name) + '</em>' : esc(r.name);
-  var row = '<tr class="ee-row" style="cursor:pointer" onclick="openProjectInBrowse(\'' + esc(r.name) + '\')"><td>' + nameCell + flags + '</td>' +
-    '<td><span class="card-tag-status status-' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
-    '<td style="text-align:right">' + (r.object_count || 0).toLocaleString() + '</td>' +
-    '<td>' + esc(lastTouch) + '</td></tr>';
-  // WORKTREES NESTED UNDER THEIR PARENT (thread 922d920c/55992ca9): a worktree is never
-  // a project of its own (Sekhmet's own Worktree/worktree_of shape) — a plain sibling
-  // row would misread as one, exactly the ballgem-wt-* misfiling this shape exists to
-  // stop repeating in the UI too. Indented, muted, no status/object-count columns (a
-  // Worktree carries neither) — just enough to say "this checkout lives under that repo".
-  (r.worktrees || []).forEach(function(w){
-    row += '<tr class="ee-row" style="color:var(--muted);font-size:12px">' +
-      '<td style="padding-left:28px">↳ ' + esc(w.name) +
-      (w.branch ? ' <span class="proj-flag" title="checked out branch">' + esc(w.branch) + '</span>' : '') +
-      '</td><td></td><td></td><td></td></tr>';
-  });
-  return row;
-}
-function openProjectInBrowse(name) {
-  // A drill-in stand-in for the real project PAGE (#93 step 2, blocked on the operator's
-  // own read of "surfaces templates/primitives" — msg 5635) — filters Browse to this one
-  // project via the SAME server-side scope filter #196 built, not a client-side re-derive.
-  switchSurface('browse');
-  selectRepos([name]);
-}
 
 // ── Fleet ────────────────────────────────────────────────────────────────────
 

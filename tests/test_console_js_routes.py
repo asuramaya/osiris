@@ -159,3 +159,34 @@ def test_palette_search_includes_saved_compositions_in_both_search_paths() -> No
     assert "SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql))" in _JS
     assert "OMNI_ITEMS = toolHits.concat(compHits);" in _JS
     assert "OMNI_ITEMS = toolHits.concat(compHits, graphHits).slice(0, 16);" in _JS
+
+
+# THE PROJECTS SWAP (Thoth dispatch 9542/9676/9690/9716, 588148bb): the hardcoded /projects
+# fetch + hand-rolled projectRow()/openProjectInBrowse() replaced by the "projects" saved
+# composition — proven complete across 4 pieces first (object_count, bucket badges, worktree
+# nesting, click-through), plus the name-resolution parity gap the swap itself surfaced. The
+# status toggle stays (never collapse the status dimension to one number, msg 5631); the
+# table body renders through the same generic pipeline every other composition uses.
+
+
+def test_projects_no_longer_fetches_the_hardcoded_route() -> None:
+    assert "fetch('/projects')" not in _JS
+    assert "'/compositions/projects/run'" in _JS
+
+
+def test_projects_hand_rolled_row_renderer_is_gone() -> None:
+    assert "function projectRow(" not in _JS
+    assert "function openProjectInBrowse(" not in _JS
+
+
+def test_projects_renders_through_the_generic_composer_pipeline() -> None:
+    body = _JS.split("async function renderProjects()", 1)[1].split("\nfunction ", 1)[0]
+    assert "Osiris.renderResult(filtered" in body
+    assert "JSON.stringify(res, null, 2)" not in body
+
+
+def test_projects_status_toggle_still_narrows_client_side_over_every_status() -> None:
+    # the composition itself fetches every status in one call (status:"any", piece 1); the
+    # toggle narrowing stays client-side, same shape as the pre-swap page.
+    body = _JS.split("async function renderProjects()", 1)[1].split("\nfunction ", 1)[0]
+    assert "PROJECTS_INDEX_STATUS === 'all' || r.status === PROJECTS_INDEX_STATUS" in body
