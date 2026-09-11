@@ -974,6 +974,75 @@ async def test_projects_composition_row_action_binds_subject_to_browse(
     assert row["_action"] == {"action": "run:browse", "subject": str(proj)}
 
 
+async def test_property_name_column_resolves_through_the_label_chain_generically(
+    actions: Actions,
+) -> None:
+    """Thoth dispatch 9676/9712/9716: a `property:"name"` column is TYPE-NEUTRAL — the same
+    resolve_label rule/chain tiers /objects itself uses, for ANY object type, not just
+    SoftwareProject. A named object resolves through the chain (here: `summary`, since Thread
+    has no `name` property but LABEL_CHAIN falls through to it)."""
+    now = datetime.now(UTC)
+    thread = await actions.create_or_find_object("Thread", "thread:namecol-chain", "test")
+    await actions.assert_property(thread, "summary", "a real summary, no name property", "test",
+                                  now, 0.9, evidence_class="self_declared")
+
+    spec = {"op": "table", "from": {"op": "select", "object_type": "Thread"},
+            "columns": [{"name": "n", "property": "name"}]}
+    out = await run_composition(actions.pool, await _save(actions, "namecol-chain-test", spec))
+    row = next(r for r in out["items"] if r["n"] == "a real summary, no name property")
+    assert row["n"] == "a real summary, no name property"
+
+
+async def test_property_name_column_returns_raw_unstripped_canonical_on_no_match(
+    actions: Actions,
+) -> None:
+    """Nothing in the LABEL_CHAIN resolved: the shared `property:"name"` path returns the
+    RAW canonical, honestly, with no type-specific prefix-stripping — that policy is
+    `name_fallback`'s own opt-in (see the projects-composition tests below), never baked
+    into this generic path."""
+    now = datetime.now(UTC)
+    bare = await actions.create_or_find_object("SoftwareProject", "repo:namecol-bare", "test")
+    await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", now, bare)
+
+    spec = {"op": "table", "from": {"op": "select", "object_type": "SoftwareProject"},
+            "columns": [{"name": "n", "property": "name"},
+                        {"name": "c", "property": "canonical"}]}
+    out = await run_composition(actions.pool, await _save(actions, "namecol-bare-test", spec))
+    row = next(r for r in out["items"] if r["c"] == "repo:namecol-bare")
+    assert row["n"] == "repo:namecol-bare"  # unstripped — the shared path never trims it
+
+
+async def test_projects_composition_unnamed_project_strips_the_repo_prefix_and_flags_unnamed(
+    actions: Actions,
+) -> None:
+    """Thoth dispatch 9676/9712/9716, the (b) half: SoftwareProject's own "never show a bare
+    repo: canonical" policy — opt-in on the projects composition via `name_fallback`, not the
+    shared property path. A project with no LABEL_CHAIN property at all falls to the
+    canonical tier, gets `repo:` stripped, and is flagged `unnamed`."""
+    await seed_default_compositions(actions.pool)
+    await actions.create_or_find_object("SoftwareProject", "repo:swap-unnamed", "test")
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["canonical"] == "repo:swap-unnamed")
+    assert row["project"] == "swap-unnamed"  # repo: stripped, not the raw canonical
+    assert row["unnamed"] is True
+
+
+async def test_projects_composition_named_project_is_not_flagged_unnamed(
+    actions: Actions,
+) -> None:
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    named = await actions.create_or_find_object("SoftwareProject", "repo:swap-named", "test")
+    await actions.assert_property(named, "name", "swap-named", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["canonical"] == "repo:swap-named")
+    assert row["project"] == "swap-named"
+    assert row["unnamed"] is False
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
