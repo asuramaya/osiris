@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import faulthandler
 import http.server
 import os
 import shutil
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -348,6 +350,51 @@ def _default_basetemp() -> str:
     return f"{base}/pt-{os.getpid()}"
 
 
+# THE SESSION WATCHDOG (mail 9658, the deadlock fix): pytest-timeout's own per-test
+# ceiling (see the ini `timeout` above) covers a test that hangs WHILE RUNNING — it does
+# nothing for the shape the seshat specimen actually was, an xdist CONTROLLER at 0% CPU
+# in futex_do_wait with no worker processes visible at all (workers dead or hung, the
+# controller waiting on a report that will never arrive; --max-worker-restart=2 above
+# covers a worker that dies and gets replaced, this covers the controller's own wait
+# never resolving either way). `_last_report_at` is a one-element mutable box (not a
+# plain module global float) so `pytest_runtest_logreport` can rebind it from any thread
+# without a `global` statement; started only in the SAME branch that starts the Postgres/
+# Redis containers below (the controller, or this same process outside xdist — an actual
+# xdist WORKER never reaches this point, `pytest_configure` returns before it). A daemon
+# thread: it must never keep the process alive past a normal exit on its own.
+_last_report_at = [0.0]
+_watchdog_stop = threading.Event()
+_WATCHDOG_SILENCE_LIMIT_S = 600  # ten minutes with no test report at all = hung, not slow
+_WATCHDOG_POLL_S = 20
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Fires for EVERY report (setup/call/teardown, every outcome) in the process that
+    collects it — the controller too, under xdist, since it re-fires this hook for every
+    report a worker forwards it (the documented channel; this is not a local-only hook).
+    The watchdog thread (started only in the controller/standalone process, see
+    `pytest_configure` below) reads this same box; a worker process rebinding it too is
+    harmless — nothing there ever reads it, since no watchdog thread runs in a worker."""
+    _last_report_at[0] = time.monotonic()
+
+
+def _watchdog_loop() -> None:
+    while not _watchdog_stop.wait(_WATCHDOG_POLL_S):
+        silent_for = time.monotonic() - _last_report_at[0]
+        if silent_for > _WATCHDOG_SILENCE_LIMIT_S:
+            sys.stderr.write(
+                f"\n[session watchdog] no pytest_runtest_logreport in {silent_for:.0f}s "
+                f"(limit {_WATCHDOG_SILENCE_LIMIT_S}s) — controller-side hang presumed "
+                "(dead/hung xdist workers, or a bare run stuck outside any single test's "
+                "own per-test timeout). Dumping every thread's stack, then os._exit(3) — "
+                "a hang here must never outlive this ceiling.\n")
+            sys.stderr.flush()
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            sys.stderr.flush()
+            os._exit(3)  # not sys.exit — a wedged process needs a hard exit, and this
+            # thread's own caller (pytest's own run loop) is exactly what's presumed stuck
+
+
 def pytest_configure(config: pytest.Config) -> None:
     if config.option.basetemp is None:
         config.option.basetemp = _default_basetemp()
@@ -356,6 +403,10 @@ def pytest_configure(config: pytest.Config) -> None:
         _install_live_db_guard(str(wi["pg_host"]), str(wi["pg_port"]))
         return  # an xdist worker: the controller (or, outside xdist, this same
         # process, since it then takes this same branch itself) owns the containers
+    _last_report_at[0] = time.monotonic()  # started fresh here, not at import time — a
+    # slow container pull/start below must not already count against the silence budget
+    threading.Thread(target=_watchdog_loop, name="osiris-session-watchdog",
+                     daemon=True).start()
     _install_tool_contract_ceiling_merge_driver()
     pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
     pg.start()
@@ -386,6 +437,8 @@ def pytest_configure_node(node: pytest.Item) -> None:  # xdist controller-only h
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
+    _watchdog_stop.set()  # a normal finish must not leave the daemon thread polling —
+    # harmless either way (daemon, dies with the process), but a clean stop is cheap
     pg = _CONTAINER.pop("pg", None)
     if pg is not None:
         pg.stop()

@@ -628,8 +628,20 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                     if load1 is not None and pytest_timeout != _PYTEST_TIMEOUT_SECS else "")
 
         def _run_pytest() -> subprocess.CompletedProcess[str]:
+            # THE DEADLOCK FIX (mail 9658): this subprocess's own `timeout=pytest_timeout`
+            # (180s scaled by load, the LAST resort — same role as a hand-run's outer shell
+            # `timeout 1500`, just enforced in-process here) is unchanged. The new inner
+            # layers apply UNCONDITIONALLY, with no flag needed here: pytest.ini's
+            # `timeout`/`timeout_method`/`faulthandler_timeout` and addopts'
+            # `--max-worker-restart` (pyproject.toml) are read from the project root
+            # regardless of the CLI args this call passes, so a per-test hang or a dead
+            # xdist worker is now caught well inside this outer ceiling, not merely by it.
+            # `-p no:cacheprovider` matches the fleet's own hand-run convention (mail
+            # 9649): a scoped gate run under real multi-agent contention gains nothing from
+            # writing/reading .pytest_cache and it is one less thing racing another
+            # concurrent gate_hook run in a sibling worktree.
             return subprocess.run(
-                [str(VENV_BIN / "pytest"), *test_files, "-q",
+                [str(VENV_BIN / "pytest"), *test_files, "-q", "-p", "no:cacheprovider",
                  "-n", str(_PYTEST_XDIST_CAP)], cwd=repo_root,
                 capture_output=True, text=True, check=False,
                 env=pytest_env, timeout=pytest_timeout,
