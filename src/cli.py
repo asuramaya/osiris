@@ -3361,7 +3361,8 @@ async def cmd_decide(
     implements: str | None = None, rediscovers: list[str] | None = None,
     bears_on: list[str] | None = None, narrows: list[str] | None = None,
     cites: list[str] | None = None, ack_prior_art: bool = False,
-    unlinked_because: str | None = None, actor: str = _CONSOLE_ACTOR,
+    unlinked_because: str | None = None, operator_authorized: bool = False,
+    actor: str = _CONSOLE_ACTOR,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris decide <summary> [--kind K] [--rationale R] ... — the console-script door
@@ -3380,6 +3381,12 @@ async def cmd_decide(
     only an EXACT uuid for each (never a canonical string or short-id prefix), and
     `--ack-prior-art` is accepted for CLI/MCP name parity but has no effect — no
     prior-art search runs from a bare terminal, so there is nothing to acknowledge.
+
+    `--operator-authorized` (decision 12efe065): this decision carries the operator's
+    OWN authority — mints a `ruled_by` edge to the operator's own Person object.
+    A bare terminal is exactly where a human operator IS typing directly, so this flag
+    is real here, not a stub — set it only when this decision really is the operator's
+    ruling.
 
     TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule amend-decision/
     annotate-thread above keep — but this hand-builds a LEANER receipt than the MCP
@@ -3437,7 +3444,8 @@ async def cmd_decide(
                 bears_on=_uuids(bears_on, "--bears-on"),
                 narrows=_uuids(narrows, "--narrows"), cites=_uuids(cites, "--cites"),
                 refute_id=_uuid1(refutes, "--refutes"),
-                unlinked_because=unlinked_because)
+                unlinked_because=unlinked_because,
+                operator_authorized=operator_authorized)
         except ValueError as e:
             print(f"osiris decide: refused — {e}", file=sys.stderr)
             return 1
@@ -5780,6 +5788,10 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="record a dismissed prior_art_flag instead of a silent shrug")
     p_decide.add_argument("--unlinked-because", default=None,
                           help="a real reason through declare-or-refuse's link-kind gate")
+    p_decide.add_argument("--operator-authorized", action="store_true",
+                          help="this decision carries the operator's own authority — "
+                               "mints a ruled_by edge to the operator's Person "
+                               "object")
     p_decide.add_argument("--actor", default=_CONSOLE_ACTOR,
                           help=f"who is deciding — defaults to {_CONSOLE_ACTOR!r}")
     p_decide.add_argument("--json", action="store_true", dest="as_json",
@@ -6487,7 +6499,8 @@ def main(argv: list[str] | None = None) -> int:
             refutes=args.refutes, implements=args.implements,
             rediscovers=args.rediscovers, bears_on=args.bears_on, narrows=args.narrows,
             cites=args.cites, ack_prior_art=args.ack_prior_art,
-            unlinked_because=args.unlinked_because, actor=args.actor,
+            unlinked_because=args.unlinked_because,
+            operator_authorized=args.operator_authorized, actor=args.actor,
             as_json=args.as_json))
     if args.command == "thread":
         return asyncio.run(cmd_thread(

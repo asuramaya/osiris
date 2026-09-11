@@ -28,6 +28,7 @@ from src.orchestrator.capture import (
     backfill_decided_in,
     correct_thread_summary,
     decision_addenda,
+    ensure_operator_person,
     find_near_duplicate_decision,
     find_near_duplicate_open_thread,
     held_work_overlap,
@@ -108,6 +109,49 @@ async def test_record_decision_is_idempotent_on_the_summary(actions: Actions) ->
     d2 = await record_decision(actions, "Keyless is a safety feature, not a limitation")
     assert d1 == d2
     assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Decision'") == 1
+
+
+async def test_record_decision_without_operator_authorized_mints_no_ruled_by(
+    actions: Actions,
+) -> None:
+    # default False — an ordinary worker's own ruling never accretes operator authority
+    d = await record_decision(actions, "An ordinary worker ruling")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='ruled_by'", d)
+    assert n == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Person'") == 0
+
+
+async def test_record_decision_operator_authorized_mints_ruled_by_to_the_operator(
+    actions: Actions,
+) -> None:
+    d = await record_decision(actions, "An actual operator ruling", operator_authorized=True)
+    row = await actions.pool.fetchrow(
+        "SELECT l.to_id, o.type, o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='ruled_by'", d)
+    assert row is not None
+    assert row["type"] == "Person"
+    assert row["canonical"] == "person:operator"
+    role = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions "
+        "WHERE object_id=$1 AND name='role'", row["to_id"])
+    assert role == "operator"
+
+
+async def test_ensure_operator_person_is_idempotent(actions: Actions) -> None:
+    d1 = await record_decision(actions, "First operator ruling", operator_authorized=True)
+    d2 = await record_decision(actions, "Second operator ruling", operator_authorized=True)
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Person' AND canonical='person:operator'"
+    ) == 1
+    to1 = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='ruled_by'", d1)
+    to2 = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='ruled_by'", d2)
+    assert to1 == to2  # both rulings point at the SAME operator object, never a twin
+    pid = await ensure_operator_person(actions)
+    assert pid == to1
 
 
 async def test_record_decision_with_repo_links_in_repo_and_still_renders(

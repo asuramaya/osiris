@@ -1504,7 +1504,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 83
 # refused unless the ruling actually names charter_for) — the only prose growth in this
 # fix; a genuinely new capability on an existing door, not padding. Measured exact
 # (126,736), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 129060
+# 126448 -> 126865 (2026-09-11, decision 12efe065, thread 9d2aaf4d, "THE OPERATOR AS AN
+# OBJECT"): record_decision gains one new param, `operator_authorized` — a rulings-carry-
+# authority-to-a-real-Person-object mechanism, plus its own one-paragraph docstring entry
+# and a matching docstring sentence on `authorized_by`'s widened LinkType. No new tool,
+# load-bearing growth per this file's own escape valve. Measured exact (126,865).
+TOOL_CONTRACT_CEILING_CHARS = 129477
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

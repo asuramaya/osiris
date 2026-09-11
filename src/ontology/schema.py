@@ -563,7 +563,12 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "split, msg/DM 9136, over folding this sense into derived_from). Domain is "
              "the Agent generation doing the work (CITATION SHAPE, decision c6d25164 — "
              "AgentRun folded in here); range is a Decision (a ruling that dispatched "
-             "the work) or a Thread (an obligation the run is discharging).",
+             "the work) or a Thread (an obligation the run is discharging). SPLIT from "
+             "`ruled_by` below (decision 12efe065's build, DM 9483) — the operator's own "
+             "word reused this edge name for a second, unrelated sense (a ruling's own "
+             "human authority); the operator ruled the two apart rather than let one "
+             "edge type carry two senses (f47d14a7's own principle), so this stays the "
+             "run's-plan sense only.",
              ("Agent",), ("Decision", "Thread")),
     LinkType("evaluated_by", "The traceability invariant's EVALUATOR leg — an Agent "
              "generation or an Artifact pointing AT the Evaluation that judged it "
@@ -572,6 +577,17 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "the confirming object): evaluated_by's own subject — 'what evaluates "
              "artifact X' — is read far more often than the reverse.",
              ("Agent", "Artifact"), ("Evaluation",)),
+    LinkType("ruled_by", "A RULING'S OWN HUMAN AUTHORITY (decision 12efe065, thread "
+             "9d2aaf4d: \"rulings carry authorized_by to it [the operator Person]\" — "
+             "renamed off `authorized_by` per the operator's own split, DM 9483, once "
+             "that name turned out already spoken for by the work-lineage build's "
+             "run's-plan sense, f47d14a7). A Decision pointing at the operator Person "
+             "object that backs it, so nothing else accretes on the bare 'operator' "
+             "string. Explicit and caller-declared only (record_decision's own "
+             "`operator_authorized` param) — never inferred, matching the sibling "
+             "citation ruling's own 'no auto-cite, ever' principle applied to authority "
+             "instead of citations.",
+             ("Decision",), ("Person",)),
     LinkType("revises", "A later Artifact version supersedes an earlier one — the "
              "version DAG, same self-referential shape as Commit's own `follows` edge.",
              ("Artifact",), ("Artifact",)),

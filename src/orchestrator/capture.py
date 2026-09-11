@@ -58,6 +58,28 @@ _SOURCE = "session"
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
+# THE OPERATOR, AS A REAL OBJECT (decision 12efe065, thread 9d2aaf4d: "a Person with the
+# operator role and a canonical the literal 'operator' resolves to... so nothing else
+# accretes on a string"). THE LITERAL STRING 'operator' IS UNCHANGED EVERYWHERE ELSE —
+# resolve_owner_seat (owner_normalization.py), _OPERATOR_ACTORS (seats.py), and every
+# other reader/writer of the bare string keep working exactly as before; this object is
+# an ADDITIVE identity a caller can attach for real provenance (a ruled_by edge),
+# never a replacement for the alias. Canonical `person:operator` matches Person's own
+# existing scheme (schema.py: "person:", already used for OSINT identity-hub subjects).
+_OPERATOR_PERSON_CANONICAL = "person:operator"
+
+
+async def ensure_operator_person(actions: Actions, source: str = _SOURCE) -> uuid.UUID:
+    """Idempotent find-or-create for the operator's own Person object (see the module
+    comment above this function). Safe to call from any mint path that wants to attach
+    real operator provenance — never mints twice (create_or_find_object's own
+    (type, canonical) uniqueness)."""
+    pid = await actions.create_or_find_object("Person", _OPERATOR_PERSON_CANONICAL, source)
+    await actions.assert_property(pid, "role", "operator", source, datetime.now(UTC),
+                                  _CONF, evidence_class=_EC)
+    return pid
+
+
 # task #101: most rulings already cite the commit they landed in, in ENGLISH prose
 # ("commit 238b48f", "Commit: 238b48f.") — this is the only thing standing between that
 # text and a real `decided_in` edge. Requires the word "commit(s)" immediately before the
@@ -2117,9 +2139,25 @@ async def record_decision(
     rediscovers: list[uuid.UUID] | None = None, bears_on: list[uuid.UUID] | None = None,
     narrows: list[uuid.UUID] | None = None, cites: list[uuid.UUID] | None = None,
     refute_id: uuid.UUID | None = None, obsoletes: list[str] | None = None,
-    unlinked_because_kind: str | None = None,
+    unlinked_because_kind: str | None = None, operator_authorized: bool = False,
 ) -> uuid.UUID:
     """Capture a decision at the moment it is made — the WHY, declared, not mined.
+
+    `operator_authorized` (decision 12efe065, thread 9d2aaf4d — "rulings carry
+    authorized_by to it [the operator Person object]", the edge itself renamed
+    `ruled_by` per DM 9483's split once `authorized_by` turned out already spoken
+    for by the work-lineage build's own run's-plan sense, f47d14a7): an EXPLICIT,
+    caller-declared
+    act, never inferred from `source`. `source` records WHO TYPED THIS INTO THE GRAPH
+    (a fleet agent's own id, or the bare `session` for an unmounted tab) — it does NOT
+    distinguish the operator's own words from a seat holder's own scoped judgment call,
+    since a human-attended seat (this house's own convention — a manager seat the
+    operator types directly through) writes under ITS OWN mounted agent id, never a
+    special sentinel. NO AUTO-DETECT, matching the sibling citation ruling's own "no
+    auto-cite, ever" principle: a caller (typically a human-attended seat relaying an
+    actual operator ruling, per this fleet's own "operator's word" dispatch convention)
+    sets this explicitly when, and only when, the decision being recorded truly
+    represents the operator's own authority — never guessed from `source`/`kind`.
 
     `kind` labels it the way the miner does (ruling / reset / override / rejection /
     choice / decision). `rationale`, if given, is the reasoning stored inline (an
@@ -2406,6 +2444,17 @@ async def record_decision(
             await mint_cites(a, d, cid, source, origin="declared",
                              self_referential=(target_source is not None
                                               and target_source == source))
+        if operator_authorized:
+            # RULINGS CARRY ruled_by TO THE OPERATOR (decision 12efe065, thread
+            # 9d2aaf4d) — see this function's own docstring on `operator_authorized`
+            # for why this is an explicit param, never inferred from `source`. Named
+            # `ruled_by`, not `authorized_by` (DM 9483 split) — the work-lineage build
+            # (f47d14a7) already spoke for `authorized_by` as a run's own plan/objective
+            # edge; two senses on one edge name is exactly what that ruling's own
+            # principle forbids, so the operator split this one off under its own name.
+            operator_id = await ensure_operator_person(a, source=source)
+            await a.create_link(d, operator_id, "ruled_by", source, observed,
+                                _CONF, evidence_class=_EC)
         if refute_id is not None:
             # THE POLARITY FLIP, folded (see refute_practice, now this block's own
             # inline twin — kept identical, just sharing `a`/`d`/`observed` instead of
