@@ -113,6 +113,28 @@ def test_palette_has_an_author_composition_entry() -> None:
     assert "run: () => authorComposition()" in _JS
 
 
+# THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d): pick a live seat
+# (/pane/live), watch its transcript stream live (/pane/{agent_id}/stream, SSE) — no writes,
+# no spawn.
+
+
+def test_render_pane_loads_the_live_seat_picker() -> None:
+    assert "await fetch('/pane/live')" in _JS
+
+
+def test_open_pane_stream_opens_the_sse_route_for_the_picked_agent() -> None:
+    assert "new EventSource('/pane/' + encodeURIComponent(agentId) + '/stream')" in _JS
+
+
+def test_switching_away_from_pane_closes_the_open_sse_connection() -> None:
+    assert "if (surface !== 'pane') closePaneStream();" in _JS
+
+
+def test_pane_stream_error_events_close_the_connection_rather_than_looping_forever() -> None:
+    body = _JS.split("PANE_SOURCE.onmessage = function(ev) {", 1)[1].split("};", 1)[0]
+    assert "closePaneStream();" in body
+
+
 def test_palette_search_includes_saved_compositions_in_both_search_paths() -> None:
     assert "SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql))" in _JS
     assert "OMNI_ITEMS = toolHits.concat(compHits);" in _JS

@@ -1457,6 +1457,73 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    @app.get("/pane/live")
+    async def pane_live_agents(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """THE PICK half of the read-only pane (Thoth dispatch 9378, lane B piece 2): the
+        same live/seated fold chrome.fleet_data already computes for /fleet, narrowed to
+        the fields a picker needs (agent_id to open the stream, seat/project to label the
+        row) — no new liveness logic, just a leaner slice of an existing read."""
+        from src.api.chrome import fleet_data
+
+        data = await fleet_data(p)
+        return [{"agent_id": m["agent_id"], "seat": m.get("seat") or m["agent_id"],
+                 "project": m.get("project") or "?"}
+                for m in data["mounts"] if m.get("live") and m.get("seated")]
+
+    @app.get("/pane/{agent_id}/stream")
+    async def pane_transcript_stream(
+        agent_id: str, request: Request, p: asyncpg.Pool = Depends(get_pool)
+    ) -> StreamingResponse:
+        """SSE: THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d) —
+        a composer-shell pane tails a live seat's own transcript, no writes, no new spawn
+        path. Reuses sessions.py's byte-offset chunk reader (the SAME primitive the
+        session miner already polls in production) against the transcript file
+        locate_current_transcript/locate_transcript_by_cwd already resolve for identity;
+        this route only adds the interval-poll-and-push wrapper `distill()` already turns
+        into role-tagged dialogue text (OPERATOR:/CLAUDE:), skipping tool noise/thinking/
+        sidechains the same way the miner does. STARTS AT THE CURRENT FILE SIZE, not byte
+        0 — a live pane watches what happens FROM HERE, never replays a whole transcript's
+        history in one SSE burst. CLAUDE-CODE JSONL ONLY FOR NOW (dsh/crush's own live-tail
+        is a graceful degrade for later, matching harness_process.py's own refuse-by-name
+        discipline elsewhere) — a picked agent whose transcript can't be found gets an
+        honest error event, never a silent empty pane."""
+        async def gen() -> AsyncIterator[str]:
+            row = await p.fetchrow(
+                "SELECT cwd, job_dir FROM agent_mounts WHERE agent_id=$1 "
+                "ORDER BY last_seen DESC LIMIT 1", agent_id)
+            if row is None:
+                yield f"data: {_json.dumps({'error': f'no live mount for {agent_id!r}'})}\n\n"
+                return
+            from src.ingest.sessions import (
+                _file_size,
+                _read_chunk,
+                distill,
+                locate_current_transcript,
+                locate_transcript_by_cwd,
+            )
+
+            root = Path.home() / ".claude" / "projects"
+            path = await asyncio.to_thread(
+                locate_current_transcript, root, row["job_dir"], anchored_only=True)
+            if path is None and row["cwd"]:
+                path = await asyncio.to_thread(locate_transcript_by_cwd, row["cwd"], root)
+            if path is None:
+                yield f"data: {_json.dumps({'error': f'no transcript found for {agent_id!r}'})}\n\n"
+                return
+
+            watermark = await asyncio.to_thread(_file_size, path)
+            while not await request.is_disconnected():
+                lines, watermark = await asyncio.to_thread(
+                    _read_chunk, path, watermark, 512 * 1024)
+                text, _cwd = distill(lines) if lines else ("", None)
+                if text:
+                    yield f"data: {_json.dumps({'text': text})}\n\n"
+                else:
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(1.0)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
     @app.post("/subscriptions")
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)

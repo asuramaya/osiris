@@ -50,6 +50,7 @@ function showPanel() { $('stage').classList.add('panel'); }
 
 // ── Surface Switching ────────────────────────────────────────────────────────
 async function switchSurface(surface) {
+  if (surface !== 'pane') closePaneStream();  // never leak an open SSE connection off-pane
   ACTIVE_SURFACE = surface; postConsole({ surface });
   document.querySelectorAll('.lens-item').forEach(el => el.classList.toggle('sel', el.dataset.surface === surface));
   $('page-title').textContent = surface.charAt(0).toUpperCase() + surface.slice(1);
@@ -69,6 +70,7 @@ async function switchSurface(surface) {
     $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
     (ensureBoard()).clear(); showBoard();
     if (surface === 'mailbox') renderMailbox();
+    if (surface === 'pane') renderPane();
     if (surface === 'projects') renderProjects();
   }
 }
@@ -487,6 +489,46 @@ document.addEventListener('osiris:run', function(e) {
   if (ACTIVE_SURFACE !== 'mailbox') return;
   runMailboxComposition(e.detail.name, e.detail.args || {});
 });
+
+// ── Pane (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d) ───────────────
+// THE READ-ONLY PANE: pick a live seat, watch its transcript stream live — no writes, no
+// spawn. PICK is /pane/live (a lean slice of the same live/seated fold /fleet already
+// computes); the stream is /pane/{agent_id}/stream (SSE), text already role-tagged
+// OPERATOR:/CLAUDE: server-side by sessions.py's own distill() — this surface only appends
+// what arrives, never re-derives or re-parses it.
+var PANE_SOURCE = null;
+function closePaneStream() { if (PANE_SOURCE) { PANE_SOURCE.close(); PANE_SOURCE = null; } }
+async function renderPane() {
+  closePaneStream();
+  var container = $('result'); showPanel();
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading live seats…</div>';
+  try {
+    var agents = await fetch('/pane/live').then(function(r){ return r.json(); });
+    if (!agents.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No live seated agents right now.</div>'; return; }
+    var picker = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
+      '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Pick a live seat (' + agents.length + ')</h2>' +
+      agents.map(function(a){ return '<button class="iconbtn" style="margin:0 8px 8px 0" onclick="openPaneStream(' + JSON.stringify(a.agent_id) + ')">' + esc(a.seat) + ' <span class="o-faint">(' + esc(a.project) + ')</span></button>'; }).join('') +
+      '</div><div id="pane-stream" style="padding:0 16px"></div>';
+    container.innerHTML = picker;
+  } catch(e) {
+    console.error('renderPane failed', e);
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load live seats.</div>';
+  }
+}
+function openPaneStream(agentId) {
+  closePaneStream();
+  var out = $('pane-stream');
+  if (!out) return;
+  out.innerHTML = '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:12px 0">' + esc(agentId) + '</h2><pre id="pane-text" style="white-space:pre-wrap;font-size:12px;line-height:1.6;color:var(--text);max-height:60vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px"></pre>';
+  var pre = $('pane-text');
+  PANE_SOURCE = new EventSource('/pane/' + encodeURIComponent(agentId) + '/stream');
+  PANE_SOURCE.onmessage = function(ev) {
+    var msg; try { msg = JSON.parse(ev.data); } catch(e) { return; }
+    if (msg.error) { pre.textContent += '\n[' + msg.error + ']\n'; closePaneStream(); return; }
+    if (msg.text) { pre.textContent += (pre.textContent ? '\n\n' : '') + msg.text; pre.scrollTop = pre.scrollHeight; }
+  };
+  PANE_SOURCE.onerror = function() { /* EventSource auto-retries; nothing to do here */ };
+}
 
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
 var PROJECTS_INDEX_DATA = null, PROJECTS_INDEX_STATUS = 'active';
