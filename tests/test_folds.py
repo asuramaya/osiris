@@ -13,6 +13,7 @@ from src.actions.core import Actions
 from src.orchestrator.folds import (
     canonical_agent,
     fold_agent,
+    fold_justification_and_parity_check,
     living_head,
     reconcile_agent_fold,
     unfold_agent,
@@ -768,6 +769,55 @@ async def test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_wo
         because="the operator's fresh word, 2026-07-28: this fold was wrong",
         actor="agent:judge", execute=True)
     assert out2["unmerged"] is True
+
+
+async def test_fold_justification_and_parity_check_the_one_shared_resolver(
+    actions: Actions,
+) -> None:
+    """DM 9438: the operator-parity heuristic was byte-for-byte duplicated across
+    unfold_agent/unfold_project/unfold_seat — this is the ONE test against the ONE
+    extracted resolver, directly, rather than three copies of the same assertion
+    exercised only indirectly through each caller. The three callers' own existing
+    tests (e.g. test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_word
+    above, plus test_projects.py/test_seats.py's own) are unchanged and still prove each
+    call site's own behavior end-to-end — this test proves the shared logic itself,
+    including the (ev, original_evidence) reuse the three sites all depend on."""
+    p = actions.pool
+    await _mk_agent(actions, "agent:parity0dead")
+    await _mk_agent(actions, "agent:parity0live")
+    object_id = await p.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:parity0dead'")
+    await fold_agent(actions, dupe="agent:parity0dead", into="agent:parity0live",
+                     evidence="the operator confirmed these are one mind", actor="operator")
+
+    # no fresh operator word -> refused, but ev/original_evidence still come back for
+    # the caller's own reporting use
+    ev, original_evidence, error = await fold_justification_and_parity_check(
+        p, object_id, "I think this was wrong", label="agent:parity0dead")
+    assert error is not None and "operator" in error["error"]
+    assert ev is not None and ev["actor"] == "operator"
+    assert "operator" in original_evidence
+
+    # a fresh operator word in `because` -> parity holds, no error
+    ev2, _original_evidence2, error2 = await fold_justification_and_parity_check(
+        p, object_id, "the operator's fresh word: this fold was wrong",
+        label="agent:parity0dead")
+    assert error2 is None
+    assert ev2 is not None
+
+    # a fold never justified by the operator at all -> no parity requirement, ever
+    await _mk_agent(actions, "agent:parity1dead")
+    await _mk_agent(actions, "agent:parity1live")
+    object_id2 = await p.fetchval(
+        "SELECT id FROM objects WHERE canonical='agent:parity1dead'")
+    await fold_agent(actions, dupe="agent:parity1dead", into="agent:parity1live",
+                     evidence="a plain duplicate, same census sighting twice",
+                     actor="console")
+    ev3, original_evidence3, error3 = await fold_justification_and_parity_check(
+        p, object_id2, "any reason at all", label="agent:parity1dead")
+    assert error3 is None
+    assert "operator" not in original_evidence3
+    assert ev3 is not None
 
 
 async def test_unfold_clears_a_cross_lineage_succeeded_by_stitch(actions: Actions) -> None:

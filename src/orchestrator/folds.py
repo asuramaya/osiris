@@ -392,6 +392,37 @@ async def reconcile_agent_fold(
     estate = await _move_agent_estate(actions, dupe, into, actor)
     return {"reconciled": dupe, "into": into, **estate}
 
+
+async def fold_justification_and_parity_check(
+    pool: asyncpg.Pool, object_id: uuid.UUID, because: str, *, label: str,
+) -> tuple[asyncpg.Record | None, str, dict[str, Any] | None]:
+    """THE OPERATOR-PARITY HEURISTIC, ONE COPY (DM 9438, "keep cooking" — was
+    byte-for-byte duplicated across unfold_agent/unfold_project/unfold_seat): fetches the
+    most recent 'merge' event for `object_id` and refuses an unfold whose own `because`
+    doesn't ALSO carry the operator's word when the ORIGINAL fold's own justification did
+    — a fold the operator blessed by name is not quietly undone by a different hand's
+    say-so; it takes the same authority to reverse it that it took to make it. (Heuristic,
+    not NLP: "cites the operator" = the word 'operator' appears in the justification text.)
+
+    Returns `(ev, original_evidence, error)`: `ev` is the raw event row (or None — no
+    merge event on record) and `original_evidence` its justification text, BOTH returned
+    unconditionally (not only on success) because every one of the three call sites reuses
+    `ev["actor"]`/`ev["created_at"]`/`original_evidence` in its own report AFTER this
+    check — a second fetch was the alternative, and this avoids it. `error` is an
+    `{"error": ...}` dict when parity fails, else `None` (proceed normally)."""
+    ev = await pool.fetchrow(
+        "SELECT payload, actor, created_at FROM object_events "
+        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
+        object_id)
+    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
+    if "operator" in original_evidence.lower() and "operator" not in because.lower():
+        return ev, original_evidence, {
+            "error": f"{label}'s fold was justified by citing the operator's word "
+                     f"({original_evidence!r}) — an unfold needs the operator's word "
+                     "too; add it to `because` or get it first"}
+    return ev, original_evidence, None
+
+
 async def unfold_agent(
     actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
@@ -444,15 +475,10 @@ async def unfold_agent(
                          "unfold"}
     into_canon = await actions.pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
-    ev = await actions.pool.fetchrow(
-        "SELECT payload, actor, created_at FROM object_events "
-        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
-        row["id"])
-    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
-    if "operator" in original_evidence.lower() and "operator" not in because.lower():
-        return {"error": f"{dupe}'s fold was justified by citing the operator's word "
-                         f"({original_evidence!r}) — an unfold needs the operator's word "
-                         "too; add it to `because` or get it first"}
+    ev, original_evidence, parity_error = await fold_justification_and_parity_check(
+        actions.pool, row["id"], because, label=dupe)
+    if parity_error is not None:
+        return parity_error
     head = await living_head(actions.pool, str(into_canon))
     fold_time = ev["created_at"] if ev else datetime.now(UTC)
 

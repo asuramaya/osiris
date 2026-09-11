@@ -506,7 +506,10 @@ async def unfold_project(
     `unfold_agent`'s own thread reversal uses, generalized to links). `agent_mounts.project`
     was moved by a raw UPDATE — reported as `estate_unreturnable`, never guessed back,
     exactly like `fold_agent`'s own mount rows."""
-    from src.orchestrator.folds import _reversible_moved_links
+    from src.orchestrator.folds import (
+        _reversible_moved_links,
+        fold_justification_and_parity_check,
+    )
 
     dupe, because = (dupe or "").strip(), (because or "").strip()
     if not because:
@@ -531,15 +534,10 @@ async def unfold_project(
         "SELECT merged_into FROM objects WHERE id=$1", row["id"])
     into_canon = await actions.pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1", into_id)
-    ev = await actions.pool.fetchrow(
-        "SELECT payload, actor, created_at FROM object_events "
-        "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
-        row["id"])
-    original_evidence = str((ev["payload"] or {}).get("justification", "")) if ev else ""
-    if "operator" in original_evidence.lower() and "operator" not in because.lower():
-        return {"error": f"{row['canonical']}'s fold was justified by citing the "
-                         f"operator's word ({original_evidence!r}) — an unfold needs the "
-                         "operator's word too; add it to `because` or get it first"}
+    ev, original_evidence, parity_error = await fold_justification_and_parity_check(
+        actions.pool, row["id"], because, label=row["canonical"])
+    if parity_error is not None:
+        return parity_error
 
     moved: dict[str, list[dict[str, Any]]] = {}
     for link_type in _PROJECT_ESTATE_LINK_TYPES:
