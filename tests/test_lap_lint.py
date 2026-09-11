@@ -175,6 +175,48 @@ async def test_lint_catches_a_dangling_succeeded_from(actions: Actions) -> None:
     assert anc and heir  # created only to prove the negative control, never flagged
 
 
+async def test_lint_catches_succeeded_from_mismatch(actions: Actions) -> None:
+    """Decision 1081a782: every lineage check reads succeeded_by FORWARD only — an heir's
+    own succeeded_from pointer was never cross-checked against that SAME ancestor's own
+    succeeded_by. Three flagged shapes (real disagreement, absent ancestor succeeded_by,
+    dangling ancestor canonical) plus one healthy negative control."""
+    t = "agent:teller"
+    # healthy pair: heir's succeeded_from names the ancestor, ancestor's succeeded_by names
+    # the heir right back — agreement, never flagged.
+    anc_ok = await actions.create_or_find_object("Agent", "agent:mismatch-anc-ok", t)
+    heir_ok = await actions.create_or_find_object("Agent", "agent:mismatch-heir-ok", t)
+    await actions.assert_property(anc_ok, "succeeded_by", "agent:mismatch-heir-ok", t, NOW,
+                                  0.9, evidence_class=_SD)
+    await actions.assert_property(heir_ok, "succeeded_from", "agent:mismatch-anc-ok", t, NOW,
+                                  0.9, evidence_class=_SD)
+    # real disagreement: the ancestor's own succeeded_by names a THIRD, different canonical.
+    anc_bad = await actions.create_or_find_object("Agent", "agent:mismatch-anc-bad", t)
+    heir_bad = await actions.create_or_find_object("Agent", "agent:mismatch-heir-bad", t)
+    await actions.create_or_find_object("Agent", "agent:mismatch-someone-else", t)
+    await actions.assert_property(anc_bad, "succeeded_by", "agent:mismatch-someone-else", t,
+                                  NOW, 0.9, evidence_class=_SD)
+    await actions.assert_property(heir_bad, "succeeded_from", "agent:mismatch-anc-bad", t,
+                                  NOW, 0.9, evidence_class=_SD)
+    # expected/benign: the ancestor exists but never asserted a succeeded_by at all.
+    await actions.create_or_find_object("Agent", "agent:mismatch-anc-blank", t)
+    heir_blank = await actions.create_or_find_object("Agent", "agent:mismatch-heir-blank", t)
+    await actions.assert_property(heir_blank, "succeeded_from", "agent:mismatch-anc-blank", t,
+                                  NOW, 0.9, evidence_class=_SD)
+    # dangling ancestor: succeeded_from names a canonical no Agent object carries at all.
+    heir_void = await actions.create_or_find_object("Agent", "agent:mismatch-heir-void", t)
+    await actions.assert_property(heir_void, "succeeded_from", "agent:mismatch-nowhere", t,
+                                  NOW, 0.9, evidence_class=_SD)
+    out = await _fn(actions, "lint", {})
+    mismatch = {f["subject"]: f["detail"] for f in _by_check(out, "succeeded-from-mismatch")}
+    assert "agent:mismatch-heir-ok" not in mismatch
+    assert "real disagreement" in mismatch["agent:mismatch-heir-bad"]
+    assert "expected/benign" in mismatch["agent:mismatch-heir-blank"]
+    assert "was never asserted" in mismatch["agent:mismatch-heir-blank"]
+    assert "expected/benign" in mismatch["agent:mismatch-heir-void"]
+    assert "no Agent object of any status carries" in mismatch["agent:mismatch-heir-void"]
+    assert all(f["severity"] == "warn" for f in _by_check(out, "succeeded-from-mismatch"))
+
+
 async def test_lint_flags_a_merged_agent_whose_succeeded_by_is_still_active(
     actions: Actions,
 ) -> None:
