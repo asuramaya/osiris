@@ -666,6 +666,57 @@ class SoulStore:
             harness, anchor_sid, source_path,
         )
 
+    async def forget_and_reingest(
+        self, source_path: str, anchor_sid: str, harness: str | None = None,
+    ) -> dict[str, Any]:
+        """THE SANCTIONED EXCEPTION TO APPEND-ONLY (thread 6e56cf7e, Thoth mail 9382 item
+        5): `heal_slug_transcripts`' own re-addressing (mounts.py, `_rewrite_transcript_
+        cwd`) rewrites the `cwd` field on every cwd-carrying line of an already-soul-
+        stored transcript — a real, in-place edit to lines `ingest_path` has already
+        chained. `ingest_path` can never repair this itself: it only ever appends past
+        its own checkpoint (`soul_sessions.last_line_idx`), blind to a content change at
+        an EARLIER `line_idx` — pointed at the rewritten file, it would find every
+        touched line already "ingested" by index and append nothing, leaving the store's
+        copy silently stale forever (the exact divergence `verify_round_trip_sample`'s
+        own `cwd_rewrites` class now names but never fixes on its own).
+
+        NOT A BESPOKE PARTIAL RESPLICE: `_rewrite_transcript_cwd` touches every cwd-
+        carrying line, which in practice is most or all of a real transcript — a full
+        re-chain is both simpler AND more correct than trying to patch just the touched
+        lines and recompute every downstream hash by hand. Deletes this anchor_sid's
+        existing `soul_lines`/`soul_lines_cold`/`soul_sessions` rows (one transaction,
+        so a crash mid-delete never leaves a half-forgotten session — `ingest_path`
+        would otherwise resume from a checkpoint that no longer has the rows it thinks
+        it does) then calls `ingest_path` UNCHANGED, which reads `_progress` as (0, None)
+        for a session it now finds no record of and re-chains the WHOLE current file
+        fresh — the same proven, tested, batched/streaming machinery every real ingest
+        already uses, never a second hash-chain implementation.
+
+        NEVER SILENT: returns `{"reingested": True, "lines": N}`, or `{"reingested":
+        False, "reason": "never soul-stored — nothing to reconcile"}` when this
+        anchor_sid was never ingested in the first place (a cwd heal on a session this
+        store has no opinion about is not this function's concern)."""
+        harness = harness or self._detect_harness(source_path)
+        existing = await self.pool.fetchval(
+            "SELECT 1 FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+            harness, anchor_sid)
+        if not existing:
+            return {"reingested": False,
+                    "reason": "never soul-stored — nothing to reconcile"}
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM soul_lines WHERE harness=$1 AND anchor_sid=$2",
+                    harness, anchor_sid)
+                await conn.execute(
+                    "DELETE FROM soul_lines_cold WHERE harness=$1 AND anchor_sid=$2",
+                    harness, anchor_sid)
+                await conn.execute(
+                    "DELETE FROM soul_sessions WHERE harness=$1 AND anchor_sid=$2",
+                    harness, anchor_sid)
+        n = await self.ingest_path(source_path, anchor_sid, harness=harness)
+        return {"reingested": True, "lines": n}
+
     async def ingest_crush_session(
         self, db_path: str, session_id: str, anchor_sid: str,
     ) -> int:

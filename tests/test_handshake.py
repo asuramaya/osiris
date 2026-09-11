@@ -79,6 +79,47 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 0
 
 
+async def test_automount_reingests_a_soul_stored_session_the_heal_just_rewrote(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thread 6e56cf7e item 5, end to end: a DIFFERENT session, already soul-stored,
+    sits under this cwd's own slug directory but is internally addressed to a former
+    home — automount's own heal rewrites its cwd on disk (already proven elsewhere);
+    this proves the follow-on wiring actually reconciles the soul store too, not just
+    the file."""
+    import os
+    import time
+
+    from src.ingest.soul_store import SoulStore
+
+    root = tmp_path / "projects"
+    _transcript(root, "/w/sibling-nine")  # THIS session's own transcript
+    moved_sid = "aaaa1111-0000-4000-8000-000000000000"
+    slug_dir = root / "-w-sibling-nine"
+    slug_dir.mkdir(parents=True, exist_ok=True)
+    moved_path = slug_dir / f"{moved_sid}.jsonl"
+    moved_path.write_text(json.dumps(
+        {"type": "assistant", "cwd": "/w/former-home",
+         "message": {"content": [{"type": "text", "text": "line one"}]}}) + "\n")
+    stale = time.time() - 3600  # NOT an open tab's pen — heal_slug_transcripts' own
+    os.utime(moved_path, (stale, stale))  # quiet_secs guard would otherwise defer this
+
+    store = SoulStore(actions.pool)
+    await store.ingest_path(str(moved_path), moved_sid)
+    before = await store.raw_lines(moved_sid)
+    assert before is not None and '"cwd": "/w/former-home"' in before[0]
+
+    await automount(actions, session_id=SID, cwd="/w/sibling-nine",
+                    actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
+
+    # _rewrite_transcript_cwd's own compact re-serialization (no space after ':')
+    assert '"cwd":"/w/sibling-nine"' in moved_path.read_text()  # the heal itself
+    after = await store.raw_lines(moved_sid)
+    assert after is not None
+    assert '"cwd":"/w/sibling-nine"' in after[0]  # the soul store now agrees
+    assert await store.verify_chain(moved_sid) is True
+
+
 async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

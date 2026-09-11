@@ -1826,3 +1826,68 @@ async def test_verify_crush_round_trip_sample_skips_a_vanished_db(
     db.unlink()
     report = await store.verify_crush_round_trip_sample(n=5)
     assert report.failures == []
+
+
+# --- forget_and_reingest: the sanctioned exception to append-only (thread 6e56cf7e item 5) ----
+
+async def test_forget_and_reingest_reflects_an_in_place_edit(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """The shape a real cwd heal produces: an already-ingested line's own CONTENT
+    changes on disk, same line_idx — ingest_path alone would skip it (already past its
+    own checkpoint) and append nothing, leaving the store silently stale."""
+    p = _write_transcript(tmp_path / "healme.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "forget001")
+    before = await store.raw_lines("forget001")
+    assert before is not None and "line 2" in before[2]
+
+    lines = p.read_text().splitlines()
+    obj = json.loads(lines[2])
+    obj["message"]["content"] = "line 2 REWRITTEN"
+    lines[2] = json.dumps(obj)
+    p.write_text("\n".join(lines) + "\n")
+
+    out = await store.forget_and_reingest(str(p), "forget001")
+    assert out == {"reingested": True, "lines": 4}
+    after = await store.raw_lines("forget001")
+    assert after is not None
+    assert "line 2 REWRITTEN" in after[2]
+    assert await store.verify_chain("forget001") is True  # a fresh, valid chain
+
+
+async def test_forget_and_reingest_replaces_the_cold_tier_too(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A session folded before its own transcript was edited: the OLD cold blob must
+    not survive a reingest as a stale duplicate answering reads instead of the fresh
+    hot rows forget_and_reingest just wrote."""
+    p = _write_transcript(tmp_path / "healcold.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "forget002")
+    await store.fold_to_cold_tier("forget002")
+    cold_before = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines_cold WHERE anchor_sid='forget002'")
+    assert cold_before == 1
+
+    lines = p.read_text().splitlines()
+    obj = json.loads(lines[0])
+    obj["message"]["content"] = "line 0 REWRITTEN"
+    lines[0] = json.dumps(obj)
+    p.write_text("\n".join(lines) + "\n")
+
+    out = await store.forget_and_reingest(str(p), "forget002")
+    assert out["reingested"] is True
+    cold_after = await store.pool.fetchval(
+        "SELECT count(*) FROM soul_lines_cold WHERE anchor_sid='forget002'")
+    assert cold_after == 0  # the stale fold is gone, not sitting beside fresh hot rows
+    after = await store.raw_lines("forget002")
+    assert after is not None and "line 0 REWRITTEN" in after[0]
+
+
+async def test_forget_and_reingest_reports_nothing_to_reconcile_when_never_ingested(
+    tmp_path: Path, store: SoulStore,
+) -> None:
+    p = _write_transcript(tmp_path / "neveringested.jsonl", _synthetic_lines(2))
+    out = await store.forget_and_reingest(str(p), "notyetseen1")
+    assert out == {"reingested": False,
+                   "reason": "never soul-stored — nothing to reconcile"}
+    assert await store.raw_lines("notyetseen1") is None  # never invented anything
