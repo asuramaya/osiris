@@ -4674,6 +4674,24 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         ot = node.get("object_type")
         cp = node.get("canonical_prefix")
         where = node.get("where", []) or []
+        # STATUS (Thoth dispatch 9490, 588148bb's completeness bar — the projects
+        # composition's own active/all toggle needed a real "all" to filter, and every
+        # composition before this shared ONE hardcoded `status='active'`): OPT-IN, never a
+        # silent behavior change — omitted (the default, every caller before this one)
+        # resolves to the exact same `['active']` list the old hardcoded clause always
+        # produced, so an untouched composition's result is byte-identical. `"any"` lifts
+        # the filter entirely (NULL array = no AND clause); an explicit list narrows to
+        # exactly those statuses (e.g. `["active","retired"]`).
+        raw_status = node.get("status")
+        statuses: list[str] | None
+        if raw_status is None:
+            statuses = ["active"]
+        elif raw_status == "any":
+            statuses = None
+        elif isinstance(raw_status, list):
+            statuses = [str(s) for s in raw_status]
+        else:
+            statuses = [str(raw_status)]
         # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
         # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
         # carried NO order at all, so row order was whatever the planner's physical scan
@@ -4686,8 +4704,10 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         # deterministic, insertion-order-matching key every caller actually wants; `id`
         # (a random UUID) is only the tiebreaker for two rows sharing one timestamp.
         rows = await pool.fetch(
-            "SELECT id FROM objects WHERE status='active' AND ($1::text IS NULL OR type=$1) "
-            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') ORDER BY created_at, id", ot, cp
+            "SELECT id FROM objects WHERE ($3::text[] IS NULL OR status = ANY($3::text[])) "
+            "AND ($1::text IS NULL OR type=$1) "
+            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') ORDER BY created_at, id",
+            ot, cp, statuses,
         )
         # the house boundary (6c18709f): a composition selecting Reflections — by type or
         # by an untyped select-all — reads only the caller's own house; the record stays
@@ -5937,10 +5957,15 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
         "op": "order", "by": "last_touched", "dir": "desc",
         "from": {
             "op": "table",
-            "from": {"op": "select", "object_type": "SoftwareProject"},
+            # status="any" (Thoth dispatch 9490): the client-side active/all toggle needs
+            # every status in ONE fetch to filter locally, same shape the hardcoded
+            # /projects route already fetches (every status, client-side toggle) — the
+            # `status` COLUMN below is what the toggle actually reads.
+            "from": {"op": "select", "object_type": "SoftwareProject", "status": "any"},
             "columns": [
                 {"name": "project", "property": "name"},
                 {"name": "canonical", "property": "canonical"},
+                {"name": "status", "property": "status"},
                 {"name": "on_disk_path", "property": "on_disk_path"},
                 {"name": "commits", "rollup": {"direction": "in", "link_type": "in_repo",
                                                "object_type": "Commit", "of": "count"}},

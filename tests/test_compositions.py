@@ -661,6 +661,117 @@ async def test_projects_composition_surfaces_canonical_and_on_disk_path(
     assert bare_row["on_disk_path"] is None
 
 
+# select's opt-in `status` arg (Thoth dispatch 9490, 588148bb's completeness bar): the
+# projects composition's active/all toggle needed a real "all" to filter, and every
+# composition before this shared ONE hardcoded `status='active'`. OPT-IN, never a silent
+# behavior change — omitted resolves to the exact `['active']` list the old hardcoded
+# clause always produced.
+
+
+async def test_select_status_omitted_is_byte_identical_to_the_old_active_only_default(
+    actions: Actions,
+) -> None:
+    now = datetime.now(UTC)
+    active = await actions.create_or_find_object("SoftwareProject", "repo:selstat-active",
+                                                  "test")
+    await actions.assert_property(active, "name", "selstat-active", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    retired = await actions.create_or_find_object("SoftwareProject", "repo:selstat-retired",
+                                                   "test")
+    await actions.assert_property(retired, "name", "selstat-retired", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    spec = {"op": "select", "object_type": "SoftwareProject"}
+    out = await run_composition(actions.pool, await _save(actions, "sel-default", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(active) in ids
+    assert str(retired) not in ids  # unchanged: still excluded by default
+
+
+async def test_select_status_any_lifts_the_filter_entirely(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    retired = await actions.create_or_find_object("SoftwareProject", "repo:selstat-any-retired",
+                                                   "test")
+    await actions.assert_property(retired, "name", "selstat-any-retired", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    spec = {"op": "select", "object_type": "SoftwareProject", "status": "any"}
+    out = await run_composition(actions.pool, await _save(actions, "sel-any", spec))
+    assert str(retired) in {i["id"] for i in out["items"]}
+
+
+async def test_select_status_explicit_list_narrows(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    merged = await actions.create_or_find_object("SoftwareProject", "repo:selstat-merged", "test")
+    await actions.assert_property(merged, "name", "selstat-merged", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute("UPDATE objects SET status='merged' WHERE id=$1", merged)
+    active = await actions.create_or_find_object("SoftwareProject", "repo:selstat-list-active",
+                                                  "test")
+    await actions.assert_property(active, "name", "selstat-list-active", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "SoftwareProject", "status": ["merged"]}
+    out = await run_composition(actions.pool, await _save(actions, "sel-list", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(merged) in ids
+    assert str(active) not in ids
+
+
+def test_only_projects_opts_into_a_non_default_select_status() -> None:
+    """Static proof that the opt-in is honored fleet-wide, not just by the primitive's own
+    default: walks every DEFAULT_COMPOSITIONS spec for a "select" node and asserts none
+    but "projects" declares a status — every other composition's behavior is therefore
+    unchanged by construction, without having to run all 30 of them (several need
+    subjects/args this test has no business fabricating)."""
+    def _select_statuses(node: Any) -> list[Any]:
+        found: list[Any] = []
+        if isinstance(node, dict):
+            if node.get("op") == "select" and "status" in node:
+                found.append(node["status"])
+            for v in node.values():
+                found.extend(_select_statuses(v))
+        elif isinstance(node, list):
+            for item in node:
+                found.extend(_select_statuses(item))
+        return found
+
+    for name, spec in DEFAULT_COMPOSITIONS.items():
+        statuses = _select_statuses(spec)
+        if name == "projects":
+            assert statuses == ["any"]
+        else:
+            assert statuses == [], f"{name!r} unexpectedly opts into select status={statuses}"
+
+
+async def test_projects_composition_surfaces_status_and_includes_retired_rows(
+    actions: Actions,
+) -> None:
+    """Thoth dispatch 9476/9490: renderProjects()'s active/all toggle reads `status`
+    client-side over ONE fetch — the composition now opts into status="any" so a
+    retired/merged project reaches the client at all, same shape the hardcoded /projects
+    route already fetches (every status, filtered client-side)."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    active = await actions.create_or_find_object("SoftwareProject", "repo:statustest-active",
+                                                  "test")
+    await actions.assert_property(active, "name", "statustest-active", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    retired = await actions.create_or_find_object("SoftwareProject", "repo:statustest-retired",
+                                                   "test")
+    await actions.assert_property(retired, "name", "statustest-retired", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    out = await run_composition(actions.pool, "projects")
+    active_row = next(r for r in out["items"] if r["project"] == "statustest-active")
+    retired_row = next(r for r in out["items"] if r["project"] == "statustest-retired")
+    assert active_row["status"] == "active"
+    assert retired_row["status"] == "retired"
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
