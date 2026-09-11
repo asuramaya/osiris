@@ -184,10 +184,25 @@ const Osiris = (() => {
   // count, capped so one true supernode can't dwarf the board.
   const NODE_SIZE_MIN = 26, NODE_SIZE_MAX = 68, NODE_SIZE_PER_DEGREE = 3;
   const nodeSize = (e) => Math.min(NODE_SIZE_MAX, NODE_SIZE_MIN + e.degree() * NODE_SIZE_PER_DEGREE);
+  // WHOLE-GRAPH LOD sizing/labels (Thoth dispatch 9563, folded from the retired Atlas —
+  // same formulas, unchanged): count -> radius by sqrt scale (area, not radius, should
+  // track population — twice the count should not look four times the size), and the
+  // orphan/abstention labeling the census tracks at every level.
+  const sizeForCount = (n) => Math.min(56, 10 + Math.sqrt(Math.max(n, 1)) * 3.2);
+  const labelWithOrphans = (base, orphans) =>
+    orphans ? `${base} (${orphans} orphan${orphans === 1 ? "" : "s"})` : base;
+  const UNFILED_COLOR = "#c9762c";
+  const unfiledLabel = (u) => {
+    if (!u.orphans) return "Unfiled";
+    const abstainedPart = u.abstained ? `, ${u.abstained} abstained` : "";
+    return `Unfiled (${u.orphans} orphan${u.orphans === 1 ? "" : "s"}${abstainedPart})`;
+  };
 
   // onFocus(id, deep, type): tap = select (deep=false), double-tap = primary action (deep=true).
   // onCtx(id, type, mouseEvent): right-click = the object's contextual action menu.
-  function makeBoard(container, onFocus, onCtx) {
+  // onGraphLevel(level): whole-graph mode only — fires "supernodes"|"clusters"|"nodes" after
+  // each drill, purely for the shell's own level badge (Thoth dispatch 9563).
+  function makeBoard(container, onFocus, onCtx, onGraphLevel) {
     if (window.cytoscapeFcose) cytoscape.use(window.cytoscapeFcose);
     const HAS_FCOSE = !!window.cytoscapeFcose;
     const cy = cytoscape({
@@ -232,6 +247,21 @@ const Osiris = (() => {
         { selector: "node[type='bundle']", style: {
           "background-color": "#21262d", shape: "round-rectangle", "border-style": "dashed",
           "border-color": "#8b949e", width: 44, height: 24, "font-size": 10 } },
+        // WHOLE-GRAPH LOD (Thoth dispatch 9563, folded from the retired Atlas): supernode/
+        // cluster pseudo-nodes size by POPULATION (raw.count), never by cytoscape degree —
+        // a project with 900 members and 3 edges to other projects should still read as the
+        // bigger circle. Unfiled (raw.unfiled) gets its own color, same as the Atlas always
+        // gave it — the one place the eye should always find the last-resort population.
+        { selector: "node[type='supernode']", style: {
+          "background-color": (e) => (e.data("raw") || {}).unfiled ? UNFILED_COLOR : ty("SoftwareProject").c,
+          shape: "ellipse", "border-width": 2, "border-color": "rgba(255,255,255,0.25)",
+          width: (e) => sizeForCount((e.data("raw") || {}).count || 1),
+          height: (e) => sizeForCount((e.data("raw") || {}).count || 1) } },
+        { selector: "node[type='cluster']", style: {
+          "background-color": (e) => ty((e.data("raw") || {}).type).c,
+          shape: "ellipse", "border-width": 2, "border-color": "rgba(255,255,255,0.25)",
+          width: (e) => sizeForCount((e.data("raw") || {}).count || 1),
+          height: (e) => sizeForCount((e.data("raw") || {}).count || 1) } },
       ],
     });
     cy.on("zoom", () => cy.style().update());
@@ -396,11 +426,101 @@ const Osiris = (() => {
       else { newIds.forEach((id) => settleNewNode(cy.getElementById(id))); savePositions(); }
       return added;
     };
+    // ---- WHOLE-GRAPH LOD (Thoth dispatch 9563, folded from the retired Atlas) ---------
+    // A second mode over this SAME cy instance/canvas — "Cytoscape stays the renderer",
+    // Thoth's own words, never a second library or a second element. Unlike the
+    // neighborhood mode above (fcose-laid-out, sticky only via drag/Re-layout), whole-
+    // graph positions are NEVER computed client-side: every position comes straight from
+    // the server (graph_layout.py's heartbeat for individual objects, a live centroid
+    // rollup for supernodes/clusters) via cy.add({..., position}) — layout() above is
+    // never called on these nodes, so a drill never re-shuffles what the heartbeat placed.
+    let wgLevel = null;    // null (neighborhood mode) | "supernodes" | "clusters" | "nodes"
+    let wgProject = null;  // {id, label} once drilled into one project's own clusters
+    const wgClear = () => cy.elements().remove();
+
+    async function loadSupernodes() {
+      wgClear();
+      wgLevel = "supernodes"; wgProject = null;
+      const g = await fetch("/graph/supernodes").then((r) => r.json());
+      g.supernodes.forEach((s) => {
+        if (s.x == null || s.y == null) return;  // not yet positioned this heartbeat tick
+        cy.add({ group: "nodes", data: {
+          id: s.id, type: "supernode", label: labelWithOrphans(s.label, s.orphans), raw: s,
+        }, position: { x: s.x, y: s.y } });
+      });
+      g.project_edges.forEach((e) => {
+        const id = `${e.source}-in_repo-${e.target}`;
+        if (cy.getElementById(e.source).length && cy.getElementById(e.target).length && !cy.getElementById(id).length)
+          cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: "in_repo" } });
+      });
+      // unfiled always renders, even before the heartbeat has positioned any of its
+      // members — falls back to the origin rather than being dropped, since this is the
+      // ONE place the eye should always find the last-resort population.
+      if (g.unfiled && g.unfiled.count > 0) {
+        cy.add({ group: "nodes", data: {
+          id: g.unfiled.id, type: "supernode", label: unfiledLabel(g.unfiled),
+          raw: { ...g.unfiled, label: "unfiled", unfiled: true },
+        }, position: { x: g.unfiled.x != null ? g.unfiled.x : 0, y: g.unfiled.y != null ? g.unfiled.y : 0 } });
+      }
+      cy.resize(); cy.fit(undefined, 45);
+    }
+
+    async function loadClusters(projectId, projectLabel) {
+      wgClear();
+      wgLevel = "clusters"; wgProject = { id: projectId, label: projectLabel };
+      const g = await fetch(`/graph/clusters?project=${encodeURIComponent(projectLabel)}`).then((r) => r.json());
+      g.clusters.forEach((c, i) => {
+        // a cluster with no positioned member yet has no centroid — seed it in a small
+        // circle around the origin rather than dropping it, so it's still clickable.
+        const x = c.x != null ? c.x : Math.cos(i) * 30;
+        const y = c.y != null ? c.y : Math.sin(i) * 30;
+        cy.add({ group: "nodes", data: {
+          id: `cluster:${projectLabel}:${c.type}`, type: "cluster",
+          label: labelWithOrphans(`${c.type} (${c.count})`, c.orphans),
+          raw: { ...c, project: projectLabel },
+        }, position: { x, y } });
+      });
+      cy.resize(); cy.fit(undefined, 45);
+    }
+
+    async function loadViewportNear(x, y, span) {
+      wgClear();
+      wgLevel = "nodes";
+      const g = await fetch("/objects/viewport?" + new URLSearchParams({
+        minx: x - span, maxx: x + span, miny: y - span, maxy: y + span, limit: 500,
+      })).then((r) => r.json());
+      g.nodes.forEach((n) => cy.add({ group: "nodes", data: nodeData(n), position: { x: n.x, y: n.y } }));
+      g.edges.forEach((e) => {
+        const id = `${e.source}-${e.type}-${e.target}`;
+        if (!cy.getElementById(id).length && cy.getElementById(e.source).length && cy.getElementById(e.target).length)
+          cy.add({ group: "edges", data: { id, source: e.source, target: e.target, type: e.type } });
+      });
+      cy.resize(); cy.fit(undefined, 45);
+    }
+
+    function exitWholeGraph() { wgLevel = null; wgProject = null; wgClear(); }
+
     // a bundle node's own click is EXPAND, not the normal select/focus verb — it isn't a
-    // real object, so onFocus (which fetches /objects/<id>) would 404 on it.
+    // real object, so onFocus (which fetches /objects/<id>) would 404 on it. A supernode/
+    // cluster click DRILLS one level in (never onFocus — neither is a real object either);
+    // a real positioned node at the bottom LOD level behaves exactly like neighborhood
+    // mode's own tap (onFocus), the one case where whole-graph and neighborhood converge.
     cy.on("tap", "node", (e) => {
-      if (e.target.data("type") === "bundle") { expandBundle(e.target.id()); return; }
-      onFocus && onFocus(e.target.id(), false, e.target.data("type"));
+      const type = e.target.data("type");
+      if (type === "bundle") { expandBundle(e.target.id()); return; }
+      if (type === "supernode") {
+        const raw = e.target.data("raw") || {};
+        loadClusters(e.target.id(), raw.label != null ? raw.label : e.target.id());
+        onGraphLevel && onGraphLevel("clusters");
+        return;
+      }
+      if (type === "cluster") {
+        const pos = e.target.position();
+        loadViewportNear(pos.x, pos.y, 400);
+        onGraphLevel && onGraphLevel("nodes");
+        return;
+      }
+      onFocus && onFocus(e.target.id(), false, type);
     });
     cy.on("dbltap", "node", (e) => {
       if (e.target.data("type") === "bundle") return;
@@ -418,6 +538,17 @@ const Osiris = (() => {
       // then frame the graph. Without this a board revealed from a panel paints blank.
       resizeFit: () => { cy.resize(); cy.fit(undefined, 40); },
       clear: () => cy.elements().remove(),
+      // WHOLE-GRAPH LOD (Thoth dispatch 9563): enter via loadSupernodes(), climb back a
+      // level via zoomOut() (mirrors the retired Atlas's own zoomOut — clusters -> its
+      // project's supernode view, supernodes level has nowhere higher to climb), leave via
+      // exitWholeGraph() (the shell's own mode toggle, back to neighborhood mode).
+      loadSupernodes,
+      exitWholeGraph,
+      wholeGraphZoomOut() {
+        if (wgLevel === "nodes" && wgProject) loadClusters(wgProject.id, wgProject.label);
+        else loadSupernodes();
+      },
+      wholeGraphLevel: () => wgLevel,
       focusNode: (id) => {
         cy.nodes().removeClass("focus"); cy.edges().removeClass("edge-focus");
         const n = cy.getElementById(id);
