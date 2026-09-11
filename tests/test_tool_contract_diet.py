@@ -909,7 +909,13 @@ def _tool_chars(t: Any) -> int:
 # gated by _enforce_required_links' new incoming direction (artifact-has-authoring-
 # run-plus-version). Same shape as record_evaluation just above. Genuinely new
 # capability, no existing tool it could parameterize.
-TOOL_CONTRACT_EXPECTED_COUNT = 81
+# 81 -> 83 (2026-09-11, Sekhmet, thread 9d2aaf4d, decision c6d25164, Thoth DM
+# 9377/9383, CITATION SHAPE): cite_transcript (the explicit, reasoned citation door —
+# a `cites` edge to an Agent generation's own transcript line, NO AUTO-CITE ever) and
+# read_citation (its verified read-back against the soul store's own hash chain).
+# Two genuinely new capabilities, no existing tool names a transcript-line citation
+# as one of its own params.
+TOOL_CONTRACT_EXPECTED_COUNT = 83
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1489,7 +1495,10 @@ TOOL_CONTRACT_EXPECTED_COUNT = 81
 # reclassify receipt fields this same audit added are pure code, no schema/docstring
 # growth of their own. No new tool, load-bearing growth per this file's own escape
 # valve. Measured exact (122,273), not estimated.
-TOOL_CONTRACT_CEILING_CHARS = 126448
+# 126448 -> 128772 (2026-09-11, Sekhmet, thread 9d2aaf4d, decision c6d25164, Thoth DM
+# 9377/9383, CITATION SHAPE): two new doors, cite_transcript and read_citation (see
+# TOOL_CONTRACT_EXPECTED_COUNT's own 81->83 log entry just above). Measured exact.
+TOOL_CONTRACT_CEILING_CHARS = 128772
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

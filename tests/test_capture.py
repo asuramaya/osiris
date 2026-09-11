@@ -5538,7 +5538,6 @@ async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
     """produced/derived_from/authorized_by/revises each report whether a NEW link was
     minted, the same idempotent shape mint_implements/mint_rediscovers already use."""
     from src.orchestrator.capture import (
-        ensure_agent_run,
         ensure_artifact,
         mint_authorized_by,
         mint_derived_from,
@@ -5547,7 +5546,9 @@ async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
         record_decision,
     )
 
-    run = await ensure_agent_run(actions, "soul-session-abc123")
+    # the run IS the Agent generation (CITATION SHAPE, decision c6d25164 — AgentRun
+    # folded into Agent, no separate pointer object to lazily mint)
+    run = await actions.create_or_find_object("Agent", "agent:soul-session-abc123", "test")
     art_v1 = await ensure_artifact(actions, "report-v1")
     art_v2 = await ensure_artifact(actions, "report-v2")
     src_art = await ensure_artifact(actions, "raw-data")
@@ -5559,8 +5560,9 @@ async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
     assert await mint_authorized_by(actions, run, plan) is True
     assert await mint_revises(actions, art_v2, art_v1) is True
 
-    # lazy re-mint of the same soul_session finds, never twins
-    run_again = await ensure_agent_run(actions, "soul-session-abc123")
+    # re-find of the same Agent canonical finds, never twins
+    run_again = await actions.create_or_find_object("Agent", "agent:soul-session-abc123",
+                                                     "test")
     assert run_again == run
 
 
@@ -5620,18 +5622,35 @@ async def test_record_artifact_refuses_without_authoring_run_once_armed(
 async def test_record_artifact_with_authoring_run_satisfies_the_armed_gate(
     actions: Actions,
 ) -> None:
-    """`authoring_run=` lazily mints the AgentRun and its `produced` edge in the SAME
-    transaction, satisfying the gate before it runs — the incoming-direction check
-    reads `to_id=art` (the run points AT the artifact, never the reverse)."""
+    """`authoring_run=` resolves an EXISTING Agent generation (CITATION SHAPE, decision
+    c6d25164 — the session object IS the Agent generation, no separate AgentRun
+    pointer to lazily mint) and mints its `produced` edge in the same transaction,
+    satisfying the gate before it runs — the incoming-direction check reads
+    `to_id=art` (the run points AT the artifact, never the reverse)."""
     from src.orchestrator.capture import record_artifact
 
+    run = await actions.create_or_find_object("Agent", "agent:citation-run-1", "test")
     async with _artifact_gate_armed(actions):
-        art = await record_artifact(actions, "armed-build-with-run", authoring_run="soul-xyz")
+        art = await record_artifact(actions, "armed-build-with-run",
+                                    authoring_run=str(run))
         row = await actions.pool.fetchrow(
             "SELECT f.type AS run_type FROM links l JOIN objects f ON f.id = l.from_id "
             "WHERE l.to_id=$1 AND l.type='produced'", art)
         assert row is not None
-        assert row["run_type"] == "AgentRun"
+        assert row["run_type"] == "Agent"
+
+
+async def test_record_artifact_refuses_when_authoring_run_does_not_resolve(
+    actions: Actions,
+) -> None:
+    """A bare string that isn't a real Agent's UUID/short-id/canonical refuses cleanly
+    (CITATION SHAPE, decision c6d25164) — there is no lazy-mint fallback left to fall
+    back on."""
+    from src.orchestrator.capture import record_artifact
+
+    with pytest.raises(ValueError, match="does not resolve to a real"):
+        await record_artifact(actions, "unarmed-build-bad-run",
+                              authoring_run="not-a-real-agent-ref")
 
 
 async def test_record_artifact_unlinked_because_satisfies_the_armed_gate_and_dual_writes(
@@ -7237,3 +7256,121 @@ async def test_annotate_thread_renews_a_stale_obligation_window(actions: Actions
     plain = await open_thread(actions, "a question with no window", kind="question")
     await annotate_thread(actions, str(plain), "a note")
     assert "stale_after" not in await _props(actions.pool, plain)
+
+
+# ── THE CITATION SHAPE (operator ruling c6d25164, thread 9d2aaf4d, DM 9377/9383) ──
+
+
+async def _seed_soul_lines(
+    pool: Any, harness: str, anchor_sid: str, lines: list[bytes],
+) -> list[str]:
+    """Test-only fixture: insert a short verified chain of soul_lines rows, matching
+    the exact write shape SoulStore's own ingest path uses. Returns each line's own
+    line_hash, in order."""
+    from src.ingest.soul_store import _chain_hash
+
+    prev: str | None = None
+    hashes: list[str] = []
+    for idx, raw in enumerate(lines):
+        h = _chain_hash(prev, raw)
+        await pool.execute(
+            "INSERT INTO soul_sessions (harness, anchor_sid, source_path) "
+            "VALUES ($1, $2, $3) ON CONFLICT (harness, anchor_sid) DO NOTHING",
+            harness, anchor_sid, f"/tmp/{anchor_sid}.jsonl")
+        await pool.execute(
+            "INSERT INTO soul_lines (harness, anchor_sid, line_idx, raw_line, "
+            "line_hash, prev_hash) VALUES ($1, $2, $3, $4, $5, $6)",
+            harness, anchor_sid, idx, raw, h, prev)
+        hashes.append(h)
+        prev = h
+    return hashes
+
+
+async def test_mint_transcript_citation_verifies_and_mints_the_cites_edge(
+    actions: Actions,
+) -> None:
+    """A citation targeting a real Agent generation, a real line_idx, with a `because`
+    reason, mints a `cites` edge carrying line_idx/line_hash/said_at as properties."""
+    from src.orchestrator.capture import mint_transcript_citation
+
+    run = await actions.create_or_find_object("Agent", "agent:cite-test-1", "test")
+    await actions.assert_property(run, "session", "anchor-cite-1", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_soul_lines(actions.pool, "claude-code", "anchor-cite-1",
+                          [b'{"line":0}', b'{"line":1}'])
+    d = await record_decision(actions, "a ruling that cites a transcript line")
+
+    result = await mint_transcript_citation(
+        actions, d, str(run), 1, "grounding this ruling in what was actually said")
+    assert result["line_idx"] == 1
+    edge = await actions.pool.fetchrow(
+        "SELECT properties FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
+        d, run)
+    assert edge is not None
+    assert edge["properties"]["line_idx"] == 1
+    assert edge["properties"]["because"] == "grounding this ruling in what was actually said"
+
+
+async def test_mint_transcript_citation_refuses_without_because(actions: Actions) -> None:
+    from src.orchestrator.capture import mint_transcript_citation
+
+    run = await actions.create_or_find_object("Agent", "agent:cite-test-2", "test")
+    d = await record_decision(actions, "a ruling")
+    with pytest.raises(ValueError, match="because"):
+        await mint_transcript_citation(actions, d, str(run), 0, "   ")
+
+
+async def test_mint_transcript_citation_never_targets_a_human_node(actions: Actions) -> None:
+    """The literal 'operator' string (or any non-Agent object) refuses exactly like an
+    unresolved ref — nothing that represents a human is ever typed Agent."""
+    from src.orchestrator.capture import mint_transcript_citation
+
+    d = await record_decision(actions, "a ruling")
+    with pytest.raises(ValueError, match="does not resolve to a real Agent"):
+        await mint_transcript_citation(actions, d, "operator", 0, "a real reason")
+
+
+async def test_mint_transcript_citation_refuses_on_bad_line_idx(actions: Actions) -> None:
+    from src.orchestrator.capture import mint_transcript_citation
+
+    run = await actions.create_or_find_object("Agent", "agent:cite-test-3", "test")
+    await actions.assert_property(run, "session", "anchor-cite-3", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_soul_lines(actions.pool, "claude-code", "anchor-cite-3", [b'{"line":0}'])
+    d = await record_decision(actions, "a ruling")
+    with pytest.raises(ValueError, match="mint_transcript_citation refused"):
+        await mint_transcript_citation(actions, d, str(run), 99, "a real reason")
+
+
+async def test_read_transcript_citation_returns_the_verified_line(actions: Actions) -> None:
+    from src.orchestrator.capture import mint_transcript_citation, read_transcript_citation
+
+    run = await actions.create_or_find_object("Agent", "agent:cite-test-4", "test")
+    await actions.assert_property(run, "session", "anchor-cite-4", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_soul_lines(actions.pool, "claude-code", "anchor-cite-4",
+                          [b'{"line":0}', b'{"said":"the real quote"}'])
+    d = await record_decision(actions, "a ruling")
+    await mint_transcript_citation(actions, d, str(run), 1, "a real reason")
+
+    out = await read_transcript_citation(actions.pool, d, str(run))
+    assert out["raw_line"] == '{"said":"the real quote"}'
+
+
+async def test_read_transcript_citation_refuses_on_tampered_line(actions: Actions) -> None:
+    """A line_hash corrupted AFTER the citation was minted (simulated tampering) is
+    caught on read-back — the read door never trusts the edge property alone."""
+    from src.orchestrator.capture import mint_transcript_citation, read_transcript_citation
+
+    run = await actions.create_or_find_object("Agent", "agent:cite-test-5", "test")
+    await actions.assert_property(run, "session", "anchor-cite-5", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await _seed_soul_lines(actions.pool, "claude-code", "anchor-cite-5", [b'{"line":0}'])
+    d = await record_decision(actions, "a ruling")
+    await mint_transcript_citation(actions, d, str(run), 0, "a real reason")
+
+    await actions.pool.execute(
+        "UPDATE soul_lines SET line_hash='tampered' WHERE harness='claude-code' "
+        "AND anchor_sid='anchor-cite-5' AND line_idx=0")
+    with pytest.raises(ValueError, match="read_transcript_citation refused"):
+        await read_transcript_citation(actions.pool, d, str(run))

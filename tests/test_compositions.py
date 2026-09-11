@@ -2785,12 +2785,12 @@ async def test_lint_untraceable_output_flags_all_four_legs_missing(actions: Acti
 async def test_lint_untraceable_output_run_and_plan_satisfied_via_live_edges(
     actions: Actions,
 ) -> None:
-    """A real `produced` edge from an AgentRun, and that run's own `authorized_by` edge
-    to a Decision, satisfy the run and plan legs without any confession — source and
-    evaluator remain genuinely missing."""
+    """A real `produced` edge from an Agent generation, and that generation's own
+    `authorized_by` edge to a Decision, satisfy the run and plan legs without any
+    confession — source and evaluator remain genuinely missing."""
     art = await actions.create_or_find_object("Artifact", "artifact:untraceable-partial",
                                                "test")
-    run = await actions.create_or_find_object("AgentRun", "run:untraceable-partial", "test")
+    run = await actions.create_or_find_object("Agent", "agent:untraceable-partial", "test")
     plan = await actions.create_or_find_object("Decision", "decision:untraceable-plan", "test")
     await actions.create_link(run, art, "produced", "test", datetime.now(UTC), 0.9,
                               evidence_class="self_declared")
@@ -2812,7 +2812,7 @@ async def test_lint_untraceable_output_a_confession_on_every_leg_excludes_the_ro
     confession' wording (f47d14a7)."""
     art = await actions.create_or_find_object("Artifact", "artifact:untraceable-confessed",
                                                "test")
-    run = await actions.create_or_find_object("AgentRun", "run:untraceable-confessed", "test")
+    run = await actions.create_or_find_object("Agent", "agent:untraceable-confessed", "test")
     await actions.create_link(run, art, "produced", "test", datetime.now(UTC), 0.9,
                               evidence_class="self_declared")
     for obj_id, link_type in ((run, "authorized_by"), (art, "derived_from"),
@@ -3035,3 +3035,56 @@ async def test_census_cohort_composition_is_registered_and_runs(actions: Actions
     res = await run_composition(actions.pool, "census-cohort")
     assert res["kind"] == "data"
     assert "cohorts" in res["items"]
+
+
+# ── UNVERIFIED-CITATION (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d) ──
+
+
+async def test_lint_unverified_citation_clean_on_a_genuinely_verified_citation(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import mint_transcript_citation, record_decision
+
+    run = await actions.create_or_find_object("Agent", "agent:lint-cite-clean", "test")
+    await actions.assert_property(run, "session", "anchor-lint-clean", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    from src.ingest.soul_store import _chain_hash
+
+    h = _chain_hash(None, b'{"line":0}')
+    await actions.pool.execute(
+        "INSERT INTO soul_lines (harness, anchor_sid, line_idx, raw_line, line_hash, "
+        "prev_hash) VALUES ('claude-code', 'anchor-lint-clean', 0, $1, $2, NULL)",
+        b'{"line":0}', h)
+    d = await record_decision(actions, "a ruling citing a real transcript line")
+    await mint_transcript_citation(actions, d, str(run), 0, "grounding the ruling")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["unverified-citation"] == 0
+
+
+async def test_lint_unverified_citation_flags_a_tampered_citation(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import mint_transcript_citation, record_decision
+
+    run = await actions.create_or_find_object("Agent", "agent:lint-cite-tampered", "test")
+    await actions.assert_property(run, "session", "anchor-lint-tampered", "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    from src.ingest.soul_store import _chain_hash
+
+    h = _chain_hash(None, b'{"line":0}')
+    await actions.pool.execute(
+        "INSERT INTO soul_lines (harness, anchor_sid, line_idx, raw_line, line_hash, "
+        "prev_hash) VALUES ('claude-code', 'anchor-lint-tampered', 0, $1, $2, NULL)",
+        b'{"line":0}', h)
+    d = await record_decision(actions, "a ruling citing a transcript line, later tampered")
+    await mint_transcript_citation(actions, d, str(run), 0, "grounding the ruling")
+
+    await actions.pool.execute(
+        "UPDATE soul_lines SET line_hash='corrupted' WHERE harness='claude-code' "
+        "AND anchor_sid='anchor-lint-tampered' AND line_idx=0")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["unverified-citation"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "unverified-citation")
+    assert finding["subject"] == "agent:lint-cite-tampered"
