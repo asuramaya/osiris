@@ -4812,6 +4812,11 @@ class Result:
     values: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
     data: Any = None  # a Function's native output (list/dict) — opaque to the ops
+    # `object_cols` (Thoth dispatch 9855): set by `select`'s `scope` path only — tells
+    # `_package`/`object_items` to also carry `status`/`created_at` (objects-table columns,
+    # not winning_props assertions) for a caller that needs them, e.g. browse's own keyset
+    # Load More cursor. False (every other producer of an "objects" Result) is unchanged.
+    object_cols: bool = False
 
 
 # `group`'s body evaluates against "this partition's members" — threaded the same way
@@ -5137,7 +5142,13 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         # scope-less path), and `where`/props/neighborhood downstream are untouched either
         # way — only the ROW FETCH itself branches here.
         scope = node.get("scope")
-        if scope:
+        # `is not None`, not truthiness: `scope: {}` is a deliberate opt-in ("use
+        # list_objects_scoped, no narrowing beyond its own default rules") a caller like
+        # browse sends for its unscoped "All Repos" state — `if scope:` would silently
+        # treat an empty dict as absent and fall through to the old branch, losing
+        # exclude_types/cursor/object_cols exactly when a caller asked for them the most
+        # plainly. Found while adding object_cols support (Thoth dispatch 9855).
+        if scope is not None:
             # a saved composition's spec round-trips through JSON storage — a UUID/datetime
             # in the node arrives back as a plain string, never the Python object a caller
             # constructing the spec programmatically might pass; accept either, same
@@ -5182,7 +5193,7 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                 "AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[])) ORDER BY created_at, id",
                 ot, cp, statuses, link_ids,
             )
-        if scope and link_ids is not None:
+        if scope is not None and link_ids is not None:
             keep = set(link_ids)
             rows = [r for r in rows if r["id"] in keep]
         # the house boundary (6c18709f): a composition selecting Reflections — by type or
@@ -5215,7 +5226,13 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             if all(match_condition(facts.get(c.get("property")), c.get("op", "contains"),
                                    c.get("value")) for c in where):
                 out.append(r["id"])
-        return Result("objects", objects=out)
+        # `object_cols` (Thoth dispatch 9855, the browse-swap shape gap): a `scope`-driven
+        # select is the one path a composition consumer (browse's own Load More) needs
+        # `status`/`created_at` back — object_items' packaging normally carries neither
+        # (they're objects-table columns, not winning_props assertions, and no caller
+        # before this one ever needed them). Flagged on the Result rather than threaded as
+        # a new _package parameter every other op would have to pass None for.
+        return Result("objects", objects=out, object_cols=scope is not None)
 
     if op == "traverse":
         base = await _eval(pool, node["from"], subject)
@@ -5946,7 +5963,9 @@ async def list_compositions(
     ]
 
 
-async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[str, Any]]:
+async def object_items(
+    pool: asyncpg.Pool, ids: list[uuid.UUID], *, with_object_cols: bool = False,
+) -> list[dict[str, Any]]:
     """Label a result set's objects AND carry their compact properties — in two batch
     queries, not N. The view-switcher needs this: the Graph view uses label/type, the
     Table view shows property columns (sector, date, …) without a per-row fetch.
@@ -5956,11 +5975,20 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
     hand-rolled fallback chain agreeing with the others by coincidence. `display_label`
     is `disambiguate_labels` across THIS result set — the board/table views are exactly
     where the reported bug (three rows truncating to one indistinguishable string) is
-    most visible."""
+    most visible.
+
+    `with_object_cols` (Thoth dispatch 9855, browse-swap shape gap, ruling on 588148bb):
+    OPT-IN, same discipline as every other flag this reign — False (every caller before
+    this one) is byte-identical. True also selects `status`/`created_at` in the SAME
+    batched objects query (they're objects-table columns, not winning_props assertions,
+    so there's no second round trip) and carries them onto each item — browse's own
+    keyset Load More derives its next cursor from `created_at`/`id` on the composition's
+    own returned rows, the same helper `/objects` and `select`'s `scope` arg both share."""
     if not ids:
         return []
+    cols = "id, type, canonical, status, created_at" if with_object_cols else "id, type, canonical"
     objs = await pool.fetch(
-        "SELECT id, type, canonical FROM objects WHERE id = ANY($1::uuid[])", ids
+        f"SELECT {cols} FROM objects WHERE id = ANY($1::uuid[])", ids
     )
     props: dict[uuid.UUID, dict[str, str]] = {}
     for r in await pool.fetch(
@@ -5975,9 +6003,13 @@ async def object_items(pool: asyncpg.Pool, ids: list[uuid.UUID]) -> list[dict[st
             continue
         p = props.get(oid, {})
         res = resolve_label(o["type"], p, o["canonical"])
-        out.append({"id": str(oid), "type": o["type"], "canonical": o["canonical"],
-                    "label": res.label, "props": p,
-                    **({"subtitle": res.subtitle} if res.subtitle else {})})
+        item = {"id": str(oid), "type": o["type"], "canonical": o["canonical"],
+                "label": res.label, "props": p,
+                **({"subtitle": res.subtitle} if res.subtitle else {})}
+        if with_object_cols:
+            item["status"] = o["status"]
+            item["created_at"] = o["created_at"].isoformat() if o["created_at"] else None
+        out.append(item)
     disp = disambiguate_labels([(o["id"], o["label"], o["canonical"]) for o in out])
     for o in out:
         o["display_label"] = disp[o["id"]]
@@ -5989,7 +6021,7 @@ async def _package(pool: asyncpg.Pool, res: Result) -> Any:
     rows, rows/values/data pass through. Shared by `run_spec` and the `sections` op (a section
     body is packaged exactly as a top-level composition would be)."""
     if res.kind == "objects":
-        return await object_items(pool, res.objects)
+        return await object_items(pool, res.objects, with_object_cols=res.object_cols)
     if res.kind == "rows":
         return res.rows
     if res.kind == "data":

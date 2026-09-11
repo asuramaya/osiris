@@ -845,6 +845,36 @@ async def test_select_scope_composes_with_subject_link_post_filter(actions: Acti
     assert ids == {str(linked)}
 
 
+async def test_select_scope_items_carry_status_and_created_at(actions: Actions) -> None:
+    """Thoth dispatch 9855 (588148bb, the browse-swap shape gap): `object_items`'
+    packaging normally carries neither `status` nor `created_at` — they're objects-table
+    columns, not winning_props assertions, and no consumer before browse's own keyset
+    Load More ever needed them back off a composition run. A `scope`-driven select is the
+    ONE path that does (the cursor it needs IS created_at/id) — proven here as an opt-in
+    that rides along automatically with `scope`, never a separate flag callers forget."""
+    await actions.create_or_find_object("Thread", "thread:scope-cols", "test")
+    spec = {"op": "select", "object_type": "Thread", "scope": {}}
+    saved = await _save(actions, "sel-scope-cols", spec)
+    out = await run_composition(actions.pool, saved)
+    assert out["items"], "expected at least one Thread"
+    for item in out["items"]:
+        assert "status" in item and item["status"]
+        assert "created_at" in item and item["created_at"]
+
+
+async def test_select_without_scope_carries_no_object_cols(actions: Actions) -> None:
+    """The inverse of the above — every select before `scope` existed (and every select
+    that still doesn't use it) is byte-identical: no status/created_at on its items."""
+    await actions.create_or_find_object("Thread", "thread:no-scope-cols", "test")
+    spec = {"op": "select", "object_type": "Thread"}
+    saved = await _save(actions, "sel-no-scope-cols", spec)
+    out = await run_composition(actions.pool, saved)
+    assert out["items"], "expected at least one Thread"
+    for item in out["items"]:
+        assert "status" not in item
+        assert "created_at" not in item
+
+
 def test_only_projects_opts_into_a_non_default_select_status() -> None:
     """Static proof that the opt-in is honored fleet-wide, not just by the primitive's own
     default: walks every DEFAULT_COMPOSITIONS spec for a "select" node and asserts none

@@ -193,6 +193,42 @@ def test_projects_status_toggle_still_narrows_client_side_over_every_status() ->
     assert "PROJECTS_INDEX_STATUS === 'all' || r.status === PROJECTS_INDEX_STATUS" in body
 
 
+# THE BROWSE SWAP (Thoth dispatch 9838/9855, 588148bb): the entity set's own load used to
+# GET /objects directly; it now runs an ephemeral {"op":"select","scope":{...}} op-tree
+# through /compositions/run-spec — the SAME `scope` opt-in (and, since it's the same
+# extraction, the same list_objects_scoped SQL) /objects itself calls. Type pills/search/
+# sort stay client-side residue, same discipline the Projects swap used.
+
+
+def test_browse_object_set_no_longer_fetches_objects_directly() -> None:
+    assert "fetch(objectSetUrl(" not in _JS
+    assert "function objectSetUrl(" not in _JS
+
+
+def test_browse_select_runs_an_ephemeral_scope_spec_through_run_spec() -> None:
+    body = _JS.split("async function runBrowseSelect(", 1)[1].split("\nfunction ", 1)[0]
+    assert "'/compositions/run-spec'" in body
+    assert "spec: spec" in body and "op: 'select', scope: browseScope(cursor)" in body
+
+
+def test_browse_scope_carries_the_same_exclude_types_case_project_as_before() -> None:
+    body = _JS.split("function browseScope(cursor) {", 1)[1].split("\n}", 1)[0]
+    assert "scope.exclude_types = ['Agent']" in body
+    assert "scope.case_id = s.case_id" in body
+    assert "scope.project = s.project" in body
+
+
+def test_browse_load_more_reuses_the_exact_same_helper_as_the_initial_load() -> None:
+    body = _JS.split("async function loadMoreObjects()", 1)[1].split("\n}\n", 1)[0]
+    assert "runBrowseSelect({ created_at: last.created_at, id: last.id })" in body
+
+
+def test_browse_bridges_composition_items_onto_the_shape_rendering_already_expects() -> None:
+    body = _JS.split("async function runBrowseSelect(", 1)[1].split("\nfunction ", 1)[0]
+    assert "name: it.display_label || it.label" in body
+    assert "status: it.status" in body and "created_at: it.created_at" in body
+
+
 # THE ATLAS REMOVAL (Thoth dispatch 9563, 588148bb): "atlas is terrible, it's like browse
 # in graph mode but worse and uglier, I don't think it should exist at all" — the operator's
 # own word. The sigma.js/graphology full-graph surface is gone; its useful backend

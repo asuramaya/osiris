@@ -202,9 +202,9 @@ function updateRepoPill() {
 }
 
 function objectScopeParams() {
-  // The scope bits objectSetUrl() and objectCountsUrl() both need — split out so the
-  // counts fetch (#196, Thoth msg 5600) reads the exact same scope /objects itself would,
-  // never a second, drifting copy of the same three branches.
+  // The scope bits browseScope() and objectCountsUrl() both need — split out so the
+  // counts fetch (#196, Thoth msg 5600) reads the exact same scope the entity set's own
+  // load would, never a second, drifting copy of the same three branches.
   var ex = SHOW_AGENTS ? '' : '&exclude_types=Agent';
   var room = ROOMS.find(function(r){return r.id === ROOM;});
   var subject = (room && room.config && room.config.subject) || null;
@@ -213,17 +213,43 @@ function objectScopeParams() {
   var repos = SCOPE_FILTER ? SCOPE_FILTER.split(',').filter(Boolean) : [];
   return { extra: ex, project: repos, case_id: null };
 }
-function objectSetUrl(cursor) {
+// THE BROWSE-TAB CUTOVER (Thoth dispatch 9838/9855, 588148bb): the entity set's own load
+// used to GET /objects directly; it now runs an EPHEMERAL {"op":"select","scope":{...}}
+// op-tree through /compositions/run-spec — the exact same `scope` opt-in (and, since it's
+// the SAME extraction, the exact same list_objects_scoped SQL) /objects itself calls, so
+// there is truly one definition, not a REST caller and a composition caller drifting apart.
+// Type pills/search/sort stay client-side residue (unchanged, over whatever SET holds) —
+// per Thoth's own dispatch shape, same discipline the Projects swap used.
+function browseScope(cursor) {
   var s = objectScopeParams();
-  var url = '/objects?limit=' + OBJECTS_LIMIT + s.extra;
-  if (s.case_id) url += '&case_id=' + encodeURIComponent(s.case_id);
-  for (var i = 0; i < s.project.length; i++) url += '&project=' + encodeURIComponent(s.project[i]);
+  var scope = { limit: OBJECTS_LIMIT };
+  if (!SHOW_AGENTS) scope.exclude_types = ['Agent'];
+  if (s.case_id) scope.case_id = s.case_id;
+  if (s.project.length) scope.project = s.project;
   // KEYSET continuation (#93 step 3, Thoth msg 5668) — the cursor #196 built and proved
-  // (before_created_at/before_id, migration 0054's objects_type_created_idx) but never
-  // wired to a click. Omitted for the initial load (unchanged behavior, every existing
-  // caller); passed here only by loadMoreObjects() below.
-  if (cursor) url += '&before_created_at=' + encodeURIComponent(cursor.created_at) + '&before_id=' + encodeURIComponent(cursor.id);
-  return url;
+  // (before_created_at/before_id, migration 0054's objects_type_created_idx). Omitted for
+  // the initial load (unchanged behavior); passed here only by loadMoreObjects() below —
+  // the composition's own `scope.cursor` is the SAME shape select's scope arg accepts.
+  if (cursor) scope.cursor = { before_created_at: cursor.created_at, before_id: cursor.id };
+  return scope;
+}
+async function runBrowseSelect(cursor) {
+  var spec = { op: 'select', scope: browseScope(cursor) };
+  var res = await fetch('/compositions/run-spec', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ spec: spec, name: 'browse' }),
+  }).then(function(r){return r.json();}).catch(function(){return null;});
+  var items = (res && Array.isArray(res.items)) ? res.items : [];
+  // Bridge the composition's generic packaged shape ({label,display_label} plus the
+  // opt-in status/created_at that ride along with `scope`) onto the exact object shape
+  // the entity explorer's rendering/search/sort/footer always consumed (name/
+  // display_label/status/created_at/props) — a client-side adapter, not a backend
+  // change: object_items' own shape stays generic for every OTHER composition.
+  return items.map(function(it) {
+    return { id: it.id, type: it.type, canonical: it.canonical, status: it.status,
+             created_at: it.created_at, props: it.props || {},
+             name: it.display_label || it.label, display_label: it.display_label };
+  });
 }
 function objectCountsUrl() {
   var s = objectScopeParams();
@@ -233,9 +259,8 @@ function objectCountsUrl() {
   return url;
 }
 async function loadObjectSet() {
-  const r = await fetch(objectSetUrl()).then(r => r.json()).catch(() => []);
-  SET = Array.isArray(r) ? r : [];
-  // A full-length page is the only signal /objects gives that there might be more (no
+  SET = await runBrowseSelect();
+  // A full-length page is the only signal the scope gives that there might be more (no
   // total/has_more field) — a heuristic, not a promise, same honesty rule as everywhere
   // else this reign: never assert a conclusion the data can't support. A short page is
   // certain (fewer than asked for = nothing left); a full page MIGHT mean more, or might
@@ -278,9 +303,7 @@ async function loadMoreObjects() {
   OBJECTS_LOADING_MORE = true;
   renderEntityExplorerStage();  // shows the loading state on the button immediately
   try {
-    var page = await fetch(objectSetUrl({ created_at: last.created_at, id: last.id }))
-      .then(function(r){return r.json();}).catch(function(){return [];});
-    page = Array.isArray(page) ? page : [];
+    var page = await runBrowseSelect({ created_at: last.created_at, id: last.id });
     SET = SET.concat(page);
     OBJECTS_HAS_MORE = page.length >= OBJECTS_LIMIT;
   } finally {
