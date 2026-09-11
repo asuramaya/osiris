@@ -889,6 +889,91 @@ async def test_projects_composition_surfaces_worktrees(actions: Actions) -> None
     assert lonely_row["worktrees"] is None  # no worktree_of edges — honest absence
 
 
+async def test_select_subject_link_is_inert_without_a_subject_bound(actions: Actions) -> None:
+    """Thoth dispatch 9676/9690, 588148bb piece 4: `subject_link` is OPT-IN the same way
+    `status` was — declaring it on a `select` node must not change an unsubjected run's
+    result at all (browse's own default load, every caller before this one)."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:sublink-noop", "test")
+    await actions.assert_property(proj, "name", "sublink-noop", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    thread = await actions.create_or_find_object("Thread", "thread:sublink-unlinked", "test")
+    await actions.assert_property(thread, "summary", "unrelated to any project", "test", now,
+                                  0.9, evidence_class="self_declared")
+
+    spec = {"op": "select", "subject_link": {"link_type": "in_repo", "direction": "in"}}
+    out = await run_composition(actions.pool, await _save(actions, "sel-sublink-noop", spec))
+    ids = {i["id"] for i in out["items"]}
+    assert str(proj) in ids and str(thread) in ids  # no subject bound — nothing narrowed
+
+
+async def test_select_subject_link_narrows_to_the_subject_neighborhood_when_bound(
+    actions: Actions,
+) -> None:
+    """With a subject bound, `subject_link` narrows to the one-hop in_repo neighborhood —
+    same convention _rollup/traverse already use ("in" = a link pointing INTO the subject)."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:sublink-narrow", "test")
+    await actions.assert_property(proj, "name", "sublink-narrow", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    inside = await actions.create_or_find_object("Thread", "thread:sublink-inside", "test")
+    await actions.assert_property(inside, "summary", "belongs to sublink-narrow", "test", now,
+                                  0.9, evidence_class="self_declared")
+    await actions.create_link(inside, proj, "in_repo", "test", now, 0.9)
+    outside = await actions.create_or_find_object("Thread", "thread:sublink-outside", "test")
+    await actions.assert_property(outside, "summary", "belongs to nothing", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    spec = {"op": "select", "object_type": "Thread",
+            "subject_link": {"link_type": "in_repo", "direction": "in"}}
+    saved = await _save(actions, "sel-sublink-narrow", spec)
+    out = await run_composition(actions.pool, saved, proj)
+    ids = {i["id"] for i in out["items"]}
+    assert ids == {str(inside)}  # exactly the neighborhood, the project itself excluded too
+
+
+async def test_browse_composition_subject_bound_narrows_to_that_projects_objects(
+    actions: Actions,
+) -> None:
+    """588148bb piece 4's own motivating case: browse run with a SoftwareProject as subject
+    (the projects click-through's target) shows only that project's own in_repo set — same
+    population the `object_count` column already counts, not a re-derived notion."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:browse-sub", "test")
+    await actions.assert_property(proj, "name", "browse-sub", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    inside = await actions.create_or_find_object("Commit", "commit:browse-sub-inside", "test")
+    await actions.create_link(inside, proj, "in_repo", "test", now, 0.9)
+    other_proj = await actions.create_or_find_object("SoftwareProject", "repo:browse-sub-other",
+                                                      "test")
+    await actions.assert_property(other_proj, "name", "browse-sub-other", "test", now, 0.9,
+                                  evidence_class="self_declared")
+    outside = await actions.create_or_find_object("Commit", "commit:browse-sub-outside", "test")
+    await actions.create_link(outside, other_proj, "in_repo", "test", now, 0.9)
+
+    out = await run_composition(actions.pool, "browse", proj)
+    ids = {i["id"] for i in out["items"]}
+    assert ids == {str(inside)}
+
+
+async def test_projects_composition_row_action_binds_subject_to_browse(
+    actions: Actions,
+) -> None:
+    """Thoth dispatch 9542/9676/9690, piece 4 of 4: the old /projects route's own
+    openProjectInBrowse click-through. `bind_subject`, not `args` — browse is an op-tree,
+    not a Function, so there's nothing to drill into via run-spec's function wrapping."""
+    await seed_default_compositions(actions.pool)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rowact-bind", "test")
+    await actions.assert_property(proj, "name", "rowact-bind", "test", now, 0.9,
+                                  evidence_class="self_declared")
+
+    out = await run_composition(actions.pool, "projects")
+    row = next(r for r in out["items"] if r["project"] == "rowact-bind")
+    assert row["_action"] == {"action": "run:browse", "subject": str(proj)}
+
+
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
