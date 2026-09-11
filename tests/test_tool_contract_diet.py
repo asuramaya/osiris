@@ -1538,7 +1538,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # @mcp.tool() (tool count unchanged; dispatched through the existing `backfill` door, same
 # as `lineage_repo_links`/`agent_project_links` before it). No prose growth on any other
 # tool. Measured exact (131,805).
-TOOL_CONTRACT_CEILING_CHARS = 131807
+# 131807 -> 131996 (2026-09-11, Imhotep, thread 9dc3ce8b, wave 19 item 1, READ-SIDE
+# ADOPTION OF THE VISIT CLASS): `fleet`'s own docstring gains one new diagnostic-field
+# entry (`agent_classes` — vitals.py's one authority, named_souls/visit_families/
+# unresolved_families beside the raw `count`) — a genuinely new field, not prose padding
+# on an existing one. No new @mcp.tool(). Measured exact (131,996).
+TOOL_CONTRACT_CEILING_CHARS = 131998
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

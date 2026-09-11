@@ -402,29 +402,34 @@ async def demote_visits(
 
 
 async def fold_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """The honest numbers, one query set: what the operator's rule says the fleet IS."""
-    from src.orchestrator.agents import _generation
+    """The honest numbers, one query set: what the operator's rule says the fleet IS.
+
+    THE NAMED/VISIT/UNRESOLVED SPLIT IS `vitals.agent_class_counts`'s OWN AUTHORITY NOW
+    (9dc3ce8b, the Great Fold's read-side adoption): this function used to re-derive it
+    here, in Python, over its own copy of the same two predicates — promoted to vitals.py
+    so fleet()/graph_lint's orphan census (and any future reader) share the identical
+    SQL instead of a second copy free to drift. This function keeps only the fold-
+    specific facts that authority has no reason to carry (seat_objects, labels_total/
+    active/folded — counts across EVERY status, not just active, which
+    `agent_class_counts` deliberately never sees)."""
+    from src.orchestrator.vitals import agent_class_counts
 
     seat_objects = await pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
-    labels = await pool.fetch(
-        "SELECT canonical, status, "
-        "EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=objects.id "
-        "        AND a.name='agent_class' AND a.value #>> '{}' = 'visit') AS visit, "
-        "EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=objects.id "
-        "        AND a.name='handle') AS named "
+    status_counts = await pool.fetchrow(
+        "SELECT count(*) AS total, "
+        "count(*) FILTER (WHERE status='active') AS active, "
+        "count(*) FILTER (WHERE status='merged') AS folded "
         "FROM objects WHERE type='Agent'")
-    active = [r for r in labels if r["status"] == "active"]
-    folded = sum(1 for r in labels if r["status"] == "merged")
-    visits = {_generation(str(r["canonical"]))[0] for r in active if r["visit"]}
-    named = {_generation(str(r["canonical"]))[0] for r in active if r["named"]}
-    all_active = {_generation(str(r["canonical"]))[0] for r in active}
+    classes = await agent_class_counts(pool)
     return {
         "seat_objects": int(seat_objects or 0),
-        "labels_total": len(labels), "labels_active": len(active),
-        "labels_folded": folded,
-        "families_active": len(all_active),
-        "souls_named": len(named - visits),
-        "visit_families": len(visits),
-        "unresolved_families": len(all_active - named - visits),
+        "labels_total": int(status_counts["total"] or 0),
+        "labels_active": int(status_counts["active"] or 0),
+        "labels_folded": int(status_counts["folded"] or 0),
+        "families_active": (classes["named_souls"] + classes["visit_families"]
+                            + classes["unresolved_families"]),
+        "souls_named": classes["named_souls"],
+        "visit_families": classes["visit_families"],
+        "unresolved_families": classes["unresolved_families"],
     }

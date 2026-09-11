@@ -24,6 +24,7 @@ from src.orchestrator.agents import SOUL_SQL_TEMPLATE
 class _DB(Protocol):
     """The slice of asyncpg's pool/connection API the vitals need — both satisfy it."""
 
+    async def fetch(self, query: str, *args: Any) -> Any: ...
     async def fetchrow(self, query: str, *args: Any) -> Any: ...
     async def fetchval(self, query: str, *args: Any) -> Any: ...
 
@@ -110,3 +111,54 @@ async def wakes_hour(db: _DB) -> int:
     n = await db.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
     return int(n or 0)
+
+
+# THE VISIT CLASS'S OWN READ-SIDE PREDICATE (9dc3ce8b, the Great Fold's read-side
+# adoption): greatfold.py's `demote_visit_families` marks a registration-only family
+# `agent_class='visit'` — a DOORBELL RING, never a mind, never folded into a soul. A
+# handle-claiming family is `named` — deliberately claimed the seat's own name, the
+# strongest positive signal this house has. Neither predicate is retyped anywhere else;
+# every headline that counts Agent objects reads it from HERE.
+_NAMED_SQL = ("EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+             "AND a.name='handle')")
+_VISIT_SQL = ("EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+             "AND a.name='agent_class' AND a.value #>> '{}' = 'visit')")
+
+
+async def agent_class_counts(db: _DB) -> dict[str, int]:
+    """{named_souls, visit_families, unresolved_families} — the STATIC population split
+    (every Agent object ever minted, folded to its soul), distinct from `live_souls`
+    above (a 900s liveness WINDOW, a completely different axis — a soul can be named yet
+    long asleep, or live yet unresolved). This is the promoted READ-SIDE half of
+    greatfold.py's own `fold_census`, which computes the identical named/visit/
+    unresolved split in Python over the same two predicates for the fold tool's own
+    diagnostics (plus fold-specific facts — seat_objects, labels_folded — no read
+    surface needs); `fold_census` now calls this instead of re-deriving it, so the two
+    never drift. named/visit are DISJOINT BY CONSTRUCTION (fold_agent refuses to demote
+    anything carrying a handle) but computed as `named - visit` regardless, defensively
+    — the same posture greatfold.py's own fold_census already took.
+
+    9dc3ce8b: "every headline that counts agents... deflates visit-class agents out of
+    the named-soul count and names the visit count beside it, one shared predicate,
+    never five" — this IS that one predicate. fleet()'s `count` and graph_lint's
+    `orphan_census` (Agent bucket) both call this rather than counting raw Agent rows."""
+    from src.orchestrator.agents import _generation
+
+    rows = await db.fetch(
+        f"SELECT o.canonical, {_NAMED_SQL} AS named, {_VISIT_SQL} AS visit "
+        "FROM objects o WHERE o.type='Agent' AND o.status='active'")
+    named: set[str] = set()
+    visit: set[str] = set()
+    families: set[str] = set()
+    for r in rows:
+        base = _generation(str(r["canonical"]))[0]
+        families.add(base)
+        if r["named"]:
+            named.add(base)
+        if r["visit"]:
+            visit.add(base)
+    return {
+        "named_souls": len(named - visit),
+        "visit_families": len(visit),
+        "unresolved_families": len(families - named - visit),
+    }

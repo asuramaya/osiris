@@ -1591,12 +1591,23 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
     reachability question, not a status one. A merged/retired object can carry
     orphan-link findings forever and never appear here; an active object with a real
     live edge never appears here even if that edge's OTHER end is long since merged
-    away."""
+    away.
+
+    THE Agent BUCKET DEFLATES VISIT-CLASS OUT OF ITS OWN COUNT (9dc3ce8b, read-side
+    adoption): a visit-class doorbell ring is exactly the shape most likely to be
+    orphaned (a one-shot registration nobody ever linked to anything), so this check's
+    own by_type['Agent'] was the fiction's own worst-case surface. visit sub-counts
+    alongside count, same shared predicate as fleet()'s agent_classes and greatfold.py's
+    fold_census (vitals.py's one authority) - only the Agent bucket gets it, never a
+    zero-value key on a type it makes no sense for."""
+    from src.orchestrator.vitals import _VISIT_SQL
+
     rows = await pool.fetch(
-        "SELECT o.id, o.canonical, o.type, "
+        f"SELECT o.id, o.canonical, o.type, "
         " EXISTS (SELECT 1 FROM current_assertions ca WHERE ca.object_id=o.id "
         "   AND ca.name LIKE 'derivation_abstained_%' AND NOT (ca.value ? 'resolved')) "
-        "   AS abstained "
+        "   AS abstained, "
+        f" {_VISIT_SQL} AS visit "
         "FROM objects o "
         "WHERE o.status='active' AND o.type <> 'Type' "
         "AND NOT EXISTS (SELECT 1 FROM links l WHERE (l.from_id=o.id OR l.to_id=o.id) "
@@ -1608,6 +1619,8 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
         bucket["count"] += 1
         if r["abstained"]:
             bucket["abstained"] += 1
+        if r["type"] == "Agent" and r["visit"]:
+            bucket["visit"] = bucket.get("visit", 0) + 1
     return {
         "rows": [{"id": r["id"], "canonical": r["canonical"], "type": r["type"],
                  "abstained": bool(r["abstained"])} for r in rows],

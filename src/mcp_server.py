@@ -4937,8 +4937,10 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     `harness_registry` (occupancy+identity fold-in, no second call needed);
     `landing_audit` (unmerged branches, git-vs-graph landing disagreements); `pool_health`
     (pg backend counts per daemon, cumulative `tx_total`, `caps` for the connection
-    envelope). Project grouping normalizes through `merged_into`. Field detail:
-    consult_canon('fleet')."""
+    envelope); `agent_classes` (9dc3ce8b: `count`'s own deflated twin —
+    named_souls/visit_families/unresolved_families, vitals.py's one authority, never a
+    raw row total mistaken for a headcount). Project grouping normalizes through
+    `merged_into`. Field detail: consult_canon('fleet')."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -5287,9 +5289,25 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                 harness_caps[canon] = (" ".join(caps) or "none", canon not in stamped)
     except Exception:  # noqa: BLE001
         pass
+    # THE VISIT CLASS, READ-SIDE (9dc3ce8b): `count` above is every active Agent row,
+    # visit-class doorbell rings included — the exact fiction the Great Fold's own read-
+    # side adoption exists to stop each headline re-inventing. `agent_classes` is
+    # vitals.py's one authority (also greatfold.py's own fold_census, so the two never
+    # drift), additive beside `count` rather than replacing it — an existing reader of
+    # the raw row total keeps working unchanged. Best-effort, same fail-open shape as
+    # os_bodies/ghost_gap/harness_caps above: a probe failure here must never break
+    # fleet() outright.
+    agent_classes: dict[str, int] | None = None
+    try:
+        from src.orchestrator.vitals import agent_class_counts
+
+        agent_classes = await agent_class_counts(pool)
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "connected_now": len(_agents),
         "count": len(nodes),
+        **({"agent_classes": agent_classes} if agent_classes is not None else {}),
         **({"ghosts": ghosts} if ghosts else {}),
         "live": sum(1 for n in nodes.values() if n["live"]),
         "swarm": sum(1 for n in nodes.values() if n["parent"]),
