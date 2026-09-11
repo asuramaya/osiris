@@ -885,3 +885,36 @@ class Actions:
                 name,
             )
             return [dict(r) for r in rows]
+
+    async def would_be_noop_assert(
+        self, object_id: uuid.UUID, name: str, source_id: str, value: Any,
+    ) -> bool:
+        """True when THIS source's own current value for (object_id, name) already
+        equals `value` — a read-before-write guard a periodic source calls BEFORE
+        assert_property, not a replacement for it (ruling 0623995e, thread 2a280e07:
+        assert_property's own byte-dup skip compares `observed_at` too, so it never
+        fires for a source that stamps a fresh clock on every tick — a same-value
+        reassertion at a NEW timestamp is deliberately treated as real information
+        THERE, "confirmed still true at T2". This helper is for the different, coarser
+        question a periodic source asks: "do I have anything NEW to say at all", so it
+        can skip the call — and the fresh-clock write — entirely).
+
+        Scoped to THIS source specifically (`source_id`), never the cross-source
+        `current_assertions` winner — a different, higher-confidence source's value
+        disagreeing with this source's own prior assertion is not this source's own
+        no-op to detect (using the cross-source winner here would make a source that
+        can never win its own comparison re-assert forever, chasing a value it can
+        never make current — the exact shape found live in disk-census's own
+        already-known-repo path, decision 0623995e)."""
+        # is_current-backed (migration 0047), the SAME O(1) lookup assert_property's own
+        # kernel guard uses — never the anti-join this whole ruling exists to stop paying
+        # on every write; a pre-write check that re-derived "not superseded" via the old
+        # NOT EXISTS scan would defeat its own purpose on a deep-history triple.
+        async with self._read() as conn:
+            row = await conn.fetchrow(
+                "SELECT a.value FROM assertions a "
+                "WHERE a.object_id=$1 AND a.name=$2 AND a.source_id=$3 AND a.is_current "
+                "LIMIT 1",
+                object_id, name, source_id,
+            )
+        return row is not None and row["value"] == value

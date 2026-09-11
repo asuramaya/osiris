@@ -134,6 +134,49 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     assert again["known"] == 2  # both now known; the unchanged disk writes nothing
 
 
+async def test_census_trees_own_history_stays_flat_when_another_source_also_asserts(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Ruling 0623995e (thread 2a280e07): disk-census used to compare its own on_disk_path/
+    remote_url against the UNORDERED, UN-LIMITED-consistently `current_assertions` view
+    (`... LIMIT 1` with no `ORDER BY` and no `source_id` filter) rather than its own prior
+    value — when a SECOND source also holds a live current assertion for the same
+    (object, name), which row that query returns is undefined, so disk-census's own
+    unchanged-vs-changed comparison could silently compare against a DIFFERENT source's
+    value instead of its own history, re-asserting the identical path on a later walk even
+    though ITS OWN last report never changed. Fix: compare against disk-census's own prior
+    assertion specifically (same-source), never an unscoped/unordered read. A second walk
+    that reports the SAME disk path must not grow disk-census's own row count, regardless
+    of what any other source has also asserted for the same object in the meantime."""
+    from src.orchestrator.neighborhoods import census_trees
+    from src.parsers.base import EvidenceClass
+    from src.parsers.evidence import confidence_for
+
+    (tmp_path / "code" / "known-tree" / ".git").mkdir(parents=True)
+    known = await actions.create_or_find_object(
+        "SoftwareProject", "repo:known-tree", "analyst:test")
+
+    first = await census_trees(actions, roots=[str(tmp_path / "code")])
+    assert first["pathed"] == ["known-tree"]
+    rows_after_first = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='on_disk_path' "
+        "AND source_id='disk-census'", known)
+    assert rows_after_first == 1
+
+    # a second source ALSO asserts a value for the same property on the same object —
+    # disk-census's own comparison must stay scoped to its own history, not this one
+    other = EvidenceClass.SELF_DECLARED
+    await actions.assert_property(
+        known, "on_disk_path", "/some/other/path", "operator", datetime.now(UTC),
+        confidence_for(other), evidence_class=other.value)
+
+    await census_trees(actions, roots=[str(tmp_path / "code")])
+    rows_after_second = await actions.pool.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='on_disk_path' "
+        "AND source_id='disk-census'", known)
+    assert rows_after_second == 1, "disk-census's own history regrew despite no real change"
+
+
 def _real_git_repo(tmp_path: Path, name: str, remote: str | None) -> Path:
     import subprocess
     path = tmp_path / "code" / name

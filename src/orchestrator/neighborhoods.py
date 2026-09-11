@@ -384,38 +384,43 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             if not discovered_current:
                 await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
                                               observed, 0.9, evidence_class=ec)
-            current_path = await actions.pool.fetchval(
-                "SELECT a.value #>> '{}' FROM current_assertions a "
-                "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", obj)
-            if current_path != str(repo):
+            # SAME-SOURCE SCOPING (ruling 0623995e, thread 2a280e07): this branch's own
+            # on_disk_path/remote_url checks used to compare against `current_assertions`
+            # (the cross-source, evidence-graded WINNER) rather than disk-census's OWN prior
+            # value — undefined once a different, higher-confidence source also holds a
+            # current assertion on the same property; the SAME bug the "known" branch below
+            # already fixed via `would_be_noop_assert`, missed here on first sighting.
+            if not await actions.would_be_noop_assert(obj, "on_disk_path", "disk-census",
+                                                       str(repo)):
                 await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
                                               observed, 0.9, evidence_class=ec)
-            if remote_url:
-                current_remote = await actions.pool.fetchval(
-                    "SELECT a.value #>> '{}' FROM current_assertions a "
-                    "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", obj)
-                if current_remote != remote_url:
-                    await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
-                                                  observed, 0.9, evidence_class=ec)
-                    remoted.append(name)
+            if remote_url and not await actions.would_be_noop_assert(
+                obj, "remote_url", "disk-census", remote_url
+            ):
+                await actions.assert_property(obj, "remote_url", remote_url, "disk-census",
+                                              observed, 0.9, evidence_class=ec)
+                remoted.append(name)
             minted.append(name)
             continue
         known += 1
-        current = await actions.pool.fetchval(
-            "SELECT a.value #>> '{}' FROM current_assertions a "
-            "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", existing)
-        if current != str(repo):
+        # NO-OP REASSERTION GUARD (ruling 0623995e, thread 2a280e07): this used to compare
+        # against `current_assertions` (the cross-source, evidence-graded WINNER) rather than
+        # disk-census's OWN prior value — so once any other, higher-confidence source (e.g. a
+        # human rename_project) disagreed with disk-census's own on_disk_path/remote_url, this
+        # census could never "win" its own comparison and re-asserted the identical value on
+        # EVERY walk, forever (1.5-3k rows per triple, live). `would_be_noop_assert` is scoped
+        # to THIS source specifically, matching assert_property's own same-source supersession.
+        if not await actions.would_be_noop_assert(existing, "on_disk_path", "disk-census",
+                                                   str(repo)):
             await actions.assert_property(existing, "on_disk_path", str(repo),
                                           "disk-census", observed, 0.9, evidence_class=ec)
             pathed.append(name)
-        if remote_url:
-            current_remote = await actions.pool.fetchval(
-                "SELECT a.value #>> '{}' FROM current_assertions a "
-                "WHERE a.object_id=$1 AND a.name='remote_url' LIMIT 1", existing)
-            if current_remote != remote_url:
-                await actions.assert_property(existing, "remote_url", remote_url,
-                                              "disk-census", observed, 0.9, evidence_class=ec)
-                remoted.append(name)
+        if remote_url and not await actions.would_be_noop_assert(
+            existing, "remote_url", "disk-census", remote_url
+        ):
+            await actions.assert_property(existing, "remote_url", remote_url,
+                                          "disk-census", observed, 0.9, evidence_class=ec)
+            remoted.append(name)
     return {"known": known, "minted": minted, "pathed": pathed, "remoted": remoted,
             "reconnected": reconnected, "worktrees": worktrees, "refused": refused}
 

@@ -6,6 +6,7 @@ graded AUTHORITATIVE_API, all through the same Actions waist. Hermetic: a throwa
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from pathlib import Path
@@ -57,6 +58,77 @@ async def test_ingests_a_repo_history(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='follows'") == 1
     ec = await p.fetchval("SELECT evidence_class FROM links WHERE type='in_repo' LIMIT 1")
     assert ec == "authoritative_api"
+
+
+async def test_reingest_same_history_does_not_regrow_dev_assertions(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """Ruling 0623995e (thread 2a280e07): a full re-ingest re-walks EVERY commit each time
+    (`--all --reverse`, no since-cursor), so a dev's name/email used to be re-asserted once
+    per commit, every ingest run, forever — the worst live triple hit 164,149 rows for 3
+    distinct values. Two ingests of the SAME unchanged history must not grow the dev's own
+    name/email assertion COUNT (the append-only `assertions` table, not just the
+    current-value view)."""
+    repo = tmp_path / "proj3"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "genesis")
+
+    await ingest_repo(actions, str(repo))
+    p = actions.pool
+    dev_id = await p.fetchval("SELECT id FROM objects WHERE canonical='dev:ada@x.io'")
+    name_rows_1 = await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", dev_id)
+    email_rows_1 = await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='email'", dev_id)
+    assert name_rows_1 == 1 and email_rows_1 == 1
+
+    await ingest_repo(actions, str(repo))  # re-ingest, nothing changed
+    name_rows_2 = await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", dev_id)
+    email_rows_2 = await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='email'", dev_id)
+    assert name_rows_2 == name_rows_1, "unchanged name re-asserted on a no-op re-ingest"
+    assert email_rows_2 == email_rows_1, "unchanged email re-asserted on a no-op re-ingest"
+
+
+async def test_reingest_with_a_real_name_change_still_writes(
+    actions: Actions, tmp_path: Path
+) -> None:
+    """The no-op guard must never suppress a REAL change — a dev whose git name genuinely
+    changes between ingests still gets the new value recorded."""
+    repo = tmp_path / "proj4"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "genesis")
+    await ingest_repo(actions, str(repo))
+
+    (repo / "b.txt").write_text("2")
+    _git(repo, "add", ".")
+    env = {**os.environ, "GIT_AUTHOR_NAME": "Ada Lovelace", "GIT_AUTHOR_EMAIL": "ada@x.io",
+           "GIT_COMMITTER_NAME": "Ada Lovelace", "GIT_COMMITTER_EMAIL": "ada@x.io"}
+    await asyncio.to_thread(
+        subprocess.run, ["git", "-C", str(repo), "commit", "-q", "-m", "second"],
+        check=True, capture_output=True, env=env)
+    await ingest_repo(actions, str(repo))
+
+    p = actions.pool
+    dev_id = await p.fetchval("SELECT id FROM objects WHERE canonical='dev:ada@x.io'")
+    current_name = await p.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name'",
+        dev_id)
+    assert current_name == "Ada Lovelace"
+    name_rows = await p.fetchval(
+        "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='name'", dev_id)
+    assert name_rows == 2, "a genuine name change must still be written"
 
 
 async def test_repo_name_survives_conventional_commits(actions: Actions, tmp_path: Path) -> None:
