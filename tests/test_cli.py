@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 from src.actions.core import Actions
 from src.cli import (
-    DEPLOY_UNITS,
     _apply_pending_migrations,
     _collapse_resume_log,
     _composition_gaps,
@@ -70,6 +69,7 @@ from src.cli import (
     composition_drift_notes,
     composition_gap_notes,
     composition_room_gap_notes,
+    deploy_unit_names,
     diff_tool_lists,
     dirty_tracked_src_files,
     main,
@@ -2544,6 +2544,14 @@ def test_find_repo_root_finds_this_repo_from_a_subdirectory() -> None:
 async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    # a real deploy/user/*.service pair — deploy_unit_names is DERIVED from these
+    # (thread 2a280e07's own follow-up: never a hand-listed default), so a test exercising
+    # the restart step needs real sources to derive from, same as production always has.
+    unit_dir = tmp_path / "deploy" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "osiris-mcp.service").write_text("[Service]\nExecStart=/bin/true\n")
+    (unit_dir / "osiris-pulse.service").write_text("[Service]\nExecStart=/bin/true\n")
+
     calls: list[list[str]] = []
     tool_snapshots = iter([{"smoke": "aaa"}, {"smoke": "bbb", "retire_assertion": "ccc"}])
 
@@ -2554,6 +2562,9 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     async def _list_tools() -> dict[str, str]:
         return next(tool_snapshots)
 
+    async def _timestamps(units: list[str]) -> dict[str, str]:
+        return {u: "Thu 2026-09-11 00:00:00 UTC" for u in units}
+
     import io
     from contextlib import redirect_stdout
 
@@ -2563,8 +2574,10 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
                                pool=actions.pool, list_tools=_list_tools,
                                wait_for_health=_fake_wait_for_health,
                                wait_for_smoke=_fake_wait_for_smoke,
+                               unit_start_timestamps=_timestamps,
                          check_whisper_probe=_fake_check_whisper_ok)
-    assert calls == [list(DEPLOY_UNITS)]
+    assert calls == [["osiris-mcp", "osiris-pulse"]]
+    assert "osiris-mcp: started Thu 2026-09-11 00:00:00 UTC" in buf.getvalue()
     # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
     # gap-reporting path without asserting exact names (that's composition_gap_notes' own
     # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
@@ -3139,6 +3152,36 @@ def test_user_unit_sources_discovers_the_real_deploy_user_dir() -> None:
 
 def test_user_unit_sources_missing_dir_is_empty(tmp_path: Path) -> None:
     assert user_unit_sources(tmp_path) == []
+
+
+def test_deploy_unit_names_is_derived_from_installed_units_never_hand_listed(
+    tmp_path: Path,
+) -> None:
+    """Thread 2a280e07's own follow-up: `osiris-pulse` was already installed via
+    deploy/user/osiris-pulse.service (and covered by `_REQUIRED_UNIT_ENV`'s own contract
+    test above) but was never in the old hand-typed DEPLOY_UNITS restart tuple — a unit
+    a plain main merge doesn't reach ran two-day-stale code through two separate merged
+    fixes before anyone noticed. Proves the derivation, not a fixed set: a name that
+    exists ONLY in deploy/user/ (never hand-listed anywhere) is still restarted, and a
+    real repo with none of the well-known three names still restarts exactly what it
+    finds — there is no second list for a fresh unit to fall out of sync with."""
+    unit_dir = tmp_path / "deploy" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "osiris-pulse.service").write_text("[Service]\nExecStart=/bin/true\n")
+    (unit_dir / "osiris-a-brand-new-unit.service").write_text(
+        "[Service]\nExecStart=/bin/true\n")
+    assert deploy_unit_names(tmp_path) == ["osiris-a-brand-new-unit", "osiris-pulse"]
+
+
+def test_deploy_unit_names_matches_the_real_repos_own_deploy_user_dir() -> None:
+    """The REAL repo's own deploy/user/ (not a fixture standing in for it) must include
+    every name _REQUIRED_UNIT_ENV's own contract test already requires — osiris-pulse
+    included — so this test fails at the source the moment a real unit file is removed
+    without updating the derivation's own caller."""
+    repo_root = _find_repo_root(Path(__file__).resolve().parent)
+    assert repo_root is not None
+    assert set(deploy_unit_names(repo_root)) == {n.removesuffix(".service")
+                                                 for n in _REQUIRED_UNIT_ENV}
 
 
 async def test_real_install_user_units_no_deploy_user_dir_touches_nothing(

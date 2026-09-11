@@ -1482,11 +1482,10 @@ async def cmd_show(ref: str, *, as_json: bool = False) -> int:
 
 # --- deploy ----------------------------------------------------------------------------------
 
-DEPLOY_UNITS = ("osiris-mcp", "osiris-worker", "osiris-console")
-
 GitStatus = Callable[[Path], list[tuple[str, str]]]
 RestartServices = Callable[[list[str]], Awaitable[tuple[int, str]]]
 InstallUserUnits = Callable[[Path], Awaitable[list[str]]]
+UnitStartTimestamps = Callable[[list[str]], Awaitable[dict[str, str]]]
 
 
 def user_unit_sources(repo_root: Path) -> list[Path]:
@@ -1500,6 +1499,23 @@ def user_unit_sources(repo_root: Path) -> list[Path]:
     if not d.is_dir():
         return []
     return sorted(d.glob("*.service"))
+
+
+def deploy_unit_names(repo_root: Path) -> list[str]:
+    """The units `osiris deploy` restarts — DERIVED from `user_unit_sources` (deploy/
+    user/*.service), NEVER hand-listed (Thoth's ruling, thread 2a280e07's own follow-up):
+    a unit that owns `deploy/user/<name>.service` and never appears in a SEPARATE,
+    hand-maintained restart list can silently keep running whatever code was loaded at
+    its own last restart — however many `osiris deploy` runs land on main after it. Live
+    specimen: `osiris-pulse` was already installed via `deploy/user/osiris-pulse.service`
+    (and covered by `install_units`, `_REQUIRED_UNIT_ENV`'s own contract test) but was
+    NEVER in the old hand-typed `DEPLOY_UNITS` tuple this function replaces — two full
+    days and two separate merged fixes (the reassertion kernel guard, the four
+    reasserting sources) ran against its resident, pre-fix process before anyone noticed,
+    found only by chasing a live measurement that didn't move. Every unit this repo
+    installs is now, structurally, a unit this repo restarts — there is no second list
+    to fall out of sync with the first."""
+    return [p.stem for p in user_unit_sources(repo_root)]
 
 
 async def _real_install_user_units(repo_root: Path) -> list[str]:
@@ -1635,6 +1651,27 @@ async def _real_restart_services(units: list[str]) -> tuple[int, str]:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     out, _ = await proc.communicate()
     return proc.returncode or 0, out.decode(errors="replace")
+
+
+async def _real_unit_start_timestamps(units: list[str]) -> dict[str, str]:
+    """`ExecMainStartTimestamp` for each just-restarted unit, straight from systemd — the
+    deploy receipt's own PROOF a restart actually replaced the running process (a fresh
+    timestamp), not merely that `systemctl restart` exited 0 (which it does even when a
+    unit was already stopped, or restarts onto a crash-looping process). Named per unit
+    on the receipt so a stale-process gap (osiris-pulse's own two-day specimen, thread
+    2a280e07) is visible in the deploy log itself rather than requiring a live
+    `systemctl --user show` chase after the fact to notice."""
+    out: dict[str, str] = {}
+    for unit in units:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "show", f"{unit}.service",
+            "-p", "ExecMainStartTimestamp", "--value",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        stdout, _ = await proc.communicate()
+        ts = stdout.decode(errors="replace").strip()
+        if ts:
+            out[unit] = ts
+    return out
 
 
 def _alembic_config(repo_root: Path) -> Any | None:
@@ -2270,6 +2307,7 @@ async def cmd_deploy(
     wait_for_health: WaitForHealth = _wait_for_health,
     wait_for_smoke: WaitForSmoke = _wait_for_smoke,
     install_units: InstallUserUnits = _real_install_user_units,
+    unit_start_timestamps: UnitStartTimestamps = _real_unit_start_timestamps,
     check_whisper_probe: CheckWhisperProbe = _real_check_whisper_probe,
     chaos_gate: ChaosGate = _real_chaos_gate,
     check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
@@ -2417,11 +2455,18 @@ async def cmd_deploy(
         except Exception as exc:  # noqa: BLE001
             print(f"NOTE: pre-restart disconnect warning failed to send: {exc}")
 
-        rc, out = await restart(list(DEPLOY_UNITS))
+        units = deploy_unit_names(root)
+        rc, out = await restart(units)
         if rc != 0:
             print(f"osiris deploy: restart failed (exit {rc}): {out}", file=sys.stderr)
             return 1
-        print(f"osiris deploy: restarted {', '.join(DEPLOY_UNITS)}")
+        print(f"osiris deploy: restarted {', '.join(units)}")
+        # THE RECEIPT'S OWN PROOF (thread 2a280e07 follow-up): a per-unit start timestamp,
+        # not just an exit-0 from `systemctl restart` — osiris-pulse's own two-day-stale
+        # process is exactly the gap a receipt with no timestamp per unit couldn't have
+        # caught even after the fact.
+        for unit, ts in (await unit_start_timestamps(units)).items():
+            print(f"  {unit}: started {ts}")
 
         health_ready, health_waited = await wait_for_health()
         if health_ready:
