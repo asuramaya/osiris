@@ -840,6 +840,23 @@ async def _cmd_launch_harness(
         office=office, anchor=anchor, handle=facts["handle"], agent=bound["agent"],
         generation=bound["generation"], resolved_project=resolved_project)
 
+    # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): this
+    # door is a SEPARATE implementation from trigger.launch_seat (this function's own
+    # docstring), so launch_seat's own may_spend gate does not cover it — independently
+    # vulnerable, independently fixed, same as every other bug this door has needed fixed
+    # twice. Placed after every idempotency check above (an already-live return costs
+    # nothing new) and before the real spawn, same dollar wall dispatch_dm/wake_worker
+    # already stand behind. Inert on a subscription; bites only on a keyed API backend.
+    from src.config.settings import get_settings
+    from src.ingest.providers import spend_is_metered
+    from src.orchestrator.ceiling import may_spend
+
+    st = get_settings()
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
+    if not ok:
+        print(f"osiris launch: refused — {why}", file=sys.stderr)
+        return 1
+
     try:
         await spawn(launch_cwd, name=name, model=resolved_model, prompt=boot_prompt)
     except OSError as exc:
@@ -896,6 +913,19 @@ async def _cmd_launch_pty(
         print(f"osiris launch: a live body already holds {handle!r} — {existing!r}. Not "
               f"minting a twin (attach to it: `osiris attach {handle}`).")
         return 0
+
+    # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d) — see
+    # _cmd_launch_harness's own comment on this same check, above: a separate door, an
+    # independent gate, placed after the idempotency check and before the real spawn.
+    from src.config.settings import get_settings
+    from src.ingest.providers import spend_is_metered
+    from src.orchestrator.ceiling import may_spend
+
+    st = get_settings()
+    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
+    if not ok:
+        print(f"osiris launch: refused — {why}", file=sys.stderr)
+        return 1
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
     from src.orchestrator.harness_process import claude_pty_argv

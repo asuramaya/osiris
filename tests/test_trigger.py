@@ -4633,6 +4633,68 @@ async def test_launch_harness_lane_catches_a_resumed_body_the_harness_roster_can
     assert d["window"] is None  # nothing to name from the (empty) harness roster
 
 
+async def test_launch_harness_lane_refuses_an_over_budget_mint(
+    actions: Actions,
+) -> None:
+    """THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): a new
+    body is a real turn, same dollar wall dispatch_dm/wake_worker already stand behind —
+    but launch_seat never checked it at all. Same $12-over-$10 ledger and billed-backend
+    settings as test_the_DAILY_CEILING_stops_the_wake, aimed at launch_seat instead of the
+    mail-driven wake path."""
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:hw10", manager_agent="agent:hm10",
+        worker_handle="Overbudget-Harness", house="osiris")
+    await _office(actions, worker_seat, "/tmp/overbudget-harness")
+    for _ in range(12):
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:hm10", target=worker_seat, substrate="harness",
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        settings=_settings(enabled=True, daily_usd=10.0,
+                           extract_provider="anthropic", api_key="k"))
+
+    assert d["status"] == "refused-budget"
+    assert "CEILING REACHED" in d["detail"] or "ceiling" in d["detail"].lower()
+    assert spawned == []
+
+
+async def test_launch_pty_lane_refuses_an_over_budget_mint(
+    actions: Actions,
+) -> None:
+    """Same gate, the other substrate — a real gap independently, per launch_seat's own
+    two-lanes-two-spawn-sites shape."""
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:pw10", manager_agent="agent:pm10",
+        worker_handle="Overbudget-Pty", house="osiris")
+    await _office(actions, worker_seat, "/tmp/overbudget-pty")
+    for _ in range(12):
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+
+    async def _boom(*a: Any, **kw: Any) -> Any:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:pm10", target=worker_seat, substrate="pty",
+        manager=_boom, windows=_fake_windows([]),
+        settings=_settings(enabled=True, daily_usd=10.0,
+                           extract_provider="anthropic", api_key="k"))
+
+    assert d["status"] == "refused-budget"
+    assert "CEILING REACHED" in d["detail"] or "ceiling" in d["detail"].lower()
+
+
 async def test_launch_harness_lane_confesses_dormant_history_before_spawn(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
