@@ -1100,6 +1100,7 @@ async def _reattach(
         return None
     rec = await mounts.find_mount(pool, job_dir=job)
     adopted_from = None
+    self_restored = False
     if rec is None:
         # THE BRIDGED RESUME (90f0cb3a): the session-picker resume presents a NEW anchor the
         # registry never learned (jobs/<new>/state.json names resumeSessionId — the harness's
@@ -1126,6 +1127,13 @@ async def _reattach(
             return None
         rec = mounts.MountRecord(job_dir=job, agent_id="", project=None, cwd=restored_cwd,
                                  model=None)
+        # THE GENUINELY-UNATTRIBUTED CASE (thread 879c97b9 piece 1): unlike every other
+        # branch above, this one has NO prior binding at all — rec.agent_id=="" means the
+        # transcript proved the session ran before, but nothing ties it to any known
+        # lineage. register_agent's own revisit_check (agents.py) is gated to fire ONLY
+        # here, never for a bridged-resume or an ordinary re-attach (both already carry
+        # real attribution — the row itself is the evidence).
+        self_restored = True
     settings = get_settings()
     # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29);
     # fail-open — a store outage re-attaches with an unobserved model, never a bounce
@@ -1168,7 +1176,7 @@ async def _reattach(
     await _resolve_project_seat_first(pool, ident)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, rec.cwd, ident.project),
-                         mint_reason=mint_reason)
+                         mint_reason=mint_reason, revisit_check=self_restored)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()
@@ -3055,6 +3063,10 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
             "model": _opt_s(), **_SUBAGENT_TRIO,
         }, ["action", "handle", "wants_office"]),
         _dispatcher_action_schema({
+            "action": _action_const("promote_visitor"), "target": _s(), "handle": _s(),
+            "because": _s(), "ruling": _opt_s(), "repos": _opt_list_s(),
+        }, ["action", "target", "handle", "because"]),
+        _dispatcher_action_schema({
             "action": _action_const("pause"), "paused": _b(True), "target": _opt_s(),
             "reason": _s(), **_SESSION_ANCHOR_ONLY,
         }, ["action"]),
@@ -3185,6 +3197,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "mint": (["handle", "project", "model", "house"], ["handle"]),
     "stop": (["target", "reason"], []),
     "walk_in": (["handle", "wants_office", "cwd", "job_dir", "model"], ["handle", "wants_office"]),
+    "promote_visitor": (["target", "handle", "because", "ruling", "repos"],
+                        ["target", "handle", "because"]),
     "pause": (["paused", "target", "reason"], []),
     "vacate": (["target", "because"], ["target", "because"]),
     "retire": (["target", "because", "override_live"], ["target"]),
@@ -3263,10 +3277,9 @@ async def _seat_impl(
     paused: bool = True, agent_id: str | None = None, wants_office: bool | None = None,
     cwd: str | None = None, job_dir: str | None = None, message: str = "",
     stale_project: str | None = None, fabricated_project: str | None = None,
-    real_project: str | None = None,
+    real_project: str | None = None, ruling: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, workers: list[str] | None = None,
-    ruling: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Shared body behind `seat` and its 22 hidden single-purpose aliases (mint_seat,
@@ -3366,6 +3379,17 @@ async def _seat_impl(
             result.setdefault("steps_so_far", {})["mount"] = mount_step
             return result
         return {**result, "mount": mount_step}
+
+    if action == "promote_visitor":
+        assert target is not None and handle is not None  # already validated
+        ident = await _ident_for(ctx, session_anchor)
+        if ident is None:
+            return {"error": "mount first — promoting another identity is a mind's act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
+        from src.orchestrator.walkin import promote_visitor as _promote_visitor
+        return await _promote_visitor(
+            await _pool_get(), target=target, handle=handle, because=because,
+            actor=ident.agent_id, ruling=ruling, repos=repos)
 
     if action == "pause":
         ident = await _ident_for(ctx, session_anchor)
@@ -3781,10 +3805,9 @@ async def seat(
     paused: bool = True, agent_id: str | None = None, wants_office: bool | None = None,
     cwd: str | None = None, job_dir: str | None = None, message: str = "",
     stale_project: str | None = None, fabricated_project: str | None = None,
-    real_project: str | None = None,
+    real_project: str | None = None, ruling: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, workers: list[str] | None = None,
-    ruling: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """THE SEAT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one door,
@@ -3798,6 +3821,8 @@ async def seat(
       new: NOT YET BUILT here — still CLI-only (`osiris new`), no MCP door
       stop: kill a live body's OS process (target=None means self)
       walk_in: mount + claim_name + establish_office in one call (handle, wants_office)
+      promote_visitor: THIRD-PARTY visitor-to-soul collapse, operator/manager/ruling-
+        gated (target, handle, because) — piece 2 of thread 879c97b9, sibling of walk_in
       pause: gate the DM push lane for a seat (target=None means self)
       vacate: release a dead holder without retiring the seat (target, because)
       retire: mark a Seat permanently closed, third-party (target)
@@ -3845,8 +3870,9 @@ async def seat(
         override_live=override_live, paused=paused, agent_id=agent_id,
         wants_office=wants_office, cwd=cwd, job_dir=job_dir, message=message,
         stale_project=stale_project, fabricated_project=fabricated_project,
-        real_project=real_project, subagent_id=subagent_id, subagent_type=subagent_type,
-        session_anchor=session_anchor, workers=workers, ruling=ruling, ctx=ctx)
+        real_project=real_project, ruling=ruling, subagent_id=subagent_id,
+        subagent_type=subagent_type, session_anchor=session_anchor, workers=workers,
+        ctx=ctx)
 
 
 @mcp.tool(meta={
