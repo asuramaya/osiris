@@ -21,13 +21,19 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"intersect","sets":[N,...]}                 -> objects/values in ALL sets (.intersect)
   {"op":"aggregate","from":N,"group_by":[],"metric":{...}} -> group + a metric (.groupBy / rollup)
   {"op":"table","from":N,"columns":[...],"row_action":?} -> one ROW per object, columns = a
-       property OR a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+
-       per-object aggregate). column = {"name":,"property":P} | {"name":,"rollup":
-       {"direction":in|out|both,"link_type":?,"object_type":?,
-       "of":count|first|max|min|sum|avg,"property":?}}. `first` = Notion's show-original
+       property, a rollup-over-a-link (Notion's database+rollups / Palantir's object-set+
+       per-object aggregate), OR a registered Function's own field. column = {"name":,
+       "property":P} | {"name":,"rollup":{"direction":in|out|both,"link_type":?,
+       "object_type":?,"of":count|first|max|min|sum|avg,"property":?}} | {"name":,
+       "function":{"name":<fn>,"args":{},"field":F}}. `first` = Notion's show-original
        (pluck a single relation's value, incl. an object column like `canonical` — how a
-       linked commit/entity is named). `row_action` (ruling c5b184cd, thread d56e7073/#44 —
-       the write leg) declares a CONTROL every row carries, not a column:
+       linked commit/entity is named). `function` (Thoth dispatch 9542, task #138/#163's
+       arc) is for real domain logic no property/rollup can express (triage's bucket
+       classification) — called ONCE per distinct (name, args) across the whole table,
+       matched back to each row by the Function's own "id" field; an object absent from
+       the Function's output degrades that column to None, never a crash. `row_action`
+       (ruling c5b184cd, thread d56e7073/#44 — the write leg) declares a CONTROL every row
+       carries, not a column:
        {"action":<name>,"args":{<argname>:{"property":P}}}, resolved per-row into a private
        `_action` key the renderer turns into a button — the op-tree only ever DECLARES the
        shape; `/act`'s own registry is what enforces which actions/args are real.
@@ -5084,6 +5090,35 @@ async def _table(
         cols_sql = ", ".join(sorted(obj_cols_needed))
         obj_cols = {r["id"]: dict(r) for r in await pool.fetch(
             f"SELECT id, {cols_sql} FROM objects WHERE id = ANY($1::uuid[])", objects)}
+    # FUNCTION COLUMNS (Thoth dispatch 9542, 588148bb's projects-composition series,
+    # piece 2 of 4): a column whose value comes from a registered Function's own row-
+    # shaped output — real domain logic (triage's bucket classification), exactly what a
+    # Function is for per this module's own top-of-file law, never re-derived as a
+    # rollup/property. Called ONCE per distinct (name, args) pair across the whole table,
+    # batched, never per-object — the same batching discipline _props_batch already
+    # established for assertions. Matched back to each object by its own "id" field; an
+    # object absent from the Function's own output (e.g. triage buckets default to
+    # status="active", so a retired project has none) degrades that column to None,
+    # never a crash or a stale borrowed value.
+    fn_col_specs = [c["function"] for c in columns if "function" in c]
+    fn_results: dict[str, dict[str, dict[str, Any]]] = {}
+    for fn_spec in fn_col_specs:
+        fn_name = str(fn_spec.get("name"))
+        fn_args = fn_spec.get("args") or {}
+        key = fn_name + "|" + json.dumps(fn_args, sort_keys=True)
+        if key in fn_results:
+            continue
+        fn = _FUNCTIONS.get(fn_name)
+        data: Any = None
+        if fn is not None:
+            try:
+                data = await fn(pool, None, fn_args)
+            except Exception:  # noqa: BLE001 — a function column that fails degrades every
+                # row on it to None, never crashes the whole table.
+                data = None
+        fn_results[key] = ({str(r["id"]): r for r in data
+                            if isinstance(r, dict) and "id" in r}
+                           if isinstance(data, list) else {})
     rows: list[dict[str, Any]] = []
     props_by_id = await _props_batch(pool, objects)
     for oid in objects:
@@ -5097,6 +5132,12 @@ async def _table(
                 row[name] = _col_value(oid, facts, str(col["property"]))
             elif "rollup" in col:
                 row[name] = await _rollup(pool, oid, col["rollup"])
+            elif "function" in col:
+                fn_spec = col["function"]
+                key = (str(fn_spec.get("name")) + "|"
+                      + json.dumps(fn_spec.get("args") or {}, sort_keys=True))
+                fn_row = fn_results.get(key, {}).get(str(oid))
+                row[name] = fn_row.get(str(fn_spec.get("field"))) if fn_row else None
             else:
                 row[name] = None
         if row_action:
@@ -6032,6 +6073,22 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                 {"name": "last_touched", "rollup": {"direction": "in", "link_type": "in_repo",
                                                     "object_type": "Commit", "of": "max",
                                                     "property": "authored_date"}},
+                # BUCKET (Thoth dispatch 9542, piece 2 of 4): the old /projects route's own
+                # badge — triage's existing bucket classification (orphan/contradicted/
+                # duplicate_suspect/stale/hub/thin/normal), never re-derived. Buckets mode
+                # defaults to status="active" (no "any" of its own yet), so a retired
+                # project degrades to bucket=None here — honest, not a crash; every ACTIVE
+                # project (the population the badges were ever meant to flag) is covered.
+                {"name": "bucket", "function": {"name": "triage",
+                                                "args": {"mode": "buckets",
+                                                         "object_type": "SoftwareProject",
+                                                         "limit": 2000},
+                                                "field": "bucket"}},
+                {"name": "contradicted_on", "function": {"name": "triage",
+                                                         "args": {"mode": "buckets",
+                                                                  "object_type": "SoftwareProject",
+                                                                  "limit": 2000},
+                                                         "field": "contradicted_on"}},
             ],
         },
     },
