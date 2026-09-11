@@ -3362,8 +3362,20 @@ async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
     caller)."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.capture import ensure_operator_person
 
     await _repo(actions, "chfor-repo")
+    # AUTHORITY BY CHARTER (thread 1d5b9773): the operator's bypass below now requires
+    # its OWN charter to cover the repo being declared — this test is about the MCP
+    # dispatcher's cache-healing, not charter scoping, so give person:operator that
+    # charter directly rather than exercising the scoping question here.
+    op_id = await ensure_operator_person(actions, source="test")
+    proj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:chfor-repo'")
+    from datetime import UTC, datetime
+
+    await actions.create_link(op_id, proj_id, "governs", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared", actor="test")
     seat = (await ensure_seat(actions, house="chforhouse", handle="ChforWorker",
                               source="test"))["seat_id"]
     await bind_holder(actions, seat_id=seat, agent_id="agent:chfor-holder")

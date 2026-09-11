@@ -3137,6 +3137,10 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
     and falls through to the literal mint-or-find."""
     from src.orchestrator.capture import _REPO_NAME_RE
     from src.orchestrator.seats import _OPERATOR_ACTORS
+    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): this is
+    # a project-NAME sentinel filter ("operator"/"analyst:operator"/"console" are never
+    # real repo names), not a live authorization gate — no charter concept applies to
+    # whether a string is a genuine repository name.
     if not _REPO_NAME_RE.fullmatch(project) or project in _OPERATOR_ACTORS:
         return None
     matches = await actions.pool.fetch(

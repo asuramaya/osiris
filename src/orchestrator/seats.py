@@ -1638,6 +1638,11 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
             house = None
         if house:
             link_source = await _managed_by_source(pool, current)
+            # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"):
+            # this asks whether a HISTORICAL write was stamped by the operator's hand — a
+            # read-only provenance signal for house-boundary detection, not a live "is
+            # this actor allowed to do X" gate, and there is no project here to scope a
+            # charter check against.
             if link_source in _OPERATOR_ACTORS or house_source in _OPERATOR_ACTORS:
                 manager_house = await derive_house(pool, manager, max_hops=max_hops)
                 if manager_house is not None and house != manager_house:
@@ -1784,7 +1789,9 @@ async def set_seat_attended(
         return {"error": "because is required — a seat's attendance signal gates a safety "
                          "guard (dispatch_dm's human-attended check); the reason it changed "
                          "must be on the record"}
-    if actor not in _OPERATOR_ACTORS:
+    from src.orchestrator.charter import is_operator_actor
+
+    if not await is_operator_actor(actions.pool, actor):
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         manager_seat_id = await manager_of_seat(actions.pool, seat_id)
@@ -1862,7 +1869,9 @@ async def rename_seat(
         return {"error": "because is required — a rename is testimony; the reason it "
                          "changed must be on the record"}
     self_authorized = False
-    if actor not in _OPERATOR_ACTORS:
+    from src.orchestrator.charter import is_operator_actor
+
+    if not await is_operator_actor(actions.pool, actor):
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         manager_seat_id = await manager_of_seat(actions.pool, seat_id)
@@ -1954,7 +1963,9 @@ async def bind_seat_tree(
         return {"error": "because is required — a tree binding is testimony; the reason "
                          "it changed must be on the record"}
     self_authorized = False
-    if actor not in _OPERATOR_ACTORS:
+    from src.orchestrator.charter import is_operator_actor
+
+    if not await is_operator_actor(actions.pool, actor):
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         manager_seat_id = await manager_of_seat(actions.pool, seat_id)
@@ -3428,7 +3439,9 @@ async def promote_seat(
         return {"error": f"no such active seat: {target!r}"}
     target_canonical = str(target_row["canonical"])
 
-    if actor not in _OPERATOR_ACTORS:
+    from src.orchestrator.charter import is_operator_actor
+
+    if not await is_operator_actor(actions.pool, actor):
         caller_seat = await held_seat(actions.pool, actor)
         caller_seat_id = str(caller_seat["seat_id"]) if caller_seat else None
         if caller_seat_id is None or caller_seat_id != target_canonical:

@@ -55,11 +55,10 @@ from src.orchestrator.boot_compiler import (
     template_version,
     wrap_managed,
 )
-from src.orchestrator.charter import charter_of
+from src.orchestrator.charter import charter_of, is_operator_actor
 from src.orchestrator.offices import _CHARTER_TEMPLATE, _CHARTER_UNDECLARED, _default_office_root
 from src.orchestrator.seats import (
     _FOUNDER_SOURCE_PREFIX,
-    _OPERATOR_ACTORS,
     bind_seat_tree,
     ensure_seat,
     seat_facts,
@@ -326,7 +325,7 @@ async def mint_seat(
                                  "mint a distinct seat anyway"}
         resolved_house = house or manager_house
         if house and manager_house and house != manager_house \
-                and (actor or "") not in _OPERATOR_ACTORS:
+                and not await is_operator_actor(actions.pool, actor or ""):
             return {"error": f"cross-house mint refused: {manager!r} (house "
                              f"{manager_house!r}) may not mint a seat in house {house!r} — "
                              "only the operator's own hand crosses a house boundary"}

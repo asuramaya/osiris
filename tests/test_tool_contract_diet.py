@@ -1548,7 +1548,14 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # genuinely new capability (a charter-gated coordinator read of another seat's mail),
 # not prose growth on an existing param, dispatched through the existing `inbox` door
 # rather than a new @mcp.tool() (tool count unchanged). Measured exact (133,019).
-TOOL_CONTRACT_CEILING_CHARS = 133019
+# 133019 -> 133261 (2026-09-11, Sekhmet, thread 1d5b9773, wave 21 piece 1, AUTHORITY BY
+# CHARTER): `backfill`'s own docstring gains a seventh `target=` clause
+# (operator_charter) documenting the operator's charter backfill (mints `governs` from
+# person:operator to every active SoftwareProject it doesn't already cover) — a
+# genuinely new capability, not prose growth on any other tool, not a new @mcp.tool()
+# (tool count unchanged; dispatched through the existing `backfill` door). Measured
+# exact (133,261).
+TOOL_CONTRACT_CEILING_CHARS = 133261
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

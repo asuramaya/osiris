@@ -44,6 +44,19 @@ async def _repo(actions: Actions, name: str) -> None:
     await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
 
 
+async def _operator_charters(actions: Actions, *repos: str) -> None:
+    """Mints `governs` links from `person:operator` over the named (already-real) repos —
+    the test-side stand-in for `backfill_operator_charter` (thread 1d5b9773, "authority by
+    charter"), so a test can prove the operator's OWN charter now gates its bypass."""
+    from src.orchestrator.capture import ensure_operator_person
+
+    person_id = await ensure_operator_person(actions, source="test")
+    for name in repos:
+        proj_id = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
+        await actions.create_link(person_id, proj_id, "governs", "test", NOW, 0.9,
+                                  evidence_class="self_declared", actor="test")
+
+
 async def test_set_charter_mints_governs_links(actions: Actions) -> None:
     seat_id = await _seated(actions, "agent:steward", "Steward")
     await _repo(actions, "osiris")
@@ -218,8 +231,53 @@ def test_schema_declares_governs() -> None:
     from src.ontology.schema import LINK_TYPES
 
     assert "governs" in LINK_TYPES
-    assert LINK_TYPES["governs"].domain == ("Seat",)
+    # WIDENED TO Person (thread 1d5b9773, "authority by charter"): an operator governs
+    # projects the same way a Seat does.
+    assert LINK_TYPES["governs"].domain == ("Seat", "Person")
     assert LINK_TYPES["governs"].range == ("SoftwareProject",)
+
+
+async def test_operator_charter_of_mirrors_charter_of_for_a_person(actions: Actions) -> None:
+    """operator_charter_of (thread 1d5b9773) is charter_of's own query shape, joined on
+    Person instead of Seat — empty for an unchartered Person, populated by active
+    `governs` links exactly the same way."""
+    from src.orchestrator.charter import operator_charter_of
+
+    person_id = await actions.create_or_find_object("Person", "person:test-operator", "test")
+    assert await operator_charter_of(actions.pool, "person:test-operator") == []
+    await _repo(actions, "alpha")
+    proj_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:alpha'")
+    await actions.create_link(person_id, proj_id, "governs", "test", NOW, 0.9,
+                              evidence_class="self_declared", actor="test")
+    assert await operator_charter_of(actions.pool, "person:test-operator") == ["alpha"]
+
+
+async def test_second_operator_person_is_authoritative_only_over_its_own_charter(
+    actions: Actions,
+) -> None:
+    """AUTHORITY BY CHARTER, the multi-operator scoping test (thread 1d5b9773): two real
+    Person objects, each governing a DISJOINT set of projects — proves operator_charter_of
+    scopes strictly to each Person's own governs links, never leaking into the other's,
+    independent of any _OPERATOR_ACTORS string-recognition question (multiple recognized
+    operator SENTINELS are out of scope for this piece; the SCOPING mechanism itself is
+    what's under test here)."""
+    from src.orchestrator.charter import operator_charter_of
+
+    op_a = await actions.create_or_find_object("Person", "person:operator-a", "test")
+    op_b = await actions.create_or_find_object("Person", "person:operator-b", "test")
+    await _repo(actions, "alpha-repo")
+    await _repo(actions, "beta-repo")
+    alpha_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:alpha-repo'")
+    beta_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:beta-repo'")
+    await actions.create_link(op_a, alpha_id, "governs", "test", NOW, 0.9,
+                              evidence_class="self_declared", actor="test")
+    await actions.create_link(op_b, beta_id, "governs", "test", NOW, 0.9,
+                              evidence_class="self_declared", actor="test")
+
+    assert await operator_charter_of(actions.pool, "person:operator-a") == ["alpha-repo"]
+    assert await operator_charter_of(actions.pool, "person:operator-b") == ["beta-repo"]
 
 
 # ═══ repo-name validation (Thoth's design constraint, msg 2402): a charter is SELF_DECLARED
@@ -738,16 +796,36 @@ async def test_charter_for_refuses_an_unmanaged_seat_from_a_non_manager(
 
 
 async def test_charter_for_succeeds_for_an_operator_actor(actions: Actions) -> None:
-    """One of seats._OPERATOR_ACTORS — authorized regardless of managed_by (the operator
-    is every seat's ultimate manager)."""
+    """AUTHORITY BY CHARTER (thread 1d5b9773): an operator actor whose OWN charter covers
+    every repo being declared is authorized regardless of managed_by (the operator is
+    every seat's ultimate manager, over what it actually governs) — no longer an
+    unconditional bypass by the bare literal alone."""
     from src.orchestrator.charter import charter_for
 
     await _repo(actions, "osiris")
+    await _operator_charters(actions, "osiris")
     worker_seat = await _seat(actions, "Worker4")  # no manager at all
     out = await charter_for(actions, worker_seat, ["osiris"], because="operator backfill",
                             actor="operator")
     assert out["charter"] == ["osiris"]
-    assert await charter_of(actions.pool, worker_seat) == ["osiris"]
+
+
+async def test_charter_for_refuses_when_the_operator_s_charter_does_not_cover_the_repo(
+    actions: Actions,
+) -> None:
+    """AUTHORITY BY CHARTER (thread 1d5b9773): the operator sentinel alone no longer
+    bypasses the manager check for a project outside the operator's OWN charter — it
+    falls through and refuses exactly like a non-operator caller with no manager bond."""
+    from src.orchestrator.charter import charter_for
+
+    await _repo(actions, "osiris")
+    await _repo(actions, "elsewhere")
+    await _operator_charters(actions, "osiris")  # covers osiris, NOT elsewhere
+    worker_seat = await _seat(actions, "Worker4b")  # no manager at all
+    out = await charter_for(actions, worker_seat, ["elsewhere"], because="try anyway",
+                            actor="operator")
+    assert "not authorized" in out["error"]
+    assert await charter_of(actions.pool, worker_seat) == []
 
 
 async def test_charter_for_refuses_blank_because(actions: Actions) -> None:
@@ -843,6 +921,7 @@ async def test_charter_for_never_touches_a_legacy_agent_origin_governs_edge(
     await _agent(actions, "agent:legacyholder")
     await _repo(actions, "legacyrepo")
     await _repo(actions, "newrepo")
+    await _operator_charters(actions, "newrepo")
     worker_seat = await _seated(actions, "agent:legacyholder", "LegacyWorker")
     a_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical='agent:legacyholder'")

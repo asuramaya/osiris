@@ -2472,7 +2472,23 @@ async def record_decision(
             # (f47d14a7) already spoke for `authorized_by` as a run's own plan/objective
             # edge; two senses on one edge name is exactly what that ruling's own
             # principle forbids, so the operator split this one off under its own name.
-            operator_id = await ensure_operator_person(a, source=source)
+            #
+            # AUTHORITY BY CHARTER (thread 1d5b9773): when this decision names a `repo`,
+            # `ruled_by` targets the SPECIFIC operator Person whose charter covers it —
+            # 'the operator's word' on a project resolves to the operator whose charter
+            # covers it — falling back to the singleton `person:operator` only when no
+            # operator's charter covers this repo (an operator-authorized decision must
+            # never end up with no ruled_by edge just because charter data is
+            # incomplete). No `repo` at all: unchanged, always the singleton — there is
+            # no project here to scope against.
+            operator_id = None
+            if repo:
+                from src.orchestrator.charter import resolve_operator_authority
+
+                check = await resolve_operator_authority(a.pool, source, project=repo)
+                operator_id = check["person_id"] if check["authorized"] else None
+            if operator_id is None:
+                operator_id = await ensure_operator_person(a, source=source)
             await a.create_link(d, operator_id, "ruled_by", source, observed,
                                 _CONF, evidence_class=_EC)
         if refute_id is not None:
@@ -4178,6 +4194,48 @@ async def backfill_closed_by_real_sources(
                 retired.append(canonical)
     return {"dry_run": dry_run, "scanned": len(rows), "plan": plan,
            "retired": retired if not dry_run else None,
+           "because": because if not dry_run else None}
+
+
+async def backfill_operator_charter(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE OPERATOR CHARTER BACKFILL (thread 1d5b9773, "authority by charter"): mints a
+    `governs` link from `person:operator` (via `ensure_operator_person`) to every
+    currently-active SoftwareProject it doesn't already govern — this is what makes "the
+    single operator today is chartered over every project, so behaviour does not change"
+    literally true, the moment `charter_for`'s and `record_decision`'s own operator
+    checks start consulting the charter instead of a bare literal.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds no active SoftwareProject left uncovered.
+
+    NEVER runs against production on its own — this is a one-time, deliberate act, held
+    for an explicit `dry_run=False` call naming why, same discipline every backfill in
+    this file already keeps."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "backfilling without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.orchestrator.charter import operator_charter_of
+
+    pool = actions.pool
+    person_id = await ensure_operator_person(actions, source=actor)
+    already = set(await operator_charter_of(pool, _OPERATOR_PERSON_CANONICAL))
+    rows = await pool.fetch(
+        "SELECT id, canonical FROM objects WHERE type='SoftwareProject' AND status='active'")
+    to_add = sorted(
+        (r["canonical"].removeprefix("repo:"), r["id"]) for r in rows
+        if r["canonical"].removeprefix("repo:") not in already)
+    plan = [{"repo": name, "verdict": "mint"} for name, _oid in to_add]
+    minted: list[str] = []
+    if not dry_run:
+        observed = datetime.now(UTC)
+        for name, proj_id in to_add:
+            await actions.create_link(person_id, proj_id, "governs", actor, observed,
+                                      _CONF, evidence_class=_EC)
+            minted.append(name)
+    return {"dry_run": dry_run, "already_chartered": sorted(already), "scanned": len(rows),
+           "plan": plan, "minted": minted if not dry_run else None,
            "because": because if not dry_run else None}
 
 

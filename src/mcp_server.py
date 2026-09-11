@@ -6268,6 +6268,7 @@ async def unwire_informs_fanout(
 _BACKFILL_TARGETS = frozenset({
     "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
     "lineage_repo_links", "agent_project_links", "closed_by_real_sources",
+    "operator_charter",
 })
 
 
@@ -6317,6 +6318,10 @@ async def _backfill_impl(
         )
         return await _f_closed_by_real_sources(
             Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
+    if target == "operator_charter":
+        from src.orchestrator.capture import backfill_operator_charter as _f_operator_charter
+        return await _f_operator_charter(
+            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
     return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
 
 
@@ -6325,10 +6330,10 @@ async def backfill(
     target: str, dry_run: bool = True, because: str | None = None,
     only_bases: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb, dispatched over `target` — six structurally distinct backfills (no
+    """Repair verb, dispatched over `target` — seven structurally distinct backfills (no
     shared logic underneath, only a shared wire shape). Dry run is the default for every
     target; `dry_run=False` requires `because` (except `agent_project_links`, which
-    predates that convention). All six idempotent.
+    predates that convention). All seven idempotent.
 
     `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
     Reference to the SoftwareProject its own canonical prefix names) |
@@ -6340,7 +6345,9 @@ async def backfill(
     write) | "closed_by_real_sources" (thread 6d01f21e: re-points a `closed_by` edge off
     the old 'session'/'analyst:operator' placeholder Agent objects onto the real Person/
     SystemSource `_mint_closed_by` mints today, then retires the now-edgeless
-    placeholder)."""
+    placeholder) | "operator_charter" (thread 1d5b9773, "authority by charter": mints a
+    `governs` link from `person:operator` to every active SoftwareProject it doesn't
+    already govern, so the single operator today stays chartered over everything)."""
     if target not in _BACKFILL_TARGETS:
         return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
     return await _backfill_impl(target, dry_run, because, only_bases, ctx)

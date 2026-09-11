@@ -29,7 +29,6 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
-from src.orchestrator.seats import _OPERATOR_ACTORS
 
 _log = logging.getLogger("osiris.folds")
 
@@ -235,12 +234,14 @@ async def fold_agent(
 
     ENFORCED, not just documented (census a5e53ed8/3f97f9c7, 2026-08-02: this docstring
     claimed "operator's word or an approved merge_candidate" for weeks while any mounted
-    caller could fold any two agents): `actor` must be one of `seats._OPERATOR_ACTORS`'s
-    sentinels, or the scheduled reaper's own name (`_SANCTIONED_AUTO_FOLD_ACTOR` — that
-    tick is already gated separately by `osiris_fleet_reconcile_enabled`, a distinct
-    operator signature). `resolve_fold_candidate`'s `decision='merged'` branch calls this
-    function unchanged, so ITS caller inherits the same gate through this one check —
-    no separate copy to drift out of sync. Refuses LOUDLY, naming who was refused.
+    caller could fold any two agents): `actor` must resolve to a recognized operator
+    identity (`charter.is_operator_actor` — global recognition, no project in scope for
+    a fleet-wide identity merge; thread 1d5b9773, "authority by charter"), or the
+    scheduled reaper's own name (`_SANCTIONED_AUTO_FOLD_ACTOR` — that tick is already
+    gated separately by `osiris_fleet_reconcile_enabled`, a distinct operator signature).
+    `resolve_fold_candidate`'s `decision='merged'` branch calls this function unchanged,
+    so ITS caller inherits the same gate through this one check — no separate copy to
+    drift out of sync. Refuses LOUDLY, naming who was refused.
 
     Refuses LOUDLY (an error dict, nothing written) when: evidence is empty; the actor is
     not authorized (above); either label is unknown or not an Agent; dupe==into or same
@@ -249,12 +250,13 @@ async def fold_agent(
     first — a deliberate act, never a side effect); dupe is already folded. `into` may be
     any generation — the estate finds the living head regardless."""
     from src.orchestrator.agents import _generation
+    from src.orchestrator.charter import is_operator_actor
 
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
         return {"error": "a fold without evidence is an auto-merge wearing a signature — "
                          "cite the transcripts/census/timing that prove one mind"}
-    if actor not in _OPERATOR_ACTORS and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
+    if not await is_operator_actor(actions.pool, actor) and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
         return {"error": f"{actor!r} is not authorized to fold agents — fold_agent runs "
                          "only on the operator's own word (mount as the operator) or via "
                          "resolve_fold's judgment of an approved merge_candidate, relaying "
@@ -360,8 +362,10 @@ async def reconcile_agent_fold(
     resolving to an Agent; dupe.status != 'merged' (fold_agent's job, not this one's);
     dupe's own `merged_into` not equal to `into`'s id; into not resolving to an ACTIVE
     Agent."""
+    from src.orchestrator.charter import is_operator_actor
+
     dupe, into = (dupe or "").strip(), (into or "").strip()
-    if actor not in _OPERATOR_ACTORS and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
+    if not await is_operator_actor(actions.pool, actor) and actor != _SANCTIONED_AUTO_FOLD_ACTOR:
         return {"error": f"{actor!r} is not authorized to reconcile an agent fold — same "
                          "gate as fold_agent itself (962579a6): repairing a merge needs "
                          "the same authority as making one"}

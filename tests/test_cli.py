@@ -3729,10 +3729,19 @@ async def test_cmd_charter_for_ruling_bypasses_the_manager_check(actions: Action
 async def test_cmd_charter_for_operator_actor_bypasses_managed_by(actions: Actions) -> None:
     import io
     from contextlib import redirect_stdout
+    from datetime import UTC, datetime
 
+    from src.orchestrator.capture import ensure_operator_person
     from src.orchestrator.seats import ensure_seat
 
     await _cli_repo(actions, "osiris")
+    # AUTHORITY BY CHARTER (thread 1d5b9773): the operator bypass now requires its OWN
+    # charter to cover the repo being declared — give person:operator that charter
+    # directly, since this test is about the CLI wiring, not charter scoping.
+    op_id = await ensure_operator_person(actions, source="test")
+    proj_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:osiris'")
+    await actions.create_link(op_id, proj_id, "governs", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared", actor="test")
     worker = await ensure_seat(actions, house="clihouse", handle="CliWorker3", source="test")
 
     buf = io.StringIO()

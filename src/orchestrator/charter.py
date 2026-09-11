@@ -67,6 +67,78 @@ async def charter_of(pool: asyncpg.Pool, seat_id: str) -> list[str]:
     return sorted(r["canonical"].removeprefix("repo:") for r in rows)
 
 
+async def operator_charter_of(pool: asyncpg.Pool, person_id: str) -> list[str]:
+    """Mirrors `charter_of` exactly, joined on a Person object instead of a Seat — an
+    operator's own charter (thread 1d5b9773, "authority by charter"): an operator governs a
+    set of projects the SAME WAY a coordinator's seat does, via active `governs` links off
+    its own durable object id. Empty for a Person that has never been chartered (or never
+    minted at all — a caller passes whatever canonical it has; a miss here just means an
+    empty charter, not an error)."""
+    rows = await pool.fetch(
+        "SELECT p.canonical FROM links l "
+        "JOIN objects s ON s.id=l.from_id AND s.type='Person' AND s.canonical=$1 "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE l.type='governs' AND (l.valid_until IS NULL OR l.valid_until > now())",
+        person_id,
+    )
+    return sorted(r["canonical"].removeprefix("repo:") for r in rows)
+
+
+async def resolve_operator_authority(
+    pool: asyncpg.Pool, actor: str, *, project: str | None = None,
+) -> dict[str, Any]:
+    """THE ONE SHARED RESOLVER (thread 1d5b9773, operator ruling 2026-09-11, "authority by
+    charter") — every reader of `_OPERATOR_ACTORS` that means live AUTHORIZATION (as
+    opposed to an address, or a historical-attribution/name-filter exclusion) goes through
+    this instead of a bare `actor in _OPERATOR_ACTORS` test, so there is exactly one
+    definition of "is this actor the operator, and over what" in the whole codebase.
+
+    `is_operator`: unchanged recognition path — `actor` is a member of `seats._OPERATOR_ACTORS`.
+    This function does NOT invent a second way to recognize an operator identity; multiple
+    real operators (a Person per tenant) is explicitly OUT OF SCOPE for this piece (see
+    `operator_charter_of`, callable directly against any Person id for that later design).
+
+    `person_id`: the resolved `person:operator` object id when `is_operator` — `None` if
+    that singleton has never been minted (e.g. `ensure_operator_person` never ran yet), in
+    which case there is nothing to check a charter against.
+
+    `authorized`: with `project=None` (no project in scope for this check), mirrors
+    `is_operator` exactly — global recognition, the same behavior every one of these call
+    sites already had before this build. With a `project` given (resolved the same tolerant
+    way `_resolve_repo` already does — bare name, `repo:`-prefixed, or canonical), `True`
+    only when the resolved operator Person's OWN active `governs` charter covers that
+    project — 'the operator's word' on a project resolves to the operator whose charter
+    covers it, never a blanket claim by the bare literal alone."""
+    from src.orchestrator.capture import _OPERATOR_PERSON_CANONICAL, _resolve_repo
+    from src.orchestrator.seats import _OPERATOR_ACTORS
+
+    is_operator = actor in _OPERATOR_ACTORS
+    if not is_operator:
+        return {"is_operator": False, "person_id": None, "authorized": False}
+    person_oid = await pool.fetchval(
+        "SELECT id FROM objects WHERE type='Person' AND canonical=$1 AND status='active'",
+        _OPERATOR_PERSON_CANONICAL)
+    if project is None:
+        return {"is_operator": True, "person_id": person_oid, "authorized": True}
+    if person_oid is None:
+        return {"is_operator": True, "person_id": None, "authorized": False}
+    proj_oid = await _resolve_repo(pool, project.removeprefix("repo:"))
+    if proj_oid is None:
+        return {"is_operator": True, "person_id": person_oid, "authorized": False}
+    covered = await pool.fetchval(
+        "SELECT 1 FROM links l WHERE l.from_id=$1 AND l.to_id=$2 AND l.type='governs' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", person_oid, proj_oid)
+    return {"is_operator": True, "person_id": person_oid, "authorized": bool(covered)}
+
+
+async def is_operator_actor(pool: asyncpg.Pool, actor: str) -> bool:
+    """Thin convenience wrapper over `resolve_operator_authority`'s no-project (global
+    recognition) mode — for the many BUCKET B call sites that only ever asked "is this
+    actor the operator", never "over which project", and don't want to unpack a dict for
+    that one bit. Behaviorally identical to the old `actor in _OPERATOR_ACTORS` test."""
+    return bool((await resolve_operator_authority(pool, actor))["is_operator"])
+
+
 async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, str]]:
     """`charter_of` plus each governed project's own recorded `on_disk_path` — (repo label,
     path) pairs, only for projects that HAVE a path on record. The launch doors use this to
@@ -198,17 +270,23 @@ async def charter_for(
 
     GUARD, ENFORCED (not merely a naming convention — rename_seat/set_seat_attended's own
     "manager/operator-invoked" claim is not actually checked in their code; this one
-    checks): `actor` must be either one of `seats._OPERATOR_ACTORS`'s sentinels, OR the
-    seat `actor`'s own lineage currently holds must BE the target seat's manager
-    (`manager_of_seat`'s live `managed_by` edge), OR `ruling` names a standing operator
-    ruling that authorizes THIS write (Thoth mail 9382 item 3, 93b25ddc — see
-    `verify_ruling`'s own three-part check: the ref resolves, its kind is 'ruling', and
-    its own text names 'charter_for'). Refuses loudly otherwise, naming both who the
-    caller resolved to and who the seat's actual manager is (or that it has none on
-    record) — never a bare permission-denied. A `ruling` that fails any of
-    `verify_ruling`'s checks refuses on THAT error directly — it never silently falls
-    through to the manager check, which would let a caller probe two unrelated
-    authorization paths in one call.
+    checks): `actor` must be either an operator actor WHOSE OWN CHARTER COVERS EVERY REPO
+    NAMED IN `repos` (thread 1d5b9773, "authority by charter" — 'the operator's word' on a
+    project resolves to the operator whose charter covers it; a bare `_OPERATOR_ACTORS`
+    sentinel is no longer an unconditional bypass by itself), OR the seat `actor`'s own
+    lineage currently holds must BE the target seat's manager (`manager_of_seat`'s live
+    `managed_by` edge), OR `ruling` names a standing operator ruling that authorizes THIS
+    write (Thoth mail 9382 item 3, 93b25ddc — see `verify_ruling`'s own three-part check:
+    the ref resolves, its kind is 'ruling', and its own text names 'charter_for'). An
+    operator actor whose charter does NOT cover every named repo falls straight through to
+    the manager check below (which will ordinarily refuse too, for the same clean
+    "not authorized" reason a non-operator caller gets — the bypass simply never fires,
+    it does not manufacture a second, differently-worded refusal). Refuses loudly
+    otherwise, naming both who the caller resolved to and who the seat's actual manager is
+    (or that it has none on record) — never a bare permission-denied. A `ruling` that
+    fails any of `verify_ruling`'s checks refuses on THAT error directly — it never
+    silently falls through to the manager check, which would let a caller probe two
+    unrelated authorization paths in one call.
 
     `because` is required, same testimony discipline `rename_seat` runs: declaring a
     charter on someone else's behalf is a deliberate act, not a routine one. Every write
@@ -229,19 +307,27 @@ async def charter_for(
     Agent-origin union, with no awareness of a charter already declared post-rekey — it
     could heal away what `charter_for` just wrote. A real, separate gap in the migration
     itself, still open."""
-    from src.orchestrator.seats import (
-        _OPERATOR_ACTORS,
-        _resolve_active_seat,
-        held_seat,
-        manager_of_seat,
-    )
+    from src.orchestrator.seats import _resolve_active_seat, held_seat, manager_of_seat
 
     because = (because or "").strip()
     if not because:
         return {"error": "because is required — a charter declared on another seat's "
                          "behalf is testimony, same discipline rename_seat runs"}
     ruling_id = None
-    if actor not in _OPERATOR_ACTORS:
+    # AUTHORITY BY CHARTER (thread 1d5b9773): an operator actor's bypass is no longer
+    # unconditional — it only fires when the resolved operator's OWN charter covers every
+    # repo this call is trying to declare. A repos=[] call (clearing a charter) has no
+    # project to scope against, so it falls back to plain global operator recognition —
+    # the same behavior every other bucket-B site keeps.
+    repo_names = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
+    if repo_names:
+        checks = [await resolve_operator_authority(actions.pool, actor, project=r)
+                  for r in repo_names]
+        operator_authorized = all(c["authorized"] for c in checks)
+    else:
+        operator_authorized = (await resolve_operator_authority(actions.pool, actor))[
+            "is_operator"]
+    if not operator_authorized:
         if ruling:
             from src.orchestrator.capture import verify_ruling
 

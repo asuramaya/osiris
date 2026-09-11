@@ -286,7 +286,13 @@ async def _caller_house(pool: asyncpg.Pool, caller: str | None) -> str | None:
     clicks — task #82), None for an anonymous caller (reads NO reflections — an
     unmounted stranger has no house), else the caller's seat house, falling back to its
     project label (most projects are their own house). `held_seat`'s `house` is DERIVED
-    (decision 4c9e4bd7) — this inherits that fix for free, no query of its own."""
+    (decision 4c9e4bd7) — this inherits that fix for free, no query of its own.
+
+    BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): this
+    '*' cross-house omniscience is genuinely adjacent to multi-operator scoping, but
+    Thoth's own dispatch for piece 1 does not name this file, and the parent design
+    thread explicitly lists per-operator desks/visibility as a SEPARATE, later piece
+    ("stays design") — not silently forgotten, just not this build's scope."""
     if caller in _OPERATOR_ACTORS:
         return "*"
     if not caller:
