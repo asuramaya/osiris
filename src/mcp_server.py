@@ -1100,6 +1100,7 @@ async def _reattach(
         return None
     rec = await mounts.find_mount(pool, job_dir=job)
     adopted_from = None
+    self_restored = False
     if rec is None:
         # THE BRIDGED RESUME (90f0cb3a): the session-picker resume presents a NEW anchor the
         # registry never learned (jobs/<new>/state.json names resumeSessionId — the harness's
@@ -1126,6 +1127,13 @@ async def _reattach(
             return None
         rec = mounts.MountRecord(job_dir=job, agent_id="", project=None, cwd=restored_cwd,
                                  model=None)
+        # THE GENUINELY-UNATTRIBUTED CASE (thread 879c97b9 piece 1): unlike every other
+        # branch above, this one has NO prior binding at all — rec.agent_id=="" means the
+        # transcript proved the session ran before, but nothing ties it to any known
+        # lineage. register_agent's own revisit_check (agents.py) is gated to fire ONLY
+        # here, never for a bridged-resume or an ordinary re-attach (both already carry
+        # real attribution — the row itself is the evidence).
+        self_restored = True
     settings = get_settings()
     # the model reading rides THE STORE (sole lane since the JSONL-fallback removal, #29);
     # fail-open — a store outage re-attaches with an unobserved model, never a bounce
@@ -1168,7 +1176,7 @@ async def _reattach(
     await _resolve_project_seat_first(pool, ident)
     await register_agent(Actions(pool), ident, actor=settings.osiris_actor,
                          expected_model=await _expected_model(pool, rec.cwd, ident.project),
-                         mint_reason=mint_reason)
+                         mint_reason=mint_reason, revisit_check=self_restored)
     if key is not None:
         _agents[key] = ident
         _agents_touched[key] = time.monotonic()

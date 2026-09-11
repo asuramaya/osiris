@@ -1752,6 +1752,49 @@ async def _flag_works_in_alongside_prior(
         src, now, _CONF, evidence_class=_EC)
 
 
+async def _flag_unattributed_revisit(
+    actions: Actions, *, base: str, project: str, src: str, now: datetime,
+) -> None:
+    """Thread 879c97b9 piece 1 (operator ruling, decision d438f6b7's own sibling —
+    "revisit determinism", ruling c8abd24a: most projects are unplanned or revisits): a
+    GENUINELY fresh Agent object just minted (register_agent's own `revisit_check`,
+    gated to the one call site that actually needs it — mcp_server.py's `_reattach`
+    transcript self-restore fallback, the specimen audited live on this thread: a real
+    prior transcript proves the session ran before, but nothing links it to any known
+    lineage, and it used to mint unconditionally with no check at all) at a project that
+    ALREADY carries `works_in` activity from some OTHER, unrelated lineage.
+
+    Never refuses the mint — the fresh identity is real, whatever door resolved it —
+    only confesses that this MAY be one of the four unresolved-revisit shapes this
+    thread names (weeks-cold project, harness churn, no .osiris pin, foreign harness)
+    landing as a stranger instead of a recognized return, exactly the population "zero
+    inference-minted Agents after the fold" is meant to measure. `open_thread`'s own
+    summary-hash dedup absorbs a repeat mount finding the same gap again, so this fires
+    once per (agent, project) pair, not once per mount."""
+    from src.orchestrator.capture import open_thread
+
+    other = await actions.pool.fetchval(
+        "SELECT o2.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "AND o.type='SoftwareProject' AND o.canonical=$1 "
+        "JOIN objects o2 ON o2.id=l.from_id AND o2.type='Agent' AND o2.status='active' "
+        "WHERE l.type='works_in' AND o2.canonical <> $2 AND o2.canonical NOT LIKE $2 || '-%' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "LIMIT 1",
+        f"repo:{project}", base)
+    if not other:
+        return
+    await open_thread(
+        actions,
+        f"UNATTRIBUTED REVISIT: a fresh identity ({base}) just minted at {project!r} via "
+        "a transcript self-restore with no known lineage — the project already carries "
+        f"works_in activity from {other}. Either a genuinely new visitor sharing this "
+        "project, or one of the four unresolved-revisit shapes (weeks-cold project, "
+        "harness churn, no .osiris pin, foreign harness) landing as a stranger instead "
+        "of a recognized return. Never auto-resolved: a human's own judgment decides "
+        "which.",
+        kind="obligation", owner="operator", repo=project, source="revisit-determinism")
+
+
 async def _succeeded_by_candidates(pool: asyncpg.Pool, canonical: str) -> list[str]:
     """Every DISTINCT non-empty current `succeeded_by` VALUE asserted on `canonical`,
     across EVERY source — not just the single row the old linear walk's own `ORDER BY
@@ -3796,7 +3839,7 @@ def _looks_like_a_real_session(sid: str | None) -> bool:
 
 async def register_agent(
     actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None,
-    mint_reason: str | None = None,
+    mint_reason: str | None = None, revisit_check: bool = False,
 ) -> uuid.UUID:
     """Mint (idempotently) the Agent object + its org-chart links. The agent attributes
     its OWN registration (`source = agent:<session>`), SELF_DECLARED. Re-mount is a no-op
@@ -3815,7 +3858,20 @@ async def register_agent(
     swap is a death like any other (the warm-swap `model_swapped` stamp still lands too — both
     records are true). `mint_reason` forces a mint for a context-death the harness reported
     with no model change at all (compaction, /clear): the weights survive but the memory the
-    operator was talking to does not."""
+    operator was talking to does not.
+
+    `revisit_check=True` (thread 879c97b9 piece 1, 2026-09-11): opt-in, load-bearing
+    ONLY at the one call site that genuinely needs it (_reattach's own transcript
+    self-restore fallback, mcp_server.py — audited live: a real prior transcript proves
+    the session ran before, but nothing links it to any known lineage, and it minted
+    unconditionally with no check at all before this). When a GENUINELY fresh Agent
+    object mints under this flag at a project already carrying activity from a
+    DIFFERENT, unrelated lineage, `_flag_unattributed_revisit` opens a loud obligation
+    Thread naming it instead of minting silently — never refuses the mint itself, only
+    confesses it. False by default: every OTHER register_agent call site already carries
+    its own attribution (a fork's spawned_by link, an office-birth's deed, a seam heir's
+    own parent generation) that this check has no way to see, and must never
+    second-guess."""
     now = datetime.now(UTC)
     obs: str | None = None
     # THE MINT LOCK (thread a3d49d91): phases 0–1 read-then-write the succession chain; two
@@ -3829,6 +3885,14 @@ async def register_agent(
         if head != identity.agent_id:
             identity.agent_id = head
         src = identity.agent_id
+        # THE INSERT-VS-FOUND SIGNAL (thread 879c97b9 piece 1): a plain pre-existence
+        # check, not a change to create_or_find_object's own shared return contract —
+        # every other caller of that function expects a bare id back, and widening it
+        # here would ripple across the whole codebase for one caller's own question.
+        # Only computed under revisit_check (an extra read on the hot mint path is a
+        # real cost, paid only by the one call site that asked for it).
+        genuinely_fresh = revisit_check and not bool(await actions.pool.fetchval(
+            "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", identity.agent_id))
         a = await actions.create_or_find_object("Agent", identity.agent_id, src)
 
         # PHASE 1 — SEAM DETECTION → MINT (the operator's ruling: the heir gets its OWN name).
@@ -4175,6 +4239,9 @@ async def register_agent(
         actions, a, "works_in",
         reason="no live works_in link observed when register_agent's post-mint invariant ran",
         source=src, observed=now)
+    if genuinely_fresh and identity.project:
+        await _flag_unattributed_revisit(
+            actions, base=_generation(src)[0], project=identity.project, src=src, now=now)
     return a
 
 

@@ -278,6 +278,55 @@ async def test_reattach_self_restores_from_a_real_transcript_when_no_row_survive
     rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
     assert rec is not None and rec.agent_id == ident.agent_id and rec.cwd == restored_cwd
     srv._agents.pop("sid:restored", None)
+    # thread 879c97b9 piece 1: a genuinely NEW project (no prior works_in activity from
+    # anyone) is the ordinary, correct case — never flagged as an unattributed revisit
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Thread' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "AND a.name='summary' AND a.value #>> '{}' LIKE 'UNATTRIBUTED REVISIT%')") == 0
+
+
+async def test_reattach_self_restore_flags_an_unattributed_revisit_to_a_known_project(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 879c97b9 piece 1 (operator ruling, 2026-09-11 — "revisit determinism"):
+    the exact gap audited live on that thread. A self-restore has no prior binding at
+    all (rec.agent_id=="" — nothing ties this transcript-proven session to any known
+    lineage) and used to mint unconditionally; when it lands at a project that ALREADY
+    carries `works_in` activity from some OTHER, unrelated lineage, it must open a loud
+    obligation Thread naming the unattributed revisit instead of minting silently. Never
+    refuses the mint itself — the fresh identity still lands, exactly as before."""
+    from src import mcp_server as srv
+
+    other = await actions.create_or_find_object("Agent", "agent:otherlineage", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:demo2", "test")
+    await actions.create_link(other, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    job_dir = str(tmp_path / "jobs" / "restore2")
+    restored_cwd = str(tmp_path / "demo2")
+    monkeypatch.setattr(
+        "src.ingest.sessions.cwd_of_transcript",
+        lambda root=None, job_dir=None: restored_cwd)
+
+    srv._agents.pop("sid:restored2", None)
+    ident = await srv._reattach(actions.pool, "sid:restored2", job_dir)
+    assert ident is not None
+    assert ident.agent_id == "agent:restore2"  # the fresh identity still mints, unblocked
+
+    flagged = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects o WHERE o.type='Thread' "
+        "AND EXISTS (SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+        "AND a.name='summary' AND a.value #>> '{}' LIKE 'UNATTRIBUTED REVISIT%')")
+    assert flagged == 1
+    kind = await actions.pool.fetchval(
+        "SELECT a.value #>> '{}' FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='kind' "
+        "WHERE o.type='Thread' AND EXISTS (SELECT 1 FROM current_assertions s "
+        "WHERE s.object_id=o.id AND s.name='summary' "
+        "AND s.value #>> '{}' LIKE 'UNATTRIBUTED REVISIT%')")
+    assert kind == "obligation"
+    srv._agents.pop("sid:restored2", None)
 
 
 async def test_reattach_stays_none_when_no_transcript_exists_to_restore_from(
