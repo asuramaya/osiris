@@ -168,20 +168,48 @@ _PYTEST_TIMEOUT_SECS = 180
 _PYTEST_LOAD_THRESHOLD = 8.0
 _PYTEST_TIMEOUT_MAX_SCALE = 4.0
 
+# THE SECOND FACTOR (wave 19 item 4, Thoth mail 9794/9816): load alone still let the cap
+# lie about a HEALTHY run — a scoped set of ~90 touched-adjacent files genuinely runs
+# ~205s, measured live twice (once inside a failed gate_hook attempt, once standalone,
+# both clean, zero failures) with load nowhere near _PYTEST_LOAD_THRESHOLD. The per-test
+# pytest-timeout ceiling and conftest.py's own session watchdog (THE DEADLOCK FIX,
+# pyproject.toml/tests/conftest.py) already bound a TRUE hang independently of this cap —
+# so this cap's only remaining job is to stop refusing a commit whose tests were always
+# going to finish, never to catch a hang itself (that job already moved elsewhere).
+# Below this many scoped files the file-count factor is untouched (1.0x, same shape the
+# load factor already has below ITS OWN threshold) — an ordinary single-feature commit
+# (single digits to low teens of touched-adjacent files, every commit this whole session)
+# stays on the unscaled 180s baseline.
+_PYTEST_FILES_THRESHOLD = 40
+_PYTEST_FILES_MAX_SCALE = 2.5
+# THE OUTER BOUND (unchanged in spirit): the fleet's own hand-run convention already
+# treats a bare shell `timeout 1500` as the last resort for a FULL untruncated suite run
+# (mail 9649) — this gate's own scoped-and-scaled cap must never exceed what the house
+# already accepts as the outer ceiling for a run far larger than any gate_hook scope.
+_PYTEST_TIMEOUT_ABSOLUTE_CAP = 1500
 
-def _load_scaled_pytest_timeout(base: int = _PYTEST_TIMEOUT_SECS) -> tuple[int, float | None]:
-    """(scaled_timeout_secs, load1) — `load1` is None when `os.getloadavg` is unavailable
-    (never POSIX-guaranteed), in which case the base timeout is returned unchanged. The
-    caller names `load1` in its own receipt so a scaled timeout is never silently
-    indistinguishable from the fixed default."""
+
+def _load_scaled_pytest_timeout(
+    n_files: int, base: int = _PYTEST_TIMEOUT_SECS,
+) -> tuple[int, float | None, float]:
+    """(scaled_timeout_secs, load1, files_scale) — TWO independent scale factors,
+    combined multiplicatively then capped at `_PYTEST_TIMEOUT_ABSOLUTE_CAP`: live
+    ambient load (`load1`, None when `os.getloadavg` is unavailable — never POSIX-
+    guaranteed — in which case that factor is inert, 1.0) and the scoped file-set's own
+    size (`files_scale`, always a real float — file count is always knowable, no
+    platform gap the way load has). The caller names both in its own receipt so a
+    scaled timeout is never silently indistinguishable from the fixed default, and a
+    reader can tell WHICH factor (or both) actually moved the number."""
     try:
-        load1 = os.getloadavg()[0]
+        load1: float | None = os.getloadavg()[0]
     except (OSError, AttributeError):
-        return base, None
-    if load1 <= _PYTEST_LOAD_THRESHOLD:
-        return base, load1
-    scale = min(load1 / _PYTEST_LOAD_THRESHOLD, _PYTEST_TIMEOUT_MAX_SCALE)
-    return int(base * scale), load1
+        load1 = None
+    load_scale = (1.0 if load1 is None or load1 <= _PYTEST_LOAD_THRESHOLD
+                 else min(load1 / _PYTEST_LOAD_THRESHOLD, _PYTEST_TIMEOUT_MAX_SCALE))
+    files_scale = (1.0 if n_files <= _PYTEST_FILES_THRESHOLD
+                   else min(n_files / _PYTEST_FILES_THRESHOLD, _PYTEST_FILES_MAX_SCALE))
+    scaled = int(base * load_scale * files_scale)
+    return min(scaled, _PYTEST_TIMEOUT_ABSOLUTE_CAP), load1, files_scale
 
 # pytest's own "no tests were collected" exit status (pytest.ExitCode.NO_TESTS_COLLECTED).
 # NOT a failure -- see the branch that consumes it for the incident that proved it.
@@ -623,14 +651,24 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             # of whether pytest itself goes on to pass, fail, skip, or time out.
             print(f"gate_hook: {tmpdir_note}")
 
-        pytest_timeout, load1 = _load_scaled_pytest_timeout()
-        load_note = (f" (1-min load {load1:.1f}, timeout scaled to {pytest_timeout}s)"
-                    if load1 is not None and pytest_timeout != _PYTEST_TIMEOUT_SECS else "")
+        pytest_timeout, load1, files_scale = _load_scaled_pytest_timeout(len(test_files))
+        # RECEIPT NAMES THE COMPUTED CAP, ALWAYS ASKED FOR (wave 19 item 4): unlike the
+        # load-only note this replaces, this fires whenever the cap actually moved from
+        # the fixed baseline, regardless of WHICH factor moved it — load alone, files
+        # alone, or both — so a scaled timeout is never silently indistinguishable from
+        # the default just because load happened to be quiet.
+        load_text = f"{load1:.1f}" if load1 is not None else "unavailable"
+        load_note = (
+            f" (1-min load {load_text}, {len(test_files)} scoped file(s) x{files_scale:.2f}, "
+            f"timeout scaled to {pytest_timeout}s)"
+            if pytest_timeout != _PYTEST_TIMEOUT_SECS else "")
 
         def _run_pytest() -> subprocess.CompletedProcess[str]:
-            # THE DEADLOCK FIX (mail 9658): this subprocess's own `timeout=pytest_timeout`
-            # (180s scaled by load, the LAST resort — same role as a hand-run's outer shell
-            # `timeout 1500`, just enforced in-process here) is unchanged. The new inner
+            # THE DEADLOCK FIX (mail 9658), scaled by load AND scope (wave 19 item 4, mail
+            # 9794/9816): this subprocess's own `timeout=pytest_timeout` (180s base,
+            # scaled by ambient load and the scoped file-set's own size, the LAST resort —
+            # same role as a hand-run's outer shell `timeout 1500`, just enforced in-
+            # process here). The new inner
             # layers apply UNCONDITIONALLY, with no flag needed here: pytest.ini's
             # `timeout`/`timeout_method`/`faulthandler_timeout` and addopts'
             # `--max-worker-restart` (pyproject.toml) are read from the project root
