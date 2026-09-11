@@ -13,16 +13,25 @@ the ops can't express is a Function (a named transform), never a new op.
 
 Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"subject"}                                 -> the object you're looking at
-  {"op":"select","object_type":?,"where":[...],"status":?,"subject_link":?} -> objects
-       matching conditions (.filter). `status` (Thoth dispatch 9490) opt-in: omitted =
-       active-only (the historical default, byte-identical); "any" lifts the filter;
-       an explicit list narrows to exactly those. `subject_link` (Thoth dispatch 9676/
-       9690, 588148bb piece 4) opt-in: `{"link_type":?,"direction":in|out}` narrows to
+  {"op":"select","object_type":?,"where":[...],"status":?,"subject_link":?,"scope":?}
+       -> objects matching conditions (.filter). `status` (Thoth dispatch 9490) opt-in:
+       omitted = active-only (the historical default, byte-identical); "any" lifts the
+       filter; an explicit list narrows to exactly those. `subject_link` (Thoth dispatch
+       9676/9690, 588148bb piece 4) opt-in: `{"link_type":?,"direction":in|out}` narrows to
        the one-hop neighborhood of the RUNTIME subject via that link (same "in"/"out"
        convention as `traverse`/`_rollup`) — inert (old behavior, byte-identical)
        whenever the key is absent OR no subject is bound, so an unfiltered composition
        like `browse`'s own default run is untouched; only a subject-bound run (e.g. a
-       `bind_subject` row_action's drill-in) narrows.
+       `bind_subject` row_action's drill-in) narrows. `scope` (Thoth dispatch 9838,
+       588148bb's Browse tab cutover) opt-in: `{"case_id":?,"project":?,"q":?,
+       "exclude_types":?,"cursor":{"before_created_at":?,"before_id":?},"limit":?}` —
+       delegates to `list_objects_scoped`, the SAME function /objects' own REST route
+       calls (one definition, not a second copy) for case/project scoping (multi-repo,
+       case-insensitive), word-order-proof search, exclude_types, and keyset pagination.
+       Absent = untouched, byte-identical. When present it supersedes `canonical_prefix`
+       (ignored, no equivalent) and `status` (list_objects_scoped's own historical "not a
+       terminal status" rule wins instead) on that ONE row-fetch step; `subject_link`
+       still composes as a post-filter either way.
   {"op":"traverse","from":N,"direction":,"hops":}  -> objects N hops away (.searchAround)
   {"op":"collect","from":N,"properties":[],"transform":?} -> the values of those props
   {"op":"subtract","left":N,"right":N}             -> values in left not in right (.subtract)
@@ -4872,6 +4881,136 @@ async def _props_batch(
     return out
 
 
+def _project_filter_arrays(
+    project: list[str] | None,
+) -> tuple[list[str] | None, list[str] | None]:
+    """`project` repeats (`&project=a&project=b`) for a multi-repo scope pill — the console
+    already sends it this way (console.js's applyRepoFilter/objectSetUrl loops SELECTED_REPOS
+    onto repeated `&project=` params); this endpoint used to accept only the LAST one FastAPI
+    bound a bare `str | None` to, so a multi-repo selection quietly filtered on whichever repo
+    happened to be last in the list — the scope pill's own "server-side, not client-side after
+    a capped fetch" gap named in #196 (Thoth msg 5600). Returns parallel (canonical, bare-name)
+    arrays, `None` for an empty selection so the SQL's own `IS NULL` no-op branch is unchanged
+    for the common single/no-repo case.
+
+    MOVED HERE FROM app.py (Thoth dispatch 9838, 588148bb's Browse tab cutover, the extraction
+    piece): app.py's `/objects`/`/objects/counts` and this module's `list_objects_scoped` all
+    need the exact same multi-repo matching rule — one definition, not three drifting copies.
+    app.py imports this rather than keeping its own nested duplicate."""
+    names = [p.strip() for p in (project or []) if p and p.strip()]
+    if not names:
+        return None, None
+    canons = [n if n.startswith("repo:") else f"repo:{n}" for n in names]
+    bare = [n[5:] if n.startswith("repo:") else n for n in names]
+    return canons, bare
+
+
+async def list_objects_scoped(
+    pool: asyncpg.Pool,
+    *,
+    case_id: uuid.UUID | None = None,
+    object_type: str | None = None,
+    q: str | None = None,
+    exclude_types: list[str] | None = None,
+    project: list[str] | None = None,
+    limit: int = 100,
+    before_created_at: datetime | None = None,
+    before_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """THE SHARED OBJECT-LISTING QUERY (Thoth dispatch 9838, 588148bb's Browse tab cutover,
+    the extraction piece — "one definition, one test suite over both callers"): case/project
+    scoping (multi-repo, case-insensitive, matching either the object's own canonical or a
+    project it's in_repo-linked to — #196's own hard-won fix), word-order-proof search tokens
+    (≤6, every token must match somewhere in canonical or a name/summary/title/rationale
+    assertion), an exclude_types filter, and keyset pagination (before_created_at/before_id,
+    #196/msg 5600 — OFFSET paging would re-sort the whole table per page). This is the EXACT
+    SQL app.py's `/objects` route ran inline before this extraction, parameterized and moved
+    here so `select`'s own new opt-in args (project/case_id/q/exclude_types/cursor) and
+    `/objects` itself share one implementation instead of two that can drift. Status filter is
+    NOT the `select` op's own `status` opt-in (active-only default, explicit-list narrowing) —
+    it stays `/objects`' own historical "not a terminal status" rule (NOT IN archived/merged/
+    retired), unconditional, matching every existing `/objects` caller byte-for-byte. Returns
+    raw rows ({id, type, canonical, status, created_at}), no name/display_label — presentation
+    (resolve_label/disambiguate_labels) stays each caller's own concern, unchanged from today."""
+    tokens = (q.split()[:6] if q else None) or None
+    proj_canons, proj_names = _project_filter_arrays(project)
+    if before_created_at is not None:
+        rows = await pool.fetch(
+            "SELECT id, type, canonical, status, created_at FROM objects o "
+            "WHERE status NOT IN ('archived','merged','retired') "
+            "  AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "        WHERE co.object_id = o.id AND co.case_id = $1)) "
+            "  AND ($2::text IS NULL OR type = $2) "
+            "  AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
+            "  AND ($6::text[] IS NULL OR ("
+            "        o.canonical = ANY($6::text[]) OR o.canonical = ANY($7::text[]) "
+            "        OR EXISTS ("
+            "          SELECT 1 FROM links l "
+            "          JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+            "          WHERE (l.from_id = o.id OR l.to_id = o.id) "
+            "            AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "            AND p.type IN ('SoftwareProject', 'Project') "
+            "            AND (p.canonical = ANY($6::text[]) OR p.canonical = ANY($7::text[]) "
+            "                 OR lower(p.canonical) = ANY("
+            "                   SELECT lower(x) FROM unnest($6::text[]) x))"
+            "        )"
+            "      )) "
+            "  AND ($3::text[] IS NULL OR NOT EXISTS ("
+            "        SELECT 1 FROM unnest($3::text[]) AS tok "
+            "        WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+            "          AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "             WHERE a.object_id=o.id "
+            "             AND a.name IN ('name','summary','title','rationale') "
+            "             AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
+            "  AND (o.created_at, o.id) < "
+            "      ($8, COALESCE($9, '00000000-0000-0000-0000-000000000000'::uuid)) "
+            "ORDER BY created_at DESC, id DESC LIMIT $4",
+            case_id, object_type, tokens, limit, exclude_types, proj_canons, proj_names,
+            before_created_at, before_id,
+        )
+    else:
+        rows = await pool.fetch(
+            "WITH scoped_objects AS ("
+            "  SELECT id, type, canonical, status, created_at,"
+            "         ROW_NUMBER() OVER ("
+            "           PARTITION BY type ORDER BY created_at DESC) as type_rn "
+            "  FROM objects o "
+            "  WHERE status NOT IN ('archived','merged','retired') "
+            "    AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM case_objects co "
+            "          WHERE co.object_id = o.id AND co.case_id = $1)) "
+            "    AND ($2::text IS NULL OR type = $2) "
+            "    AND ($5::text[] IS NULL OR NOT (type = ANY($5::text[]))) "
+            "    AND ($6::text[] IS NULL OR ("
+            "          o.canonical = ANY($6::text[]) OR o.canonical = ANY($7::text[]) "
+            "          OR EXISTS ("
+            "            SELECT 1 FROM links l "
+            "            JOIN objects p ON (p.id = l.to_id OR p.id = l.from_id) "
+            "            WHERE (l.from_id = o.id OR l.to_id = o.id) "
+            "              AND (l.valid_until IS NULL OR l.valid_until > now()) "
+            "              AND p.type IN ('SoftwareProject', 'Project') "
+            "              AND (p.canonical = ANY($6::text[]) "
+            "                   OR p.canonical = ANY($7::text[]) "
+            "                   OR lower(p.canonical) = ANY("
+            "                     SELECT lower(x) FROM unnest($6::text[]) x))"
+            "          )"
+            "        )) "
+            "    AND ($3::text[] IS NULL OR NOT EXISTS ("
+            "          SELECT 1 FROM unnest($3::text[]) AS tok "
+            "          WHERE o.canonical NOT ILIKE '%' || tok || '%' "
+            "            AND NOT EXISTS (SELECT 1 FROM current_assertions a "
+            "               WHERE a.object_id=o.id "
+            "               AND a.name IN ('name','summary','title','rationale') "
+            "               AND a.value #>> '{}' ILIKE '%' || tok || '%'))) "
+            ") "
+            "SELECT id, type, canonical, status, created_at "
+            "FROM scoped_objects "
+            "WHERE type_rn <= (CASE WHEN $2::text IS NOT NULL THEN $4 ELSE 300 END) "
+            "ORDER BY created_at DESC LIMIT $4",
+            case_id, object_type, tokens, limit, exclude_types, proj_canons, proj_names,
+        )
+    return [dict(r) for r in rows]
+
+
 def _distinct[T](values: list[T]) -> list[T]:
     seen: set[T] = set()
     out: list[T] = []
@@ -4982,24 +5121,70 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                 subject, ltype,
             )
             link_ids = [r["n"] for r in link_rows]
-        # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
-        # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
-        # carried NO order at all, so row order was whatever the planner's physical scan
-        # happened to produce — usually insertion order on a quiet local box (a sequential
-        # scan with no concurrent writers tends to return heap order), but Postgres never
-        # guarantees that, and a shared-container-under-real-load plan (parallel workers,
-        # a different scan choice from buffer/lock contention) can and did return rows out
-        # of insertion order, which every downstream group/table/collect op then silently
-        # inherited as if it were meaningful. `created_at` (0054's own index) is the
-        # deterministic, insertion-order-matching key every caller actually wants; `id`
-        # (a random UUID) is only the tiebreaker for two rows sharing one timestamp.
-        rows = await pool.fetch(
-            "SELECT id FROM objects WHERE ($3::text[] IS NULL OR status = ANY($3::text[])) "
-            "AND ($1::text IS NULL OR type=$1) "
-            "AND ($2::text IS NULL OR canonical LIKE $2 || '%') "
-            "AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[])) ORDER BY created_at, id",
-            ot, cp, statuses, link_ids,
-        )
+        # SCOPE (Thoth dispatch 9838, 588148bb's Browse tab cutover, the extraction piece):
+        # OPT-IN, same discipline as `status`/`subject_link` above — absent (every
+        # composition before this one) leaves the row fetch exactly as it always was, byte-
+        # identical. Given, delegates to `list_objects_scoped` (the SAME function
+        # /objects' own REST route calls, since the earlier extraction) for case/project
+        # scoping, word-order-proof search, exclude_types, and keyset pagination — one
+        # definition, not a second copy of that SQL drifting inside the op-tree dispatcher.
+        # NOTE two things this path does NOT compose with, documented rather than silently
+        # wrong: `canonical_prefix` has no equivalent in list_objects_scoped (ignored on
+        # this path — /objects never supported prefix filtering either) and `status`'s own
+        # opt-in is superseded by list_objects_scoped's own historical "not a terminal
+        # status" rule (matching every /objects caller) rather than combined with it.
+        # `subject_link` DOES still compose (applied as a post-filter below, same as the
+        # scope-less path), and `where`/props/neighborhood downstream are untouched either
+        # way — only the ROW FETCH itself branches here.
+        scope = node.get("scope")
+        if scope:
+            # a saved composition's spec round-trips through JSON storage — a UUID/datetime
+            # in the node arrives back as a plain string, never the Python object a caller
+            # constructing the spec programmatically might pass; accept either, same
+            # leniency `_row_action_arg`/other opt-in args elsewhere in this dispatcher
+            # already extend to a stored spec's own JSON-native types.
+            raw_case_id = scope.get("case_id")
+            cursor = scope.get("cursor") or {}
+            raw_before_created_at = cursor.get("before_created_at")
+            raw_before_id = cursor.get("before_id")
+            scope_rows = await list_objects_scoped(
+                pool,
+                case_id=(uuid.UUID(raw_case_id) if isinstance(raw_case_id, str)
+                        else raw_case_id),
+                object_type=ot, q=scope.get("q"),
+                exclude_types=scope.get("exclude_types"), project=scope.get("project"),
+                limit=int(scope.get("limit", 100)),
+                before_created_at=(datetime.fromisoformat(raw_before_created_at)
+                                   if isinstance(raw_before_created_at, str)
+                                   else raw_before_created_at),
+                before_id=(uuid.UUID(raw_before_id) if isinstance(raw_before_id, str)
+                          else raw_before_id),
+            )
+            rows = [{"id": r["id"]} for r in scope_rows]
+        else:
+            # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
+            # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
+            # carried NO order at all, so row order was whatever the planner's physical scan
+            # happened to produce — usually insertion order on a quiet local box (a
+            # sequential scan with no concurrent writers tends to return heap order), but
+            # Postgres never guarantees that, and a shared-container-under-real-load plan
+            # (parallel workers, a different scan choice from buffer/lock contention) can
+            # and did return rows out of insertion order, which every downstream group/
+            # table/collect op then silently inherited as if it were meaningful.
+            # `created_at` (0054's own index) is the deterministic, insertion-order-
+            # matching key every caller actually wants; `id` (a random UUID) is only the
+            # tiebreaker for two rows sharing one timestamp.
+            rows = await pool.fetch(
+                "SELECT id FROM objects "
+                "WHERE ($3::text[] IS NULL OR status = ANY($3::text[])) "
+                "AND ($1::text IS NULL OR type=$1) "
+                "AND ($2::text IS NULL OR canonical LIKE $2 || '%') "
+                "AND ($4::uuid[] IS NULL OR id = ANY($4::uuid[])) ORDER BY created_at, id",
+                ot, cp, statuses, link_ids,
+            )
+        if scope and link_ids is not None:
+            keep = set(link_ids)
+            rows = [r for r in rows if r["id"] in keep]
         # the house boundary (6c18709f): a composition selecting Reflections — by type or
         # by an untyped select-all — reads only the caller's own house; the record stays
         # whole, this lens narrows
