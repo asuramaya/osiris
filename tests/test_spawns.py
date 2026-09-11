@@ -498,6 +498,64 @@ async def test_file_subagent_refuses_when_genuinely_unattributable(actions: Acti
     assert "error" in out and "neither a spawned_by edge nor a session" in out["error"]
 
 
+async def test_resolve_subagent_parent_flags_an_unregistered_session_fallback_unverified(
+    actions: Actions,
+) -> None:
+    """Thread 329236eb: identify_agent/doors() does real existence resolution and would
+    report ZERO matches for a raw session id nobody has ever registered as an Agent object —
+    _resolve_subagent_parent's session fallback used to hand that same synthesized id back
+    with no way to tell it apart from a real, edge-backed parent. A spawned_by edge is always
+    verified; the session fallback is verified only when that Agent object genuinely exists."""
+    from src.orchestrator.lineage import _resolve_subagent_parent
+
+    edge_child = await actions.create_or_find_object("Agent", "agent:ac00000000000000a",
+                                                      "fleet-observer")
+    edge_parent = await actions.create_or_find_object("Agent", "agent:fso00005",
+                                                       "agent:fso00005")
+    await actions.create_link(edge_child, edge_parent, "spawned_by", "fleet-observer", NOW, 0.6,
+                              evidence_class="direct_observation")
+    parent, verified = await _resolve_subagent_parent(actions, edge_child)
+    assert parent == "agent:fso00005" and verified is True
+
+    unregistered_session_child = await actions.create_or_find_object(
+        "Agent", "agent:ac00000000000000b", "fleet-observer")
+    await actions.assert_property(unregistered_session_child, "session", "neverregistered",
+                                  "fleet-observer", NOW, 0.6, evidence_class="direct_observation")
+    parent, verified = await _resolve_subagent_parent(actions, unregistered_session_child)
+    assert parent == "agent:neverregistered"
+    assert verified is False  # no Agent object with that canonical exists anywhere
+
+    # once that same id IS registered as a real Agent object, the identical session fallback
+    # verifies true — the check is genuine existence, not a heuristic on the string shape
+    await actions.create_or_find_object("Agent", "agent:neverregistered", "fleet-observer")
+    parent, verified = await _resolve_subagent_parent(actions, unregistered_session_child)
+    assert parent == "agent:neverregistered" and verified is True
+
+
+async def test_file_subagents_dry_run_flags_unverified_session_fallback_parents(
+    actions: Actions,
+) -> None:
+    """The sweep's own dry-run report (file_subagents) must surface the same unverified
+    signal per-candidate — identify_agent-grade honesty, not a new refusal: the candidate
+    stays in `attributable` and would still be filed on a live pass (file_subagent's own
+    mint-on-demand contract for this exact straggler case), but the report no longer hides
+    that its parent id is a guess, never independently confirmed to exist."""
+    from src.orchestrator.lineage import file_subagents
+
+    kid = await actions.create_or_find_object("Agent", "agent:aa44aa00112233445",
+                                               "fleet-observer")
+    await actions.assert_property(kid, "project", "sweeptest2", "fleet-observer", NOW, 0.9,
+                                  evidence_class=_SD)
+    await actions.assert_property(kid, "session", "ghostroot", "fleet-observer", NOW, 0.6,
+                                  evidence_class="direct_observation")
+
+    out = await file_subagents(actions, project="sweeptest2", dry_run=True, actor="test")
+    assert out["counts"]["attributable_parent_unverified"] == 1
+    row = next(s for s in out["sample"] if s["subagent"] == "agent:aa44aa00112233445")
+    assert row["parent"] == "agent:ghostroot"
+    assert row["parent_verified"] is False
+
+
 async def test_file_subagent_refuses_an_unknown_subagent(actions: Actions) -> None:
     from src.orchestrator.lineage import file_subagent
 
@@ -536,7 +594,7 @@ async def test_file_subagents_dry_run_writes_nothing_and_classifies(actions: Act
 
     out = await file_subagents(actions, project="sweeptest", dry_run=True, actor="test")
     assert out["counts"] == {"attributable_parent_dead": 1, "attributable_parent_live": 1,
-                             "unattributable": 1}
+                             "unattributable": 1, "attributable_parent_unverified": 0}
     assert out["unattributable_ids"] == ["agent:aa33aa00112233445"]
     assert "DRY-RUN" in out["note"]
     # nothing written
