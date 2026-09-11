@@ -4832,6 +4832,34 @@ async def mint_bears_on(
     return True
 
 
+async def thread_answering_decisions(
+    pool: asyncpg.Pool, thread_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[dict[str, str]]]:
+    """Live `answers` edges (`mint_bears_on`'s own edge) landing on each of `thread_ids` —
+    the SHARED read-back, extracted here so `recall()`'s own single-object `bears_on_from`
+    and `obligation_hygiene`'s own nudge (898840dc/e123b9fa, "the stale nudge quotes it")
+    read the identical query instead of two copies free to drift. Batched (one query, not
+    N) since the hygiene sweep's own caller runs over every open obligation Thread at once.
+    Live edges only (valid_until IS NULL) — an unmerge/retraction must not go on citing a
+    row. A thread with none is simply absent from the returned dict, never a present-but-
+    empty list, so `dict.get(tid, [])` reads correctly either way."""
+    if not thread_ids:
+        return {}
+    rows = await pool.fetch(
+        "SELECT l.to_id AS thread_id, d.id, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
+        "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "  AS summary "
+        "FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
+        "WHERE l.to_id = ANY($1) AND l.type='answers' AND l.valid_until IS NULL "
+        "ORDER BY l.to_id, d.created_at", thread_ids)
+    out: dict[uuid.UUID, list[dict[str, str]]] = {}
+    for r in rows:
+        out.setdefault(r["thread_id"], []).append(
+            {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]})
+    return out
+
+
 async def acknowledge_prior_art(
     actions: Actions, decision_id: uuid.UUID, prior_art_id: str, source: str = _SOURCE,
 ) -> None:

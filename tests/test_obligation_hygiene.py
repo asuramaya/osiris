@@ -255,6 +255,59 @@ async def test_quote_summary_names_the_age_and_the_dispute() -> None:
     assert "CONTESTED" in disputed and "unchanged for 12 day(s)" in disputed
 
 
+# ═══ wave 18 item 1 (thread 898840dc, "the stale nudge quotes it"): a row already
+# carrying a live `answers` edge (mint_bears_on) gets named in its own nudge, never
+# suppressed — the owner is spared a redundant re-measurement, never spared the nudge
+# itself ═══
+
+async def test_quote_summary_names_an_already_answered_row() -> None:
+    from src.orchestrator.obligation_hygiene import _quote_summary
+
+    plain = _quote_summary({"summary": "a headline", "summary_age_days": 12,
+                            "contested": False, "answered_by": []})
+    assert "ALREADY ANSWERED" not in plain
+    answered = _quote_summary({
+        "summary": "a headline", "summary_age_days": 12, "contested": False,
+        "answered_by": [{"id": "abc12345", "summary": "found and fixed it already"}]})
+    assert "ALREADY ANSWERED" in answered
+    assert "abc12345" in answered and "found and fixed it already" in answered
+
+
+async def test_hygiene_dry_run_surfaces_an_answering_decision_on_the_nudge(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.capture import mint_bears_on
+
+    stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
+    t = await _mk_obligation(actions, "hyg-answered-1", owner="agent:hyg-answered-owner",
+                             touched_at=stale)
+    d = await actions.create_or_find_object("Decision", "decision:hyg-answered-1", _SRC)
+    await actions.assert_property(d, "summary", "re-measured hyg-answered-1: it's fine now",
+                                  _SRC, NOW, 0.9, evidence_class="self_declared")
+    new_link = await mint_bears_on(actions, d, t, _SRC)
+    assert new_link is True
+
+    out = await hygiene_dry_run(actions.pool, now=NOW)
+    row = _find(out["buckets"]["would_nudge"], t)
+    assert row is not None
+    assert row["answered_by"] == [
+        {"id": str(d)[:8], "summary": "re-measured hyg-answered-1: it's fine now"}]
+
+
+async def test_hygiene_dry_run_never_answers_for_a_row_with_no_bears_on_edge(
+    actions: Actions,
+) -> None:
+    """The common case — no answering decision at all — carries an EMPTY list, never
+    absent, so `_quote_summary`'s own `.get("answered_by") or []` reads correctly."""
+    stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
+    t = await _mk_obligation(actions, "hyg-unanswered-1", owner="agent:hyg-plain-owner",
+                             touched_at=stale)
+    out = await hygiene_dry_run(actions.pool, now=NOW)
+    row = _find(out["buckets"]["would_nudge"], t)
+    assert row is not None
+    assert row["answered_by"] == []
+
+
 # ═══ hygiene_status ═══════════════════════════════════════════════════════════════════
 
 async def test_hygiene_status_counts_by_stage(actions: Actions) -> None:

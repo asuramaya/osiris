@@ -83,8 +83,20 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     8922): the nudge that quotes `summary` back at the owner must never present a
     disputed headline as settled fact — `contested` names the dispute, `summary_age_days`
     (how long the CURRENT summary text has stood, from its own last touch to now) lets
-    the nudge say "unchanged for N days" instead of implying it was just observed."""
-    from src.orchestrator.capture import CONTESTED_SQL, LAST_SUMMARY_TOUCH_SQL
+    the nudge say "unchanged for N days" instead of implying it was just observed.
+
+    `answered_by` (wave 18 item 1, thread 898840dc, "the stale nudge quotes it"): every
+    live `answers` edge already landed on this row (`capture.thread_answering_decisions`,
+    the SAME batched read `recall()` uses for its own `bears_on_from`) — a row Seshat's
+    own sweep found FOUR of six stale board rows already carried, unrouted, before
+    mint_bears_on existed at all. Never suppresses or reclassifies the nudge; only lets
+    it say "already answered by decision X" instead of blindly asking the owner to
+    re-measure something someone already did."""
+    from src.orchestrator.capture import (
+        CONTESTED_SQL,
+        LAST_SUMMARY_TOUCH_SQL,
+        thread_answering_decisions,
+    )
 
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
@@ -105,7 +117,8 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
         "FROM objects o "
         f"WHERE o.type='Thread' AND o.merged_into IS NULL AND o.status='active' "
         f"  AND {_STATUS_SQL}='open' AND {_KIND_SQL}='obligation'")
-    return [dict(r) for r in rows]
+    answers_by_thread = await thread_answering_decisions(pool, [r["id"] for r in rows])
+    return [{**dict(r), "answered_by": answers_by_thread.get(r["id"], [])} for r in rows]
 
 
 async def _owner_active_since(pool: asyncpg.Pool, owner: str, since: datetime) -> bool:
@@ -131,12 +144,22 @@ def _quote_summary(item: dict[str, Any]) -> str:
     summary WITH its age and, when disputed, says so — never as though it were current,
     unverified fact. `summary_age_days` is None only when the thread's own created_at
     (this function's last-resort clock) is somehow absent; the quote degrades gracefully
-    rather than raising."""
+    rather than raising.
+
+    ANSWERED-BY, APPENDED (wave 18 item 1, thread 898840dc, "the stale nudge quotes it"):
+    when `mint_bears_on` has already routed a fresh Decision onto this exact row, the
+    nudge says so and quotes it — never suppressing or softening the nudge itself (the
+    row is still open and still needs a human act), only sparing the owner a redundant
+    re-measurement of something someone already found."""
     age = item.get("summary_age_days")
     aged = f"{item['summary']!r}, unchanged for {age} day(s)" if age is not None \
         else f"{item['summary']!r}"
     if item.get("contested"):
-        return f"{aged} — CONTESTED: a newer note disputes this summary, unresolved"
+        aged = f"{aged} — CONTESTED: a newer note disputes this summary, unresolved"
+    answers = item.get("answered_by") or []
+    if answers:
+        quoted = "; ".join(f"{a['id']} ({a['summary']!r})" for a in answers)
+        aged = f"{aged} — ALREADY ANSWERED by {len(answers)} decision(s): {quoted}"
     return aged
 
 
@@ -160,6 +183,7 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
             "last_touched": last_touched.isoformat() if last_touched else None,
             "stage": stage, "contested": bool(r["contested"]),
             "summary_age_days": (now - summary_touch).days if summary_touch else None,
+            "answered_by": r["answered_by"],
         }
 
         if stage == "stale_candidate":

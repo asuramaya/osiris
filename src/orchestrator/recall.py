@@ -113,17 +113,12 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         # speak to this" and could re-measure something already answered (the exact shape
         # four of six stale board rows turned out to be, Seshat's own sweep). Live edges
         # only (valid_until IS NULL) — an unmerge/retraction must not go on citing a row.
-        bearers = await pool.fetch(
-            "SELECT d.id, "
-            " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
-            "  AND a.name='summary' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-            "  AS summary "
-            "FROM links l JOIN objects d ON d.id=l.from_id AND d.type='Decision' "
-            "WHERE l.to_id=$1 AND l.type='answers' AND l.valid_until IS NULL "
-            "ORDER BY d.created_at", oid)
-        record["bears_on_from"] = [
-            {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]}
-            for r in bearers]
+        # SHARED with obligation_hygiene's own nudge (wave 18 item 1, "the stale nudge
+        # quotes it") via `thread_answering_decisions`, batched there — one query here too,
+        # single-object shape, never two copies of the same SQL free to drift.
+        from src.orchestrator.capture import thread_answering_decisions
+
+        record["bears_on_from"] = (await thread_answering_decisions(pool, [oid])).get(oid, [])
     elif otype == "Decision":
         from src.orchestrator.capture import decision_addenda
         addenda = await decision_addenda(pool, oid)
