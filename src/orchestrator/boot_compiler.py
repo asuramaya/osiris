@@ -282,6 +282,99 @@ def wrap_managed(body: str, version: str) -> str:
             f"<!-- osiris:compiled:end -->\n")
 
 
+# ═══════════ VENDOR-NEUTRAL OUTPUT (thread f37aaf1b, v1.1 follow-up piece 2) ═══════════
+# Every compile point above wrote ONLY CLAUDE.md — Claude Code's own convention, never
+# read by any other harness. Crush v0.85.0's own documentation (Charm's repo, README.md
+# at the exact v0.85.0 tag, https://raw.githubusercontent.com/charmbracelet/crush/
+# v0.85.0/README.md, "### Initialization" section) names the equivalent directly: "When
+# you initialize a project, Crush analyzes your codebase and creates a context file...
+# By default, this file is named AGENTS.md." That same README's own "### Global context
+# files" section frames AGENTS.md explicitly as the CROSS-TOOL convention — "generic
+# instructions that other coding tools might read" — as opposed to Crush's own
+# CRUSH.md-named files, which it explicitly scopes to "rules that would confuse other
+# agentic coding tools." AGENTS.md is therefore the correct vendor-neutral mirror: the
+# same per-office, per-project scope CLAUDE.md already has (not the separate `~/.config/
+# crush/CRUSH.md` / `~/.config/AGENTS.md` pair, which are Crush's own USER-HOME-scoped
+# cross-project config, a different concept entirely). Not a confess-and-close case —
+# the docs name a real target, so this piece builds it.
+
+
+def scaffold_boot_file(
+    path: Path, wrapped: str, *, label: str, existing_note: str | None = None,
+) -> str:
+    """'written' or a 'left in place' note — the same two states every first-compile
+    scaffold site already tracked locally for CLAUDE.md alone, generalized so AGENTS.md's
+    own vendor-neutral mirror can reuse the identical discipline: existence checked
+    INDEPENDENTLY per file, a hand-grown file (a real `crush init` run's own AGENTS.md,
+    say) never overwritten just because its CLAUDE.md sibling needed writing.
+
+    `existing_note` overrides the default "left in place — the office already has
+    {label}" wording verbatim — `mint_seat`'s own scaffold predates this helper and its
+    existing tests assert on the bare "left in place" string for CLAUDE.md; passing it
+    here keeps that exact string rather than silently changing tested caller-facing
+    text as a side effect of sharing this helper."""
+    if path.exists():
+        return existing_note if existing_note is not None else (
+            f"left in place — the office already has {label}")
+    path.write_text(wrapped)
+    return "written"
+
+
+async def _mirror_agents_md(
+    office: Path, wrapped: str, *, adopt: bool, handle: str,
+) -> dict[str, Any]:
+    """AGENTS.md's own recompile — the vendor-neutral mirror of whatever `reissue_office`
+    just did to CLAUDE.md, same wrapped content, same marker-safety/adopt discipline
+    (deliberately RE-IMPLEMENTED here rather than sharing `reissue_office`'s own inline
+    logic: that logic's exact refusal wording is load-bearing prose other callers may
+    already depend on, and this mirror's own failures must never risk changing it by
+    sharing a helper mid-refactor).
+
+    NEVER RAISES, NEVER BLOCKS THE CALLER'S OWN CLAUDE.md REISSUE — the same "one bad
+    row must not sink a correct batch" discipline `sweep_stacked_office_headers` already
+    uses. A problem here (a malformed AGENTS.md, or one already marker-shaped with no
+    leading duplicate under adopt) is reported inline, softly, in the returned dict's own
+    `error` key: AGENTS.md is a secondary mirror, never the primary managed-section
+    contract this module exists to protect."""
+    path = office / "AGENTS.md"
+    if not path.exists():
+        path.write_text(wrapped)
+        return {"changed": True, "note": "written (first compile)"}
+    text = path.read_text()
+    if adopt and _has_any_markers(text):
+        header_match = _office_header_re(handle).search(text)
+        leading_duplicate = False
+        if header_match is not None:
+            try:
+                b_start, _b_end, _e_start, _e_end, _v = locate_managed_section(text)
+                leading_duplicate = header_match.start() < b_start
+            except MarkerError:
+                leading_duplicate = False
+        if not leading_duplicate:
+            return {"changed": False,
+                    "error": "AGENTS.md already carries managed-section marker text and "
+                             "no leading duplicate header sits before it — left untouched"}
+    if not adopt:
+        try:
+            locate_managed_section(text)
+        except MarkerError as exc:
+            return {"changed": False, "error": f"AGENTS.md: {exc} — left untouched"}
+    if adopt:
+        header_match = _office_header_re(handle).search(text)
+        if header_match is not None:
+            lead = text[:header_match.start()].rstrip("\n")
+            new_text = (lead + "\n\n" if lead else "") + wrapped
+        else:
+            new_text = text.rstrip("\n") + "\n\n" + wrapped
+    else:
+        b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
+        new_text = text[:b_start] + wrapped + text[e_end:]
+    if new_text == text:
+        return {"changed": False, "note": "no change — already matches"}
+    path.write_text(new_text)
+    return {"changed": True, "note": "recompiled"}
+
+
 def _has_any_markers(text: str) -> bool:
     return bool(_MARKER_BEGIN_RE.search(text) or _MARKER_END_RE.search(text))
 
@@ -592,11 +685,18 @@ async def reissue_office(
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
         new_text = text[:b_start] + wrapped + text[e_end:]
 
+    # AGENTS.md, VENDOR-NEUTRAL (thread f37aaf1b piece 2, see this module's own section
+    # above `_mirror_agents_md`): mirrored regardless of whether CLAUDE.md itself changed
+    # this call — an office whose CLAUDE.md already matched but whose AGENTS.md has never
+    # been written (every pre-existing office in this fleet, at the moment this piece
+    # ships) still needs it written the first time a reissue happens to pass through.
+    agents_md = await _mirror_agents_md(office, wrapped, adopt=adopt, handle=handle)
+
     if new_text == text:
         return {"seat": seat_id, "handle": handle, "version": version,
                 "because": because, "changed": False,
                 "note": "no change — the compiled section already matches",
-                "identity_migration": identity_migration}
+                "identity_migration": identity_migration, "agents_md": agents_md}
     orders_path.write_text(new_text)
     # TESTIMONY, DURABLE (a reissue is testimony, per this verb's own docstring): the
     # version + why land on the Seat object itself, not just in this call's receipt —
@@ -607,7 +707,7 @@ async def reissue_office(
             "changed": True,
             "note": "managed section added (adopt)" if adopt else
                     "managed section recompiled",
-            "identity_migration": identity_migration}
+            "identity_migration": identity_migration, "agents_md": agents_md}
 
 
 # ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) ═══════════

@@ -14,6 +14,7 @@ from src.orchestrator.boot_compiler import (
     MarkerError,
     _armed_practices,
     _has_any_markers,
+    _mirror_agents_md,
     _practice_block,
     apply_boot_drift_nudge_sweep,
     boot_drift_gaps,
@@ -24,6 +25,7 @@ from src.orchestrator.boot_compiler import (
     locate_managed_section,
     migrate_identity_to_charter,
     reissue_office,
+    scaffold_boot_file,
     sweep_stacked_office_headers,
     template_version,
     wrap_managed,
@@ -327,6 +329,110 @@ async def test_fresh_mint_carries_the_ordered_first_breath_checklist(
     assert "<!-- osiris:compiled:begin v=" in orders
     assert "<!-- osiris:compiled:end -->" in orders
     assert out["office"]["standing_orders"] == "written"
+
+
+# ═══════════ VENDOR-NEUTRAL: AGENTS.md, Crush's own default project-context file ══════
+
+
+async def test_fresh_mint_writes_agents_md_identical_to_claude_md(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """thread f37aaf1b piece 2: a fresh scaffold writes AGENTS.md (Crush's own default
+    per-project context file, https://raw.githubusercontent.com/charmbracelet/crush/
+    v0.85.0/README.md "### Initialization") alongside CLAUDE.md, same wrapped content,
+    so a Crush session in this same office gets the identical compiled standing orders."""
+    await ensure_seat(actions, house="vnhouse", handle="VnBoss", source="test")
+    out = await mint_seat(actions, manager="VnBoss", handle="VnWorker",
+                          office_root=tmp_path / "seats", actor="agent:test")
+    office = tmp_path / "seats" / "vnworker"
+    claude_text = (office / "CLAUDE.md").read_text()
+    agents_text = (office / "AGENTS.md").read_text()
+    assert claude_text == agents_text
+    assert "<!-- osiris:compiled:begin v=" in agents_text
+    assert out["office"]["agents_md"] == "written"
+
+
+async def test_scaffold_never_overwrites_a_pre_existing_file_on_either_side(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """AGENTS.md's own existence is checked INDEPENDENTLY of CLAUDE.md's — a hand-grown
+    AGENTS.md (a real `crush init` run's own output, say) is left in place exactly as a
+    hand-grown CLAUDE.md already is, and vice versa."""
+    await ensure_seat(actions, house="vnhouse2", handle="VnBoss2", source="test")
+    office = tmp_path / "seats" / "vnworker2"
+    office.mkdir(parents=True)
+    hand_grown = "# Hand-written by crush init\nSome real project context.\n"
+    (office / "AGENTS.md").write_text(hand_grown)
+    out = await mint_seat(actions, manager="VnBoss2", handle="VnWorker2",
+                          office_root=tmp_path / "seats", actor="agent:test")
+    assert (office / "AGENTS.md").read_text() == hand_grown  # untouched
+    assert out["office"]["agents_md"].startswith("left in place")
+    assert out["office"]["standing_orders"] == "written"  # CLAUDE.md still scaffolded
+    assert "<!-- osiris:compiled:begin v=" in (office / "CLAUDE.md").read_text()
+
+
+def test_scaffold_boot_file_writes_only_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.md"
+    state = scaffold_boot_file(path, "compiled content\n", label="a file")
+    assert state == "written"
+    assert path.read_text() == "compiled content\n"
+    state2 = scaffold_boot_file(path, "different content\n", label="a file")
+    assert state2 == "left in place — the office already has a file"
+    assert path.read_text() == "compiled content\n"  # untouched, never overwritten
+
+
+async def test_reissue_recompiles_agents_md_identically_to_claude_md(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """reissue_office's own recompile mirrors into AGENTS.md too — same content, same
+    marker-safety discipline, a hand-written span outside AGENTS.md's own markers
+    survives exactly as CLAUDE.md's already does."""
+    await ensure_seat(actions, house="vnhouse3", handle="VnBoss3", source="test")
+    minted = await mint_seat(actions, manager="VnBoss3", handle="VnWorker3",
+                             office_root=tmp_path / "seats", actor="agent:test")
+    seat_id = minted["seat_id"]
+    office = tmp_path / "seats" / "vnworker3"
+    agents_path = office / "AGENTS.md"
+    narrative = "\n## Project notes\nSome hand-written context for Crush.\n"
+    agents_path.write_text(agents_path.read_text() + narrative)
+
+    peer = (await ensure_seat(actions, house="vnhouse3", handle="VnPeer3",
+                              source="test"))["seat_id"]
+    await peer_seats(actions, seat_id, peer, because="test peer bond for reissue",
+                     actor="agent:test")
+    out = await reissue_office(actions, seat_id=seat_id,
+                               because="peer bond landed, recompiling", actor="agent:test")
+    assert out["changed"] is True
+    assert out["agents_md"]["changed"] is True
+    claude_text = (office / "CLAUDE.md").read_text()
+    agents_text = agents_path.read_text()
+    assert agents_text.endswith(narrative)  # hand-written span survived
+    assert "peered with **VnPeer3**" in agents_text
+    # the compiled span itself (everything but AGENTS.md's own extra narrative) matches
+    assert claude_text == agents_text[:len(agents_text) - len(narrative)]
+
+
+async def test_mirror_agents_md_writes_fresh_when_missing(tmp_path: Path) -> None:
+    office = tmp_path / "office"
+    office.mkdir()
+    wrapped = "<!-- osiris:compiled:begin v=abc -->\nbody\n<!-- osiris:compiled:end -->\n"
+    out = await _mirror_agents_md(office, wrapped, adopt=False, handle="Test")
+    assert out["changed"] is True
+    assert (office / "AGENTS.md").read_text() == wrapped
+
+
+async def test_mirror_agents_md_reports_a_soft_error_never_raises_on_malformed_markers(
+    tmp_path: Path,
+) -> None:
+    """A malformed pre-existing AGENTS.md must never block the caller's own successful
+    CLAUDE.md reissue — reported inline, softly, never raised."""
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / "AGENTS.md").write_text("<!-- osiris:compiled:begin v=rogue -->\nstray\n")
+    wrapped = "<!-- osiris:compiled:begin v=abc -->\nbody\n<!-- osiris:compiled:end -->\n"
+    out = await _mirror_agents_md(office, wrapped, adopt=False, handle="Test")
+    assert out["changed"] is False
+    assert "error" in out
 
 
 async def test_reissue_preserves_hand_written_content_outside_the_managed_section(
