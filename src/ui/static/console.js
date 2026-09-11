@@ -515,11 +515,14 @@ async function renderPane() {
     container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load live seats.</div>';
   }
 }
+var PANE_AGENT = null;
 function openPaneStream(agentId) {
   closePaneStream();
+  PANE_AGENT = agentId;
   var out = $('pane-stream');
   if (!out) return;
-  out.innerHTML = '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:12px 0">' + esc(agentId) + '</h2><pre id="pane-text" style="white-space:pre-wrap;font-size:12px;line-height:1.6;color:var(--text);max-height:60vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px"></pre>';
+  out.innerHTML = '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:12px 0">' + esc(agentId) + '</h2><pre id="pane-text" style="white-space:pre-wrap;font-size:12px;line-height:1.6;color:var(--text);max-height:60vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px"></pre>' +
+    '<div style="display:flex;gap:8px;margin-top:8px"><input id="pane-reply-input" class="filter" style="flex:1" placeholder="Reply into this seat’s own session…" onkeydown="if(event.key===\'Enter\')sendPaneReply()" /><button class="iconbtn" onclick="sendPaneReply()">Send</button></div>';
   var pre = $('pane-text');
   PANE_SOURCE = new EventSource('/pane/' + encodeURIComponent(agentId) + '/stream');
   PANE_SOURCE.onmessage = function(ev) {
@@ -528,6 +531,29 @@ function openPaneStream(agentId) {
     if (msg.text) { pre.textContent += (pre.textContent ? '\n\n' : '') + msg.text; pre.scrollTop = pre.scrollHeight; }
   };
   PANE_SOURCE.onerror = function() { /* EventSource auto-retries; nothing to do here */ };
+}
+// THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): posts through the seat's own
+// harness-agnostic adapter (/pane/{agent}/reply) — a one-shot turn against the seat's
+// ALREADY-RUNNING session, never a new spawn. The reply itself lands in the same
+// transcript file the stream above is already tailing, so it needs no separate render
+// path — it just shows up.
+async function sendPaneReply() {
+  var input = $('pane-reply-input');
+  if (!input || !PANE_AGENT) return;
+  var prompt = input.value.trim();
+  if (!prompt) return;
+  input.value = ''; input.disabled = true;
+  try {
+    var res = await fetch('/pane/' + encodeURIComponent(PANE_AGENT) + '/reply', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: prompt }),
+    }).then(function(r){ return r.json(); });
+    if (res.error) { setStatus(res.error); }
+  } catch(e) {
+    setStatus('reply failed — ' + e);
+  } finally {
+    input.disabled = false; input.focus();
+  }
 }
 
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────

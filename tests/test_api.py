@@ -5,6 +5,8 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest_asyncio
@@ -800,6 +802,84 @@ async def test_pane_live_lists_only_live_seated_agents(
     assert any(row["agent_id"] == "agent:paneseated1" for row in rows)
     for row in rows:
         assert set(row) == {"agent_id", "seat", "project"}
+
+
+# THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): POST /pane/{agent_id}/reply — a
+# one-shot turn against the seat's OWN already-running session via ProcessAdapter.reply(),
+# never a new spawn. Carries the SAME may_spend gate piece 1 gave every other hand-birth
+# path (a new billed call site with no gate would have been a fifth instance of that bug).
+
+
+async def test_pane_reply_refuses_honestly_when_no_live_mount_exists(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/pane/agent:nobody-here/reply", json={"prompt": "hello"})
+    assert r.status_code == 200
+    assert "no live mount" in r.json()["error"]
+
+
+async def test_pane_reply_refuses_an_over_budget_turn(
+    client: httpx.AsyncClient, actions: Actions, monkeypatch: Any,
+) -> None:
+    from src.config.settings import Settings
+    from src.ingest.providers import Usage
+    from src.ingest.usage import record_usage
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/tmp/jobs/panereply-budget",
+                     agent_id="agent:panereply-budget", project="p",
+                     cwd="/tmp/panereply-budget", model=None, session_key=None)
+    for _ in range(12):
+        await record_usage(actions.pool, purpose="wake", usage=Usage(
+            model="claude-haiku-4-5-20251001", input_tokens=1, output_tokens=1,
+            cache_read_tokens=0, cache_creation_tokens=0, cost_usd=1.00))
+    monkeypatch.setattr(
+        "src.config.settings.get_settings",
+        lambda: Settings(osiris_daily_usd=10.0, osiris_extract_provider="anthropic",
+                         anthropic_api_key="k"))
+
+    async def _boom(**kw: Any) -> Any:
+        raise AssertionError("a refused reply must never reach the adapter")
+
+    monkeypatch.setattr(
+        "src.orchestrator.harness_process.resolve_process_adapter",
+        lambda *a, **k: SimpleNamespace(list_sessions=_boom, reply=_boom))
+
+    r = await client.post("/pane/agent:panereply-budget/reply", json={"prompt": "hello"})
+    assert r.status_code == 200
+    assert "ceiling" in r.json()["error"].lower()
+
+
+async def test_pane_reply_resolves_the_resume_session_by_cwd_and_calls_the_real_adapter(
+    client: httpx.AsyncClient, actions: Actions, monkeypatch: Any,
+) -> None:
+    from src.orchestrator.mounts import save_mount
+
+    await save_mount(actions.pool, job_dir="/tmp/jobs/panereply-happy",
+                     agent_id="agent:panereply-happy", project="p",
+                     cwd="/tmp/panereply-happy", model=None, session_key=None)
+
+    calls: dict[str, Any] = {}
+
+    async def _list_sessions(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
+        return [{"sessionId": "sess-wrong", "cwd": "/tmp/somewhere-else"},
+                {"sessionId": "sess-right", "cwd": cwd}]
+
+    async def _reply(**kw: Any) -> dict[str, Any]:
+        calls.update(kw)
+        return {"replied": True}
+
+    monkeypatch.setattr(
+        "src.orchestrator.harness_process.resolve_process_adapter",
+        lambda *a, **k: SimpleNamespace(list_sessions=_list_sessions, reply=_reply))
+
+    r = await client.post("/pane/agent:panereply-happy/reply", json={"prompt": "hello"})
+    assert r.status_code == 200
+    assert r.json() == {"replied": True}
+    assert calls["repo"] == "/tmp/panereply-happy"
+    assert calls["prompt"] == "hello"
+    assert calls["job_dir"] == "/tmp/jobs/panereply-happy"
+    assert calls["resume_session"] == "sess-right"
 
 
 async def test_pane_stream_refuses_honestly_when_no_live_mount_exists(
