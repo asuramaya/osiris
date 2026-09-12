@@ -686,12 +686,19 @@ async def retire_agent(
 
     (2) SEAT/MOUNT RELEASE — unconditional on a successful retirement, live or not: this
     is the half of the bug with no defensible reason to stay broken (a corpse should never
-    keep holding a seat). held_seat + vacate_holder (seats.py) release any active `holds`
-    link the same way retire_seat's own vacate-then-retire discipline would, WITHOUT
-    retiring the seat itself (the role may still get a legitimate new occupant — only
-    retire_seat closes the role). mounts.release_mounts (thread b47b3814, retire()'s own
-    call) drops the durable mount row so a retired agent never haunts the fleet chrome as
-    a live mount, exactly as it already does for self-retirement.
+    keep holding a seat). held_seat_exact + vacate_holder (seats.py) release any active
+    `holds` link the same way retire_seat's own vacate-then-retire discipline would,
+    WITHOUT retiring the seat itself (the role may still get a legitimate new occupant —
+    only retire_seat closes the role). EXACT match only (MOUNT ROW VANISHED, c7524a2b,
+    Thoth mail 9873) — held_seat's own lineage-wide resolution (any generation sharing
+    the base, newest wins) is right for a live mind's self-lookup, but wrong for a
+    third-party act on a SPECIFIC named generation: an already-superseded ancestor
+    sharing its heir's base would resolve to the seat the HEIR currently, rightfully
+    holds, and this step would vacate the LIVE heir's own seat as a side effect of
+    retiring an ancestor that held nothing of its own. mounts.release_mounts (thread
+    b47b3814, retire()'s own call) drops the durable mount row so a retired agent never
+    haunts the fleet chrome as a live mount, exactly as it already does for
+    self-retirement — also exact-id, never lineage-widened.
 
     Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent; a LIVE
     target unless `override_live=True`."""
@@ -726,13 +733,18 @@ async def retire_agent(
                                   evidence_class=_EC)
     await actions.set_status(row["id"], "retired", because, actor)
 
-    from src.orchestrator.seats import held_seat, vacate_holder
+    from src.orchestrator.seats import held_seat_exact, vacate_holder
 
     out: dict[str, Any] = {"retired": agent_id, "because": because,
                            "was_live": liveness["live"]}
-    bound = await held_seat(actions.pool, agent_id)
-    if bound is not None:
-        vac = await vacate_holder(actions, seat_id=bound["seat_id"], actor=actor,
+    # EXACT match only (c7524a2b's own over-reach, Thoth mail 9873): held_seat's own
+    # lineage-wide resolution ("any generation sharing the base, newest wins") is right
+    # for a live mind's self-lookup, but wrong here — it would resolve an ancestor's
+    # already-superseded generation onto whatever seat its LIVE HEIR currently holds,
+    # and vacate that instead. This agent's own exact holds link, or nothing.
+    bound_seat = await held_seat_exact(actions.pool, agent_id)
+    if bound_seat is not None:
+        vac = await vacate_holder(actions, seat_id=bound_seat, actor=actor,
                                   because=f"holder retired: {because}")
         if vac.get("vacated"):
             out["seat_vacated"] = vac["vacated"]
