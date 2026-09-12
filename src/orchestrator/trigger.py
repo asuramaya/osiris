@@ -3334,6 +3334,7 @@ async def _launch_twin_check(
 
 async def _launch_target_setup(
     actions: Actions, *, caller: str, target: str, agents_json: Any,
+    operator_authorized: bool = False,
 ) -> dict[str, Any]:
     """THE GATE + FACTS SHARED BY BOTH launch_seat AND resume_seat (extracted, task #199
     lane 3C, ruling 41a41437/msgs 6823/6831: "one shared orchestration shell, the
@@ -3345,6 +3346,17 @@ async def _launch_target_setup(
     and enforces ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1) — checked here,
     once, so neither launch nor resume can ever fork a second eligible head.
 
+    `operator_authorized` (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH" — same
+    self-declared-act convention as record_decision's own `operator_authorized`, decision
+    12efe065): SKIPS the managed_by trust gate entirely, never widens it. Set ONLY by
+    `osiris launch`'s own CLI door (cli.py's `main()`, a local-execution trust boundary no
+    network caller can reach) — the ONE flag genuinely different from a forgeable `caller`
+    override: it names no seat, asserts no delegated authority, just states outright that
+    THIS caller IS the operator's own hand, out-of-band, exactly as `launch_seat`'s own
+    docstring already required before this flag existed. An MCP agent caller can never set
+    this (mcp_server.py's own `seat()` dispatcher never threads it through) — the boolean is
+    the boundary, not a value inside `caller`.
+
     A dict with NO `target_seat` key is an ERROR — return it to the caller UNCHANGED.
     Otherwise every field a launch or resume decision needs is resolved and ready:
     target_seat, handle, house, office, tree_cwd, launch_cwd, attach, anchor,
@@ -3352,22 +3364,31 @@ async def _launch_target_setup(
     pool = actions.pool
     from src.orchestrator.seats import held_seat, seat_receipt
 
-    caller_held = await held_seat(pool, caller)
-    caller_seat = (caller_held or {}).get("seat_id")
-    if caller_seat is None:
-        return {"status": "refused-not-your-worker",
-                "detail": f"{caller} holds no seat — launch is a seat-to-seat act; an unseated "
-                          "caller has no managed_by relationship to invoke it with"}
-    target_seat = await _seat_for_target(actions, target)
-    if target_seat is None:
-        return {"status": "refused-not-your-worker",
-                "detail": f"'{target}' resolves to no living Seat — launch bodies a seat, and "
-                          "managed_by is Seat-to-Seat"}
-    if not await _manages(pool, caller_seat, target_seat):
-        return {"status": "refused-not-your-worker",
-                "detail": f"no active managed_by edge from {target_seat} up to {caller_seat} — "
-                          "launch is DOWNWARD-ONLY (78e3734e): you may only body a seat you "
-                          "manage; a worker cannot spawn its manager a body"}
+    if operator_authorized:
+        target_seat = await _seat_for_target(actions, target)
+        if target_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"'{target}' resolves to no living Seat — launch bodies a "
+                              "seat, and managed_by is Seat-to-Seat"}
+    else:
+        caller_held = await held_seat(pool, caller)
+        caller_seat = (caller_held or {}).get("seat_id")
+        if caller_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"{caller} holds no seat — launch is a seat-to-seat act; an "
+                              "unseated caller has no managed_by relationship to invoke it "
+                              "with"}
+        target_seat = await _seat_for_target(actions, target)
+        if target_seat is None:
+            return {"status": "refused-not-your-worker",
+                    "detail": f"'{target}' resolves to no living Seat — launch bodies a "
+                              "seat, and managed_by is Seat-to-Seat"}
+        if not await _manages(pool, caller_seat, target_seat):
+            return {"status": "refused-not-your-worker",
+                    "detail": f"no active managed_by edge from {target_seat} up to "
+                              f"{caller_seat} — launch is DOWNWARD-ONLY (78e3734e): you "
+                              "may only body a seat you manage; a worker cannot spawn its "
+                              "manager a body"}
 
     from src.orchestrator.seats import seat_facts
     facts = await seat_facts(pool, target_seat)
@@ -3389,7 +3410,9 @@ async def _launch_target_setup(
                     "detail": f"{handle} ({target_seat}) names tree_cwd={tree_cwd!r} but it "
                               "does not exist on disk — osiris expects the harness (or a "
                               "human, via EnterWorktree) to have created it before launch; "
-                              "it never provisions one itself"}
+                              "it never provisions one itself. Fix it with: bind_seat_tree("
+                              f"seat_id={target_seat!r}, tree_cwd='<the real directory>', "
+                              "because='...')"}
         fabricated = await fabricated_tree_verdict(pool, target_seat, tree_cwd)
         if fabricated is not None:
             repo, real_path = fabricated
@@ -3430,15 +3453,22 @@ async def launch_seat(
     model: str | None = None, settings: Settings | None = None,
     manager: Any = None, windows: Any = None, substrate: str | None = None,
     spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
+    operator_authorized: bool = False,
 ) -> dict[str, Any]:
-    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages).
-    Idempotent: a live window for the seat is RETURNED, never twinned. The receipt reports
-    body_exists and can_receive SEPARATELY, each from an independent read — Ra's requirement
-    (53ae1a87): a launch that returns success must mean a body exists AND can receive, and where
-    those are separable states the verb must not collapse them into one lying boolean.
+    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages) —
+    UNLESS `operator_authorized=True` (WAVE 21 item 3, a793b01b, "UNIFY LAUNCH"). Idempotent: a
+    live window for the seat is RETURNED, never twinned. The receipt reports body_exists and
+    can_receive SEPARATELY, each from an independent read — Ra's requirement (53ae1a87): a launch
+    that returns success must mean a body exists AND can receive, and where those are separable
+    states the verb must not collapse them into one lying boolean.
 
-    THE OPERATOR NEVER CALLS THIS (no operator param, exactly like wake): an override a caller can
-    assert in an argument is an override that can be forged; the operator's hand stays out-of-band.
+    NO MCP AGENT CALLER CAN EVER SET `operator_authorized` (no operator param on the MCP `seat()`
+    dispatcher, exactly like wake): an override a caller can assert in an argument passed over
+    the wire is an override that can be forged. `osiris launch`'s own CLI door is the ONE caller
+    that sets it — a local-execution trust boundary, the operator's own hand, out-of-band by
+    construction (see `_launch_target_setup`'s own docstring for the full reasoning) — replacing
+    that door's former SEPARATE reimplementation of this entire function (#48's "two doors, one
+    receipt" lesson, finally closed for launch itself, not just its sub-pieces).
 
     SUBSTRATE (the default flip, task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): `substrate`
     picks the spawn lane — an explicit argument wins, then `osiris_launch_substrate`
@@ -3465,7 +3495,8 @@ async def launch_seat(
     cost_reader = cost_reader or _bg_session_cost
 
     setup = await _launch_target_setup(
-        actions, caller=caller, target=target, agents_json=agents_json)
+        actions, caller=caller, target=target, agents_json=agents_json,
+        operator_authorized=operator_authorized)
     if "target_seat" not in setup:
         return setup
     target_seat, handle, house = setup["target_seat"], setup["handle"], setup["house"]
