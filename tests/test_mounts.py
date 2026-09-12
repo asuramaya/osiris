@@ -196,7 +196,6 @@ async def test_lineage_transcript_mtime_caps_to_the_freshest_anchor_sids(
     unbounded — this caps to `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` freshest rows by
     `observed_at`. A transcript for a sid OUTSIDE that cap (older than the freshest N)
     must never surface; one for a sid INSIDE it must."""
-    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
     agent = await actions.create_or_find_object("Agent", "agent:cappedsid1", "test")
     now = datetime.now(UTC)
     total = mounts.MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK + 5
@@ -205,12 +204,21 @@ async def test_lineage_transcript_mtime_caps_to_the_freshest_anchor_sids(
         observed = now - timedelta(minutes=total - i)  # i=0 is the OLDEST
         await actions.assert_property(agent, f"anchor_sid:{sid[:8]}", sid, "test",
                                       observed, 0.9, evidence_class=_SD)
+    oldest_sid = f"bbbb2222-0000-0000-0000-{0:012d}"
+    fresh_sid = f"bbbb2222-0000-0000-0000-{total - 1:012d}"
+    # each half gets its OWN root (thread 9150aec2 follow-up: `_transcript_index` caches
+    # the tree walk per-root for a TTL, so two reads sharing one root within that window
+    # would reuse the first root's cached index regardless of what the second half wrote)
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
     # a transcript for the OLDEST sid (outside the cap) must be invisible
-    (tmp_path / f"bbbb2222-0000-0000-0000-{0:012d}.jsonl").write_text("{}\n")
+    (root_a / f"{oldest_sid}.jsonl").write_text("{}\n")
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(root_a))
     assert await mounts._lineage_transcript_mtime(actions.pool, "agent:cappedsid1") is None
     # the FRESHEST sid (well inside the cap) must be found
-    fresh_sid = f"bbbb2222-0000-0000-0000-{total - 1:012d}"
-    (tmp_path / f"{fresh_sid}.jsonl").write_text("{}\n")
+    (root_b / f"{fresh_sid}.jsonl").write_text("{}\n")
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(root_b))
     ts = await mounts._lineage_transcript_mtime(actions.pool, "agent:cappedsid1")
     assert ts is not None
 

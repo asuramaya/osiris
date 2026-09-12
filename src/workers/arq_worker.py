@@ -67,6 +67,12 @@ memprofile.maybe_start()  # inert unless OSIRIS_PROFILE_MEMORY is set — thread
 _HELPERS_DIR = Path(__file__).resolve().parent.parent.parent / "helpers"
 _log = logging.getLogger("osiris.worker")
 
+# classification_laws_heartbeat's own per-sub-sweep time budget (thread 9150aec2 follow-
+# up, Thoth mail 10204): seven sweeps at this budget each sum to 420s, comfortably under
+# the cron's own `timeout=600` arq ceiling with margin for the untimed bookkeeping
+# between them — see that function's own docstring for the full rationale.
+_SUBSWEEP_TIMEOUT_SECS = 60.0
+
 # The watch's source ticks, keyed by source_id. Populated at startup from config
 # (register_default_watchers); a real connector registers its puller here. Empty =>
 # the run_source_ticks cron is a no-op (the watch stays source-agnostic).
@@ -908,7 +914,23 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     `open_thread(kind='obligation')` naming `reissue_office(adopt=True)` as the fix —
     nothing read that drift proactively before this; a stale seat only ever got
     recompiled on an explicit reissue call. Idempotent on open_thread's own summary-hash
-    dedup, so this never re-nudges the same (stamped, current) gap twice."""
+    dedup, so this never re-nudges the same (stamped, current) gap twice.
+
+    PER-SUB-SWEEP TIME BUDGET AND INSTRUMENTATION (thread 9150aec2, follow-up piece,
+    Thoth mail 10204): the w218 liveness regression FIXED the specific defect (an
+    unbounded per-agent transcript walk) but left this cron's own seven sub-sweeps
+    measured only in aggregate — a single slow sweep could still hold `_boot_lock` for
+    its whole run with nobody able to see WHICH of the seven was responsible short of
+    re-reading source. Every sub-sweep below now runs under `asyncio.wait_for(...,
+    timeout=_SUBSWEEP_TIMEOUT_SECS)`: a sweep that overruns its own share logs its name
+    and elapsed time and the cron MOVES ON (same "one hiccup never sinks a sibling" law
+    this function's own docstring already establishes for exceptions, extended to
+    timeouts) rather than holding the lock past its budget. `_SUBSWEEP_TIMEOUT_SECS=60`
+    — seven sweeps at 60s each sums to 420s, comfortably under this cron's own
+    `timeout=600` arq ceiling with margin for the untimed bookkeeping between them.
+    Every tick's own seven timings are logged unconditionally (never gated on "something
+    happened," unlike this function's per-sweep receipt lines above) so a slow tick is
+    diagnosed from the log alone, never re-guessed."""
     from src.orchestrator.boot_compiler import (
         apply_boot_drift_nudge_sweep,
         sweep_stacked_office_headers,
@@ -920,74 +942,69 @@ async def classification_laws_heartbeat(ctx: dict[str, Any]) -> int:
     from src.orchestrator.project_hygiene import apply_project_hygiene_sweep
 
     actions: Actions = ctx["cascade"].actions
-    try:
-        report = await apply_migration_0060(actions)
-    except Exception as exc:  # a DB hiccup must not kill the cron
-        _log.warning("classification laws heartbeat failed: %r", exc)
-        report = {}
+    timings: dict[str, float] = {}
+
+    async def _timed(name: str, coro: Any) -> dict[str, Any]:
+        t0 = time.monotonic()
+        try:
+            result: dict[str, Any] = await asyncio.wait_for(
+                coro, timeout=_SUBSWEEP_TIMEOUT_SECS)
+        except TimeoutError:
+            _log.warning(
+                "classification laws heartbeat: sub-sweep %s exceeded its own %ss "
+                "budget — abandoned this tick, never held the boot lock past it",
+                name, _SUBSWEEP_TIMEOUT_SECS)
+            result = {}
+        except Exception as exc:  # a DB/disk/mail hiccup must not kill the cron
+            _log.warning("%s failed: %r", name, exc)
+            result = {}
+        finally:
+            timings[name] = time.monotonic() - t0
+        return result
+
+    report = await _timed("migration_0060", apply_migration_0060(actions))
     acted = int(report.get("owners_resolved", 0)) + int(report.get("kinds_assigned", 0)) \
         + int(report.get("kinds_reclassified", 0)) + int(report.get("expired", 0))
     if acted:
         _log.info("classification laws heartbeat: %s", report)
 
-    try:
-        hygiene = await apply_project_hygiene_sweep(actions)
-    except Exception as exc:  # a DB hiccup must not kill the cron
-        _log.warning("project hygiene sweep failed: %r", exc)
-        hygiene = {}
+    hygiene = await _timed("project_hygiene", apply_project_hygiene_sweep(actions))
     retired = len(hygiene.get("retired", []))
     if retired or hygiene.get("refused"):
         _log.info("project hygiene sweep: %s", hygiene)
 
-    try:
-        ghosts = await apply_ghost_house_sweep(actions)
-    except Exception as exc:  # a DB hiccup must not kill the cron
-        _log.warning("ghost house-stamp sweep failed: %r", exc)
-        ghosts = {}
+    ghosts = await _timed("ghost_house", apply_ghost_house_sweep(actions))
     ghosts_retired = len(ghosts.get("retired", []))
     if ghosts_retired or ghosts.get("refused"):
         _log.info("ghost house-stamp sweep: %s", ghosts)
 
-    try:
-        pruned = await prune_execute(
-            actions, actor="cron:classification_laws_heartbeat", execute=True)
-    except Exception as exc:  # a DB/census hiccup must not kill the cron
-        _log.warning("fleet prune sweep failed: %r", exc)
-        pruned = {}
+    pruned = await _timed("fleet_prune", prune_execute(
+        actions, actor="cron:classification_laws_heartbeat", execute=True))
     dropped = len([d for d in pruned.get("dropped_transcripts", []) if "error" not in d])
     bound = len([b for b in pruned.get("bound", []) if b.get("bound")])
     if pruned.get("dropped_transcripts") or pruned.get("bound"):
         _log.info("fleet prune sweep: %s", pruned)
 
-    try:
-        headers = await sweep_stacked_office_headers(
-            actions, actor="cron:classification_laws_heartbeat")
-    except Exception as exc:  # a DB/disk hiccup must not kill the cron
-        _log.warning("stacked-header office sub-sweep failed: %r", exc)
-        headers = {}
+    headers = await _timed("stacked_office_headers", sweep_stacked_office_headers(
+        actions, actor="cron:classification_laws_heartbeat"))
     healed_offices = len(headers.get("healed", []))
     if healed_offices or headers.get("skipped"):
         _log.info("stacked-header office sub-sweep: %s", headers)
 
-    try:
-        provenance = await apply_provenance_sweep_heartbeat(
-            actions, actor="cron:classification_laws_heartbeat")
-    except Exception as exc:  # a DB hiccup must not kill the cron
-        _log.warning("provenance sweep heartbeat failed: %r", exc)
-        provenance = {}
+    provenance = await _timed("provenance_sweep", apply_provenance_sweep_heartbeat(
+        actions, actor="cron:classification_laws_heartbeat"))
     provenance_minted = int(provenance.get("total_minted", 0))
     if provenance_minted or any(k.endswith("_error") for k in provenance.get("lanes", {})):
         _log.info("provenance sweep heartbeat: %s", provenance)
 
-    try:
-        drift = await apply_boot_drift_nudge_sweep(
-            actions, actor="cron:classification_laws_heartbeat")
-    except Exception as exc:  # a DB/mail hiccup must not kill the cron
-        _log.warning("boot drift nudge sweep failed: %r", exc)
-        drift = {}
+    drift = await _timed("boot_drift_nudge", apply_boot_drift_nudge_sweep(
+        actions, actor="cron:classification_laws_heartbeat"))
     drift_nudged = len(drift.get("nudged", []))
     if drift_nudged or drift.get("errors"):
         _log.info("boot drift nudge sweep: %s", drift)
+
+    _log.info("classification laws heartbeat sub-sweep timings (s): %s",
+              {k: round(v, 2) for k, v in timings.items()})
 
     return (acted + retired + ghosts_retired + dropped + bound + healed_offices
            + provenance_minted + drift_nudged)
