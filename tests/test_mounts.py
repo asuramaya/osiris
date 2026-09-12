@@ -12,6 +12,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -158,6 +159,93 @@ async def test_agent_liveness_stale_last_active_never_manufactures_a_false_live(
                                   datetime.now(UTC), 0.9, evidence_class=_SD)
     out = await mounts.agent_liveness(actions.pool, "agent:cupidflap02")
     assert out["live"] is False
+
+
+def test_freshest_transcript_mtime_walks_the_tree_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 9150aec2, the classification_laws_heartbeat regression from w218: the
+    FIRST version of `_freshest_transcript_mtime` called `root.rglob(...)` ONCE PER sid
+    — for a lineage carrying thousands of `anchor_sid` rows, that turned one liveness
+    check into thousands of full-tree walks (~1s each on the box, measured live), long
+    enough to hold `arq_worker._boot_lock` for the cron's whole run and starve every
+    sibling behind it. This pins the fix directly: the walk itself must happen AT MOST
+    ONCE per call, no matter how many sids are requested."""
+    calls = 0
+    real_rglob = Path.rglob
+
+    def counting_rglob(self: Path, pattern: str) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_rglob(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+    (tmp_path / "-repo").mkdir()
+    (tmp_path / "-repo" / "aaaa1111-0000-0000-0000-000000000001.jsonl").write_text("{}\n")
+    sids = [f"aaaa1111-0000-0000-0000-{i:012d}" for i in range(4000)]
+    sids[0] = "aaaa1111-0000-0000-0000-000000000001"  # the one real file, buried in 4000
+    result = mounts._freshest_transcript_mtime(tmp_path, sids)
+    assert result is not None
+    assert calls == 1  # one walk total, never one per sid
+
+
+async def test_lineage_transcript_mtime_caps_to_the_freshest_anchor_sids(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 9150aec2, fix point 2: consulting a lineage's ENTIRE anchor_sid ledger is
+    unbounded — this caps to `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` freshest rows by
+    `observed_at`. A transcript for a sid OUTSIDE that cap (older than the freshest N)
+    must never surface; one for a sid INSIDE it must."""
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
+    agent = await actions.create_or_find_object("Agent", "agent:cappedsid1", "test")
+    now = datetime.now(UTC)
+    total = mounts.MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK + 5
+    for i in range(total):
+        sid = f"bbbb2222-0000-0000-0000-{i:012d}"
+        observed = now - timedelta(minutes=total - i)  # i=0 is the OLDEST
+        await actions.assert_property(agent, f"anchor_sid:{sid[:8]}", sid, "test",
+                                      observed, 0.9, evidence_class=_SD)
+    # a transcript for the OLDEST sid (outside the cap) must be invisible
+    (tmp_path / f"bbbb2222-0000-0000-0000-{0:012d}.jsonl").write_text("{}\n")
+    assert await mounts._lineage_transcript_mtime(actions.pool, "agent:cappedsid1") is None
+    # the FRESHEST sid (well inside the cap) must be found
+    fresh_sid = f"bbbb2222-0000-0000-0000-{total - 1:012d}"
+    (tmp_path / f"{fresh_sid}.jsonl").write_text("{}\n")
+    ts = await mounts._lineage_transcript_mtime(actions.pool, "agent:cappedsid1")
+    assert ts is not None
+
+
+async def test_agent_liveness_resolves_fast_against_thousands_of_anchor_sids(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 9150aec2's own acceptance test: a lineage with 4,000 anchor_sid rows (the
+    live specimen, agent:b5f04f84, carried 4,478) must resolve liveness in well under a
+    second against a fake tree — the exact shape that, pre-fix, held the worker's boot
+    lock for the better part of an hour and starved every sibling cron behind it."""
+    import time
+
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
+    agent = await actions.create_or_find_object("Agent", "agent:hugelineag", "test")
+    now = datetime.now(UTC)
+    rows = []
+    for i in range(4000):
+        sid = f"cccc3333-0000-0000-0000-{i:012d}"
+        rows.append((agent, f"anchor_sid:{sid[:8]}", sid, "test",
+                    now - timedelta(minutes=4000 - i), 0.9, "self_declared", True))
+    async with actions.pool.acquire() as conn, conn.transaction():
+        await conn.executemany(
+            "INSERT INTO current_assertions (object_id, name, value, source_id, "
+            " observed_at, confidence, evidence_class, is_current) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", rows)
+    freshest_sid = f"cccc3333-0000-0000-0000-{3999:012d}"
+    (tmp_path / f"{freshest_sid}.jsonl").write_text("{}\n")
+
+    t0 = time.monotonic()
+    out = await mounts.agent_liveness(actions.pool, "agent:hugelineag")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0, f"agent_liveness took {elapsed:.2f}s against 4,000 anchor sids"
+    assert out["live"] is True
 
 
 def test_freshest_liveness_ts_and_is_live_are_the_one_shared_decision() -> None:
