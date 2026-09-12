@@ -259,6 +259,70 @@ def test_backup_panel_saves_post_to_the_settings_route_with_a_because() -> None:
     assert "because: because, timer_schedules: schedules" in sched_body
 
 
+# THE SETTINGS MENU (ruling be1b2e47, thread 7eb26f68 piece 2): a generic view over
+# settings(action='list')/GET /settings — one renderer per field type, never a hand-
+# built form per knob. Reached via CMD-K, same placement as the backup panel.
+
+
+def test_settings_panel_reads_the_settings_list_route() -> None:
+    body = _JS.split("async function renderSettingsPanel()", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "fetch('/settings')" in body
+
+
+def test_settings_panel_has_a_palette_entry_not_a_nav_tab() -> None:
+    assert "'Settings…'" in _JS
+    assert "run: () => renderSettingsPanel()" in _JS
+    assert 'data-surface="settings"' not in _JS
+
+
+def test_settings_panel_covers_every_registry_field_type() -> None:
+    body = _JS.split("function settingsFieldInput(item)", 1)[1].split(
+        "\nfunction ", 1)[0]
+    for t in ("secret_ref", "bool", "enum", "int", "float", "json", "records"):
+        assert "'" + t + "'" in body or '"' + t + '"' in body
+
+
+def test_settings_panel_secret_ref_never_gets_a_save_button() -> None:
+    body = _JS.split("function renderSettingsPanelHtml(items)", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "it.type === 'secret_ref'" in body
+
+
+def test_settings_panel_shows_a_live_value_only_when_the_backend_sends_one() -> None:
+    """Thread c5ba8681 (Imhotep's own follow-up, not yet built): a future non-null
+    `live` field just appears beside `value` — no UI change needed when it arrives."""
+    body = _JS.split("function renderSettingsPanelHtml(items)", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "it.live !== undefined && it.live !== null" in body
+
+
+def test_settings_panel_confirms_before_a_high_consequence_save() -> None:
+    body = _JS.split("async function saveSetting(key)", 1)[1].split(
+        "\n// ── ", 1)[0]
+    assert "item.consequence === 'high'" in body
+    assert "confirm(" in body
+
+
+def test_settings_panel_because_is_only_prompted_when_the_spec_requires_it() -> None:
+    body = _JS.split("async function saveSetting(key)", 1)[1].split(
+        "\n// ── ", 1)[0]
+    assert "if (item.requires_because)" in body
+
+
+def test_settings_panel_saves_post_to_the_settings_route() -> None:
+    body = _JS.split("async function saveSetting(key)", 1)[1].split(
+        "\n// ── ", 1)[0]
+    assert "fetch('/settings'" in body
+    assert "key: key, value: value, because: because" in body
+
+
+def test_settings_panel_shows_structured_per_field_errors_inline() -> None:
+    body = _JS.split("async function saveSetting(key)", 1)[1].split(
+        "\n// ── ", 1)[0]
+    assert "errEl.textContent = res.error" in body
+
+
 # THE ATLAS REMOVAL (Thoth dispatch 9563, 588148bb): "atlas is terrible, it's like browse
 # in graph mode but worse and uglier, I don't think it should exist at all" — the operator's
 # own word. The sigma.js/graphology full-graph surface is gone; its useful backend

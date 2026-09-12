@@ -691,6 +691,127 @@ async function saveBackupTimerSchedules() {
   renderBackupPanel();
 }
 
+// ── Settings Menu (THE SETTINGS MENU, ruling be1b2e47, thread 7eb26f68 piece 2) ───────
+// One generic view over src/config/settings_registry.py's own SETTINGS tuple, rendered
+// from settings(action='list') — a new knob needs a new registry entry, never a new
+// renderer, unless it introduces a genuinely new `type` this switch doesn't yet cover.
+// `live` (thread c5ba8681, Imhotep's own follow-up, not yet built) is read defensively
+// here — when a future list_settings response carries a non-null `live` per item, it
+// just appears beside `value`; no UI change needed when it arrives. Reached via CMD-K
+// ("Settings…"), same placement as the backup panel — no standing-lens case for a tab.
+function settingsEffectProse(effect) {
+  if (effect === 'immediate') return 'takes effect immediately';
+  if (effect === 'next_tick') return 'takes effect on the next tick';
+  if (effect === 'next_deploy') return 'takes effect on the next osiris deploy';
+  if (effect && effect.indexOf('restart:') === 0) {
+    return 'takes effect on ' + effect.slice(8) + '’s next restart';
+  }
+  return effect || '';
+}
+var SETTINGS_LIST = null;
+async function renderSettingsPanel() {
+  const container = $('result'); showBoard(); (ensureBoard()).clear(); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading settings…</div>';
+  try {
+    SETTINGS_LIST = (await fetch('/settings').then(r => r.json())).settings || [];
+  } catch(e) {
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load settings.</div>';
+    return;
+  }
+  container.innerHTML = renderSettingsPanelHtml(SETTINGS_LIST);
+}
+function settingsFieldInput(item) {
+  var id = 'setting-val-' + item.key;
+  var v = item.value;
+  if (item.type === 'secret_ref') {
+    return '<span class="o-faint">' + (v && v.set ? '(set)' : '(not set)') +
+      ' — rotate outside this panel</span>';
+  }
+  if (item.type === 'bool') {
+    return '<input type="checkbox" id="' + id + '"' + (v ? ' checked' : '') + ' />';
+  }
+  if (item.type === 'enum') {
+    var opts = (item.choices || []).map(function(c) {
+      return '<option value="' + esc(c) + '"' + (c === v ? ' selected' : '') + '>' + esc(c) + '</option>';
+    }).join('');
+    return '<select id="' + id + '">' + opts + '</select>';
+  }
+  if (item.type === 'int' || item.type === 'float') {
+    return '<input type="number" id="' + id + '" value="' + esc(v) + '"' +
+      (item.type === 'float' ? ' step="any"' : '') + ' style="width:120px" />';
+  }
+  if (item.type === 'json' || item.type === 'records') {
+    return '<textarea id="' + id + '" rows="3" style="width:360px;font-family:monospace">' +
+      esc(JSON.stringify(v, null, 2)) + '</textarea>';
+  }
+  // str / path / schedule — plain text
+  return '<input type="text" id="' + id + '" value="' + esc(v == null ? '' : v) + '" style="width:280px" />';
+}
+function renderSettingsPanelHtml(items) {
+  var groups = {}, order = [];
+  items.forEach(function(it) {
+    var g = it.key.split('.')[0];
+    if (!groups[g]) { groups[g] = []; order.push(g); }
+    groups[g].push(it);
+  });
+  var sections = order.map(function(g) {
+    var rows = groups[g].map(function(it) {
+      var live = (it.live !== undefined && it.live !== null)
+        ? ' <span class="o-faint" title="the value actually running right now">live: ' +
+          esc(JSON.stringify(it.live)) + '</span>' : '';
+      return '<tr><td style="vertical-align:top"><code>' + esc(it.key) + '</code>' +
+        (it.consequence === 'high' ? ' <span title="high consequence" style="color:#e5534b">▲</span>' : '') +
+        '</td><td style="vertical-align:top">' + settingsFieldInput(it) + live +
+        '<div id="setting-err-' + esc(it.key) + '" class="o-faint" style="color:#e5534b"></div></td>' +
+        '<td class="o-faint" style="vertical-align:top">' + esc(settingsEffectProse(it.effect)) + '</td>' +
+        '<td style="vertical-align:top">' + (it.type === 'secret_ref' ? '' :
+          '<button class="iconbtn" onclick="saveSetting(\'' + esc(it.key) + '\')">Save</button>') + '</td></tr>';
+    }).join('');
+    return '<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin:20px 0 8px">' +
+      esc(g) + '</h3><table class="ee-table"><thead><tr><th>Key</th><th>Value</th><th>Effect</th><th></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  }).join('');
+  return '<div style="padding:16px;max-width:900px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Settings</h2>' +
+    '<div class="o-faint" style="margin-bottom:8px">Every configuration knob osiris has, one governed door.</div>' +
+    sections + '</div>';
+}
+function settingsFieldValue(item) {
+  var id = 'setting-val-' + item.key;
+  var el = $(id);
+  if (item.type === 'bool') return el.checked;
+  if (item.type === 'int') return parseInt(el.value, 10);
+  if (item.type === 'float') return parseFloat(el.value);
+  if (item.type === 'json' || item.type === 'records') return JSON.parse(el.value);
+  return el.value;
+}
+async function saveSetting(key) {
+  var item = (SETTINGS_LIST || []).filter(function(it) { return it.key === key; })[0];
+  if (!item) return;
+  var errEl = $('setting-err-' + key); if (errEl) errEl.textContent = '';
+  var value;
+  try { value = settingsFieldValue(item); }
+  catch(e) { if (errEl) errEl.textContent = 'invalid value: ' + e; return; }
+  if (item.consequence === 'high' &&
+      !confirm('This is a high-consequence change to ' + key + '. Proceed?')) return;
+  var because = '';
+  if (item.requires_because) {
+    because = prompt('Why this change? (required)'); if (!because) return;
+  }
+  var res = await fetch('/settings', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: key, value: value, because: because }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) {
+    if (errEl) errEl.textContent = res.error;
+    setStatus('Save failed: ' + res.error);
+    return;
+  }
+  setStatus(key + ' saved' + (res.note ? ' — ' + res.note : '') + '.');
+  renderSettingsPanel();
+}
+
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
 // THE SWAP (Thoth dispatch 9542/9676/9690/9716, 588148bb): the hardcoded /projects fetch
 // + hand-rolled projectRow()/openProjectInBrowse() replaced by the "projects" saved
@@ -944,6 +1065,7 @@ const POWER_TOOLS = [
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Backup settings…', hint: 'Vault path, timer schedules', cat: 'Admin', run: () => renderBackupPanel() },
+  { label: 'Settings…', hint: 'Every configuration knob', cat: 'Admin', run: () => renderSettingsPanel() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
