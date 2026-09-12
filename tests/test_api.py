@@ -923,3 +923,43 @@ async def test_pane_stream_refuses_honestly_when_no_transcript_resolves(
     assert r.status_code == 200
     assert "no transcript found" in r.text
     assert "agent:paneless01" in r.text
+
+
+# --- backup-settings (Wave 21, thread f04cce36 piece 3b) --------------------
+
+async def test_backup_settings_route_get_starts_empty(client: httpx.AsyncClient) -> None:
+    r = await client.get("/backup-settings")
+    assert r.status_code == 200
+    assert r.json()["vault_path"] is None
+
+
+async def test_backup_settings_route_writes_as_the_operator(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The console is the operator's own surface (6c18709f) — every write here is
+    analyst:operator, an operator actor by construction, needing no ruling citation."""
+    r = await client.post("/backup-settings", json={
+        "because": "switching to the NAS mount", "vault_path": "/mnt/nas/osiris-vault"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["vault_path"] == "/mnt/nas/osiris-vault"
+    assert body["updated_by"] == "analyst:operator"
+    # a later partial write leaves vault_path untouched
+    r2 = await client.post("/backup-settings", json={
+        "because": "rescheduling dumps",
+        "timer_schedules": {"osiris-backup.timer": "*-*-* 00,12:00:00"}})
+    body2 = r2.json()
+    assert body2["vault_path"] == "/mnt/nas/osiris-vault"
+    assert body2["timer_schedules"] == {"osiris-backup.timer": "*-*-* 00,12:00:00"}
+    read_back = (await client.get("/backup-settings")).json()
+    body2.pop("because")  # write's own receipt-only field, absent from a plain read
+    assert read_back == body2
+
+
+async def test_backup_settings_route_rejects_a_bad_field_without_writing(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/backup-settings", json={
+        "because": "testing", "timer_schedules": {"not-a-real.timer": "daily"}})
+    assert "error" in r.json()
+    assert (await client.get("/backup-settings")).json()["timer_schedules"] == {}

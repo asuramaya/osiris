@@ -9291,6 +9291,48 @@ async def record_decision(
     return out
 
 
+@mcp.tool()
+async def backup_settings(
+    action: str, vault_path: str | None = None,
+    timer_schedules: dict[str, str] | None = None,
+    offbox_repositories: list[dict[str, Any]] | None = None,
+    because: str | None = None, ruling: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """The backup config panel's write door. `action='get'` reads current settings, no
+    authority needed. `action='write'` changes them — gated like `charter_for`: the
+    operator writes freely, anyone else must cite a standing `ruling` that
+    `verify_ruling` confirms names 'backup_settings'. `because` required on write.
+
+    Partial update, only given fields change: `vault_path` (absolute path, local disk
+    or an OS-mounted NAS share — pg_dump/pg_basebackup don't distinguish the two),
+    `timer_schedules` (unit name -> OnCalendar=, one of the 5 backup-lane timers),
+    `offbox_repositories` (list of {url, schedule, enabled} — stored but inert until
+    off-box is ruled on, thread cf134938).
+
+    A written schedule takes effect only once deploy's own timer-install step
+    regenerates the unit — `backup_status`'s `configured_schedule` vs `schedule`
+    distinguish "set" from "took effect"."""
+    from src.orchestrator.backup_settings import get_backup_settings, write_backup_settings
+
+    pool = await _pool_get()
+    if action == "get":
+        return await get_backup_settings(pool)
+    if action != "write":
+        return {"error": "action must be 'get' or 'write'"}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    fields: dict[str, Any] = {}
+    if vault_path is not None:
+        fields["vault_path"] = vault_path
+    if timer_schedules is not None:
+        fields["timer_schedules"] = timer_schedules
+    if offbox_repositories is not None:
+        fields["offbox_repositories"] = offbox_repositories
+    return await write_backup_settings(
+        pool, actor=actor, because=because or "", ruling=ruling, **fields)
+
+
 # THE PRACTICE OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162, proposal
 # decision 07395004 approved as scoped — "practice(action='record'|'amend') only") —
 # the sixth and FINAL object-type dispatcher of #202's own fold arc (the operator's

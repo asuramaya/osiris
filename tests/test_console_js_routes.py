@@ -229,6 +229,36 @@ def test_browse_bridges_composition_items_onto_the_shape_rendering_already_expec
     assert "status: it.status" in body and "created_at: it.created_at" in body
 
 
+# THE BACKUP CONFIG PANEL (Wave 21, thread f04cce36 piece 3b): a small dedicated view,
+# reached via CMD-K, reading backup_status (piece 2) and /backup-settings (piece 3a's
+# own REST door) — not composition/table-shaped, so it renders its own HTML rather than
+# going through Osiris.renderResult().
+
+
+def test_backup_panel_reads_the_backup_status_function_and_settings_route() -> None:
+    body = _JS.split("async function renderBackupPanel()", 1)[1].split("\nfunction ", 1)[0]
+    assert "op: 'function', name: 'backup_status', args: {}" in body
+    assert "fetch('/backup-settings')" in body
+
+
+def test_backup_panel_has_a_palette_entry_not_a_nav_tab() -> None:
+    assert "'Backup settings…'" in _JS
+    assert "run: () => renderBackupPanel()" in _JS
+    assert 'data-surface="backup"' not in _JS
+
+
+def test_backup_panel_saves_post_to_the_settings_route_with_a_because() -> None:
+    vault_body = _JS.split("async function saveBackupVaultPath()", 1)[1].split(
+        "\nasync function ", 1)[0]
+    assert "fetch('/backup-settings'" in vault_body
+    assert "because: because, vault_path: val || null" in vault_body
+
+    sched_body = _JS.split("async function saveBackupTimerSchedules()", 1)[1].split(
+        "\n// ── ", 1)[0]
+    assert "fetch('/backup-settings'" in sched_body
+    assert "because: because, timer_schedules: schedules" in sched_body
+
+
 # THE ATLAS REMOVAL (Thoth dispatch 9563, 588148bb): "atlas is terrible, it's like browse
 # in graph mode but worse and uglier, I don't think it should exist at all" — the operator's
 # own word. The sigma.js/graphology full-graph surface is gone; its useful backend

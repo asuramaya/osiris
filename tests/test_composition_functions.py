@@ -559,3 +559,42 @@ def test_backup_status_is_subject_free_and_registered() -> None:
 
     assert "backup_status" in list_functions()
     assert "backup_status" in _SUBJECT_FREE
+
+
+async def test_backup_status_shows_a_configured_schedule_override_distinct_from_live(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    """Piece 3 (thread f04cce36): the operator's own written schedule is NOT the same
+    fact as what's actually running — `configured_schedule` stays None until deploy's
+    own timer-install step regenerates the unit, so a caller can tell "set" from "took
+    effect" instead of the two silently blurring together."""
+    from src.orchestrator.backup_settings import set_backup_settings
+
+    await set_backup_settings(
+        actions.pool, by="operator",
+        timer_schedules={"osiris-backup.timer": "*-*-* 00,12:00:00"})
+    await seed_default_compositions(actions.pool)
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"vault": str(tmp_path / "v"),
+                                                 "backups": str(tmp_path / "b")}}, None)
+    by_unit = {t["unit"]: t for t in res["items"]["timers"]}
+    assert by_unit["osiris-backup.timer"]["configured_schedule"] == "*-*-* 00,12:00:00"
+    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04,10,16,22:30:00"  # unchanged
+    assert by_unit["osiris-base-backup.timer"]["configured_schedule"] is None
+
+
+async def test_backup_status_uses_the_configured_vault_path_when_no_test_override(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    configured_vault = tmp_path / "configured-vault"
+    (configured_vault / "basebackups").mkdir(parents=True)
+    (configured_vault / "osiris-20260601-043000.dump").write_bytes(b"z" * 42)
+    from src.orchestrator.backup_settings import set_backup_settings
+
+    await set_backup_settings(actions.pool, by="operator", vault_path=str(configured_vault))
+    await seed_default_compositions(actions.pool)
+    # no args.vault override — should fall back to the configured setting, not the
+    # real production default
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"backups": str(tmp_path / "b")}}, None)
+    assert res["items"]["vault"]["dumps"]["count"] == 1
