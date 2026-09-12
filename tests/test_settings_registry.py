@@ -3,7 +3,7 @@ piece 1) — src/config/settings_registry.py's SETTINGS tuple, the pure metadata
 service/door tests all read against."""
 from __future__ import annotations
 
-from src.config.settings import get_settings
+from src.config.settings import Settings, get_settings
 from src.config.settings_registry import SETTINGS, spec_by_key
 
 
@@ -32,13 +32,20 @@ def test_every_env_field_actually_exists_on_settings() -> None:
 
 def test_every_default_matches_the_live_settings_default() -> None:
     """The registry's own `default` is a SEPARATE literal from settings.py's own field
-    default — this test is the one place that keeps them from silently drifting apart."""
-    settings = get_settings()
+    default — this test is the one place that keeps them from silently drifting apart.
+
+    Compares against `Settings.model_fields[...].default` — the MODEL's own declared
+    default, never `get_settings()` (Thoth's mail 10158: under the gate's real -n 4
+    worker environment, OSIRIS_WAKE_HOURLY_BUDGET/etc. are genuinely set in that shell,
+    so a live `Settings()` instance picks up the box's actual env rather than the bare
+    field default — order/worker-dependent flakiness, passing alone but failing under
+    the gate. `model_fields` reads the class declaration itself, no env involved."""
     for spec in SETTINGS:
         if spec.env_field is not None:
-            assert getattr(settings, spec.env_field) == spec.default, (
+            field_default = Settings.model_fields[spec.env_field].default
+            assert field_default == spec.default, (
                 f"{spec.key!r}'s registered default {spec.default!r} disagrees with "
-                f"settings.py's own {spec.env_field}={getattr(settings, spec.env_field)!r}")
+                f"settings.py's own {spec.env_field}={field_default!r}")
 
 
 def test_daemon_kill_switches_are_immediate_and_low_stakes_ones_skip_because() -> None:
