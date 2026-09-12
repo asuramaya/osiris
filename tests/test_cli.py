@@ -30,6 +30,7 @@ from src.cli import (
     cmd_annotate_thread,
     cmd_attach,
     cmd_audit,
+    cmd_backfill,
     cmd_backlog,
     cmd_boot_status,
     cmd_bootstrap,
@@ -4876,6 +4877,94 @@ async def test_cli_parser_accepts_fleet_reconcile(actions: Actions) -> None:
 
     args2 = _build_parser().parse_args(["fleet-reconcile", "--execute"])
     assert args2.execute is True
+
+
+async def test_cli_parser_accepts_backfill(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(["backfill", "bootstrap_orphan_references"])
+    assert args.command == "backfill"
+    assert args.target == "bootstrap_orphan_references"
+    assert args.apply is False and args.because is None and args.actor == "console"
+    assert args.as_json is False
+
+    args2 = _build_parser().parse_args(
+        ["backfill", "operator_charter", "--apply", "--because", "x", "--json",
+         "--only-bases", "a,b", "--actor", "sekhmet"])
+    assert args2.apply is True and args2.because == "x" and args2.as_json is True
+    assert args2.only_bases == "a,b" and args2.actor == "sekhmet"
+
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["backfill", "not-a-real-target"])
+
+
+async def test_cmd_backfill_dry_run_reports_the_plan_and_exits_zero(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backfill(
+            "bootstrap_orphan_references", apply=False, actor="operator",
+            pool=actions.pool)
+    assert out == 0
+    assert "planned (dry run" in buf.getvalue()
+
+
+async def test_cmd_backfill_apply_without_because_refuses_before_any_write(
+    actions: Actions,
+) -> None:
+    """This door's own stricter contract (thread c89a9873): `--because` is required to
+    `--apply` for EVERY target, including agent_project_links, which the underlying
+    orchestrator function does not itself require it for."""
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backfill(
+            "agent_project_links", apply=True, because=None, actor="operator",
+            pool=actions.pool)
+    assert out == 1
+    assert "--because is required" in buf.getvalue()
+    assert "--because is required" in buf.getvalue()
+
+
+async def test_cmd_backfill_json_output_shape(actions: Actions) -> None:
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backfill(
+            "bootstrap_orphan_references", apply=False, actor="operator",
+            as_json=True, pool=actions.pool)
+    assert out == 0
+    parsed = json.loads(buf.getvalue())
+    assert isinstance(parsed, dict) and "error" not in parsed
+
+
+async def test_cmd_backfill_unknown_error_receipt_exits_nonzero(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exit-code contract: any {"error": ...}-shaped receipt from the underlying
+    orchestrator function is a non-zero exit, whatever the target."""
+    async def _fake_run_backfill(*args: object, **kwargs: object) -> dict[str, str]:
+        return {"error": "refused for test purposes"}
+
+    monkeypatch.setattr("src.orchestrator.backfill.run_backfill", _fake_run_backfill)
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backfill(
+            "bootstrap_orphan_references", apply=False, actor="operator",
+            pool=actions.pool)
+    assert out == 1
 
 
 async def test_cmd_heal_seat_transcript_dry_run_reports_without_writing(

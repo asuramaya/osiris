@@ -52,6 +52,7 @@ from src.cli import (
     cmd_attach,
     cmd_attach_seat,
     cmd_audit,
+    cmd_backfill,
     cmd_backlog,
     cmd_bind_seat_tree,
     cmd_boot_status,
@@ -209,6 +210,8 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-handle", because="test", apply=False, actor="operator", pool=a.pool),
     "heal-seat-transcript": lambda a: cmd_heal_seat_transcript(
         "no-such-handle", ["/tmp/does-not-exist.jsonl"], apply=False, pool=a.pool),
+    "backfill": lambda a: cmd_backfill(
+        "bootstrap_orphan_references", apply=False, actor="operator", pool=a.pool),
     "fleet-reconcile": lambda a: cmd_fleet_reconcile(
         execute=False, actor="operator", pool=a.pool),
     "fleet-prune": lambda a: cmd_fleet_prune(execute=False, actor="operator", pool=a.pool),

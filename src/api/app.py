@@ -1350,6 +1350,42 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             p, body.key, body.value, actor="analyst:operator", because=body.because,
             scope_id=body.scope_id)
 
+    # THE REPAIRS PANEL'S OWN REST DOOR (thread c89a9873, wave 22) — mirrors the
+    # `backfill` MCP tool and the `osiris backfill` CLI command one-for-one, all three
+    # calling orchestrator.backfill.run_backfill, never one wrapping another. A dry-run
+    # request (the panel's own default) is never authority-gated (read-only, no write);
+    # an apply request (`dry_run=False`) runs `check_apply_authority` first — the same
+    # operator_or_ruling shape /settings' own write door uses, PLUS the operator_charter
+    # carve-out (refused here regardless of caller authority, never merely hidden in the
+    # UI — see that function's own docstring).
+    @app.post("/backfill")
+    async def backfill_route(
+        body: BackfillBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.backfill import (
+            BACKFILL_TARGETS,
+            check_apply_authority,
+            run_backfill,
+        )
+
+        if body.target not in BACKFILL_TARGETS:
+            return {"error": f"unknown target {body.target!r}",
+                    "valid_targets": sorted(BACKFILL_TARGETS)}
+        if not body.dry_run:
+            auth_error = await check_apply_authority(
+                p, body.target, actor="analyst:operator", ruling=body.ruling,
+                surface="ui")
+            if auth_error:
+                return {"error": auth_error}
+            because = (body.because or "").strip()
+            if not because:
+                return {"error": "because is required to apply — a backfill write is "
+                                 "testimony, same discipline every other repair door "
+                                 "in this house holds"}
+        return await run_backfill(
+            p, body.target, actor="analyst:operator", dry_run=body.dry_run,
+            because=body.because or None, only_bases=body.only_bases)
+
     @app.post("/desk/settle")
     async def desk_settle(
         body: DeskSettleBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1991,6 +2027,18 @@ class SettingsWriteBody(BaseModel):
     value: Any = None
     because: str = ""
     scope_id: str = ""
+
+
+class BackfillBody(BaseModel):
+    """THE REPAIRS PANEL's own body (thread c89a9873, wave 22) — one of the seven
+    backfill targets, dry-run by default. `dry_run=False` (apply) is refused outright
+    for `operator_charter` at the orchestrator layer regardless of `ruling`/authority —
+    see `backfill.check_apply_authority`'s own docstring."""
+    target: str
+    dry_run: bool = True
+    because: str = ""
+    only_bases: list[str] | None = None
+    ruling: str | None = None
 
 
 class ActBody(BaseModel):

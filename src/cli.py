@@ -4282,6 +4282,61 @@ async def cmd_fleet_prune(
     return 0
 
 
+async def cmd_backfill(
+    target: str, *, apply: bool = False, because: str | None = None,
+    only_bases: list[str] | None = None, actor: str, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris backfill <target> [--apply] [--because R] [--only-bases ID,...] [--json]
+    [--actor W] — the console-script door onto orchestrator.backfill.run_backfill, the
+    SAME function the `backfill` MCP tool and the UI's Repairs panel call (thread
+    c89a9873, wave 22, ruling 7be61879). Dry run is the default for every target
+    (returns the receipt, writes nothing); `--apply` performs it.
+
+    `agent_project_links` predates the underlying tool's own because-required-to-write
+    convention (a historical exemption) — this door does NOT inherit that exemption: a
+    `--because` is required to `--apply` regardless of target, a stricter contract this
+    surface imposes on its own, deliberately (thread c89a9873's own scope note)."""
+    from src.orchestrator.backfill import run_backfill
+
+    if apply and not (because or "").strip():
+        print("osiris backfill: --because is required to --apply — a backfill write is "
+              "testimony, same discipline every other repair door in this house holds",
+              file=sys.stderr)
+        return 1
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:backfill")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris backfill: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await run_backfill(
+            pool, target, actor=actor, dry_run=not apply, because=because,
+            only_bases=only_bases)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if as_json:
+        from src import cli_render as render
+        render.emit(out, as_json=True)
+        return 1 if "error" in out else 0
+    verb = "applied" if apply else "planned (dry run — pass --apply to write)"
+    print(f"backfill {target} {verb}: {out}")
+    return 1 if "error" in out else 0
+
+
 async def cmd_heal_seat_transcript(
     handle: str, source_paths: list[str], *, apply: bool = False, because: str = "",
     pool: asyncpg.Pool | None = None,
@@ -5529,7 +5584,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         create-project, rename-project, retire-project, fork-project,
                         set-project-tag, proposal, settings
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
-                        fleet-reconcile, fleet-prune
+                        fleet-reconcile, fleet-prune, backfill
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -6273,6 +6328,38 @@ def _build_parser() -> argparse.ArgumentParser:
                                help=f"who is performing this prune — defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
+    from src.orchestrator.backfill import BACKFILL_TARGETS
+
+    p_backfill = sub.add_parser(
+        "backfill", description=_d(
+            "one of the seven repair verbs, dispatched over TARGET — the same "
+            "orchestrator.backfill.run_backfill the `backfill` MCP tool and the UI's "
+            "Repairs panel call (thread c89a9873, wave 22). Dry run is the default: "
+            "returns the receipt, writes nothing"),
+        epilog="example: osiris backfill bootstrap_orphan_references\n"
+            "example, to actually write: osiris backfill bootstrap_orphan_references "
+            "--apply --because \"clearing the ref:osiris orphan backlog\"")
+    p_backfill.add_argument("target", choices=sorted(BACKFILL_TARGETS),
+                            help="which repair to run — see `backfill`'s own MCP "
+                                 "docstring for what each target does")
+    p_backfill.add_argument("--apply", action="store_true",
+                            help="actually write — default is a dry-run report, same "
+                                 "convention as every other repair verb in this house")
+    p_backfill.add_argument("--because", default=None,
+                            help="why this backfill is being applied — required to "
+                                 "--apply regardless of target (this door's own, "
+                                 "stricter contract; see agent_project_links' own note "
+                                 "in the docstring)")
+    p_backfill.add_argument("--only-bases", default=None,
+                            help="comma-separated base agent ids — only meaningful for "
+                                 "the agent_project_links target, ignored by the other "
+                                 "six")
+    p_backfill.add_argument("--actor", default=_CONSOLE_ACTOR,
+                            help=f"who is performing this backfill — defaults to "
+                                 f"{_CONSOLE_ACTOR!r}")
+    p_backfill.add_argument("--json", action="store_true", dest="as_json",
+                            help="machine-readable receipt")
+
     p_heal_transcript = sub.add_parser(
         "heal-seat-transcript", description=_d(
             "splice a seat's session, fragmented across multiple project slugs by a "
@@ -6803,6 +6890,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_fleet_reconcile(execute=args.execute, actor=args.actor))
     if args.command == "fleet-prune":
         return asyncio.run(cmd_fleet_prune(execute=args.execute, actor=args.actor))
+    if args.command == "backfill":
+        only_bases = (args.only_bases.split(",") if args.only_bases else None)
+        return asyncio.run(cmd_backfill(
+            args.target, apply=args.apply, because=args.because, only_bases=only_bases,
+            actor=args.actor, as_json=args.as_json))
     if args.command == "heal-seat-transcript":
         return asyncio.run(cmd_heal_seat_transcript(
             args.seat, args.source_paths, apply=args.apply, because=args.because))

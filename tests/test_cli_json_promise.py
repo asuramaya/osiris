@@ -69,7 +69,7 @@ READ_VERBS = frozenset({
 JSON_COMMANDS = frozenset({
     "stop", "fleet", "roster", "backlog", "threads", "inbox", "team", "status", "search",
     "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
-    "proposal", "settings", "lint", "audit",
+    "proposal", "settings", "lint", "audit", "backfill",
 })
 
 

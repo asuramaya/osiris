@@ -1561,7 +1561,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 86
 # domain never had, same class as backup_settings' own raise above. Docstring trimmed
 # to the category rule's lean end before raising (dated citations/provenance cut).
 # Tool count 85 -> 86. Measured exact (136,781).
-TOOL_CONTRACT_CEILING_CHARS = 136781
+# 136781 -> 137011 (2026-09-12, Sekhmet, thread c89a9873, wave 22): `backfill`'s own
+# docstring gains one sentence naming its new CLI/UI siblings (osiris backfill, the
+# Repairs panel) — no new @mcp.tool(), tool count unchanged, dispatched through the
+# same door as always, now delegating to src.orchestrator.backfill.run_backfill.
+# Measured exact (137,011).
+TOOL_CONTRACT_CEILING_CHARS = 137011
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

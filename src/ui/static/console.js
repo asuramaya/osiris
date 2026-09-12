@@ -735,6 +735,65 @@ async function saveSetting(key) {
   renderSettingsPanel();
 }
 
+// ── Repairs Panel (thread c89a9873, wave 22, ruling 7be61879) ─────────────────────────
+// The seven backfill repair targets, one dry-run/apply door each — all through POST
+// /backfill, which itself calls orchestrator.backfill.run_backfill, the SAME function
+// the MCP tool and the CLI's `osiris backfill` command call. operator_charter's own
+// apply control is DELIBERATELY OMITTED here (thread c89a9873's own scope note: its
+// blast radius — fleet-wide operator authority — needs a deliberate terminal act, not a
+// browser click; /backfill itself refuses dry_run=False for this target regardless, so
+// this is belt-and-suspenders, never the only guard). Reached via CMD-K ("Repairs…").
+var REPAIRS_TARGETS = [
+  { key: 'bootstrap_orphan_references', hint: 'Link an orphaned ref:osiris Reference to the SoftwareProject its own canonical names.' },
+  { key: 'boot_alarm_commit_links', hint: 'Link a zero-link boot-alarm Thread to the Commit its summary cites.' },
+  { key: 'task_sync_citation_links', hint: 'Link a zero-link task_sync Thread to the Thread it names.' },
+  { key: 'lineage_repo_links', hint: 'Link a zero-link Decision/Thread to its author’s lineage project.' },
+  { key: 'agent_project_links', hint: 'Move works_in/governs off an off-head Agent onto its living head.' },
+  { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
+  { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover — fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
+];
+function renderRepairsPanel() {
+  const container = $('result'); showBoard(); (ensureBoard()).clear(); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
+  var rows = REPAIRS_TARGETS.map(function(t) {
+    var applyBtn = t.cliOnly
+      ? '<span class="o-faint" title="' + esc(t.hint) + '">CLI-only</span>'
+      : '<button class="iconbtn" onclick="applyRepair(\'' + esc(t.key) + '\')">Apply</button>';
+    return '<tr><td style="vertical-align:top"><code>' + esc(t.key) + '</code></td>' +
+      '<td class="o-faint" style="vertical-align:top">' + esc(t.hint) + '</td>' +
+      '<td style="vertical-align:top"><button class="iconbtn" onclick="dryRunRepair(\'' + esc(t.key) + '\')">Dry run</button></td>' +
+      '<td style="vertical-align:top">' + applyBtn + '</td></tr>' +
+      '<tr><td colspan="4"><pre id="repair-out-' + esc(t.key) + '" class="o-faint" style="white-space:pre-wrap;margin:0 0 12px"></pre></td></tr>';
+  }).join('');
+  container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
+    '<div class="o-faint" style="margin-bottom:8px">The seven backfill repair verbs. Dry run always writes nothing.</div>' +
+    '<table class="ee-table"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
+    rows + '</tbody></table></div>';
+}
+async function dryRunRepair(target) {
+  var out = $('repair-out-' + target);
+  if (out) out.textContent = 'running…';
+  var res = await fetch('/backfill', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: target, dry_run: true }),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+}
+async function applyRepair(target) {
+  if (!confirm('This is a high-consequence write (' + target + '). Proceed?')) return;
+  var because = prompt('Why this change? (required)'); if (!because) return;
+  var out = $('repair-out-' + target);
+  if (out) out.textContent = 'applying…';
+  var res = await fetch('/backfill', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: target, dry_run: false, because: because }),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+  if (res.error) { setStatus('Apply failed: ' + res.error); return; }
+  setStatus(target + ' applied.');
+}
+
 // ── Projects (#93, the project dimension — Thoth msg 5631) ────────────────────
 // THE SWAP (Thoth dispatch 9542/9676/9690/9716, 588148bb): the hardcoded /projects fetch
 // + hand-rolled projectRow()/openProjectInBrowse() replaced by the "projects" saved
@@ -988,6 +1047,7 @@ const POWER_TOOLS = [
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Settings…', hint: 'Every configuration knob, including backup', cat: 'Admin', run: () => renderSettingsPanel() },
+  { label: 'Repairs…', hint: 'The seven backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean

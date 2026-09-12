@@ -6295,64 +6295,24 @@ async def unwire_informs_fanout(
         dry_run=dry_run, because=because)
 
 
-_BACKFILL_TARGETS = frozenset({
-    "bootstrap_orphan_references", "boot_alarm_commit_links", "task_sync_citation_links",
-    "lineage_repo_links", "agent_project_links", "closed_by_real_sources",
-    "operator_charter",
-})
-
-
-async def _backfill_impl(
+async def _dispatch_backfill(
     target: str, dry_run: bool, because: str | None, only_bases: list[str] | None,
     ctx: Context | None,
 ) -> dict[str, Any]:
-    """Shared dispatch (task #199 lane 2, families wave, thread 6854): five repair verbs
-    with near-identical wire shape (dry_run default True, because required to write,
-    idempotent, mount-gated) but NO shared orchestrator call — each fixes a structurally
-    different defect class in its own module. Unlike abstained_derivations's own
-    consolidation (one real underlying query, three filters), this is a genuine dispatch
-    table, named as such rather than dressed up as a merge. `target` selects which."""
+    """The mount-gate every MCP backfill door shares (this tool, plus the four
+    deprecated single-target wrappers below it) — resolves the calling identity, then
+    delegates to `run_backfill`, the SAME function the CLI's `osiris backfill` door
+    calls directly (thread c89a9873, wave 22). Never a second dispatch table."""
+    from src.orchestrator.backfill import run_backfill
+
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first — a backfill is a mind's act, and the graph must "
                          "know whose", "why": _anchorless(ctx)}
     pool = await _pool_get()
-    if target == "bootstrap_orphan_references":
-        from src.ingest.reference import (
-            backfill_bootstrap_orphan_references as _f_orphan_refs,
-        )
-        return await _f_orphan_refs(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    if target == "boot_alarm_commit_links":
-        from src.orchestrator.capture import backfill_boot_alarm_commit_links as _f_boot_alarm
-        return await _f_boot_alarm(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    if target == "task_sync_citation_links":
-        from src.orchestrator.task_sync import (
-            backfill_task_sync_citation_links as _f_task_sync,
-        )
-        return await _f_task_sync(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    if target == "lineage_repo_links":
-        from src.orchestrator.capture import backfill_lineage_repo_links as _f_lineage
-        return await _f_lineage(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    if target == "agent_project_links":
-        from src.orchestrator.agents import backfill_agent_project_links as _f_agent_links
-        return await _f_agent_links(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run,
-            only_bases=set(only_bases) if only_bases else None)
-    if target == "closed_by_real_sources":
-        from src.orchestrator.capture import (
-            backfill_closed_by_real_sources as _f_closed_by_real_sources,
-        )
-        return await _f_closed_by_real_sources(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    if target == "operator_charter":
-        from src.orchestrator.capture import backfill_operator_charter as _f_operator_charter
-        return await _f_operator_charter(
-            Actions(pool), actor=ident.agent_id, dry_run=dry_run, because=because)
-    return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
+    return await run_backfill(
+        pool, target, actor=ident.agent_id, dry_run=dry_run, because=because,
+        only_bases=only_bases)
 
 
 @mcp.tool()
@@ -6361,7 +6321,10 @@ async def backfill(
     only_bases: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Repair verb, dispatched over `target` — seven structurally distinct backfills (no
-    shared logic underneath, only a shared wire shape). Dry run is the default for every
+    shared logic underneath, only a shared wire shape), delegated to
+    `src.orchestrator.backfill.run_backfill` — the SAME function the CLI's own
+    `osiris backfill` door and the UI's Repairs panel call (thread c89a9873, wave 22):
+    never a second, drifted copy of this dispatch. Dry run is the default for every
     target; `dry_run=False` requires `because` (except `agent_project_links`, which
     predates that convention). All seven idempotent.
 
@@ -6378,9 +6341,11 @@ async def backfill(
     placeholder) | "operator_charter" (thread 1d5b9773, "authority by charter": mints a
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
     already govern, so the single operator today stays chartered over everything)."""
-    if target not in _BACKFILL_TARGETS:
-        return {"error": f"unknown target {target!r}", "valid_targets": sorted(_BACKFILL_TARGETS)}
-    return await _backfill_impl(target, dry_run, because, only_bases, ctx)
+    from src.orchestrator.backfill import BACKFILL_TARGETS
+
+    if target not in BACKFILL_TARGETS:
+        return {"error": f"unknown target {target!r}", "valid_targets": sorted(BACKFILL_TARGETS)}
+    return await _dispatch_backfill(target, dry_run, because, only_bases, ctx)
 
 
 @mcp.tool(meta={
@@ -6406,7 +6371,7 @@ async def backfill_bootstrap_orphan_references(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Links land
     evidence_class DERIVED. Idempotent."""
-    return await _backfill_impl("bootstrap_orphan_references", dry_run, because, None, ctx)
+    return await _dispatch_backfill("bootstrap_orphan_references", dry_run, because, None, ctx)
 
 
 @mcp.tool()
@@ -6452,7 +6417,7 @@ async def backfill_boot_alarm_commit_links(
     connectivity it actually has.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    return await _backfill_impl("boot_alarm_commit_links", dry_run, because, None, ctx)
+    return await _dispatch_backfill("boot_alarm_commit_links", dry_run, because, None, ctx)
 
 
 @mcp.tool(meta={
@@ -6472,7 +6437,7 @@ async def backfill_task_sync_citation_links(
     Thread; anything else abstains durably with a distinct reason and the candidate set kept.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    return await _backfill_impl("task_sync_citation_links", dry_run, because, None, ctx)
+    return await _dispatch_backfill("task_sync_citation_links", dry_run, because, None, ctx)
 
 
 @mcp.tool(meta={
@@ -6492,7 +6457,7 @@ async def backfill_lineage_repo_links(
     abstains durably via derive_or_abstain, candidate set kept, never a guess (a0339e16).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
-    return await _backfill_impl("lineage_repo_links", dry_run, because, None, ctx)
+    return await _dispatch_backfill("lineage_repo_links", dry_run, because, None, ctx)
 
 
 @mcp.tool()
