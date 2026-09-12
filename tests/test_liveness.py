@@ -89,6 +89,37 @@ async def test_liveness_can_only_ever_ADD_life_never_take_it(
     assert "agent:chatty" in await _live(actions.pool)
 
 
+async def test_a_growing_transcript_earns_the_provisional_row_its_pulse(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): observe_liveness's own
+    promotion — a whisper seat's (save_mount alive=False) first transcript growth — is
+    one of exactly two acts that may ever stamp `earned_pulse_at`. First-earn only: a
+    row that already earned its pulse (a real mount() call) is never re-stamped by a
+    later transcript touch."""
+    await mounts.save_mount(actions.pool, job_dir="/home/x/.claude/jobs/ccccc333",
+                            agent_id="agent:whisper-333", project="osiris", cwd="/repo",
+                            model=None, session_key=None, alive=False)
+    assert await actions.pool.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE agent_id='agent:whisper-333'"
+    ) is None
+    _transcript(tmp_path, "-repo", "ccccc333")
+
+    touched = await observe_liveness(actions.pool, tmp_path)
+
+    assert touched == 1
+    earned = await actions.pool.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE agent_id='agent:whisper-333'")
+    assert earned is not None
+
+    # first-earn only: a second, later transcript growth never re-stamps it
+    _transcript(tmp_path, "-repo", "ccccc333", age_secs=-5)
+    await observe_liveness(actions.pool, tmp_path)
+    still = await actions.pool.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE agent_id='agent:whisper-333'")
+    assert still == earned
+
+
 async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
     actions: Actions, tmp_path: Path,
 ) -> None:

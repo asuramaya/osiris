@@ -1173,6 +1173,41 @@ async def test_save_mount_returns_the_previous_last_seen(actions: Actions) -> No
     assert prev2 is not None                  # the re-entry sees the prior last_seen
 
 
+async def test_save_mount_earns_the_pulse_only_on_a_real_alive_call(
+    actions: Actions,
+) -> None:
+    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): `alive=True` (the default,
+    an ordinary mount()/automount()) stamps `earned_pulse_at`; `alive=False` (the
+    whisper/provisional seat) never does. First-earn only — a later greeting never
+    re-stamps an already-earned pulse, and never revokes one either."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/ep0whisper", agent_id="agent:ep0whisper",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None,
+                            alive=False)
+    assert await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir='/x/jobs/ep0whisper'") is None
+
+    await mounts.save_mount(p, job_dir="/x/jobs/ep0live", agent_id="agent:ep0live",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    earned = await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir='/x/jobs/ep0live'")
+    assert earned is not None
+
+    # a later re-mount refreshes last_seen but never re-stamps the earn
+    await mounts.save_mount(p, job_dir="/x/jobs/ep0live", agent_id="agent:ep0live",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None)
+    still = await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir='/x/jobs/ep0live'")
+    assert still == earned
+
+    # and a mere whispered re-greeting of the whisper row never grants what it hasn't earned
+    await mounts.save_mount(p, job_dir="/x/jobs/ep0whisper", agent_id="agent:ep0whisper",
+                            project="demo", cwd="/repo/demo", model=None, session_key=None,
+                            alive=False)
+    assert await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir='/x/jobs/ep0whisper'") is None
+
+
 async def test_while_away_names_the_face_wearers(actions: Actions) -> None:
     """A returning agent is told WHO acted in its project's name and how its threads moved —
     'mail 0' must never silently mean 'a stranger settled your conversations'."""
@@ -2211,6 +2246,25 @@ async def test_release_session_mounts_suspends_a_provisional_null_last_seen_row(
     assert n == 1  # must count as released, not silently skipped
     row = await mounts.find_mount(p, job_dir="/x/jobs/prov0001")
     assert row is not None  # still survives, just suspended
+
+
+async def test_release_session_mounts_clears_the_earned_pulse_too(actions: Actions) -> None:
+    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): a suspended address's earned
+    pulse dies with it — a future occupant of the same job_dir re-earns its OWN pulse via
+    a genuine act rather than silently inheriting what the prior occupant earned."""
+    p = actions.pool
+    await mounts.save_mount(p, job_dir="/x/jobs/ep0suspend", agent_id="agent:ep0suspend",
+                            project="p", cwd="/w/p", model=None, session_key="k")
+    assert await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/ep0suspend'") is not None
+
+    await mounts.release_session_mounts(p, job_dir="/x/jobs/ep0suspend",
+                                        session_id="ep0suspend")
+
+    assert await p.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts "
+        "WHERE job_dir='/x/jobs/ep0suspend'") is None
 
 
 async def test_release_session_mounts_is_idempotent(actions: Actions) -> None:

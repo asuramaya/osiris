@@ -92,6 +92,13 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
     seats a session without a pulse, and the first thing that transcript writes is what certifies
     the process as a mind. A spare never writes, so it is never promoted — which is the entire
     point, and it costs a stat() we were already doing.
+
+    EARNED-PULSE (THE EARNED-PULSE COLUMN, thread 870d7391, operator ruling 2026-09-11): this
+    is one of exactly two writers ever allowed to STAMP `earned_pulse_at` (the other is
+    save_mount's own `alive=True` path) — a transcript genuinely growing IS an earned act, per
+    this module's own law above. FIRST-EARN ONLY (`COALESCE(m.earned_pulse_at, v.moved)`),
+    same discipline save_mount's stamp uses, so the column answers "did this row EVER earn a
+    pulse", never "when was it last promoted".
     """
     seen = await asyncio.to_thread(_sessions, root)
     if not seen:
@@ -101,7 +108,8 @@ async def observe_liveness(pool: asyncpg.Pool, root: Path) -> int:
     # is not TRUE, so a provisional seat would NEVER BE PROMOTED and a real agent could work all
     # day while the fleet read it as dead. The whole provisional design hangs on this one clause.
     rows = await pool.fetch(
-        "UPDATE agent_mounts m SET last_seen = GREATEST(m.last_seen, v.moved) "
+        "UPDATE agent_mounts m SET last_seen = GREATEST(m.last_seen, v.moved), "
+        "                          earned_pulse_at = COALESCE(m.earned_pulse_at, v.moved) "
         "FROM (SELECT * FROM unnest($1::text[], $2::timestamptz[]) AS t(sid, moved)) v "
         "WHERE (m.job_dir LIKE '%' || v.sid "
         "       OR m.agent_id = 'agent:' || v.sid "

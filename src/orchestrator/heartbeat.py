@@ -151,8 +151,14 @@ async def compute_heartbeat(
         found = await find_session_row(conn, session_id)
         row0 = None
         if found is not None:
+            # EARNED-PULSE (thread 870d7391): a statusline render is a RENDERING READ, not
+            # an earned act — this bump may only REFRESH a pulse the row already earned
+            # (earned_pulse_at IS NOT NULL), never GRANT one to a row that never has. The
+            # metadata fields (model/model_raw/context_window_size) are not a liveness
+            # grant and still update unconditionally.
             row0 = await conn.fetchrow(
-                "UPDATE agent_mounts SET last_seen=now(), "
+                "UPDATE agent_mounts SET "
+                "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END, "
                 "model=COALESCE(model, NULLIF($2,'')), model_raw=NULLIF($3,''), "
                 "context_window_size=COALESCE($4, context_window_size) "
                 "WHERE job_dir = $1 RETURNING agent_id, model",
