@@ -794,25 +794,53 @@ def is_live(ts: datetime | None, *, now: datetime | None = None) -> bool:
 # generation alone 3,548) turned one liveness check into thousands of tree walks — ~1s
 # each on the box, so a single call could run for the better part of an hour, holding
 # `arq_worker._boot_lock` for its whole run and starving every sibling cron behind it.
-# FIX: walk the tree EXACTLY ONCE regardless of how many sids are requested, matching
-# against the wanted set as files are discovered, with an early exit the moment every
-# wanted sid has been found (the common case — a fresh generation's own transcript sits
-# near the top of a `-repo/<uuid>.jsonl` layout, not at the bottom of a full walk).
+# FIRST FIX: walk the tree ONCE per call regardless of sid count. FOLLOW-UP (same thread,
+# Thoth mail 10204 point 3): a sub-sweep asking about MANY agents in one tick still pays
+# one walk PER AGENT even at that reduced cost — the tree does not change between two
+# liveness checks a few seconds apart, so `_transcript_index` below caches the whole
+# sid->path mapping at module level for `_TRANSCRIPT_INDEX_TTL_SECS`, and every call in
+# that window reuses it: the walk itself now happens at most once per TTL window, not
+# once per call.
+_TRANSCRIPT_INDEX_TTL_SECS = 60.0
+_transcript_index_cache: dict[str, tuple[float, dict[str, Path]]] = {}
+
+
+def _transcript_index(root: Path) -> dict[str, Path]:
+    """sid (file stem) -> path, for every `*.jsonl` under `root` — ONE walk, cached at
+    module level keyed by `root` for `_TRANSCRIPT_INDEX_TTL_SECS`. A stale index only
+    ever costs a liveness read a slightly-out-of-date mtime within the TTL window, never
+    a wrong ANSWER — a transcript that appeared in the last `_TRANSCRIPT_INDEX_TTL_SECS`
+    is found on the NEXT rebuild at worst, and `is_live`'s own 15-minute window easily
+    absorbs a 60s staleness margin."""
+    key = str(root)
+    now = time.monotonic()
+    cached = _transcript_index_cache.get(key)
+    if cached is not None and now - cached[0] < _TRANSCRIPT_INDEX_TTL_SECS:
+        return cached[1]
+    index: dict[str, Path] = {}
+    try:
+        for p in root.expanduser().rglob("*.jsonl"):
+            index[p.stem] = p
+    except OSError:
+        pass
+    _transcript_index_cache[key] = (now, index)
+    return index
+
+
 def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime | None:
     """A stat(), nothing more — mirrors liveness.py's `_sessions()` own observation, just
     scoped to a handful of NAMED session ids instead of a full-tree walk (this only ever
-    runs from the rare fallback branch below, never the hot path). ONE tree walk total,
-    never one per sid — see the regression comment above this function."""
+    runs from the rare fallback branch below, never the hot path). The tree walk itself
+    is `_transcript_index`'s own job (cached, at most once per TTL window) — this only
+    stats the handful of paths the index resolves for the wanted sids."""
     wanted = {sid for sid in session_ids if sid}
     if not wanted:
         return None
+    index = _transcript_index(root)
     freshest: datetime | None = None
-    try:
-        walker = root.expanduser().rglob("*.jsonl")
-    except OSError:
-        return None
-    for p in walker:
-        if p.stem not in wanted:
+    for sid in wanted:
+        p = index.get(sid)
+        if p is None:
             continue
         try:
             mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
@@ -820,9 +848,6 @@ def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime |
             continue
         if freshest is None or mtime > freshest:
             freshest = mtime
-        wanted.discard(p.stem)
-        if not wanted:
-            break
     return freshest
 
 
