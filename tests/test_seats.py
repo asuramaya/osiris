@@ -4610,6 +4610,25 @@ async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions
     assert facts["house"] == "cultural-infrastructure"
 
 
+async def test_resync_seat_house_third_party_refuses_a_nonexistent_seat(
+    actions: Actions,
+) -> None:
+    """WAVE 21 item 4 (mail 9869 ad48598f): this door used to have NO existence check at
+    all — it reached straight for create_or_find_object, so a nonexistent-seat call
+    silently MINTED a stray Seat rather than refuse. Same refusal shape as its own
+    precedent-named sibling, reconcile_seat_identity_third_party."""
+    from src.orchestrator.seats import resync_seat_house_third_party
+
+    out = await resync_seat_house_third_party(
+        actions, "seat:no-such-seat-anywhere", "cultural-infrastructure", source="test",
+        reason="should never reach a write")
+    assert out == {"error": "no active seat matches 'seat:no-such-seat-anywhere'"}
+    minted = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat'",
+        "seat:no-such-seat-anywhere")
+    assert minted is None  # never minted, the whole point of the fix
+
+
 async def test_resync_seat_house_third_party_is_a_noop_when_already_correct(
     actions: Actions,
 ) -> None:

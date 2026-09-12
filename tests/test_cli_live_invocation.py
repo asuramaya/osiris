@@ -21,13 +21,18 @@ strictly BEFORE any write, verified line-by-line rather than assumed from this h
 general convention. NEEDS_SAFE_INVOCATION below names every command where that same
 close reading found the OPPOSITE — either the body genuinely writes unconditionally
 (mint-seat/new/bootstrap/create-project mint for real every time; decide always
-records a fresh Decision; smoke/deploy/seed touch real infra with no dry-run switch),
-or — the one specimen this reading actually caught, not merely presumed —
-resync-seat-house's own third-party verb has NO existence check at all: it
-find-or-CREATES the Seat object it's told to correct, so a "safe" nonexistent-ref call
-would silently mint a stray Seat rather than refuse. The completeness gate requires
-every live subcommand to be in ONE of the two dicts — so a name can never silently
-fall through either as untested or as wrongly presumed safe.
+records a fresh Decision; smoke/deploy/seed touch real infra with no dry-run switch).
+The completeness gate requires every live subcommand to be in ONE of the two dicts — so
+a name can never silently fall through either as untested or as wrongly presumed safe.
+
+resync-seat-house's own third-party verb WAS the one specimen this reading actually
+caught, not merely presumed: it used to find-or-CREATE the Seat object it was told to
+correct with no existence check at all, so a "safe" nonexistent-ref call would silently
+mint a stray Seat rather than refuse. Fixed (WAVE 21 item 4, mail 9869 ad48598f) —
+resync_seat_house_third_party now refuses an unknown seat_id by name, the same
+`SELECT ... WHERE canonical=$1 AND type='Seat' AND status='active'` shape its own
+precedent-named sibling reconcile_seat_identity_third_party already used; moved to
+NO_WRITE_INVOCATIONS below alongside it.
 """
 from __future__ import annotations
 
@@ -76,6 +81,7 @@ from src.cli import (
     cmd_rename_project,
     cmd_rename_seat,
     cmd_resume,
+    cmd_resync_seat_house,
     cmd_retention,
     cmd_retire_agent,
     cmd_retire_project,
@@ -247,6 +253,8 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-seat-or-agent-anywhere", actor="operator", pool=a.pool),
     "reconcile-seat-identity": lambda a: cmd_reconcile_seat_identity(
         "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "resync-seat-house": lambda a: cmd_resync_seat_house(
+        "no-such-seat-anywhere", "some-house", "test", actor="operator", pool=a.pool),
     "retire-project": lambda a: cmd_retire_project(
         "no-such-project-anywhere", "test", actor="operator", pool=a.pool),
     "fork-project": lambda a: cmd_fork_project(
@@ -283,14 +291,6 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
     "seed": "genuinely writes (compositions/canon) even with compositions_only=True; "
             "no dry-run flag — already declared an operator devops bootstrap act "
             "elsewhere (NO_MCP_EQUIVALENT)",
-    "resync-seat-house": "CONFIRMED UNSAFE, wave 2 own-body read: "
-                         "resync_seat_house_third_party never checks the seat exists at "
-                         "all — it calls actions.create_or_find_object('Seat', seat_id, "
-                         "source) and then writes the house property unconditionally, so "
-                         "a nonexistent-seat 'safe' invocation would silently MINT a "
-                         "stray Seat rather than refuse (contrast reconcile-seat-identity, "
-                         "its own precedent-named sibling, which DOES refuse — read "
-                         "separately, moved to NO_WRITE_INVOCATIONS)",
     "create-project": "own body read, wave 2: create_project is a genuine find-OR-CREATE "
                       "(never a mint-a-twin door, but a never-before-seen name mints "
                       "fresh every time) — no refusal-only shape exists for any name "
