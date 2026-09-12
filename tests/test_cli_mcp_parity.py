@@ -48,6 +48,15 @@ NO_MCP_EQUIVALENT = {
     "attach": "a human's own terminal act (attach to a live PTY session) — no agent "
              "equivalent",
     "boot-status": "operator devops read across the fleet's own compiled bodies",
+    "lint": "NOT actually MCP-less — wraps the graph_lint MCP tool's own orchestrator "
+        "function (comp.run_spec over the 'lint' Function), same call graph_lint itself "
+        "makes; named 'lint' on the CLI (WAVE 22 item 2, mail 10109) rather than "
+        "'graph-lint' for a shorter headless-cron command, deliberately not name-matched.",
+    "audit": "NOT actually MCP-less — one CLI door (WAVE 22 item 2) fans out to FIVE "
+        "differently-named compositions (closure-health/the-wall/type-census/family-"
+        "consistency/family-drift) via comp.run_composition, the same function "
+        "composition(action='run') calls; no single MCP tool named 'audit' to match "
+        "1:1, by design (Thoth's own instruction: one door, not a subcommand each).",
     "deploy": "operator devops act — an agent should not restart shared services",
     "migrate": "operator devops act — an agent should not run schema migrations",
     "retention": "operator devops act (thread e6fd3772 piece 1, Khnum 288675e) — a retention "

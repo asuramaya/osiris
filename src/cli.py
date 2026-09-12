@@ -495,6 +495,166 @@ async def cmd_boot_status(*, pool: asyncpg.Pool | None = None, as_json: bool = F
     return 1
 
 
+# --- lint --------------------------------------------------------------------------------------
+
+def _lint_project_match(finding: dict[str, Any], project: str) -> bool:
+    """A crude, honest heuristic (WAVE 22 scope note, thread bf10608b): graph_lint's own
+    findings carry no dedicated project/repo field at all (unlike closure_health's own
+    args.repo scoping) — most checks are fleet-wide graph-integrity questions with no
+    single project to attribute a finding to. Rather than invent a false-precision per-
+    check SQL join graph_lint itself doesn't have, this matches `project` as a case-
+    insensitive substring of the two fields nearly every check actually populates
+    (`subject`, `detail`) — real but approximate, documented as such in the receipt via
+    `checks_not_evaluable_for_project`, never silently presented as a genuine scope."""
+    needle = project.lower()
+    for key in ("subject", "detail"):
+        val = finding.get(key)
+        if isinstance(val, str) and needle in val.lower():
+            return True
+    return False
+
+
+async def cmd_lint(
+    *, check: str | None = None, project: str | None = None, as_json: bool = False,
+    stale_days: int = 14, limit: int | None = None, offset: int = 0,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris lint [--check NAME] [--project P] [--json] — the console-script door onto
+    graph_lint's own orchestrator function, the SAME call graph_lint's MCP tool makes
+    (mcp_server.py:1379: `comp.run_spec(pool, {"op": "function", "name": "lint", ...},
+    None, name="graph-lint")`) — never a second implementation of the 32 checks
+    themselves. Headless health check for a cron or a stranger's shell with no MCP
+    client: exit 0 when the (optionally --check/--project-scoped) result carries zero
+    findings, 1 when it carries any.
+
+    `--project P` is a CLIENT-SIDE post-filter — see `_lint_project_match`'s own
+    docstring for why (WAVE 22 scope note, thread bf10608b): graph_lint has no per-check
+    SQL-level project scoping to mirror, so inventing one here would be new capability,
+    not a mirror. The receipt names which checks' findings could not even be evaluated
+    for project membership (most of them), rather than silently implying a scoped-clean
+    pass just because nothing matched."""
+    from src.orchestrator import compositions as comp
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:lint")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris lint: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    args: dict[str, Any] = {"stale_days": stale_days}
+    if check is not None:
+        args["check"] = check
+    if limit is not None:
+        args["limit"] = limit
+    if offset:
+        args["offset"] = offset
+    spec = {"op": "function", "name": "lint", "args": args}
+    try:
+        out = await comp.run_spec(pool, spec, None, name="graph-lint")
+    finally:
+        if owns_pool:
+            await pool.close()
+    items: dict[str, Any] = out["items"]
+    findings: list[dict[str, Any]] = items.get("findings", [])
+
+    if project:
+        scoped = [f for f in findings if _lint_project_match(f, project)]
+        checked_names = {f.get("check") for f in findings}
+        matched_names = {f.get("check") for f in scoped}
+        items = {**items, "findings": scoped,
+                "project_filter": {
+                    "project": project,
+                    "checks_not_evaluable_for_project": sorted(checked_names - matched_names)}}
+        findings = scoped
+
+    if as_json:
+        from src import cli_render as render
+        render.emit(items, as_json=True)
+        return 1 if findings else 0
+
+    if not findings:
+        scope = f" for project {project!r}" if project else ""
+        print(f"osiris lint: clean{scope} — no findings")
+        return 0
+    for f in findings:
+        detail = f.get("detail", "")
+        subject = f.get("subject")
+        subj_part = f" ({subject})" if subject else ""
+        print(f"[{f.get('severity', '?')}] {f.get('check', '?')}{subj_part}: {detail}")
+    counts = items.get("counts", {})
+    total = sum(counts.get(c, 0) for c in {f.get("check") for f in findings})
+    print(f"osiris lint: {len(findings)} shown, {total} total in the listed checks — "
+          f"see counts_by_severity/could_not_evaluate with --json for the full receipt")
+    return 1
+
+
+# --- audit -------------------------------------------------------------------------------------
+
+# The 5 audit-shaped siblings graph_lint keeps beside it in the CMD-K palette (WAVE 22 scope
+# note, thread bf10608b — console.js's own POWER_TOOLS, lines 840-857), EXCLUDING graph_lint
+# itself (its own door, `osiris lint`) and the palette's non-audit analysis tools (Who Is This/
+# Co-Investment Ties/Screen Financing/Op vs Disclosed Geo/LAP/Overhead/Echoes — reporting lenses,
+# not health checks). Each name is a DEFAULT_COMPOSITIONS entry already, resolved by
+# `comp.run_composition` exactly as the `composition(action='run')` MCP door resolves it.
+AUDIT_NAMES: tuple[str, ...] = (
+    "closure-health", "the-wall", "type-census", "family-consistency", "family-drift",
+)
+
+
+async def cmd_audit(
+    name: str, *, as_json: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris audit <name> [--json] — one console-script door onto graph_lint's audit
+    siblings (see `AUDIT_NAMES`), calling `comp.run_composition` directly, the SAME
+    function the `composition(action='run', name=...)` MCP door calls (mcp_server.py's
+    `_composition_impl`) — never a second implementation, and never one subcommand per
+    audit (five near-identical CLI doors drifting independently is exactly the class of
+    bug graph_lint's own history (#48) already taught this house to avoid).
+
+    No subject binding (every one of these five runs fleet-wide, matching what the CMD-K
+    palette itself invokes — `runTool(name)` with no subject argument). Exit 1 only when
+    the composition itself reports an error (an unknown name, a query failure); these are
+    read-only lenses, not a pass/fail gate like `osiris lint` — a clean run and a run
+    surfacing real findings both exit 0, the same way the palette itself never turns red
+    on content."""
+    from src.orchestrator import compositions as comp
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:audit")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris audit: could not reach postgres at {settings.database_url} — "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await comp.run_composition(pool, name, None)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json)
+    return 1 if isinstance(out, dict) and "error" in out else 0
+
+
 # --- seed ------------------------------------------------------------------------------------
 
 async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None) -> int:
@@ -5355,7 +5515,8 @@ to the house name.)
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
-  see the fleet         fleet, roster, backlog, team, status, boot-status, smoke
+  see the fleet         fleet, roster, backlog, team, status, boot-status, smoke, lint,
+                        audit
   read the record       desk, show, threads, inbox, search
   write to the record   send, decide, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
@@ -5423,6 +5584,41 @@ def _build_parser() -> argparse.ArgumentParser:
                    epilog="example: osiris boot-status")
     p_boot_status.add_argument("--json", action="store_true", dest="as_json",
                                help="machine-readable: one compact JSON line")
+
+    p_lint = sub.add_parser("lint", description=_d(
+        "the graph audits itself — headless mirror of the graph_lint MCP tool/CMD-K "
+        "power tool, same 32 checks, same receipt (report-only; exit 1 if any findings)"),
+                   epilog="example: osiris lint\nexample: osiris lint --check false-mint "
+                          "--json\nexample: osiris lint --project osiris")
+    p_lint.add_argument("--check", default=None,
+                        help="one check name (a `counts` key) to list in full, past the "
+                             "default 50-per-check cap — see --json's own counts for the "
+                             "complete name list")
+    p_lint.add_argument("--project", default=None,
+                        help="best-effort client-side filter (no SQL-level scoping exists "
+                             "upstream) — keeps only findings whose subject/detail "
+                             "mentions this string; --json names which checks could not "
+                             "be evaluated for project membership at all")
+    p_lint.add_argument("--json", action="store_true", dest="as_json",
+                        help="machine-readable: the full receipt (findings/counts/"
+                             "counts_by_severity/severity/could_not_evaluate)")
+    p_lint.add_argument("--stale-days", type=int, default=14, dest="stale_days",
+                        help="the stale-obligation/rot-candidate/peer-silent window, days "
+                             "(default 14)")
+    p_lint.add_argument("--limit", type=int, default=None,
+                        help="with --check: page size past the default full fetch")
+    p_lint.add_argument("--offset", type=int, default=0,
+                        help="with --check: page offset")
+
+    p_audit = sub.add_parser("audit", description=_d(
+        "headless mirror of graph_lint's own CMD-K audit siblings — one door for all "
+        "five rather than a subcommand each"),
+                   epilog="example: osiris audit the-wall\nexample: osiris audit "
+                          "closure-health --json")
+    p_audit.add_argument("name", choices=list(AUDIT_NAMES),
+                         help="which audit to run")
+    p_audit.add_argument("--json", action="store_true", dest="as_json",
+                         help="machine-readable: the full composition result")
 
     p_seed = sub.add_parser("seed", description=_d("seed default compositions (and rooms)"),
                             epilog="example: osiris seed\nexample: osiris seed "
@@ -6482,6 +6678,12 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_smoke(chaos=args.chaos, as_json=args.as_json))
     if args.command == "boot-status":
         return asyncio.run(cmd_boot_status(as_json=args.as_json))
+    if args.command == "lint":
+        return asyncio.run(cmd_lint(
+            check=args.check, project=args.project, as_json=args.as_json,
+            stale_days=args.stale_days, limit=args.limit, offset=args.offset))
+    if args.command == "audit":
+        return asyncio.run(cmd_audit(args.name, as_json=args.as_json))
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "launch":
