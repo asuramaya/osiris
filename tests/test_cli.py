@@ -3555,6 +3555,51 @@ async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
     assert (target / "osiris-base-backup.service").read_text() == "# osiris-base-backup service\n"
 
 
+def test_install_prune_timers_sh_now_covers_all_five_backup_lane_units(
+    tmp_path: Path,
+) -> None:
+    """Wave 21 (thread f04cce36 piece 3, operator ruling 2026-09-12): a config panel
+    letting the operator reschedule any of the five backup timers is only real if
+    deploy actually reinstalls all five, not the original three — a panel field that
+    silently does nothing until a human hand-installs it is worse than no field. No
+    `.venv` in this synthetic repo, so render_backup_timers.py's own subprocess call
+    fails and the script's fallback (a verbatim copy) takes over — proving the UNIT
+    LIST widened, independent of the render step's own DB behavior (covered in
+    test_render_backup_timers.py instead)."""
+    import os
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "deploy").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    _git_init(repo)
+    install_script = Path("scripts") / "install_prune_timers.sh"
+    real_install = (Path(__file__).resolve().parent.parent / install_script).read_text()
+    (repo / install_script).write_text(real_install)
+    (repo / install_script).chmod(0o755)
+    for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup",
+                "osiris-backup", "osiris-preflight"):
+        (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
+        (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
+    target = tmp_path / "target"
+
+    old_env = os.environ.get("OSIRIS_SYSTEMD_USER_DIR")
+    os.environ["OSIRIS_SYSTEMD_USER_DIR"] = str(target)
+    try:
+        result = subprocess.run(["sh", str(repo / install_script)], cwd=repo,
+                                capture_output=True, text=True, timeout=30)
+    finally:
+        if old_env is None:
+            os.environ.pop("OSIRIS_SYSTEMD_USER_DIR", None)
+        else:
+            os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
+
+    assert result.returncode == 0, result.stderr
+    assert "10 installed/updated, 0 already current" in result.stdout
+    assert (target / "osiris-backup.timer").read_text() == "# osiris-backup timer\n"
+    assert (target / "osiris-preflight.service").read_text() == "# osiris-preflight service\n"
+
+
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:

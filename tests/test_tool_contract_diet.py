@@ -919,7 +919,7 @@ def _tool_chars(t: Any) -> int:
 # harness-neutral liveness refresh (self-scoped, no target param) a non-Claude MCP
 # client calls to stay reading as live without a whisper hook or statusline. Genuinely
 # new capability, no existing tool exposes a caller-scoped last_seen refresh.
-TOOL_CONTRACT_EXPECTED_COUNT = 84
+TOOL_CONTRACT_EXPECTED_COUNT = 85
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1555,7 +1555,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 84
 # genuinely new capability, not prose growth on any other tool, not a new @mcp.tool()
 # (tool count unchanged; dispatched through the existing `backfill` door). Measured
 # exact (133,261).
-TOOL_CONTRACT_CEILING_CHARS = 133261
+TOOL_CONTRACT_CEILING_CHARS = 135442
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
@@ -1694,4 +1694,11 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     # so the merge driver could reconcile it (the fix for Wave 4/5's silent 143-vs-144),
     # hers bumped the literal to 146 for Wave 5's two new abstention-retry verbs. The
     # merged tree is neither number — re-measured below, never picked.
+    # 84 -> 85 (2026-09-12, Seshat, thread f04cce36 piece 3): backup_settings — the
+    # backup config panel's write door (get/write, charter_for's own operator/ruling-
+    # citation authority shape), a genuinely new write verb this domain never had (the
+    # scope report's own finding: no config layer existed for the backup lane at all
+    # before this). Ceiling raised 133019 -> 135200 for the same reason — the new
+    # tool's docstring was trimmed once under the category rule before raising, never
+    # a reflex bump.
     assert len(per_tool) == TOOL_CONTRACT_EXPECTED_COUNT

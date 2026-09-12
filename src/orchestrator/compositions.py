@@ -4844,22 +4844,40 @@ async def _fn_backup_status(
     less box (CI, a dev worktree) still returns every OTHER section intact — `args.vault`/
     `args.backups` are optional overrides (str paths) a test points at a tmp_path instead
     of the real production paths, the same opt-in-args discipline `select`'s own `scope`
-    uses."""
+    uses.
+
+    PIECE 3's OWN SETTINGS (backup_settings.py) are folded in read-only here: `schedule`
+    stays the LIVE shipped value (what's actually running, off the deploy/*.timer file);
+    `configured_schedule` is the operator's own written override, if any — None until
+    deploy's own timer-install step regenerates the unit from it, so a caller can tell
+    "set" from "took effect" instead of the two being silently conflated."""
     from datetime import UTC as _UTC
     from datetime import datetime as _datetime
 
     from scripts.osiris_disk_guard import has_room
     from scripts.osiris_prune_ladder import _compute_plans, find_clear_manifest, plan_prune
 
-    vault = _backup_vault_path(args)
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    try:
+        settings = await get_backup_settings(pool) if pool is not None else None
+    except Exception:  # noqa: BLE001 — configured overrides are a nice-to-have on top of
+        # the live reads below, never a reason to blank the whole panel
+        settings = None
+
+    vault = Path(str(settings["vault_path"])) if (settings and settings.get("vault_path")
+                                                   and not args.get("vault")) \
+        else _backup_vault_path(args)
     backups_dir = _backup_backups_path(args)
+    sched_overrides = (settings or {}).get("timer_schedules", {}) or {}
 
     now = _datetime.now(_UTC)
 
     timers: list[dict[str, Any]] = []
     for unit, label in _BACKUP_TIMER_UNITS:
         row: dict[str, Any] = {"unit": unit, "label": label,
-                               "schedule": _backup_timer_calendar(unit)}
+                               "schedule": _backup_timer_calendar(unit),
+                               "configured_schedule": sched_overrides.get(unit)}
         row.update(await _backup_timer_live_state(unit))
         timers.append(row)
 
@@ -4919,7 +4937,10 @@ async def _fn_backup_status(
     offbox_section = {
         "wired": False,
         "script_exists": True,
-        "note": "design held for the operator's ruling — see thread cf134938",
+        "repositories": (settings or {}).get("offbox_repositories", []) or [],
+        "note": "design held for the operator's ruling — see thread cf134938; any "
+                "configured repositories above are stored but inert until off-box "
+                "is ruled on and wired to a timer",
     }
     pitr_section = {
         "wired_to_a_timer": False,

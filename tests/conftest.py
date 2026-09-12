@@ -83,8 +83,16 @@ from testcontainers.redis import RedisContainer
 # restarting at 1 every test. Verified before landing this: no test anywhere in
 # tests/ or src/ asserts a literal id for any of these 31 tables (regex-swept, not
 # just spot-checked — one incidental false positive, a UA-string, zero real hits).
+#
+# `backup_settings` (migration 0065, thread f04cce36 piece 3) joined here the same
+# night it shipped — FK-free by construction (a singleton settings row, no
+# REFERENCES at all), so no ordering constraint, added to this unordered group
+# BEFORE it could repeat harness_messages'/soul_lines' own missing-from-day-one gap
+# (found live: test_backup_settings_survives_a_wiped_singleton saw a previous test's
+# rev leak across, the exact "assert 3 == 0" shape those two entries already named).
 _RESET_TABLES = (
-    "agent_mounts", "agent_wakes", "alerts", "audit_log", "body_usage", "case_objects",
+    "agent_mounts", "agent_wakes", "alerts", "audit_log", "backup_settings",
+    "body_usage", "case_objects",
     "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
     # harness_messages (migration 0051) joined its three siblings here on 2026-08-28,
     # closing obligation 4ffb2b37. It was missing from the day the table shipped: every

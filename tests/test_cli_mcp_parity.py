@@ -1462,6 +1462,16 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # assertion vs. Actions.invalidate_link), disjoint signatures (name/superseded_id/
     # value vs. from_ref/to_ref/link_type), no shared call either could have ridden on.
     "retire_link": {"binding_verb": False},
+    # backup_settings — Wave 21 (operator's word 2026-09-11, thread f04cce36 piece 3):
+    # the backup config panel's write door (action='get'/'write'), gated to operator
+    # authority via charter_for's own shape (verify_ruling for a worker citing a
+    # standing ruling). Not a seat/office/project binding-mover — it writes a
+    # singleton settings row (console_state's own pattern), never seat/house state.
+    # Not a parameterization of any existing tool — this domain (the backup lane's
+    # vault path, timer schedules, off-box repositories) had no config layer at all
+    # before this (the scope report's own finding); no existing door names a backup
+    # setting as one of its own params.
+    "backup_settings": {"binding_verb": False},
 }
 
 
