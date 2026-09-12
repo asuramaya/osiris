@@ -14,10 +14,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from src.actions.core import Actions
+from src.config.settings import get_settings
 from src.orchestrator import capture
 from src.orchestrator.capture import _thread_canon
 from src.orchestrator.proposals import (
-    _NEW_PAIR_STARTER_BUDGET,
     accept,
     guarded_miner_tick,
     proposals_band,
@@ -306,7 +306,7 @@ async def test_propose_refuses_once_the_new_pair_starter_budget_is_spent_today(
                           candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",
                           miner="fresh-miner", actor="fresh-miner")
     assert "error" not in first
-    assert _NEW_PAIR_STARTER_BUDGET == 1  # this test's own assumption, named plainly
+    assert get_settings().osiris_miner_new_pair_starter_budget == 1  # this test's own assumption
 
     second = await propose(actions, from_id=orphan2, link_type="implements",
                            candidate=_LINK_CANDIDATE, confidence=0.9, owner="operator",

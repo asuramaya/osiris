@@ -76,6 +76,7 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
+from src.config.settings import get_settings
 from src.orchestrator.capture import open_thread
 from src.orchestrator.owner_normalization import resolve_owner_seat
 from src.parsers.base import EvidenceClass
@@ -85,10 +86,11 @@ _EC = EvidenceClass.DERIVED.value
 _CONFIDENCE_CAP = confidence_for(EvidenceClass.DERIVED)
 _EXPIRY_DAYS = 14
 _LEGAL_CANDIDATE_KINDS = ("link", "object")
-_DAILY_BUDGET_BASE = 5
-_NEW_PAIR_STARTER_BUDGET = 1
 _TRAILING_WINDOW_DAYS = 30
-_ZERO_ACCEPTANCE_WINDOW_DAYS = 7
+# THE BUDGET KNOBS THEMSELVES moved to settings.py (osiris_miner_daily_budget_base /
+# osiris_miner_new_pair_starter_budget / osiris_miner_zero_acceptance_window_days,
+# THE SETTINGS MENU piece 1, thread f4498ab304e4) — registered with effect='next_tick'
+# since every read below already calls get_settings() fresh, never once at import.
 
 
 def _validate_candidate(candidate: dict[str, Any]) -> str | None:
@@ -177,16 +179,18 @@ async def _throttle_status(
     pool: asyncpg.Pool, miner: str, owner: str,
 ) -> dict[str, Any]:
     """The daily budget for this (miner, owner) pair, right now. Scales
-    `_DAILY_BUDGET_BASE` linearly by the pair's own trailing 30-day acceptance rate
-    (accepted / (accepted+rejected) of RESOLVED Proposals in the window); a pair with
-    no resolved history yet gets `_NEW_PAIR_STARTER_BUDGET`, neither a proven record's
+    `osiris_miner_daily_budget_base` (settings.py — THE SETTINGS MENU piece 1) linearly
+    by the pair's own trailing 30-day acceptance rate (accepted / (accepted+rejected) of
+    RESOLVED Proposals in the window); a pair with no resolved history yet gets
+    `osiris_miner_new_pair_starter_budget`, neither a proven record's
     full trust nor a bad one's zero. Overrides that entirely to budget=0, `throttled`
     True, when the trailing 7-day window holds at least one rejection and zero
     acceptances (Thoth's own explicit number, mail 8920) — a pair producing nothing but
     rejections right now doesn't coast on an old good rate."""
+    st = get_settings()
     now = datetime.now(UTC)
     window_30 = now - timedelta(days=_TRAILING_WINDOW_DAYS)
-    window_7 = now - timedelta(days=_ZERO_ACCEPTANCE_WINDOW_DAYS)
+    window_7 = now - timedelta(days=st.osiris_miner_zero_acceptance_window_days)
     accepted_30 = await _resolved_count_since(pool, miner, owner, "accepted", window_30)
     rejected_30 = await _resolved_count_since(pool, miner, owner, "rejected", window_30)
     accepted_7 = await _resolved_count_since(pool, miner, owner, "accepted", window_7)
@@ -196,8 +200,8 @@ async def _throttle_status(
     if rejected_7 > 0 and accepted_7 == 0:
         return {"budget": 0, "throttled": True, "rejected_7d": rejected_7,
                "acceptance_rate": acceptance_rate}
-    budget = (_NEW_PAIR_STARTER_BUDGET if acceptance_rate is None
-             else round(_DAILY_BUDGET_BASE * acceptance_rate))
+    budget = (st.osiris_miner_new_pair_starter_budget if acceptance_rate is None
+             else round(st.osiris_miner_daily_budget_base * acceptance_rate))
     return {"budget": budget, "throttled": False, "rejected_7d": rejected_7,
            "acceptance_rate": acceptance_rate}
 
@@ -237,15 +241,16 @@ async def propose(
     throttle = await _throttle_status(actions.pool, miner, resolved_owner)
     if throttle["throttled"]:
         today = now.date().isoformat()
+        window_days = get_settings().osiris_miner_zero_acceptance_window_days
         await open_thread(
             actions,
             f"Miner {miner} throttled to zero proposals for {resolved_owner}: "
             f"{throttle['rejected_7d']} rejection(s) in the trailing "
-            f"{_ZERO_ACCEPTANCE_WINDOW_DAYS} days with zero acceptances (as of {today})",
+            f"{window_days} days with zero acceptances (as of {today})",
             kind="fyi", owner=resolved_owner, source=miner)
         return {"error": f"{miner} is throttled to zero proposals for {resolved_owner} "
                          f"— {throttle['rejected_7d']} rejection(s) in the trailing "
-                         f"{_ZERO_ACCEPTANCE_WINDOW_DAYS} days with zero acceptances "
+                         f"{window_days} days with zero acceptances "
                          "(the last-resort budget's own hard stop); a receipt Thread "
                          "was opened for the owner"}
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)

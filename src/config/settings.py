@@ -590,6 +590,16 @@ class Settings(BaseSettings):
     # route this has no HTTP surface to poll — it logs the top allocation sites once, at
     # the end of the window (see arq_worker._boot_memtrace).
     osiris_worker_boot_memtrace_enabled: bool = False
+    # MINER BUDGET KNOBS (THE SETTINGS MENU piece 1, thread f4498ab304e4, Thoth mail
+    # 10040) — promoted off proposals.py's own bare module constants so they can be
+    # registered in the settings registry with effect='next_tick' (propose()/
+    # _throttle_status call get_settings() fresh on every invocation already, so a
+    # write here is genuinely live on the very next miner tick, no restart needed).
+    # Values unchanged from their prior constants — see proposals.py's own docstring
+    # for the full budget-throttle rationale (decision ac892cd9).
+    osiris_miner_daily_budget_base: int = 5
+    osiris_miner_new_pair_starter_budget: int = 1
+    osiris_miner_zero_acceptance_window_days: int = 7
 
 
 def get_settings() -> Settings:

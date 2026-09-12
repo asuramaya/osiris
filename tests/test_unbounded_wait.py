@@ -51,7 +51,16 @@ _MARKER_RE = re.compile(r"#\s*unbounded-wait-ok\b")
 # names the actual reason at the actual line) or raise this by exactly the number you
 # added, with a comment saying why here rather than at 182 call sites.
 _SUBPROCESS_BASELINE: dict[str, int] = {
-    "src/cli.py": 67,
+    # 67 -> 68 (2026-09-12, Imhotep, thread f4498ab304e4, THE SETTINGS MENU piece 1):
+    # one new `asyncio.run(cmd_settings(...))` dispatch line for the new `settings`
+    # subcommand — the scanner's own coarse `name in ("run", "communicate")` proxy
+    # (module docstring: "a coarse but sufficient proxy") matches `asyncio.run` the
+    # same as `subprocess.run` whenever the file imports `subprocess` at all, which
+    # cli.py's giant `if args.command == ...: return asyncio.run(cmd_X(...))` dispatch
+    # chain already does at every one of its ~65 existing entries — not a genuine new
+    # unbounded subprocess wait, the same false-positive class the whole baseline for
+    # this file already is.
+    "src/cli.py": 68,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     "src/ingest/sessions.py": 3,

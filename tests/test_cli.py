@@ -58,6 +58,7 @@ from src.cli import (
     cmd_roster,
     cmd_seed,
     cmd_send,
+    cmd_settings,
     cmd_show,
     cmd_smoke_chaos,
     cmd_status,
@@ -3853,6 +3854,82 @@ async def test_cli_parser_accepts_charter_for(actions: Actions) -> None:
     assert args.repos == "a,b,c"
     assert args.because == "onboarding"
     assert args.actor == "operator"
+
+
+# --- settings (THE SETTINGS MENU, thread f4498ab304e4 piece 1) ---------------------------------
+
+async def test_cmd_settings_list_shows_every_registered_knob(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_settings("list", pool=actions.pool)
+    assert out == 0
+    assert "daemon.pit_watch.enabled" in buf.getvalue()
+
+
+async def test_cmd_settings_get_reports_the_default(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_settings("get", key="miner.daily_budget_base", pool=actions.pool)
+    assert out == 0
+    assert "5" in buf.getvalue()
+
+
+async def test_cmd_settings_set_the_operator_writes_freely(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_settings(
+            "set", key="daemon.pit_watch.enabled", value="true",
+            because="watching tonight", actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.settings_service import get_setting
+
+    assert (await get_setting(actions.pool, "daemon.pit_watch.enabled"))["value"] is True
+
+
+async def test_cmd_settings_set_a_worker_with_no_ruling_is_refused(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_settings(
+            "set", key="daemon.pit_watch.enabled", value="true",
+            actor="agent:some-worker", pool=actions.pool)
+    assert out == 1
+    assert "ruling" in buf.getvalue()
+
+
+async def test_cmd_settings_set_requires_a_key(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_settings("set", value="true", pool=actions.pool)
+    assert out == 1
+    assert "key" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_settings(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["settings", "set", "daemon.pit_watch.enabled", "true",
+         "--because", "watching tonight", "--actor", "operator"])
+    assert args.command == "settings"
+    assert args.action == "set"
+    assert args.key == "daemon.pit_watch.enabled"
+    assert args.value == "true"
+    assert args.because == "watching tonight"
 
 
 async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:

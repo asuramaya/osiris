@@ -91,6 +91,7 @@ from src.cli import (
     cmd_send,
     cmd_set_project_tag,
     cmd_set_seat_attended,
+    cmd_settings,
     cmd_show,
     cmd_smoke_chaos,
     cmd_status,
@@ -270,6 +271,10 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-handle-anywhere", actor="operator", pool=a.pool),
     "proposal": lambda a: cmd_proposal(
         "propose", candidate="not valid json{", pool=a.pool),
+    # settings get: get_setting refuses BEFORE any write on an unregistered key
+    # (settings_service.get_setting's own "unknown setting key" refusal) — a pure
+    # read regardless, never anything write-shaped.
+    "settings": lambda a: cmd_settings("get", key="no-such-key-anywhere", pool=a.pool),
 }
 
 # CLI commands the population gate below knows are NOT in NO_WRITE_INVOCATIONS, each

@@ -919,7 +919,7 @@ def _tool_chars(t: Any) -> int:
 # harness-neutral liveness refresh (self-scoped, no target param) a non-Claude MCP
 # client calls to stay reading as live without a whisper hook or statusline. Genuinely
 # new capability, no existing tool exposes a caller-scoped last_seen refresh.
-TOOL_CONTRACT_EXPECTED_COUNT = 85
+TOOL_CONTRACT_EXPECTED_COUNT = 86
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1555,7 +1555,13 @@ TOOL_CONTRACT_EXPECTED_COUNT = 85
 # genuinely new capability, not prose growth on any other tool, not a new @mcp.tool()
 # (tool count unchanged; dispatched through the existing `backfill` door). Measured
 # exact (133,261).
-TOOL_CONTRACT_CEILING_CHARS = 135089
+# 135089 -> 136781 (2026-09-12, Imhotep, thread f4498ab304e4, THE SETTINGS MENU piece
+# 1): new @mcp.tool() `settings` (list/get/write over the settings registry,
+# src/config/settings_registry.py's SETTINGS tuple) — a genuinely new write door this
+# domain never had, same class as backup_settings' own raise above. Docstring trimmed
+# to the category rule's lean end before raising (dated citations/provenance cut).
+# Tool count 85 -> 86. Measured exact (136,781).
+TOOL_CONTRACT_CEILING_CHARS = 136781
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
@@ -1701,4 +1707,9 @@ async def test_tool_contract_has_the_expected_tool_count() -> None:
     # before this). Ceiling raised 133019 -> 135200 for the same reason — the new
     # tool's docstring was trimmed once under the category rule before raising, never
     # a reflex bump.
+    # 85 -> 86 (2026-09-12, Imhotep, thread f4498ab304e4 piece 1): settings — THE
+    # SETTINGS MENU's own list/get/write door pair, generalizing backup_settings'
+    # shape over a registry (src/config/settings_registry.py's SETTINGS tuple)
+    # instead of one hardcoded field set. Ceiling raised alongside (see the ceiling's
+    # own changelog above).
     assert len(per_tool) == TOOL_CONTRACT_EXPECTED_COUNT

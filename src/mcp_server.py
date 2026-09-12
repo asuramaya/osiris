@@ -9333,6 +9333,44 @@ async def backup_settings(
         pool, actor=actor, because=because or "", ruling=ruling, **fields)
 
 
+@mcp.tool()
+async def settings(
+    action: str, key: str | None = None, value: Any = None, scope_id: str = "",
+    because: str | None = None, ruling: str | None = None,
+    subagent_id: str | None = None, subagent_type: str | None = None,
+    session_anchor: str | None = None, ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Read/write over the settings registry (`src/config/settings_registry.py`'s
+    `SETTINGS` tuple) — a new knob needs a new registry entry, never a new tool.
+
+    `action='list'` returns every declared setting's own metadata (type, default,
+    scope, effect, authority, choices) plus its current value — secrets always redacted
+    to `{"set": bool}`. `action='get'` (with `key`) returns one current value.
+    `action='write'` (with `key`/`value`) changes it: each setting's own `authority`
+    (operator | operator_or_manager | operator_or_ruling) decides who may write it
+    without a manager/ruling citation; `because` is required unless the setting opts
+    out (`requires_because=False`). Refuses structured (`errors: [{field, message}]`)
+    on a bad value, never one bare string. A written setting's own `effect`
+    (immediate/next_tick/restart:<unit>/next_deploy) names when it actually takes
+    hold — the receipt's `note` says so plainly whenever it is not the same instant."""
+    from src.orchestrator.settings_service import get_setting, list_settings, write_setting
+
+    pool = await _pool_get()
+    if action == "list":
+        return {"settings": await list_settings(pool)}
+    if action == "get":
+        if not key:
+            return {"error": "key is required for action='get'"}
+        return await get_setting(pool, key)
+    if action != "write":
+        return {"error": "action must be 'list', 'get', or 'write'"}
+    if not key:
+        return {"error": "key is required for action='write'"}
+    actor = await _actor_for(ctx, subagent_id, subagent_type)
+    return await write_setting(
+        pool, key, value, actor=actor, because=because or "", scope_id=scope_id, ruling=ruling)
+
+
 # THE PRACTICE OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162, proposal
 # decision 07395004 approved as scoped — "practice(action='record'|'amend') only") —
 # the sixth and FINAL object-type dispatcher of #202's own fold arc (the operator's
