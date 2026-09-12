@@ -1130,6 +1130,23 @@ def test_statusline_never_caches_the_callers_own_identity(
     assert cached["souls"] == 7          # the shared counts DO survive
 
 
+def test_statusline_puts_the_sick_warning_at_the_far_right_of_the_line(
+    monkeypatch: Any, tmp_path: Path,
+) -> None:
+    """Operator's word (2026-09-12): "move the warning to the right end of the chrome so
+    the standard lines are not displaced." Before this, sick_s/spend_s sat right after
+    the project cell, so a sick sense shoved owe/mail/team rightward every time one
+    fired. Order now: project, owe, mail, team, the stale marker, THEN the alarms."""
+    out = _statusline(monkeypatch, tmp_path,
+                       answer={"result": {**_COUNTS, "sick": ["etherscan"]}})
+    line1 = out.splitlines()[0]
+    project_i = line1.index("osiris")
+    mail_i = line1.index("✉")
+    team_i = line1.index("team 7/8")
+    warning_i = line1.index("not sensing")
+    assert project_i < mail_i < team_i < warning_i
+
+
 def test_statusline_with_no_answer_and_no_cache_says_only_what_it_knows(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:

@@ -310,8 +310,6 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             pass
         parts = [
             _link(f"\u25c8 {seat_tag}{resolved_project}", "desk"),
-            *([_link(sick_s, "fleet")] if sick_s else []),
-            *([_link(spend_s, "desk")] if spend_s else []),
             *([_link(owe_s, "desk")] if owe_s else []),
             _link(mail_s, "conversations"),
             # A MANAGER SEES ITS OWN TEAM; everyone else sees no fleet cell, and wakes/h
@@ -319,14 +317,20 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
             *([_link(f"team {team}/{team_of}", "fleet")] if team_of else []),
             # THE STALE MARKER, restoring the old script's answered-just-late distinction
             # (this comment used to say that state "doesn't exist here" — it does again).
-            # Dim, last, and never silent: an operator reading counts is entitled to know
-            # they are a moment old, but a 12-second-old `owe 14` is worth incomparably
-            # more than a red bar that names the wrong subsystem.
+            # Dim, last of the STANDARD cells, and never silent: an operator reading
+            # counts is entitled to know they are a moment old, but a 12-second-old
+            # `owe 14` is worth incomparably more than a red bar that names the wrong
+            # subsystem. The alarms (sick_s/spend_s) trail it, at the far right of the
+            # line, so a warning appearing/disappearing never displaces a standard cell
+            # (operator's word: "move the warning to the right end of the chrome so the
+            # standard lines are not displaced").
             # GATED ON `from_cache`, NOT ON THE AGE. A cache written under a second ago
             # has stale_age == 0, and gating on the number made a cached bar render
             # IDENTICAL to a live one — collapsing the two states this whole change
             # exists to keep apart, in the very line meant to keep them apart.
             *([f"{_DIM}⋯{stale_age}s ago{_RESET}"] if from_cache else []),
+            *([_link(sick_s, "fleet")] if sick_s else []),
+            *([_link(spend_s, "desk")] if spend_s else []),
         ]
 
     vitals: list[str] = []
