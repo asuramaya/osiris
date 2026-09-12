@@ -10,10 +10,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from src.actions.core import Actions
+from src.config.settings import get_settings
 from src.orchestrator import capture
 from src.orchestrator.abstention_miner import _LANES, abstention_miner_tick
 from src.orchestrator.monitor import set_cursor
-from src.orchestrator.proposals import _NEW_PAIR_STARTER_BUDGET, propose
+from src.orchestrator.proposals import propose
 
 _CURSOR_KEY = "abstention_miner:lane_index"
 
@@ -190,7 +191,7 @@ async def test_budget_refuses_the_sixth_proposal_in_a_day(actions: Actions) -> N
             confidence=0.9, owner="operator", miner="abstention", actor="miner:abstention"))
     assert sum(1 for r in results if "error" not in r) == 5
     assert "budget" in results[5]["error"]
-    assert _NEW_PAIR_STARTER_BUDGET == 1  # this test's own assumption, named plainly
+    assert get_settings().osiris_miner_new_pair_starter_budget == 1  # this test's own assumption
 
 
 async def test_heartbeat_is_scheduled_as_a_cron_job() -> None:
@@ -209,6 +210,25 @@ async def test_tick_is_dark_when_the_flag_is_off(
     monkeypatch.setenv("OSIRIS_ABSTENTION_MINER_ENABLED", "0")
     out = await abstention_miner_tick(actions)
     assert out["action"] == "dark"
+    n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Proposal'")
+    assert n == 0
+
+
+async def test_tick_is_dark_when_the_settings_registry_disables_it_live(
+    actions: Actions,
+) -> None:
+    """THE SETTINGS MENU's own overlay (thread f4498ab304e4 piece 1): `miner.abstention.
+    enabled` is registered with effect='immediate' — a write through the settings door
+    (never touching env at all) takes hold on the very NEXT tick, no restart."""
+    from src.orchestrator.settings_service import write_setting
+
+    out = await write_setting(
+        actions.pool, "miner.abstention.enabled", False, actor="operator")
+    assert "error" not in out
+
+    result = await abstention_miner_tick(actions)
+
+    assert result["action"] == "dark"
     n = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Proposal'")
     assert n == 0
 

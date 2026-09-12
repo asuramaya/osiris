@@ -90,10 +90,14 @@ from testcontainers.redis import RedisContainer
 # BEFORE it could repeat harness_messages'/soul_lines' own missing-from-day-one gap
 # (found live: test_backup_settings_survives_a_wiped_singleton saw a previous test's
 # rev leak across, the exact "assert 3 == 0" shape those two entries already named).
+# `settings` (migration 0067, THE SETTINGS MENU piece 1, thread f4498ab304e4) joined
+# here the same day for the identical reason — FK-free, no seeded row at all (unlike
+# backup_settings' singleton), so a bare DELETE is a true no-op on an untouched test.
 _RESET_TABLES = (
     "agent_mounts", "agent_wakes", "alerts", "audit_log", "backup_settings",
     "body_usage", "case_objects",
     "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
+    "settings",
     # harness_messages (migration 0051) joined its three siblings here on 2026-08-28,
     # closing obligation 4ffb2b37. It was missing from the day the table shipped: every
     # OTHER harness_* table was listed, so the omission read as deliberate rather than
@@ -558,6 +562,18 @@ def _no_ambient_deploy_gate_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     env scrubbed never overrides that test's own explicit construction)."""
     monkeypatch.delenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", raising=False)
     monkeypatch.delenv("OSIRIS_DEPLOY_CHAOS_GATE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_overlay_cache() -> None:
+    """THE SETTINGS MENU's own overlay (thread f4498ab304e4, settings_service.py) caches
+    the whole `settings` table in a module-level dict for a 30s TTL — real, load-bearing
+    in production (one query, not one per registered key), but a genuine cross-test
+    leak risk here: two tests writing the SAME key within that window in the same xdist
+    worker would otherwise see each other's value. Reset before every test."""
+    from src.orchestrator.settings_service import _invalidate_overlay_cache
+
+    _invalidate_overlay_cache()
 
 
 @pytest_asyncio.fixture

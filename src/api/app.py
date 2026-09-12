@@ -1329,6 +1329,27 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return await write_backup_settings(
             p, actor="analyst:operator", because=body.because, **fields)
 
+    # THE SETTINGS MENU'S OWN REST DOOR (thread f4498ab304e4 piece 1) — mirrors the MCP
+    # `settings(action=...)` tool one-for-one, same split as /backup-settings above:
+    # both wrap the SAME orchestrator functions, never one calling the other. Every
+    # write here is `analyst:operator` for the identical reason /backup-settings's own
+    # comment gives — the console has no other identity to offer today.
+    @app.get("/settings")
+    async def list_settings_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        from src.orchestrator.settings_service import list_settings
+
+        return {"settings": await list_settings(p)}
+
+    @app.post("/settings")
+    async def write_setting_route(
+        body: SettingsWriteBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.settings_service import write_setting
+
+        return await write_setting(
+            p, body.key, body.value, actor="analyst:operator", because=body.because,
+            scope_id=body.scope_id)
+
     @app.post("/desk/settle")
     async def desk_settle(
         body: DeskSettleBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1959,6 +1980,17 @@ class BackupSettingsBody(BaseModel):
     vault_path: str | None = None
     timer_schedules: dict[str, str] | None = None
     offbox_repositories: list[dict[str, Any]] | None = None
+
+
+class SettingsWriteBody(BaseModel):
+    """THE SETTINGS MENU's own write body (thread f4498ab304e4 piece 1) — one key at a
+    time, generalizing BackupSettingsBody's own partial-update shape over the
+    registry. `because` is optional here (some specs opt out via
+    `requires_because=False`); `write_setting` itself enforces the spec's own rule."""
+    key: str
+    value: Any = None
+    because: str = ""
+    scope_id: str = ""
 
 
 class ActBody(BaseModel):

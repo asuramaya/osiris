@@ -52,7 +52,6 @@ from typing import Any
 import asyncpg
 
 from src.actions.core import Actions
-from src.config.settings import get_settings
 from src.orchestrator.monitor import get_cursor, set_cursor
 from src.orchestrator.proposals import propose
 
@@ -212,9 +211,16 @@ async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
     candidate against its next eligible abstention, or do nothing. Never raises past a
     normal `{"action": ...}` receipt — `guarded_miner_tick` (the caller's own wrapper) is
     where a genuine exception becomes a durable failure receipt; this function's own
-    business-as-usual "found nothing"/"too many candidates" outcomes are not failures."""
-    settings = get_settings()
+    business-as-usual "found nothing"/"too many candidates" outcomes are not failures.
+
+    Reads `settings_with_overlay` (THE SETTINGS MENU piece 1, thread f4498ab304e4),
+    not bare `get_settings()` — `miner.abstention.enabled` is registered with
+    `effect='immediate'`, so a write through the settings door takes hold on the very
+    next tick, no restart needed."""
+    from src.orchestrator.settings_service import settings_with_overlay
+
     pool = actions.pool
+    settings = await settings_with_overlay(pool)
     if not getattr(settings, "osiris_abstention_miner_enabled", True):
         return {"action": "dark", "reason": "osiris_abstention_miner_enabled is False"}
     idx = await _next_lane_index(pool)

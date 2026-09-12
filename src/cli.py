@@ -2940,6 +2940,75 @@ async def cmd_charter_for(
     return 0
 
 
+# --- settings (THE SETTINGS MENU, thread f4498ab304e4 piece 1) ---------------------------------
+
+async def cmd_settings(
+    action: str, *, key: str | None = None, value: str | None = None,
+    because: str = "", ruling: str | None = None, scope_id: str = "",
+    actor: str = _CONSOLE_ACTOR, as_json: bool = False, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris settings <list|get|set> ... — the console-script door onto
+    settings_service.{list_settings,get_setting,write_setting}, the SAME functions the
+    `settings` MCP tool wraps (no duplicated logic — the CLI backup_settings itself
+    never got, per Thoth's own ask on thread f4498ab304e4). `value` is a JSON string
+    for anything beyond a bare number/string (e.g. `'true'`, `'{"a":1}'`, `'["x","y"]'`)
+    — parsed the same way `osiris proposal`'s own `--candidate` flag already is."""
+    import json as _json
+
+    from src.orchestrator import settings_service
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+
+        apply_dev_fallback()
+        settings = get_settings()
+        from src.db.pool import create_pool
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:settings")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris settings: could not reach postgres at {settings.database_url} "
+                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            return 1
+    try:
+        if action == "list":
+            out: dict[str, Any] = {"settings": await settings_service.list_settings(pool)}
+        elif action == "get":
+            if not key:
+                print("osiris settings get: a key is required", file=sys.stderr)
+                return 1
+            out = await settings_service.get_setting(pool, key)
+        elif action == "set":
+            if not key:
+                print("osiris settings set: a key is required", file=sys.stderr)
+                return 1
+            parsed_value: Any = None
+            if value is not None:
+                try:
+                    parsed_value = _json.loads(value)
+                except _json.JSONDecodeError:
+                    parsed_value = value  # a bare unquoted string ('claude-fable-5') is legal
+            out = await settings_service.write_setting(
+                pool, key, parsed_value, actor=actor, because=because, scope_id=scope_id,
+                ruling=ruling)
+        else:
+            print(f"osiris settings: action must be 'list', 'get', or 'set' (got {action!r})",
+                  file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris settings {action}: refused — {out['error']}", file=sys.stderr)
+        return 1
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title=f"settings {action}")
+    return 0
+
+
 # --- amend-practice ----------------------------------------------------------------------------
 
 async def cmd_amend_practice(
@@ -5297,7 +5366,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project,
-                        set-project-tag, proposal
+                        set-project-tag, proposal, settings
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile, fleet-prune
 
@@ -5632,6 +5701,34 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "non-manager act under that ruling's authority "
                                     "instead, refused unless the ruling actually names "
                                     "charter_for")
+
+    p_settings = sub.add_parser("settings", description=_d(
+        "THE SETTINGS MENU's own CLI door (thread f4498ab304e4) — list/get/set over "
+        "the settings registry, the same functions the `settings` MCP tool wraps"),
+        epilog="example: osiris settings list\n"
+               "example: osiris settings get daemon.pit_watch.enabled\n"
+               "example: osiris settings set daemon.pit_watch.enabled true "
+               "--because 'watching a live pit tonight'")
+    p_settings.add_argument("action", choices=("list", "get", "set"))
+    p_settings.add_argument("key", nargs="?", default=None,
+                            help="required for get/set — a registered dotted key "
+                                 "(see 'osiris settings list')")
+    p_settings.add_argument("value", nargs="?", default=None,
+                            help="set only — a JSON value ('true', '5', '\"text\"', "
+                                 "'{\"a\":1}'), or a bare string when it isn't valid JSON")
+    p_settings.add_argument("--because", default="",
+                            help="required unless the setting opts out "
+                                 "(requires_because=False)")
+    p_settings.add_argument("--ruling", default=None,
+                            help="a standing operator ruling's decision id — lets a "
+                                 "non-operator write under that ruling's authority")
+    p_settings.add_argument("--scope-id", default="", dest="scope_id",
+                            help="for a project/seat-scoped setting; box-scope settings "
+                                 "(everything registered today) ignore this")
+    p_settings.add_argument("--actor", default=_CONSOLE_ACTOR,
+                            help=f"who is making this change — defaults to {_CONSOLE_ACTOR!r}")
+    p_settings.add_argument("--json", action="store_true", dest="as_json",
+                            help="machine-readable: one compact JSON line")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
         "narrow or correct a LIVE practice's "
@@ -6437,6 +6534,11 @@ def main(argv: list[str] | None = None) -> int:
         repos = [r.strip() for r in args.repos.split(",") if r.strip()]
         return asyncio.run(cmd_charter_for(args.seat, repos, args.because, actor=args.actor,
                                            ruling=args.ruling))
+    if args.command == "settings":
+        return asyncio.run(cmd_settings(
+            args.action, key=args.key, value=args.value, because=args.because,
+            ruling=args.ruling, scope_id=args.scope_id, actor=args.actor,
+            as_json=args.as_json))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     if args.command == "annotate-thread":

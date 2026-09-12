@@ -190,6 +190,8 @@ CLI_ONLY_PARAMS = {
         "own entry below.",
     ("proposal", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
         "own entry below.",
+    ("settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
     ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
         "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
         "bare console caller has no mount to derive it from, so this names the gap with "
@@ -1472,6 +1474,15 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # before this (the scope report's own finding); no existing door names a backup
     # setting as one of its own params.
     "backup_settings": {"binding_verb": False},
+    # settings — THE SETTINGS MENU piece 1 (thread f4498ab304e4, Thoth mail 10040):
+    # list/get/write over the settings registry (src/config/settings_registry.py),
+    # generalizing backup_settings' own shape above over a declared registry instead
+    # of one hardcoded field set. Not a seat/office/project binding-mover — it writes
+    # the `settings` table (EAV-shaped, migration 0067), never seat/house state. Not a
+    # parameterization of backup_settings or any other tool — a distinct registry-wide
+    # door, backup_settings itself stays a separate, already-shipped door (folding it
+    # into this registry is Seshat's own later piece).
+    "settings": {"binding_verb": False},
 }
 
 

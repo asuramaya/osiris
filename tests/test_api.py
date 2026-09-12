@@ -963,3 +963,40 @@ async def test_backup_settings_route_rejects_a_bad_field_without_writing(
         "because": "testing", "timer_schedules": {"not-a-real.timer": "daily"}})
     assert "error" in r.json()
     assert (await client.get("/backup-settings")).json()["timer_schedules"] == {}
+
+
+# --- settings (THE SETTINGS MENU, thread f4498ab304e4 piece 1) --------------
+
+async def test_settings_route_list_shows_every_registered_knob(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/settings")
+    assert r.status_code == 200
+    keys = {s["key"] for s in r.json()["settings"]}
+    assert "daemon.pit_watch.enabled" in keys
+
+
+async def test_settings_route_writes_as_the_operator(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """The console is the operator's own surface (6c18709f) — every write here is
+    analyst:operator, an operator actor by construction, needing no ruling citation."""
+    r = await client.post("/settings", json={
+        "key": "daemon.pit_watch.enabled", "value": True, "because": "watching tonight"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["value"] is True
+    listed = (await client.get("/settings")).json()["settings"]
+    row = next(s for s in listed if s["key"] == "daemon.pit_watch.enabled")
+    assert row["value"] is True
+
+
+async def test_settings_route_rejects_a_bad_value_without_writing(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/settings", json={
+        "key": "daemon.pit_watch.enabled", "value": "not-a-bool", "because": "testing"})
+    assert "error" in r.json()
+    listed = (await client.get("/settings")).json()["settings"]
+    row = next(s for s in listed if s["key"] == "daemon.pit_watch.enabled")
+    assert row["value"] is False  # untouched

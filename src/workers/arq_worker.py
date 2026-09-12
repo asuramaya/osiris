@@ -719,10 +719,11 @@ async def pit_watch_heartbeat(ctx: dict[str, Any]) -> int:
     consecutive sightings (OFF unless osiris_pit_watch_enabled — the kill switch). Never
     dispatches or spawns anything of its own; a DB hiccup logs, never sinks the cron."""
     from src.orchestrator.pit_watch import pit_watch_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await pit_watch_tick(actions)
+        report = await pit_watch_tick(actions, settings=await settings_with_overlay(actions.pool))
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("pit watch heartbeat failed: %r", exc)
         return 0
@@ -737,10 +738,12 @@ async def fleet_reconcile_heartbeat(ctx: dict[str, Any]) -> int:
     logic both live in fleet_reconcile.reconcile_scheduled_tick, never here, so a test can
     exercise the real gate without touching arq. A DB hiccup logs, never sinks the cron."""
     from src.orchestrator.fleet_reconcile import reconcile_scheduled_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await reconcile_scheduled_tick(actions)
+        report = await reconcile_scheduled_tick(
+            actions, settings=await settings_with_overlay(actions.pool))
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("fleet reconcile heartbeat failed: %r", exc)
         return 0
@@ -758,12 +761,12 @@ async def phantom_heal_heartbeat(ctx: dict[str, Any]) -> int:
     exercise it directly without touching arq. Folds only FRESH zero-turn phantoms never
     before flagged; an already-flagged-but-half-healed row is reported as an obligation
     by the same call, never auto-completed. A DB hiccup logs, never sinks the cron."""
-    from src.config.settings import get_settings
     from src.orchestrator.agents import fold_existing_zero_turn_phantoms
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_phantom_heal_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
+    if not (await settings_with_overlay(actions.pool)).osiris_phantom_heal_enabled:
+        return 0
     try:
         folded = await fold_existing_zero_turn_phantoms(actions)
     except Exception as exc:  # a DB hiccup must not kill the cron
@@ -783,12 +786,12 @@ async def phantom_fold_reap_heartbeat(ctx: dict[str, Any]) -> int:
     Reinstates a false_mint generation only when registry_census independently confirms a
     live body; invalidates a duplicate works_in edge only when exactly one live target is
     a dead SoftwareProject. A DB hiccup logs, never sinks the cron."""
-    from src.config.settings import get_settings
     from src.orchestrator.phantom_fold_reap import phantom_fold_scheduled_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_phantom_fold_reap_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
+    if not (await settings_with_overlay(actions.pool)).osiris_phantom_fold_reap_enabled:
+        return 0
     try:
         report = await phantom_fold_scheduled_tick(actions)
     except Exception as exc:  # a DB hiccup must not kill the cron
@@ -811,12 +814,12 @@ async def obligation_hygiene_heartbeat(ctx: dict[str, Any]) -> int:
     obligation's own owner (or the operator, per the owner-address fallback); N2=+7 more
     days of silence marks it a STALE-CANDIDATE and briefs the operator's desk. Never
     auto-resolves anything. A DB hiccup logs, never sinks the cron."""
-    from src.config.settings import get_settings
     from src.orchestrator.obligation_hygiene import obligation_hygiene_scheduled_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_obligation_hygiene_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
+    if not (await settings_with_overlay(actions.pool)).osiris_obligation_hygiene_enabled:
+        return 0
     try:
         report = await obligation_hygiene_scheduled_tick(actions)
     except Exception as exc:  # a DB hiccup must not kill the cron
@@ -835,12 +838,12 @@ async def no_regrow_heartbeat(ctx: dict[str, Any]) -> int:
     osiris_no_regrow_enabled (the kill switch, OFF by default). The acting logic
     (no_regrow_scheduled_tick) lives in no_regrow.py so a test can exercise it directly
     without touching arq. A DB hiccup logs, never sinks the cron."""
-    from src.config.settings import get_settings
     from src.orchestrator.no_regrow import no_regrow_scheduled_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_no_regrow_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
+    if not (await settings_with_overlay(actions.pool)).osiris_no_regrow_enabled:
+        return 0
     try:
         report = await no_regrow_scheduled_tick(actions)
     except Exception as exc:  # a DB hiccup must not kill the cron
@@ -1002,12 +1005,12 @@ async def landing_audit_heartbeat(ctx: dict[str, Any]) -> int:
     by hand from any worktree; it does not apply to this always-primary-service caller). A
     DB or git hiccup logs, never sinks the cron (landing_audit's own NEVER REFUSES law,
     doubled)."""
-    from src.config.settings import get_settings
     from src.orchestrator.deploy_guard import _REPO_ROOT, landing_audit
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_landing_audit_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
+    if not (await settings_with_overlay(actions.pool)).osiris_landing_audit_enabled:
+        return 0
     try:
         audit = await landing_audit(actions, _REPO_ROOT)
     except Exception as exc:  # a DB or git hiccup must not kill the cron
@@ -1026,10 +1029,12 @@ async def closure_miner_heartbeat(ctx: dict[str, Any]) -> int:
     closure.close_by_commits_scheduled_tick, never here. A DB hiccup logs, never sinks
     the cron."""
     from src.ingest.closure import close_by_commits_scheduled_tick
+    from src.orchestrator.settings_service import settings_with_overlay
 
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await close_by_commits_scheduled_tick(actions)
+        report = await close_by_commits_scheduled_tick(
+            actions, settings=await settings_with_overlay(actions.pool))
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("closure miner heartbeat failed: %r", exc)
         return 0
@@ -1102,11 +1107,13 @@ async def tree_ingest_alarm_heartbeat(ctx: dict[str, Any]) -> int:
     logic both live in tree_ingest.uningested_trees_alarm_tick, never here. It never
     ingests anything itself — it mails the owning Seat a graded 'ask'; ingest_project stays
     that seat's own deliberate second call. A DB hiccup logs, never sinks the cron."""
+    from src.orchestrator.settings_service import settings_with_overlay
     from src.orchestrator.tree_ingest import uningested_trees_alarm_tick
 
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await uningested_trees_alarm_tick(actions)
+        report = await uningested_trees_alarm_tick(
+            actions, settings=await settings_with_overlay(actions.pool))
     except Exception as exc:  # a DB hiccup must not kill the cron
         _log.warning("tree ingest alarm heartbeat failed: %r", exc)
         return 0
@@ -1138,14 +1145,14 @@ async def retention_heartbeat(ctx: dict[str, Any]) -> int:
     A DB hiccup on either table logs and skips ONLY that table's own retention + receipt
     line — the other table's run is independent, same "one hiccup never sinks a sibling"
     discipline as classification_laws_heartbeat's four sub-sweeps."""
-    from src.config.settings import get_settings
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.retention import audit_log_retention, outbox_retention
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_retention_heartbeat_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
     pool = actions.pool
+    if not (await settings_with_overlay(pool)).osiris_retention_heartbeat_enabled:
+        return 0
 
     lines: list[str] = []
     deleted = 0
@@ -1198,14 +1205,14 @@ async def soul_cold_tier_heartbeat(ctx: dict[str, Any]) -> int:
     already isolates one bad session's own error into the receipt without aborting its
     siblings, so a hiccup reaching here means something broke before or between
     sessions, not within one."""
-    from src.config.settings import get_settings
     from src.ingest.soul_store import SoulStore
     from src.orchestrator.mailbox import send_message
+    from src.orchestrator.settings_service import settings_with_overlay
 
-    if not get_settings().osiris_soul_cold_tier_enabled:
-        return 0
     actions: Actions = ctx["cascade"].actions
     pool = actions.pool
+    if not (await settings_with_overlay(pool)).osiris_soul_cold_tier_enabled:
+        return 0
     try:
         report = await SoulStore(pool).fold_cold_tier_batch(idle_days=30, limit=20)
     except Exception as exc:  # a DB hiccup must not kill the cron
