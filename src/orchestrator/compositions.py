@@ -139,6 +139,7 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -4745,7 +4746,200 @@ async def _fn_obligation_backlog(
     }
 
 
+_BACKUP_TIMER_UNITS: list[tuple[str, str]] = [
+    ("osiris-backup.timer", "dumps (pg_dump, every 6h)"),
+    ("osiris-base-backup.timer", "base backups (pg_basebackup, weekly)"),
+    ("osiris-prune-manifest.timer", "prune ladder — manifest (dry run, mailed)"),
+    ("osiris-prune-apply.timer", "prune ladder — apply (deletes if the manifest is clear)"),
+    ("osiris-preflight.timer", "weekly preflight — includes the dump-restore drill"),
+]
+
+
+def _backup_vault_path(args: dict[str, Any]) -> Path:
+    import os
+
+    if args.get("vault"):
+        return Path(str(args["vault"]))
+    return Path(os.environ.get("OSIRIS_VAULT", str(Path.home() / "osiris-vault")))
+
+
+def _backup_backups_path(args: dict[str, Any]) -> Path:
+    if args.get("backups"):
+        return Path(str(args["backups"]))
+    return Path.home() / "code" / "osiris" / "backups"
+
+
+def _backup_deploy_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "deploy"
+
+
+def _backup_timer_calendar(unit: str) -> str | None:
+    """The unit's own `OnCalendar=` line, read straight off the shipped `deploy/<unit>`
+    file — the SAME file `osiris deploy`'s own install step reinstalls the live timer
+    from (scripts/install_prune_timers.sh, Thoth mail 8437), so this is the schedule
+    that's actually running, not a second guess at it. None when the file doesn't exist
+    or carries no such line (never a fabricated schedule)."""
+    path = _backup_deploy_dir() / unit
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("OnCalendar="):
+            return line.removeprefix("OnCalendar=")
+    return None
+
+
+async def _backup_timer_live_state(unit: str) -> dict[str, Any]:
+    """Best-effort LIVE last/next-run off `systemctl --user show` — UNAVAILABLE, not
+    fabricated, the moment this isn't running on a box with that unit installed (CI, a
+    dev worktree, systemd absent entirely): same "unavailable, not silent" law
+    `_fn_fleet_live_agents` already holds, an empty dict rather than a raised
+    exception or a fake timestamp."""
+    import asyncio
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "show", unit,
+            "-p", "LastTriggerUSec", "-p", "NextElapseUSecRealtime", "-p", "ActiveState",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except (OSError, TimeoutError):
+        return {}
+    fields: dict[str, str] = {}
+    for line in out.decode().splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            fields[k] = v
+    out_state: dict[str, Any] = {}
+    if fields.get("ActiveState"):
+        out_state["active_state"] = fields["ActiveState"]
+    last = fields.get("LastTriggerUSec")
+    if last and last not in ("n/a", "0"):
+        out_state["last_trigger"] = last
+    nxt = fields.get("NextElapseUSecRealtime")
+    if nxt and nxt not in ("n/a", "0"):
+        out_state["next_elapse"] = nxt
+    return out_state
+
+
+async def _fn_backup_status(
+    pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
+) -> Any:
+    """THE BACKUP PANEL'S READ HALF (Wave 21, operator's word 2026-09-11, thread f04cce36
+    piece 2): a Function, not an op-tree — the scope report (annotated on f04cce36) found
+    this whole domain has no graph object to `select` over at all; every fact here is a
+    live process/filesystem read (dumps, base backups, WAL segments, the ladder's own
+    manifest-mail state, disk headroom, the 5 systemd timers), never a `winning_props`
+    assertion. Every section wraps an EXISTING definition rather than re-deriving it —
+    `_compute_plans`/`find_clear_manifest` are osiris_prune_ladder.py's own scan-and-plan
+    step (the same one --manifest/--apply-if-clear run), `has_room` is osiris_disk_guard.py's
+    own margin check — so a panel reading this can never drift from what the timers
+    actually do. Read-only, no writes (6c18709f) — the write door is its own piece (3).
+
+    Each section degrades independently ({"error": ...}, `_fn_fleet_live_agents`'s own
+    law: unavailable, not silent, never a fake row) so one missing directory or a systemd-
+    less box (CI, a dev worktree) still returns every OTHER section intact — `args.vault`/
+    `args.backups` are optional overrides (str paths) a test points at a tmp_path instead
+    of the real production paths, the same opt-in-args discipline `select`'s own `scope`
+    uses."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from scripts.osiris_disk_guard import has_room
+    from scripts.osiris_prune_ladder import _compute_plans, find_clear_manifest, plan_prune
+
+    vault = _backup_vault_path(args)
+    backups_dir = _backup_backups_path(args)
+
+    now = _datetime.now(_UTC)
+
+    timers: list[dict[str, Any]] = []
+    for unit, label in _BACKUP_TIMER_UNITS:
+        row: dict[str, Any] = {"unit": unit, "label": label,
+                               "schedule": _backup_timer_calendar(unit)}
+        row.update(await _backup_timer_live_state(unit))
+        timers.append(row)
+
+    try:
+        plans, chain_plan, wal_plan, legacy_plan = _compute_plans(backups_dir, vault)
+        dumps = plans["vault"]["keep"] + plans["vault"]["remove"]
+        basebackups = (plans["vault/basebackups"]["keep"]
+                       + plans["vault/basebackups"]["remove"])
+        newest_dump = max(dumps, key=lambda f: f.when) if dumps else None
+        newest_base = max(basebackups, key=lambda f: f.when) if basebackups else None
+        vault_section: dict[str, Any] = {
+            "dumps": {"count": len(dumps),
+                      "newest_at": newest_dump.when.isoformat() if newest_dump else None,
+                      "newest_size_bytes": newest_dump.size_bytes if newest_dump else None},
+            "base_backups": {"count": len(basebackups),
+                             "newest_at": newest_base.when.isoformat() if newest_base else None},
+            "wal_segments_kept": len(wal_plan["keep"]),
+            "wal_segments_prunable": len(wal_plan["remove"]),
+        }
+    except Exception:  # noqa: BLE001 — a missing/unreadable vault is UNAVAILABLE, not a
+        # crash that blanks every other section (disk/manifest/timers stay independent)
+        vault_section = {"error": f"vault scan unavailable ({vault})"}
+        newest_dump = None
+
+    try:
+        free = __import__("shutil").disk_usage(vault).free
+        disk_section: dict[str, Any] = {"free_bytes": free, "free_gb": round(free / 1024**3, 2)}
+        if newest_dump is not None:
+            disk_section["last_dump_size_bytes"] = newest_dump.size_bytes
+            disk_section["headroom_ok"] = has_room(free, newest_dump.size_bytes)
+    except Exception:  # noqa: BLE001 — see vault_section above
+        disk_section = {"error": f"disk usage unavailable ({vault})"}
+
+    try:
+        # the ladder's own tier windows are Python default-argument constants today
+        # (scope report's own finding) — read straight off `plan_prune`'s signature
+        # rather than a second, hand-copied set of numbers that could drift from them.
+        import inspect
+
+        params = inspect.signature(plan_prune).parameters
+        ladder_section: dict[str, Any] = {
+            "hot_window_hours": params["hot_window"].default.total_seconds() / 3600,
+            "daily_window_days": params["daily_window"].default.days,
+            "weekly_window_days": params["weekly_window"].default.days,
+            "configurable": False,  # piece 3's own job — not yet a written setting anywhere
+        }
+    except Exception:  # noqa: BLE001
+        ladder_section = {"error": "ladder tiers unavailable"}
+
+    try:
+        manifest_id, manifest_reason = await find_clear_manifest()
+        manifest_section: dict[str, Any] = {"clear_to_apply": manifest_id is not None,
+                                            "reason": manifest_reason}
+    except Exception:  # noqa: BLE001 — a DB hiccup here must not blank the rest of the panel
+        manifest_section = {"error": "manifest state unavailable"}
+
+    offbox_section = {
+        "wired": False,
+        "script_exists": True,
+        "note": "design held for the operator's ruling — see thread cf134938",
+    }
+    pitr_section = {
+        "wired_to_a_timer": False,
+        "note": "scripts/osiris_pitr_drill.py — manual-only today, no receipt persisted",
+    }
+
+    return {
+        "as_of": now.isoformat(),
+        "timers": timers,
+        "vault": vault_section,
+        "disk": disk_section,
+        "ladder": ladder_section,
+        "prune_manifest": manifest_section,
+        "pitr_drill": pitr_section,
+        "offbox": offbox_section,
+    }
+
+
 _FUNCTIONS: dict[str, Function] = {
+    "backup_status": _fn_backup_status,
     "coinvest": _fn_coinvest,
     "subject_report": _fn_subject_report,
     "screen_network": _fn_screen,
@@ -4792,7 +4986,7 @@ _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "puls
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
                  "mail_threads", "overhead", "desk_overview", "desk_project", "triage",
                  "closure_health", "reference_catalog", "census", "obligation_backlog",
-                 "project_worktrees"}
+                 "project_worktrees", "backup_status"}
 
 
 def list_functions() -> list[str]:
