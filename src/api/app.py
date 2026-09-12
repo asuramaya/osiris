@@ -1300,6 +1300,35 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return {"verb": body.verb, "acted": done, "missed": len(out) - done,
                 "results": out, "by": "analyst:operator"}
 
+    # THE BACKUP CONFIG PANEL'S WRITE DOOR (Wave 21, thread f04cce36 piece 3b): the
+    # console's own REST door onto write_backup_settings, mirroring the MCP
+    # `backup_settings(action=...)` tool one-for-one — both wrap the SAME orchestrator
+    # function, never one calling the other, same split `/threads/triage` and the
+    # `thread(action=...)` MCP tool already keep. The console is the operator's own
+    # surface (6c18709f) — every write here is `analyst:operator`, an operator actor
+    # by construction, so it never needs a ruling citation the way a fleet worker would.
+    @app.get("/backup-settings")
+    async def get_backup_settings_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        from src.orchestrator.backup_settings import get_backup_settings
+
+        return await get_backup_settings(p)
+
+    @app.post("/backup-settings")
+    async def set_backup_settings_route(
+        body: BackupSettingsBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.backup_settings import write_backup_settings
+
+        fields: dict[str, Any] = {}
+        if body.vault_path is not None:
+            fields["vault_path"] = body.vault_path
+        if body.timer_schedules is not None:
+            fields["timer_schedules"] = body.timer_schedules
+        if body.offbox_repositories is not None:
+            fields["offbox_repositories"] = body.offbox_repositories
+        return await write_backup_settings(
+            p, actor="analyst:operator", because=body.because, **fields)
+
     @app.post("/desk/settle")
     async def desk_settle(
         body: DeskSettleBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1920,6 +1949,16 @@ class ThreadTriageBody(BaseModel):
 class DeskSettleBody(BaseModel):
     """The operator DISMISSING briefs from his own desk — his click, his signature."""
     ids: list[int]
+
+
+class BackupSettingsBody(BaseModel):
+    """The backup config panel's write half (thread f04cce36 piece 3) — a partial
+    update, only given fields change. `because` is required, same testimony
+    discipline `/threads/triage` runs for a deliberate operator act."""
+    because: str
+    vault_path: str | None = None
+    timer_schedules: dict[str, str] | None = None
+    offbox_repositories: list[dict[str, Any]] | None = None
 
 
 class ActBody(BaseModel):
