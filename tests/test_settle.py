@@ -264,6 +264,89 @@ async def test_uncommitted_git_work_names_the_dirty_files(tmp_path: Path) -> Non
     assert out is not None and any("untracked.txt" in line for line in out)
 
 
+# --- resolve_dirty_tree_owner (thread fe1d91bc, Thoth dispatch 9870/9976/10000) -----------
+
+async def test_resolve_dirty_tree_owner_none_when_the_tree_is_clean(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
+
+    _git(tmp_path, "init")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "cleanown"),
+                     agent_id="agent:cleanowner", project="p", cwd=str(tmp_path),
+                     model=None, session_key=None)
+    assert await resolve_dirty_tree_owner(actions.pool, str(tmp_path)) is None
+
+
+async def test_resolve_dirty_tree_owner_none_when_no_mount_matches_that_cwd(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Never a guess — a dirty tree with no matching mount row returns None so the
+    caller's own disclaimer stays verbatim, same fail-open law uncommitted_git_work
+    itself already holds."""
+    from src.orchestrator.mounts import resolve_dirty_tree_owner
+
+    _git(tmp_path, "init")
+    (tmp_path / "dirty.txt").write_text("x\n")
+    assert await resolve_dirty_tree_owner(actions.pool, str(tmp_path)) is None
+
+
+async def test_resolve_dirty_tree_owner_finds_the_mounted_agent(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
+
+    _git(tmp_path, "init")
+    (tmp_path / "dirty.txt").write_text("x\n")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "ownerfnd"),
+                     agent_id="agent:theowner", project="p", cwd=str(tmp_path),
+                     model=None, session_key=None)
+    out = await resolve_dirty_tree_owner(actions.pool, str(tmp_path))
+    assert out is not None and out["agent_id"] == "agent:theowner"
+    assert out["last_seen"] is not None
+
+
+async def test_resolve_dirty_tree_owner_matches_a_stale_vacated_seats_mount_row(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A seat that stopped without unmounting leaves its mount row exactly where it
+    always was — deliberately still a match (Thoth's own requirement, dispatch 10000):
+    this function never decides a mount is "too old to count," it hands `last_seen`
+    back so the caller can judge staleness for itself."""
+    from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
+
+    _git(tmp_path, "init")
+    (tmp_path / "dirty.txt").write_text("x\n")
+    stale_at = datetime.now(UTC) - timedelta(days=3)
+    job_dir = str(tmp_path / "jobs" / "vacated1")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id="agent:vacatedseat",
+                     project="p", cwd=str(tmp_path), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen=$1 WHERE job_dir=$2", stale_at, job_dir)
+    out = await resolve_dirty_tree_owner(actions.pool, str(tmp_path))
+    assert out is not None and out["agent_id"] == "agent:vacatedseat"
+    assert (datetime.now(UTC) - out["last_seen"]) >= timedelta(days=3)
+
+
+async def test_resolve_dirty_tree_owner_exact_cwd_match_not_a_prefix_match(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A sibling worktree that merely shares a path prefix must never match — the exact-
+    cwd discipline this function's own docstring commits to."""
+    from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
+
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    real = tmp_path / "sibling-real"  # shares tmp_path/"sibling" as a literal PREFIX
+    real.mkdir()
+    _git(real, "init")
+    (real / "dirty.txt").write_text("x\n")
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "prefix01"),
+                     agent_id="agent:wrongmatch", project="p", cwd=str(sibling),
+                     model=None, session_key=None)
+    assert await resolve_dirty_tree_owner(actions.pool, str(real)) is None
+
+
 async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -2369,6 +2452,102 @@ async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_com
     assert out["git_checked_path"] == str(tmp_path)  # no repo_path given — falls back to cwd
     assert "uncommitted git file" in out["note"]
     assert "informational" in out["note"]
+    # the caller IS the owner here (its own mount's cwd == git_checked_path) — the
+    # generic disclaimer stays, never "looks like {self}'s own work" (thread fe1d91bc,
+    # Thoth's own requirement 1: never name an owner that is just the caller itself
+    # reading back its own note, and never fabricate a name when the caller already
+    # knows whose tree this is).
+    assert agent not in out["note"]
+
+
+async def test_settle_tool_names_the_real_owner_of_a_foreign_uncommitted_hunk(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIX (thread fe1d91bc, Thoth dispatch 9870/9976/10000): the ORIGINAL incident
+    this thread exists for — an alarm about a foreign hunk addressed to the one party
+    who could neither have written it nor restored it, while its real owner (a DIFFERENT
+    mounted agent at the exact same cwd) was never told. settle()'s own uncommitted_git_
+    work box now names that real owner directly instead of a bare disclaimer."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    caller = "agent:settlecal1"
+    real_owner = "agent:realowner1"
+    _git(tmp_path, "init")
+    (tmp_path / "charter.md").write_text("# notes\n")
+    (tmp_path / "dirty.txt").write_text("uncommitted\n")
+    # the REAL owner's own mount, most-recently-active at this exact cwd
+    await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "realownr"),
+                     agent_id=real_owner, project="p", cwd=str(tmp_path),
+                     model=None, session_key=None)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    # the CALLER is mounted at a DIFFERENT cwd but points settle at this shared repo
+    # via repo_path — a coordinator checking a directory that isn't its own workspace,
+    # settle.py's own documented load-bearing scenario.
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=caller, session="settlecal1", project="p", model=None,
+        cwd=str(tmp_path / "elsewhere"))
+    try:
+        out = await srv.settle(repo_path=str(tmp_path), ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert out["complete"] is True  # still never gated by uncommitted git state
+    assert real_owner in out["note"]
+    assert "judge staleness" in out["note"]
+    assert caller not in out["note"]
+
+
+async def test_settle_tool_a_vacated_seats_stale_mount_still_names_it_as_owner(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth's own requirement 2 (dispatch 10000): a stale mount row for a seat that
+    vacated without unmounting still matches — the receipt names the owner PLUS its
+    last_seen age, so a reader can judge staleness themselves rather than this box
+    silently deciding the mount is too old to count."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+    from src.orchestrator.mounts import save_mount
+
+    caller = "agent:settlecal2"
+    vacated = "agent:vacatedagent1"
+    _git(tmp_path, "init")
+    (tmp_path / "charter.md").write_text("# notes\n")
+    (tmp_path / "dirty.txt").write_text("uncommitted\n")
+    job_dir = str(tmp_path / "jobs" / "vacated2")
+    await save_mount(actions.pool, job_dir=job_dir, agent_id=vacated, project="p",
+                     cwd=str(tmp_path), model=None, session_key=None)
+    stale_at = datetime.now(UTC) - timedelta(days=2)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen=$1 WHERE job_dir=$2", stale_at, job_dir)
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id=caller, session="settlecal2", project="p", model=None,
+        cwd=str(tmp_path / "elsewhere"))
+    try:
+        out = await srv.settle(repo_path=str(tmp_path), ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert vacated in out["note"]
+    assert "2 day" in out["note"]  # the age rides along, unrounded away
 
 
 async def test_settle_tool_repo_path_overrides_the_office_cwd(

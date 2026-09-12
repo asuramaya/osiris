@@ -11227,10 +11227,26 @@ async def settle(
     # ALWAYS surfaced, regardless of `complete` — these inform a reader without gating them
     # (defects 1b and 2): uncommitted files may be someone else's in-flight work in a
     # shared tree; an unevaluated box is fog-of-war, not a clean bill of health.
-    uncommitted_note = (
-        f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
-        "only (may be another agent's in-flight work in a shared tree, never gates "
-        "complete)" if uncommitted else "")
+    # THE OWNER, NAMED WHEN RESOLVABLE (thread fe1d91bc, Thoth dispatch 9870/9976/10000):
+    # `resolve_dirty_tree_owner` joins the SAME dirty-check against agent_mounts.cwd — an
+    # exact match, most-recently-active mount wins, including a vacated seat's own stale
+    # row (its `last_seen` age rides along so a reader can judge staleness, never a
+    # silent cutoff here). No match (no mount ever recorded that exact cwd) keeps
+    # TODAY'S DISCLAIMER VERBATIM — never a guess, same fail-open law the box already
+    # held before this.
+    dirty_owner = await mounts.resolve_dirty_tree_owner(pool, git_dir) if uncommitted else None
+    if dirty_owner and dirty_owner["agent_id"] != ident.agent_id:
+        age = datetime.now(UTC) - dirty_owner["last_seen"]
+        uncommitted_note = (
+            f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
+            f"only, never gates complete — looks like {dirty_owner['agent_id']}'s own "
+            f"in-flight work (last seen {age} ago, judge staleness yourself)"
+            if uncommitted else "")
+    else:
+        uncommitted_note = (
+            f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
+            "only (may be another agent's in-flight work in a shared tree, never gates "
+            "complete)" if uncommitted else "")
     unevaluated_note = (
         f" — could not evaluate: {', '.join(unevaluated)} (fog-of-war, not a pass, "
         "never gates complete)" if unevaluated else "")
