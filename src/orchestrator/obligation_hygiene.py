@@ -235,21 +235,19 @@ async def _project_name_for(pool: asyncpg.Pool, owner: str) -> str | None:
 
 
 async def _is_exactly_live(pool: asyncpg.Pool, agent_id: str) -> bool:
-    """agent_liveness's own two-signal freshest-of test (mounts.py), but EXACT — no
-    lineage-wide LIKE broadening across a base id's generations. A DM to a specific
-    `agent:<id>` addresses THAT generation's own mailbox literally (send_message's own
-    grave rule: an explicit id is an act of intent, never silently redirected) — a live
-    SUCCESSOR does not make an ANCESTOR's own address live, only lineage_head's forward
-    walk finds the successor worth redirecting to."""
-    from src.orchestrator.mounts import freshest_liveness_ts, is_live
+    """`mounts.agent_liveness_exact`'s own bool shape — no lineage-wide LIKE broadening
+    across a base id's generations. A DM to a specific `agent:<id>` addresses THAT
+    generation's own mailbox literally (send_message's own grave rule: an explicit id is
+    an act of intent, never silently redirected) — a live SUCCESSOR does not make an
+    ANCESTOR's own address live, only lineage_head's forward walk finds the successor
+    worth redirecting to. Delegates outright (thread 7dd09031) rather than re-deriving
+    the same query a second time — this WAS a hand-rolled duplicate of
+    `agent_liveness_exact`, carrying the same stale `current_assertions.last_active`
+    defect that function has since dropped; calling it directly means this can never
+    drift from that fix again."""
+    from src.orchestrator.mounts import agent_liveness_exact
 
-    mount_seen = await pool.fetchval(
-        "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
-    last_active_iso = await pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
-    return is_live(freshest_liveness_ts(mount_seen, last_active_iso))
+    return bool((await agent_liveness_exact(pool, agent_id))["live"])
 
 
 async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[str, Any]:

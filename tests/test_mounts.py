@@ -116,48 +116,59 @@ async def test_agent_liveness_ever_mounted_survives_the_mount_row_itself_vanishi
     assert out["live"] is False and out["ever_mounted"] is True
 
 
-async def test_agent_liveness_falls_back_to_last_active_like_fleet_always_has(
+async def test_agent_liveness_ignores_a_stale_miner_stamped_last_active(
     actions: Actions,
 ) -> None:
-    """Ruling 70493925 — the listener-probe flap Cupid measured (fleet() live:true the
-    whole time, the probe alternating live/dead on the SAME seat): the probe used to be
-    agent_mounts-only while fleet() also trusted the graph's own last_active testimony.
-    No mount row at all, only a fresh last_active assertion — fleet()'s signal alone —
-    must now be enough for the probe to call this agent live, exactly as fleet() would."""
+    """Thread 7dd09031, the cupid specimen — reproduces the exact live shape: a FRESH
+    mount row alongside an ANCIENT `last_active` property stamped once by the session
+    miner and never refreshed since (source_id='session-miner', months old). Pre-fix,
+    `agent_liveness` blended the two via `freshest_liveness_ts`'s own max() — correct
+    when both signals are trustworthy, but the miner's stamp never updates for a
+    lineage's later generations, so it is not a competing LIVE signal at all, just a
+    permanent historical fact masquerading as one. This must never make a live mind
+    read as dead, and must never need the stale property to read as live either."""
     agent = await actions.create_or_find_object(
-        "Agent", "agent:liveflap01", "fleet-observer")
-    fresh = datetime.now(UTC).isoformat()
-    await actions.assert_property(agent, "last_active", fresh, "fleet-observer",
+        "Agent", "agent:cupidflap01", "fleet-observer")
+    ancient = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    await actions.assert_property(agent, "last_active", ancient, "session-miner",
                                   datetime.now(UTC), 0.9, evidence_class=_SD)
-    out = await mounts.agent_liveness(actions.pool, "agent:liveflap01")
-    assert out["live"] is True and out["last_seen"] == fresh
-    # stale last_active (older than the shared 15-min window) and no mount row: dead,
-    # not flapping — the SAME window agent_liveness and fleet() both apply.
-    stale = await actions.create_or_find_object(
-        "Agent", "agent:liveflap02", "fleet-observer")
-    old = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
-    await actions.assert_property(stale, "last_active", old, "fleet-observer",
+    await mounts.save_mount(actions.pool, job_dir="/x/jobs/cupidflap01",
+                            agent_id="agent:cupidflap01", project="network",
+                            cwd="/home/asuramaya/.osiris/seats/cupid", model=None,
+                            session_key=None)
+    out = await mounts.agent_liveness(actions.pool, "agent:cupidflap01")
+    assert out["live"] is True
+    # the ancient last_active must never surface as the reported timestamp either —
+    # last_seen must come from the fresh mount row, not the two-month-old property.
+    assert out["last_seen"] != ancient
+
+
+async def test_agent_liveness_stale_last_active_never_manufactures_a_false_live(
+    actions: Actions,
+) -> None:
+    """The reverse control: no mount row at all, only that same ancient last_active
+    property — must read dead. Pre-fix this already read dead too (the stale timestamp
+    fails `is_live`'s own 15-minute window), but it is worth pinning explicitly: the fix
+    must never accidentally manufacture a false-live from a signal it no longer trusts,
+    in either direction."""
+    agent = await actions.create_or_find_object(
+        "Agent", "agent:cupidflap02", "fleet-observer")
+    ancient = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    await actions.assert_property(agent, "last_active", ancient, "session-miner",
                                   datetime.now(UTC), 0.9, evidence_class=_SD)
-    out2 = await mounts.agent_liveness(actions.pool, "agent:liveflap02")
-    assert out2["live"] is False
+    out = await mounts.agent_liveness(actions.pool, "agent:cupidflap02")
+    assert out["live"] is False
 
 
 def test_freshest_liveness_ts_and_is_live_are_the_one_shared_decision() -> None:
-    """The pure decision fleet() and agent_liveness() both defer to now (ruling
-    70493925) — two independent copies of "freshest of these two signals, within the
-    window" is what produced the flap; this pins the shared function's own behavior
-    directly, no database required."""
+    """The pure decision every liveness reader defers to (thread 7dd09031, superseding
+    ruling 70493925's own two-signal design): `agent_mounts.last_seen` alone — kept
+    fresh by `liveness.py`'s own per-minute transcript-mtime sweep, never blended
+    against a graph property a one-time miner pass can leave stale for months. This
+    pins the shared function's own behavior directly, no database required."""
     now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
-    mount_only = mounts.freshest_liveness_ts(now - timedelta(minutes=5), None)
-    assert mount_only == now - timedelta(minutes=5)
-    last_active_only = mounts.freshest_liveness_ts(None, (now - timedelta(minutes=2)).isoformat())
-    assert last_active_only == now - timedelta(minutes=2)
-    # freshest of the two wins, whichever signal it came from
-    freshest = mounts.freshest_liveness_ts(
-        now - timedelta(minutes=20), (now - timedelta(minutes=3)).isoformat())
-    assert freshest == now - timedelta(minutes=3)
-    assert mounts.freshest_liveness_ts(None, None) is None
-    assert mounts.freshest_liveness_ts(None, "not-a-timestamp") is None
+    assert mounts.freshest_liveness_ts(now - timedelta(minutes=5)) == now - timedelta(minutes=5)
+    assert mounts.freshest_liveness_ts(None) is None
     # the shared window: 15 minutes, neither more nor less
     assert mounts.is_live(now - timedelta(minutes=14, seconds=59), now=now) is True
     assert mounts.is_live(now - timedelta(minutes=15, seconds=1), now=now) is False

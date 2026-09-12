@@ -4994,11 +4994,11 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     now = datetime.now(UTC)
 
     def _ts(r: Any) -> datetime | None:
-        # freshest sign of life: the miner's transcript stamp OR the durable mount registry —
-        # the SAME decision agent_liveness()'s listener probe makes (ruling 70493925: this
-        # used to be two independently-written copies of "freshest of these two signals",
-        # which is exactly what let the probe and fleet() disagree about the same live agent.
-        return mounts.freshest_liveness_ts(r["mount_seen"], r["last_active"])
+        # THE ONE SOURCE (thread 7dd09031): agent_mounts.last_seen alone, the same
+        # decision agent_liveness()'s listener probe makes — `last_active` (the miner's
+        # one-time transcript stamp) is fetched above for DISPLAY only now, never for
+        # this verdict; see freshest_liveness_ts's own docstring for why.
+        return mounts.freshest_liveness_ts(r["mount_seen"])
 
     nodes: dict[str, dict[str, Any]] = {}
     ghosts = 0

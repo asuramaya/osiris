@@ -750,25 +750,34 @@ LIVENESS_WINDOW_MINUTES = 15
 
 
 def freshest_liveness_ts(
-    mount_seen: datetime | None, last_active_iso: str | None,
+    mount_seen: datetime | None, transcript_mtime: datetime | None = None,
 ) -> datetime | None:
-    """The ONE liveness timestamp every reader of fleet identity must agree on: freshest
-    of the durable mount registry's last_seen and the graph's own self-declared
-    last_active testimony. Shared by fleet() and agent_liveness() (ruling 70493925) —
-    before this, the listener probe read agent_mounts alone while fleet() also trusted
-    last_active, so the SAME live agent could flap live/dead between the two readers
-    whenever a mount row went stale but the agent's own graph testimony hadn't. Two
-    independent implementations of "is this agent alive" is what produced that; a third
-    copy that happens to agree today would only disagree later — so this is the one place
-    either signal turns into a timestamp, and both readers now call it."""
-    stamps: list[datetime] = []
-    if mount_seen is not None:
-        stamps.append(mount_seen)
-    if last_active_iso:
-        try:
-            stamps.append(datetime.fromisoformat(last_active_iso))
-        except ValueError:
-            pass
+    """The ONE liveness timestamp every reader of fleet identity must agree on (thread
+    7dd09031, 2026-09-12 — the cupid specimen, superseding ruling 70493925's own design).
+
+    `transcript_mtime` USED TO BE `current_assertions.last_active` — REPLACED, not
+    merely renamed: that property was meant to carry a transcript's own mtime (session-
+    miner's `_stamp_alive`, src/ingest/sessions.py — "a transcript grows when a mind
+    WORKS, whether or not it deigns to speak to Osiris"), but the miner only ever stamps
+    it ONCE, when a transcript is first mined — nothing re-stamps it as the SAME
+    lineage's later generations keep working, so on any lineage the miner touched once
+    and never again, it freezes at whatever date that pass ran and sits there forever,
+    silently correct-shaped (a real ISO timestamp, a real source_id) and silently wrong.
+    Verified live on cupid (agent:7118bf41): `current_assertions.last_active` on the
+    BASE generation read '2026-07-11T23:48:36', source_id='session-miner' — the ONLY
+    last_active row that lineage has ever carried. `max()`-ing a live signal against
+    that is correct in isolation, but the property's mere PRESENCE as an eligible signal
+    is the defect: a live mind reads dead the instant its own mount row goes missing for
+    ANY reason, because the fallback is a two-month-old ghost instead of a live read.
+
+    `transcript_mtime` is now populated ONLY by a LIVE filesystem stat, at read time
+    (`_lineage_transcript_mtime`, called by `agent_liveness`/`agent_liveness_exact`
+    ONLY when `mount_seen` doesn't already prove liveness — the common case, a fresh
+    mount row, costs nothing extra). This still answers Ra XXXV's own specimen (msg
+    4901: a mind live and working with NO agent_mounts row at all) via the SAME durable
+    `anchor_sid` ledger record_session_anchor already keeps, never a graph property that
+    can go stale forever once written."""
+    stamps = [t for t in (mount_seen, transcript_mtime) if t is not None]
     return max(stamps) if stamps else None
 
 
@@ -778,29 +787,87 @@ def is_live(ts: datetime | None, *, now: datetime | None = None) -> bool:
     return ts is not None and now - ts < timedelta(minutes=LIVENESS_WINDOW_MINUTES)
 
 
+def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime | None:
+    """A stat(), nothing more — mirrors liveness.py's `_sessions()` own observation, just
+    scoped to a handful of NAMED session ids instead of a full-tree walk (this only ever
+    runs from the rare fallback branch below, never the hot path)."""
+    freshest: datetime | None = None
+    for sid in session_ids:
+        if not sid:
+            continue
+        try:
+            matches = root.expanduser().rglob(f"{sid}.jsonl")
+        except OSError:
+            continue
+        for p in matches:
+            try:
+                mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
+            except OSError:
+                continue
+            if freshest is None or mtime > freshest:
+                freshest = mtime
+    return freshest
+
+
+async def _lineage_transcript_mtime(
+    pool: asyncpg.Pool, agent_id: str, base: str | None = None,
+) -> datetime | None:
+    """LIVE FALLBACK for a lineage with no usable `agent_mounts` row (Ra XXXV's own
+    specimen, msg 4901 — a mind live and working, writing to its own transcript, with
+    nothing in the mount registry to say so: a wiped or never-written cache row, not
+    evidence of absence). Reads this lineage's own `anchor_sid:*` ledger
+    (`record_session_anchor` — durable, never swept, "a real session bound here at
+    least once") for candidate session ids, then stats each one's own transcript file
+    directly: the same free, deterministic, always-fresh observation `liveness.py`'s
+    periodic sweep performs, done live and scoped to ONE lineage on demand instead of a
+    full-tree walk on a timer. `base=None` means an EXACT check (no lineage widening) —
+    `agent_liveness_exact`'s own contract; a base widens it the way `agent_liveness`
+    already does for its own mount query."""
+    from src.config.settings import get_settings
+
+    root = get_settings().osiris_transcripts
+    if not root:
+        return None
+    if base is not None:
+        rows = await pool.fetch(
+            "SELECT a.value #>> '{}' AS sid FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' "
+            "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%')",
+            agent_id, base)
+    else:
+        rows = await pool.fetch(
+            "SELECT a.value #>> '{}' AS sid FROM current_assertions a "
+            "JOIN objects o ON o.id=a.object_id "
+            "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' AND o.canonical=$1",
+            agent_id)
+    if not rows:
+        return None
+    return await asyncio.to_thread(
+        _freshest_transcript_mtime, Path(root), [r["sid"] for r in rows])
+
+
 async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     """Is this MIND live right now (for a DM's send receipt)? Lineage-aware — phase 2
     arriving on Alfred's field evidence (msg 718, 2026-07-19): a mount row is an ADDRESS,
     and machinery legitimately re-points addresses between generations (the liveness
     promotion follows the lineage head; greets rewrite agent_id) — so a probe for -iii
     must not read dead because the row momentarily wears another numeral of the same
-    soul. The SOUL answers: freshest of the mount registry's last_seen AND the graph's
-    own last_active self-testimony, across every generation of the base — the same two
-    signals fleet() has always trusted, now read through the same helper (ruling
-    70493925: this probe used to be agent_mounts-only, and that gap is what made it flap
-    against a live seat fleet() called live the whole time). live = within 15 min."""
+    soul. THE SOUL ANSWERS: `agent_mounts.last_seen`, widened across every generation of
+    the base — no longer blended against `current_assertions.last_active` (thread
+    7dd09031: a stale-forever miner property, see `freshest_liveness_ts`'s own
+    docstring). When that alone doesn't already prove liveness, a LIVE transcript-mtime
+    check (`_lineage_transcript_mtime`) covers the case the property used to (Ra XXXV's
+    own specimen: no mount row, genuinely live) — never paid when a fresh mount row
+    already settles it. live = within 15 min."""
     from src.orchestrator.agents import _generation
     base = _generation(agent_id)[0]
     mount_seen = await pool.fetchval(
         "SELECT max(last_seen) FROM agent_mounts "
         "WHERE agent_id=$1 OR agent_id=$2 OR agent_id LIKE $2 || '-%'", agent_id, base)
-    last_active_iso = await pool.fetchval(
-        "SELECT a.value#>>'{}' FROM current_assertions a "
-        "JOIN objects o ON o.id = a.object_id "
-        "WHERE a.name='last_active' AND o.type='Agent' "
-        "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%') "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id, base)
-    ts = freshest_liveness_ts(mount_seen, last_active_iso)
+    transcript_mtime = (None if is_live(mount_seen)
+                        else await _lineage_transcript_mtime(pool, agent_id, base))
+    ts = freshest_liveness_ts(mount_seen, transcript_mtime)
     # `ever_mounted` (Alfred's post-reboot finding 2, msg 7462, thread ee412c7e): distinct
     # from `live` on purpose, and deliberately NOT keyed on `mount_seen` alone — agent_
     # mounts is a CACHE (the same distinction msg 7540/7606's tenure fix draws: a durable
@@ -829,14 +896,14 @@ async def agent_liveness_exact(pool: asyncpg.Pool, agent_id: str) -> dict[str, A
     generation had a fresh mount row — exactly the false positive `agent_liveness`'s own
     docstring warns any caller reading a SPECIFIC generation's identity, not the
     lineage's, must avoid). Any caller asking "is THIS EXACT id itself active" — not
-    "is this id's lineage active" — wants this, never the widened check."""
+    "is this id's lineage active" — wants this, never the widened check. Same live
+    transcript-mtime fallback as `agent_liveness` (thread 7dd09031), EXACT-scoped: only
+    this one canonical's own `anchor_sid:*` ledger, never a sibling generation's."""
     mount_seen = await pool.fetchval(
         "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
-    last_active_iso = await pool.fetchval(
-        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE a.name='last_active' AND o.type='Agent' AND o.canonical=$1 "
-        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", agent_id)
-    ts = freshest_liveness_ts(mount_seen, last_active_iso)
+    transcript_mtime = (None if is_live(mount_seen)
+                        else await _lineage_transcript_mtime(pool, agent_id))
+    ts = freshest_liveness_ts(mount_seen, transcript_mtime)
     return {"live": is_live(ts), "last_seen": ts.isoformat() if ts is not None else None}
 
 
