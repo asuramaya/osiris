@@ -411,7 +411,13 @@ _LINK_TYPES: tuple[LinkType, ...] = (
              "self-declared charter that survives a folder move AND a succession (one seat, one "
              "link, no generations to accumulate across). Healed by a compensating event "
              "(`valid_until`) when a repo drops off the charter — never DELETE, so a seat's "
-             "shrinking rule stays a fact the graph remembers.", ("Seat",), ("SoftwareProject",)),
+             "shrinking rule stays a fact the graph remembers. WIDENED TO Person (thread "
+             "1d5b9773, operator ruling 2026-09-11, \"authority by charter\"): an operator "
+             "Person governs a set of projects the SAME WAY a seat does — 'the operator's "
+             "word' on a project resolves to the operator whose charter covers it, never a "
+             "blanket claim over every project by the bare literal alone. Same mechanism, "
+             "same compensating-event-on-drop discipline, one more from_type, nothing else "
+             "about the link changes.", ("Seat", "Person"), ("SoftwareProject",)),
     LinkType("holds", "THE BINDING (identity core, ruling 5cef856b): the mind currently "
              "holding a durable Seat. Minted at attach (the ceremony: a one-time token the "
              "spawner exported at birth), RE-LINKED to the heir at every mint so the binding "

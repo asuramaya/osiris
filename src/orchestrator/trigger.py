@@ -3140,6 +3140,10 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
         "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
     if not source:
         return None
+    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): a
+    # historical-attribution exclusion (an operator sentinel stamped as a handle
+    # assertion's source is never a real prior Agent generation), not a live
+    # authorization gate — no project to scope a charter check against.
     if source in _OPERATOR_ACTORS:
         return None
     # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
@@ -3175,6 +3179,9 @@ async def _legacy_lineage_confession(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
         "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
+    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): same
+    # historical-attribution exclusion as the sibling check above — not live
+    # authorization, no project in scope.
     if not source or source in _OPERATOR_ACTORS or str(source).startswith(_FOUNDER_SOURCE_PREFIX):
         return None
     return (f"legacy lineage source: {seat_id}'s ancestor ({lineage_ancestor!r}) was "

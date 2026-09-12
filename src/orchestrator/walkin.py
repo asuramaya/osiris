@@ -113,9 +113,11 @@ async def promote_visitor(
 
     AUTHORIZATION IS ENFORCED, NOT MERELY NAMED (Thoth's ruling, mail 9465 — "refusing
     without the operator's or a manager's word or a ruling= citation"): a third-party act
-    minting a stranger's whole identity is not routine, so `actor` must be one of
-    `seats._OPERATOR_ACTORS` (the operator's word) OR hold a seat that itself manages at
-    least one worker (`seats.seats_managed_by` — a manager's word, the same SHAPE of
+    minting a stranger's whole identity is not routine, so `actor` must resolve to a
+    recognized operator identity (`charter.is_operator_actor` — global recognition, no
+    single project in scope for a whole-identity mint; thread 1d5b9773, "authority by
+    charter") OR hold a seat that itself manages at least one worker
+    (`seats.seats_managed_by` — a manager's word, the same SHAPE of
     enforced check `charter.charter_for` runs for its own third-party act), OR `ruling`
     must pass `capture.verify_ruling` (the same RULING-CITATION DOOR `charter_for` itself
     now uses, landed independently on main while this was being built — found and
@@ -147,9 +149,10 @@ async def promote_visitor(
     removed from the real cause."""
     from src.orchestrator.agents import claim_name as _claim_name
     from src.orchestrator.capture import verify_ruling
+    from src.orchestrator.charter import is_operator_actor
     from src.orchestrator.charter import set_charter as _set_charter
     from src.orchestrator.offices import establish_office as _establish_office
-    from src.orchestrator.seats import _OPERATOR_ACTORS, held_seat, seats_managed_by
+    from src.orchestrator.seats import held_seat, seats_managed_by
 
     target, handle = (target or "").strip(), (handle or "").strip()
     because = (because or "").strip()
@@ -163,7 +166,7 @@ async def promote_visitor(
                          "on their behalf is testimony, same discipline charter_for and "
                          "rename_seat already run"}
 
-    authorized = actor in _OPERATOR_ACTORS
+    authorized = await is_operator_actor(pool, actor)
     auth_note = "operator" if authorized else None
     if not authorized:
         caller_seat = await held_seat(pool, actor)

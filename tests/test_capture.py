@@ -141,6 +141,45 @@ async def test_record_decision_operator_authorized_mints_ruled_by_to_the_operato
     assert role == "operator"
 
 
+async def test_record_decision_operator_authorized_with_repo_scopes_to_the_charter(
+    actions: Actions,
+) -> None:
+    """AUTHORITY BY CHARTER (thread 1d5b9773): when a decision names a `repo` AND
+    `source` is itself an operator-recognized actor, `ruled_by` targets the resolved
+    operator whose charter covers that repo — not just the bare singleton
+    unconditionally."""
+    from src.orchestrator.capture import ensure_operator_person
+
+    person_id = await ensure_operator_person(actions, source="test")
+    proj_id = await actions.create_or_find_object("SoftwareProject", "repo:chartered", "test")
+    await actions.create_link(person_id, proj_id, "governs", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared", actor="test")
+    d = await record_decision(
+        actions, "an operator ruling scoped to its own charter", operator_authorized=True,
+        repo="chartered", source="operator")
+    to_id = await actions.pool.fetchval(
+        "SELECT to_id FROM links WHERE from_id=$1 AND type='ruled_by'", d)
+    assert to_id == person_id
+
+
+async def test_record_decision_operator_authorized_repo_outside_charter_falls_back(
+    actions: Actions,
+) -> None:
+    """A decision naming a `repo` the operator's own charter does NOT cover still mints
+    `ruled_by` — to the fallback singleton, never silently dropped — an operator-
+    authorized decision must never end up with no ruled_by edge just because charter
+    data is incomplete."""
+    await actions.create_or_find_object("SoftwareProject", "repo:uncharted", "test")
+    d = await record_decision(
+        actions, "an operator ruling over uncharted territory", operator_authorized=True,
+        repo="uncharted", source="operator")
+    row = await actions.pool.fetchrow(
+        "SELECT o.canonical FROM links l JOIN objects o ON o.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='ruled_by'", d)
+    assert row is not None
+    assert row["canonical"] == "person:operator"
+
+
 async def test_ensure_operator_person_is_idempotent(actions: Actions) -> None:
     d1 = await record_decision(actions, "First operator ruling", operator_authorized=True)
     d2 = await record_decision(actions, "Second operator ruling", operator_authorized=True)
