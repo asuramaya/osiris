@@ -3641,8 +3641,12 @@ async def _debounce_roundtrip(
         await follow_binding(a, ancestor_oid=cur_oid, heir=ancestor,
                              heir_oid=ancestor_oid, now=now)
         if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
+            # EARNED-PULSE (thread 870d7391): this heal is itself a repair of drifted
+            # bookkeeping, not the earning act — it may only REFRESH a pulse the row
+            # already earned, never grant one.
             await a.execute(
-                "UPDATE agent_mounts SET agent_id=$2, model=$3, last_seen=now() "
+                "UPDATE agent_mounts SET agent_id=$2, model=$3, "
+                "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END "
                 "WHERE job_dir=$1", job_dir, ancestor, observed)
         else:  # the register path: any row naming the healed heir follows the restored mind
             await a.execute(
@@ -3741,8 +3745,12 @@ async def live_succession(
             head_oid = await actions.create_or_find_object("Agent", head, head)
             await actions.assert_property(head_oid, "source_model", observed, head, now,
                                           confidence_for(do), evidence_class=do.value)
+            # EARNED-PULSE (thread 870d7391): repairing a drifted model stamp is not the
+            # earning act — refresh the pulse only if this row already earned one.
             await actions.pool.execute(
-                "UPDATE agent_mounts SET model=$2, last_seen=now() WHERE job_dir=$1",
+                "UPDATE agent_mounts SET model=$2, "
+                "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END "
+                "WHERE job_dir=$1",
                 row["job_dir"], observed)
             return {"unchanged": True,
                    "reason": f"idempotent — {head} already recorded reaching {observed}; "
@@ -3758,6 +3766,21 @@ async def live_succession(
                 _cur, _hist, deliberate = model_of_transcript(main)
         except OSError:
             deliberate = False
+        # EARNED-PULSE (THE EARNED-PULSE COLUMN, thread 870d7391, operator ruling
+        # 2026-09-11) — THE HIGHEST-VALUE GATE of the five this ruling named: this is the
+        # one door that MINTS A NEW AGENT GENERATION off the statusline's own observed
+        # model alone. "The heartbeat's model is as anchored as a transcript read"
+        # (below) conflates a TRUTHFUL RENDER with an EARNED ACT — a spare that never
+        # took a turn can render a statusline forever without ever earning a pulse.
+        # Refuse to mint off a row that has never proven itself alive; the measured
+        # incident this closes (agent:f0d23039-ii, "minted but never acted upon") had
+        # exactly this shape.
+        earned = await actions.pool.fetchval(
+            "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir=$1", row["job_dir"])
+        if earned is None:
+            return {"unchanged": True,
+                   "reason": "no earned pulse on this row — refusing to mint an heir off "
+                             "an unearned observation (THE EARNED-PULSE COLUMN, mail 9873)"}
         ancestor_oid = await actions.create_or_find_object("Agent", head, head)
         # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off the
         # front of the chain BEFORE minting on top of it — head/ancestor_oid below name

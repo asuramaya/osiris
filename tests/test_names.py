@@ -336,6 +336,38 @@ async def test_live_succession_needs_a_lived_life(actions: Actions) -> None:
     ) == "claude-opus-4-8"
 
 
+async def test_live_succession_refuses_to_mint_off_an_unearned_pulse(
+    actions: Actions,
+) -> None:
+    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): a provisional row
+    (save_mount alive=False — the `claude bg-spare`/pty-host/claim-socket-daemon
+    whisper, never a real conversation) has no `earned_pulse_at`. Statusline-observed
+    model drift off a row that never earned a pulse must NOT mint a new Agent
+    generation — the measured incident this closes (agent:f0d23039-ii, "minted but
+    never acted upon") had exactly this shape."""
+    from src.orchestrator import mounts
+    from src.orchestrator.agents import live_succession
+
+    await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/5pa4e000",
+                            agent_id="agent:5pa4e000", project="x", cwd="/x",
+                            model="claude-fable-5", session_key="k", alive=False)
+    assert await actions.pool.fetchval(
+        "SELECT earned_pulse_at FROM agent_mounts "
+        "WHERE job_dir='/h/.claude/jobs/5pa4e000'") is None
+
+    out = await live_succession(actions, session_id="5pa4e000-0000-4000-8000-000000000000",
+                                observed_model="claude-opus-4-8")
+
+    assert out.get("unchanged") is True
+    assert "no earned pulse" in out.get("reason", "")
+    n = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:5pa4e000%'")
+    assert n == 0  # no heir minted — nothing to mint an heir FROM in the first place
+    assert await actions.pool.fetchval(
+        "SELECT model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/5pa4e000'"
+    ) == "claude-fable-5"  # the row's own stored model is untouched, not silently repaired
+
+
 def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
     """The project label lives in .osiris, not the folder name — so a rename doesn't move the
     project (ruling 1e02e069). Explicit override > .osiris > folder basename."""

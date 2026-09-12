@@ -105,17 +105,29 @@ async def save_mount(
     you as living. A real session proves itself within seconds — its first Osiris call bumps this
     row, or its transcript grows and observe_liveness stamps it. A spare never does either, and
     lies there with a null pulse, costing nothing and fooling no one.
+
+    EARNED-PULSE (THE EARNED-PULSE COLUMN, thread 870d7391, operator ruling 2026-09-11): this
+    `alive=True` path is one of exactly two writers ever allowed to STAMP `earned_pulse_at`
+    (the other is liveness.py's `observe_liveness`, a real transcript growing) — FIRST-EARN
+    ONLY (`COALESCE(agent_mounts.earned_pulse_at, now())` on conflict), never re-stamped by a
+    later touch, so the column answers "did this row EVER earn a pulse", not "when was it last
+    seen". Every other writer that bumps `last_seen` must read this column first and refuse to
+    grant a pulse a row never earned — this is the one column that says whether they may.
     """
     return await pool.fetchval(  # type: ignore[no-any-return]
         "WITH old AS (SELECT last_seen FROM agent_mounts WHERE job_dir=$1) "
         "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, session_key, "
-        "                          last_seen) "
-        "VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $7 THEN now() END) "
+        "                          last_seen, earned_pulse_at) "
+        "VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $7 THEN now() END, "
+        "                          CASE WHEN $7 THEN now() END) "
         "ON CONFLICT (job_dir) DO UPDATE SET agent_id=$2, project=$3, cwd=$4, model=$5, "
         "session_key=$6, "
         # a greeting must never REVOKE a pulse either: a re-whispered session that is already
         # proven alive keeps what it earned.
-        "last_seen=CASE WHEN $7 THEN now() ELSE agent_mounts.last_seen END "
+        "last_seen=CASE WHEN $7 THEN now() ELSE agent_mounts.last_seen END, "
+        "earned_pulse_at=CASE WHEN $7 "
+        "  THEN COALESCE(agent_mounts.earned_pulse_at, now()) "
+        "  ELSE agent_mounts.earned_pulse_at END "
         "RETURNING (SELECT last_seen FROM old)",
         job_dir, agent_id, project, cwd, model, session_key, alive,
     )
@@ -163,10 +175,15 @@ async def release_session_mounts(
     by `find_mount`. A genuine re-adopt or resume then PROMOTES IT BACK the ordinary way —
     `save_mount`'s own `ON CONFLICT (job_dir) DO UPDATE` refreshes `last_seen=now()` on the
     SAME row, no different from any other re-mount. Idempotent: a row already suspended is
-    excluded from the receipt (re-suspending nothing is not a release)."""
+    excluded from the receipt (re-suspending nothing is not a release).
+
+    EARNED-PULSE (thread 870d7391): clears `earned_pulse_at` alongside `last_seen` — a
+    suspended address's earned pulse dies with it, same as the address itself; a future
+    occupant of the same job_dir/session_key re-earns its OWN pulse via a genuine act
+    rather than silently inheriting whatever the address earned before it went quiet."""
     sid32 = (session_id or "").replace("-", "").strip().lower()
     n = await pool.fetchval(
-        "WITH gone AS (UPDATE agent_mounts SET last_seen=$3 "
+        "WITH gone AS (UPDATE agent_mounts SET last_seen=$3, earned_pulse_at=NULL "
         "WHERE (job_dir=$1 OR session_key=$2) AND last_seen IS DISTINCT FROM $3 "
         "RETURNING 1) SELECT count(*) FROM gone",
         job_dir, f"sid:{sid32}", SUSPENDED_AT)
