@@ -431,6 +431,45 @@ async def test_proposal_telemetry_reports_by_lane(actions: Actions) -> None:
     assert by_lane["Thread:in_repo"]["accepted"] == 0
 
 
+async def test_proposal_telemetry_by_lane_names_the_signal(actions: Actions) -> None:
+    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5): a made-in-window
+    Proposal's own `candidate.signal` is counted per lane, so the desk sees WHICH signal
+    — 'dominance' vs 'author_tiebreak' — is actually producing each lane's proposals. A
+    Proposal with no `signal` key (pre-ruling, or a non-abstention caller) contributes
+    nothing to `by_signal` but still counts toward `made`."""
+    decision_id = await actions.create_or_find_object(
+        "Decision", "decision:digestlanesignal1", "test")
+
+    async def _mint(candidate: dict | None) -> None:
+        pid = await actions.create_or_find_object(
+            "Proposal", f"proposal:{uuid.uuid4()}", "abstention")
+        await _prop(actions, pid, "miner", "abstention", "abstention", "derived")
+        await _prop(actions, pid, "owner", "operator", "abstention", "derived")
+        await _prop(actions, pid, "status", "proposed", "abstention", "derived")
+        await _prop(actions, pid, "expires_at",
+                    (datetime.now(UTC) + timedelta(days=14)).isoformat(),
+                    "abstention", "derived")
+        await _prop(actions, pid, "evidence_pointer",
+                    {"from_id": str(decision_id), "link_type": "in_repo"},
+                    "abstention", "derived")
+        if candidate is not None:
+            await _prop(actions, pid, "candidate", candidate, "abstention", "derived")
+
+    await _mint({"kind": "link", "from_id": str(decision_id), "to_id": str(decision_id),
+                "link_type": "in_repo", "signal": "dominance"})
+    await _mint({"kind": "link", "from_id": str(decision_id), "to_id": str(decision_id),
+                "link_type": "in_repo", "signal": "dominance"})
+    await _mint({"kind": "link", "from_id": str(decision_id), "to_id": str(decision_id),
+                "link_type": "in_repo", "signal": "author_tiebreak"})
+    await _mint(None)  # no candidate at all — must not blow up, must not count anywhere
+
+    dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
+    by_lane = {r["lane"]: r for r in dg["proposals"]["by_lane"]}
+    lane = by_lane["Decision:in_repo"]
+    assert lane["made"] == 4
+    assert lane["by_signal"] == {"dominance": 2, "author_tiebreak": 1}
+
+
 async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
     actions: Actions,
 ) -> None:
