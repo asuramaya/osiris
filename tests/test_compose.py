@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -30,7 +31,8 @@ _EXTRACTION = """
 
 class _FakeLLM:
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Any] | None = None,
     ) -> str:
         return _EXTRACTION
 
