@@ -787,26 +787,53 @@ def is_live(ts: datetime | None, *, now: datetime | None = None) -> bool:
     return ts is not None and now - ts < timedelta(minutes=LIVENESS_WINDOW_MINUTES)
 
 
+# REGRESSION FROM w218 (thread 9150aec2, 2026-09-12): the FIRST version of this function
+# did one `root.rglob(f"{sid}.jsonl")` PER session id — a full recursive walk of
+# ~/.claude/projects (7,518 directories measured live) for every candidate sid. A lineage
+# with a large `anchor_sid` ledger (agent:b5f04f84's own base carried 4,478 rows, one
+# generation alone 3,548) turned one liveness check into thousands of tree walks — ~1s
+# each on the box, so a single call could run for the better part of an hour, holding
+# `arq_worker._boot_lock` for its whole run and starving every sibling cron behind it.
+# FIX: walk the tree EXACTLY ONCE regardless of how many sids are requested, matching
+# against the wanted set as files are discovered, with an early exit the moment every
+# wanted sid has been found (the common case — a fresh generation's own transcript sits
+# near the top of a `-repo/<uuid>.jsonl` layout, not at the bottom of a full walk).
 def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime | None:
     """A stat(), nothing more — mirrors liveness.py's `_sessions()` own observation, just
     scoped to a handful of NAMED session ids instead of a full-tree walk (this only ever
-    runs from the rare fallback branch below, never the hot path)."""
+    runs from the rare fallback branch below, never the hot path). ONE tree walk total,
+    never one per sid — see the regression comment above this function."""
+    wanted = {sid for sid in session_ids if sid}
+    if not wanted:
+        return None
     freshest: datetime | None = None
-    for sid in session_ids:
-        if not sid:
+    try:
+        walker = root.expanduser().rglob("*.jsonl")
+    except OSError:
+        return None
+    for p in walker:
+        if p.stem not in wanted:
             continue
         try:
-            matches = root.expanduser().rglob(f"{sid}.jsonl")
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
         except OSError:
             continue
-        for p in matches:
-            try:
-                mtime = datetime.fromtimestamp(p.stat().st_mtime, UTC)
-            except OSError:
-                continue
-            if freshest is None or mtime > freshest:
-                freshest = mtime
+        if freshest is None or mtime > freshest:
+            freshest = mtime
+        wanted.discard(p.stem)
+        if not wanted:
+            break
     return freshest
+
+
+# A lineage's `anchor_sid` ledger only ever grows (record_session_anchor never retires a
+# row) — a long-lived lineage can carry thousands (thread 9150aec2: 4,478 on one base,
+# 3,548 on a single generation). Liveness only ever cares whether ANY recent session is
+# still live, so consulting more than a handful of the FRESHEST is pure waste — every
+# extra sid is one more entry `_freshest_transcript_mtime`'s single walk must still find
+# before it can early-exit. Capped, never unbounded, regardless of how large the ledger
+# grows.
+MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK = 25
 
 
 async def _lineage_transcript_mtime(
@@ -822,7 +849,12 @@ async def _lineage_transcript_mtime(
     periodic sweep performs, done live and scoped to ONE lineage on demand instead of a
     full-tree walk on a timer. `base=None` means an EXACT check (no lineage widening) —
     `agent_liveness_exact`'s own contract; a base widens it the way `agent_liveness`
-    already does for its own mount query."""
+    already does for its own mount query.
+
+    Consults at most `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` sids, the FRESHEST by
+    `observed_at` (thread 9150aec2, the classification_laws_heartbeat regression) — a
+    lineage's ledger only grows, and liveness only needs to know whether ANY recent
+    session is still live, never whether the lineage's very first session ever was."""
     from src.config.settings import get_settings
 
     root = get_settings().osiris_transcripts
@@ -833,14 +865,16 @@ async def _lineage_transcript_mtime(
             "SELECT a.value #>> '{}' AS sid FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id "
             "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' "
-            "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%')",
-            agent_id, base)
+            "AND (o.canonical=$1 OR o.canonical=$2 OR o.canonical LIKE $2 || '-%') "
+            "ORDER BY a.observed_at DESC LIMIT $3",
+            agent_id, base, MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK)
     else:
         rows = await pool.fetch(
             "SELECT a.value #>> '{}' AS sid FROM current_assertions a "
             "JOIN objects o ON o.id=a.object_id "
-            "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' AND o.canonical=$1",
-            agent_id)
+            "WHERE o.type='Agent' AND a.name LIKE 'anchor_sid:%' AND o.canonical=$1 "
+            "ORDER BY a.observed_at DESC LIMIT $2",
+            agent_id, MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK)
     if not rows:
         return None
     return await asyncio.to_thread(
