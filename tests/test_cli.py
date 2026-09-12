@@ -6,6 +6,7 @@ spawning a claude process is exactly what these tests must never risk doing by a
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from src.cli import (
     cmd_amend_practice,
     cmd_annotate_thread,
     cmd_attach,
+    cmd_audit,
     cmd_backlog,
     cmd_boot_status,
     cmd_bootstrap,
@@ -44,6 +46,7 @@ from src.cli import (
     cmd_heal_seat_transcript,
     cmd_inbox,
     cmd_launch,
+    cmd_lint,
     cmd_merge,
     cmd_migrate,
     cmd_mint_seat,
@@ -3633,6 +3636,172 @@ async def test_cmd_boot_status_names_a_gap_and_exits_nonzero(
     assert out == 1
     assert "CliGapSeat" in buf.getvalue()
     assert "reissue_office(adopt=True)" in buf.getvalue()
+
+
+# --- cmd_lint: the graph_lint mirror (WAVE 22 item 2, mail 10109, thread bf10608b) — a real
+# pool, never mocked, same as every other CLI test in this file. Finding-triggering recipes
+# reuse test_compositions.py's own cheap fixtures (the edgeless-closure-growth ceiling
+# monkeypatch) rather than inventing a second one for the identical population. ---------------
+
+async def test_cmd_lint_clean_on_a_blank_db(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_lint(pool=actions.pool)
+    assert out == 0
+    assert "clean" in buf.getvalue()
+
+
+async def test_cmd_lint_names_a_finding_and_exits_nonzero(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "EDGELESS_CLOSURE_CEILING", 0)
+
+    t = await actions.create_or_find_object("Thread", "thread:cli-lint-edgeless", "test")
+    await actions.assert_property(t, "summary", "no closure edge at all", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(t, "status", "resolved", "test", datetime.now(UTC), 0.9)
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_lint(pool=actions.pool)
+    assert out == 1
+    assert "edgeless-closure-growth" in buf.getvalue()
+
+
+async def test_cmd_lint_check_filter_narrows_to_one_check(actions: Actions) -> None:
+    """`--check` only ever LISTS that one check's own findings — proven here on a check
+    guaranteed empty on a fresh tree (never touches the expensive full-fetch population
+    live graphs carry), same contract graph_lint's own MCP tool exposes."""
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_lint(check="rot-candidate-unscoped", pool=actions.pool)
+    assert out == 0
+    assert "clean" in buf.getvalue()
+
+
+async def test_cmd_lint_json_mode_emits_the_full_receipt(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = await cmd_lint(as_json=True, pool=actions.pool)
+    assert out == 0
+    payload = json.loads(capsys.readouterr().out)
+    # could_not_evaluate is present ONLY when non-empty (graph_lint's own contract) — a
+    # clean pass on a fresh tree has no query failures to name, so it's absent here.
+    assert {"findings", "counts", "counts_by_severity", "severity"} <= set(payload)
+    assert payload["findings"] == []
+
+
+async def test_cmd_lint_project_filter_keeps_a_matching_finding(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The client-side --project filter (thread bf10608b — graph_lint has no SQL-level
+    scoping to mirror) matches on the finding's own subject/detail text — the
+    edgeless-closure-growth finding's own `detail` always names 'bypass' verbatim
+    (compositions.py's own land() call site), a real substring, not a fabricated one."""
+    from datetime import UTC, datetime
+
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "EDGELESS_CLOSURE_CEILING", 0)
+
+    t = await actions.create_or_find_object("Thread", "thread:cli-lint-project-match", "test")
+    await actions.assert_property(t, "summary", "no closure edge at all", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(t, "status", "resolved", "test", datetime.now(UTC), 0.9)
+
+    out = await cmd_lint(project="bypass", as_json=True, pool=actions.pool)
+    assert out == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload["findings"]) == 1
+    assert payload["findings"][0]["check"] == "edgeless-closure-growth"
+    assert "project_filter" in payload
+    # every OTHER check's findings (there are none here, but the field must still exist
+    # and correctly exclude edgeless-closure-growth, the one check that DID match)
+    assert "edgeless-closure-growth" not in payload["project_filter"][
+        "checks_not_evaluable_for_project"]
+
+
+async def test_cmd_lint_project_filter_excludes_a_nonmatching_finding(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from datetime import UTC, datetime
+
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "EDGELESS_CLOSURE_CEILING", 0)
+
+    t = await actions.create_or_find_object("Thread", "thread:cli-lint-no-match", "test")
+    await actions.assert_property(t, "summary", "no closure edge at all", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(t, "status", "resolved", "test", datetime.now(UTC), 0.9)
+
+    out = await cmd_lint(project="no-such-project-anywhere-zzz", as_json=True,
+                         pool=actions.pool)
+    assert out == 0  # scoped result is empty — a clean pass for THIS project
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["findings"] == []
+    assert "edgeless-closure-growth" in payload["project_filter"][
+        "checks_not_evaluable_for_project"]
+
+
+# --- cmd_audit: the 5 audit-sibling mirror, one door over comp.run_composition ---------------
+
+async def test_cmd_audit_the_wall_runs_and_renders(actions: Actions) -> None:
+    """`comp.run_composition` resolves a name against the DB `compositions` table only
+    (`_spec_of`, no DEFAULT_COMPOSITIONS fallback) — the live dev DB already carries
+    every default from its own `osiris seed`; a fresh test DB needs the same seeding
+    step every other composition-reading test in this suite already does."""
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_audit("the-wall", pool=actions.pool)
+    assert out == 0
+    assert "composition" in buf.getvalue()
+
+
+async def test_cmd_audit_json_mode_emits_the_composition_result(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+    capsys.readouterr()  # discard seed's own "next steps" prints before capturing audit's
+
+    out = await cmd_audit("type-census", as_json=True, pool=actions.pool)
+    assert out == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["composition"] == "type-census"
+    assert "items" in payload
+
+
+async def test_cmd_audit_every_declared_name_actually_runs(actions: Actions) -> None:
+    """AUDIT_NAMES is the argparse `choices=` population too — every name it lists must
+    resolve to a real DEFAULT_COMPOSITIONS entry, or the CLI door would advertise a
+    choice that immediately refuses. Caught here, not discovered live."""
+    from src.cli import AUDIT_NAMES
+
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+
+    for name in AUDIT_NAMES:
+        out = await cmd_audit(name, as_json=True, pool=actions.pool)
+        assert out == 0, f"{name!r} refused: {out}"
+
+
+async def test_cmd_audit_unknown_name_refuses_with_exit_1(actions: Actions) -> None:
+    out = await cmd_audit("no-such-audit-anywhere", pool=actions.pool)
+    assert out == 1
 
 
 # --- fold-project: the sanctioned second door (thread 2446) — calls the SAME
