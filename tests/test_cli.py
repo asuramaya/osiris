@@ -754,6 +754,47 @@ async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> N
     assert "claude-fable-5" in buf.getvalue()
 
 
+# --- THE BEHAVIOUR-LEVEL PARITY TEST (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH"):
+# thread a793b01b's own finding was that the CLI/MCP parity census only ever checked that
+# `launch` EXISTS as a name on both surfaces, never that the CLI door actually calls
+# trigger.launch_seat rather than reimplementing it — a name-only check a full,
+# independently-drifting reimplementation still passes. This proves DELEGATION directly: a
+# spy on launch_seat itself, not on any of its own internal primitives, so a future
+# regression back to a second implementation fails here, not by drift discovered later. ---
+
+async def test_cmd_launch_harness_lane_delegates_to_launch_seat_not_a_reimplementation(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    office = tmp_path / "delegates-to-launch-seat"
+    office.mkdir()
+    await ensure_seat(actions, house="osiris", handle="delegates-to-launch-seat",
+                      anchor_cwd=str(office), source="test")
+
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_launch_seat(actions_arg: Actions, **kw: Any) -> dict[str, Any]:
+        calls.append(kw)
+        return {"status": "launched", "window": "[OS] fake", "body_exists": True,
+                "can_receive": True, "spawned_model": kw.get("model")}
+
+    monkeypatch.setattr("src.orchestrator.trigger.launch_seat", _fake_launch_seat)
+
+    async def _unreachable(*a: Any, **k: Any) -> Any:
+        raise AssertionError("should never be called — launch_seat is a fake here")
+
+    out = await cmd_launch("delegates-to-launch-seat", model=None, pool=actions.pool,
+                           spawn=_unreachable, agents_json=_unreachable)
+    assert out == 0
+    assert len(calls) == 1
+    kw = calls[0]
+    # THE ONE FLAG ONLY THIS DOOR MAY SET (launch_seat's own docstring): a local-execution
+    # trust boundary no MCP-invoked caller can reach — proven here by name, not assumed.
+    assert kw["operator_authorized"] is True
+    assert kw["caller"] == "operator"
+    assert kw["target"] == "delegates-to-launch-seat"
+    assert kw["substrate"] == "harness"
+
+
 # --- cmd_launch harness-native default lane (task #72) — same "never risk a real spawn" law,
 # a fake spawn/agents_json instead of a fake manager ---------------------------------------------
 

@@ -636,13 +636,19 @@ def _collapse_resume_log(log: list[str]) -> str:
 async def _resolve_and_guard_launch(
     handle: str, *, pool: asyncpg.Pool, agents_json: AgentsJson, verb: str,
 ) -> tuple[dict[str, Any], str] | int:
-    """THE GUARDS SHARED BY BOTH DOORS (thread 60c78788, the operator's verb split —
+    """`osiris resume`'s OWN GUARDS NOW (thread 60c78788, the operator's verb split —
     `osiris launch` always mints fresh, `osiris resume` always continues, no flag, no
     automatic guess — the VERB is the property): resolve the seat, refuse a missing
     anchor_cwd/tree_cwd BY NAME with the exact remedy (decision 27259e4d, thread
-    bc11a2d3), and refuse (as a SUCCESS, exit 0) when a body already holds this seat —
-    same occupancy gate for both verbs, so a verb split can never become a guard hole.
-    `verb` names the actual caller in every printed line so this stays ONE
+    bc11a2d3), and refuse (as a SUCCESS, exit 0) when a body already holds this seat.
+
+    NO LONGER SHARED WITH `osiris launch` (WAVE 21 item 3, a793b01b, "UNIFY LAUNCH"):
+    `_cmd_launch_harness` now calls `trigger.launch_seat` directly instead of this
+    function — its own docstring names which of these guards it kept CLI-side and why.
+    This function's own name and `verb` parameter are left as-is (still meaningful for
+    resume's one remaining caller, and renaming risks a drive-by rewrite of a working,
+    tested function for cosmetics alone). `verb` names the actual caller in every printed
+    line so this stays ONE
     implementation, never a second copy drifting from the first (#48's own lesson).
     Returns `(facts, launch_cwd)` to proceed, or an int to return immediately."""
     from src.orchestrator.trigger import (
@@ -742,130 +748,83 @@ async def _cmd_launch_harness(
     """THE DEFAULT LANE (task #72, following trigger.launch_seat's own flip, rulings 0fe36e59
     + 33d6a2eb clause 3): `claude --bg` + `claude agents --json`, the harness's own front-end
     surface — every body this creates is visible in the operator's own `claude agents` list
-    BY CONSTRUCTION. Mirrors launch_seat's harness lane closely (same spawn/agents_json
-    primitives, same bound boot-prompt shape via `_bind_before_spawn`/
-    `_bg_boot_prompt_bound`, Thoth dispatch 6713 — a SEPARATE call site, not a shared
-    function, so the two doors were independently vulnerable to the same bug and must be
-    independently fixed) but skips its managed_by/caller-seat gate: launch_seat's own
-    docstring is explicit that the operator is a different trust boundary and never calls
-    it directly — this function IS that boundary, same as the PTY lane below it.
+    BY CONSTRUCTION.
 
-    ALWAYS FRESH, NEVER A RESUME CHECK (operator ruling 60c78788, thread bc11a2d3's
-    family, 2026-09-01): this used to check the seat's last holder for a resumable
-    session before minting — that automatic property is exactly what produced the
-    operator's own complaint ("marquee was not launched into the claude agents list"),
-    because a resumed body structurally cannot ever appear there. The operator, offered
-    three options (always-fresh / keep-resume-first / split-into-two-verbs), chose the
-    split: `osiris launch` is now ALWAYS this — a fresh, persistent `--bg` mint, always
-    listed, always attachable — and `osiris resume` (below) is the one-shot `-p
-    --resume` turn this function used to fall into automatically. Ruling 696d302c
-    ("the launch window is a property of launch, never a per-launch question") is
-    SATISFIED by naming, not overridden: nobody is ever asked which one they want: the
-    verb IS the answer.
+    NO LONGER A SEPARATE IMPLEMENTATION (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH",
+    closing #48's "two doors, one receipt" lesson for launch itself, not just its
+    sub-pieces): this door now calls `trigger.launch_seat` directly, with
+    `operator_authorized=True` — the ONE flag only this CLI's own local-execution trust
+    boundary can set (see `launch_seat`'s own docstring). `wake_default` stays in the
+    signature for the two tests that call this function directly by keyword, but is no
+    longer read here: launch_seat's own `_resolve_launch_model` already resolves the same
+    precedence (explicit -> stamped intended_model -> last holder's own source_model ->
+    the trigger's global default) from the `settings` this call passes through, one tier
+    RICHER than this door's own former `resolve_model` call ever was.
 
-    TREE_CWD (task #135/#136, 2026-08-03, ruling 983ec87a — two doors onto one act must
-    return the same receipt): this door had drifted from launch_seat's own #103 update —
-    hardcoded to `office` and never reading `tree_cwd` at all, so it could not correctly
-    body any tree-bound seat; it always spawned into the office, silently. Now mirrors
-    launch_seat's own tree_cwd handling exactly: bound-but-missing refuses (osiris never
-    provisions a tree), unset falls back to `office` unchanged."""
-    pre = await _resolve_and_guard_launch(
-        handle, pool=pool, agents_json=agents_json, verb="launch")
-    if isinstance(pre, int):
-        return pre
-    facts, launch_cwd = pre
-    office = facts["anchor_cwd"]
-    tree_cwd = facts["tree_cwd"]
+    ONE GUARD STAYS CLI-SIDE, ON PURPOSE (decision 27259e4d, thread bc11a2d3): office/
+    anchor_cwd existing ON DISK. Porting it into the shared `_launch_target_setup` would
+    newly refuse roughly thirty existing `launch_seat`/`resume_seat` tests that use
+    fabricated (never-created) office paths — real scope beyond this wave's own ask. The
+    CLI keeps its own protection; an MCP-invoked launch/resume is unchanged.
 
-    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
-
+    THE BOUNDED POST-SPAWN POLL ALSO STAYS CLI-SIDE (a genuine, deliberate divergence found
+    during unification, not an oversight): launch_seat's own `can_receive` is a single read
+    taken the instant the spawn returns — right for a receipt that must never lie about the
+    current instant, wrong for a human at a terminal, whom a fresh claude often has not yet
+    self-bound for. Never re-invokes launch_seat (that would risk a second real spawn) —
+    only re-polls the SAME already-injected `agents_json` this call already holds, the exact
+    8x/1s bound this door has always used."""
     from src.actions.core import Actions
-    from src.ingest.sessions import dormant_history_confession, dormant_history_note
-    from src.orchestrator.seats import seat_receipt
-    from src.orchestrator.trigger import _bg_boot_prompt_bound, _bind_before_spawn
+    from src.orchestrator.trigger import _tree_exists, launch_seat
 
-    # BOTH SLUGS, ALWAYS (task #135/#136): office and tree_cwd are two DIFFERENT slugs by
-    # design (#103) — a dormant transcript can sit under either one, so check both
-    # regardless of which one this launch is actually spawning into, and confess whichever
-    # is freshest. locate_transcript_by_cwd was single-slug-blind; dormant_history_confession
-    # now takes every candidate cwd it's given.
-    dormant = dormant_history_confession(office, *([tree_cwd] if tree_cwd else []))
+    facts = await _resolve_launch_target(pool, handle, verb="launch")
+    if facts is None:
+        return 1
+    office = facts["anchor_cwd"]
+    # THE ONE-SIDED GUARD FAMILY (decision 27259e4d, thread bc11a2d3) — see this function's
+    # own docstring for why this stays here rather than in the shared trigger.py shell.
+    if not _tree_exists(office):
+        print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
+              "exist on disk — repoint it or create the directory before launch; osiris "
+              "never provisions one itself. The anchor is a GRAPH assertion (not a "
+              f".osiris pin file) — fix it with: rebind_seat(seat={handle!r}, "
+              "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
+              f"{office!r} at that exact path.", file=sys.stderr)
+        return 1
+
+    from src.config.settings import get_settings
+    st = get_settings()
+    out = await launch_seat(
+        Actions(pool), caller="operator", target=handle, model=model, settings=st,
+        substrate="harness", spawn=spawn, agents_json=agents_json,
+        operator_authorized=True)
+
+    status = out.get("status")
+    if status == "already-live":
+        print(f"already-live: {handle} — a body is already there, nothing started")
+        seen_via = out.get("seen_via")
+        if seen_via:
+            print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
+        return 0
+    if status != "launched":
+        print(f"osiris launch: refused — {out.get('detail', status)}", file=sys.stderr)
+        return 1
+
+    dormant = out.get("dormant_history")
     if dormant is not None:
+        from src.ingest.sessions import dormant_history_note
         print(f"osiris launch: {handle!r} — {dormant_history_note(dormant)}",
               file=sys.stderr)
 
-    from src.orchestrator.trigger import _governed_project_name, _window_name
-    name = await _window_name(pool, facts["house"], facts["handle"],
-                              await _governed_project_name(
-                                  pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
-    anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
-    # BOUND BEFORE SPAWN, THIS DOOR TOO (Thoth dispatch 6713, closing the hole above
-    # Khnum's own claim_name backstop, 2c65c6d): THIS IS THE EXACT LIVE SPECIMEN —
-    # `osiris launch marquee` is the literal command that produced the Marquee phantom
-    # (Thoth msg 6692). Sekhmet's Piece 1 fixed launch_seat's own harness lane (the MCP
-    # `launch` tool); this CLI door is a SEPARATE implementation (this function's own
-    # docstring: "mirrors launch_seat's harness lane... but skips its managed_by gate")
-    # that called the same now-deleted unbound `_bg_boot_prompt` directly — an
-    # independent path to the identical bug, not covered by her fix at all. Same
-    # primitive, same reasoning: identity is a fact the server already holds (office/
-    # handle/house all came off `seat_facts` above via `_resolve_launch_target`), not a
-    # re-derivation for the fresh session to attempt through a fallible claim_name call.
-    current_holder = ((await seat_receipt(pool, facts["seat_id"])) or {}).get("holder")
+    window = out.get("window")
+    print(f"osiris launch: spawned {window!r} via claude --bg, requested model="
+          f"{out.get('spawned_model') or '(claude CLI default)'}")
 
-    # RESOLVE PROJECT THE SAME WAY MOUNT WILL, BEFORE BINDING — THIS DOOR TOO (task #204's
-    # launch-identity fix, Thoth msg 6935/6949, decision 68fba2e4: "chad spawned in project
-    # chad"). Same refusal as trigger.launch_seat's own harness lane (shares
-    # _resolve_launch_project, not a second copy); a SEPARATE call site (this function's own
-    # docstring), independently vulnerable, independently fixed.
-    from src.orchestrator.trigger import _resolve_launch_project, _seat_lineage_ancestor
+    if out.get("can_receive"):
+        print(f"  confirmed: find it in `claude agents` as {window!r}")
+        return 0
 
-    ancestor_for_resolve = (
-        await _seat_lineage_ancestor(pool, facts["seat_id"]) or current_holder)
-    resolution = await _resolve_launch_project(
-        pool, seat_id=facts["seat_id"], office=office, ancestor=ancestor_for_resolve)
-    if resolution["refuse"] is not None:
-        r = resolution["refuse"]
-        print(f"osiris launch: refused — {facts['handle']}'s charter names "
-              f"{r['charter_project']!r} but the project this launch would resolve is "
-              f"{r['resolved_project']!r}. Run `osiris transition-seat-project "
-              f"{facts['handle']} ...` first, then relaunch.", file=sys.stderr)
-        return 1
-    resolved_project = resolution["project"]
-
-    bound = await _bind_before_spawn(
-        Actions(pool), target_seat=facts["seat_id"], handle=facts["handle"],
-        house=facts["house"], current_holder=current_holder, office=office,
-        anchor=anchor, source="operator", resolved_project=resolved_project)
-    boot_prompt = _bg_boot_prompt_bound(
-        office=office, anchor=anchor, handle=facts["handle"], agent=bound["agent"],
-        generation=bound["generation"], resolved_project=resolved_project)
-
-    # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): this
-    # door is a SEPARATE implementation from trigger.launch_seat (this function's own
-    # docstring), so launch_seat's own may_spend gate does not cover it — independently
-    # vulnerable, independently fixed, same as every other bug this door has needed fixed
-    # twice. Placed after every idempotency check above (an already-live return costs
-    # nothing new) and before the real spawn, same dollar wall dispatch_dm/wake_worker
-    # already stand behind. Inert on a subscription; bites only on a keyed API backend.
-    from src.config.settings import get_settings
-    from src.ingest.providers import spend_is_metered
-    from src.orchestrator.ceiling import may_spend
-
-    st = get_settings()
-    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
-    if not ok:
-        print(f"osiris launch: refused — {why}", file=sys.stderr)
-        return 1
-
-    try:
-        await spawn(launch_cwd, name=name, model=resolved_model, prompt=boot_prompt)
-    except OSError as exc:
-        print(f"osiris launch: claude --bg failed to start ({exc}) — nothing was spawned.",
-              file=sys.stderr)
-        return 1
-    print(f"osiris launch: spawned {name!r} via claude --bg, requested model="
-          f"{resolved_model or '(claude CLI default)'}")
-
+    launch_cwd = facts.get("tree_cwd") or office
     alive_row: dict[str, Any] | None = None
     for _ in range(8):
         try:
@@ -881,7 +840,7 @@ async def _cmd_launch_harness(
               "self-binding; re-check with `osiris fleet` in a few seconds.")
         return 0
     session_id = alive_row.get("sessionId")
-    print(f"  confirmed: find it in `claude agents` as {name!r}"
+    print(f"  confirmed: find it in `claude agents` as {window!r}"
           + (f" (session {session_id})" if session_id else ""))
     return 0
 
