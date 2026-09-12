@@ -1555,7 +1555,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 85
 # genuinely new capability, not prose growth on any other tool, not a new @mcp.tool()
 # (tool count unchanged; dispatched through the existing `backfill` door). Measured
 # exact (133,261).
-TOOL_CONTRACT_CEILING_CHARS = 135442
+TOOL_CONTRACT_CEILING_CHARS = 135089
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
