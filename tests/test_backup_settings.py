@@ -1,9 +1,12 @@
-"""backup_settings — the config panel's write half (Wave 21, thread f04cce36 piece 3).
+"""backup_settings — thin door over the settings registry (THE SETTINGS MENU piece 3,
+thread 7eb26f68, Thoth's GO mail 10084/10094), folding Wave 21's own write half (thread
+f04cce36 piece 3b) into `src/config/settings_registry.py`'s SettingSpecs.
 
-Same write semantics `test_console.py` already proves for `console_state` (partial
-update, monotonic rev, who-moved-last) plus the authority gate `write_backup_settings`
-copies from `charter_for` (operator directly, or a cited standing ruling that actually
-names this write).
+`get_backup_settings`/`write_backup_settings` keep their exact outward dict shape; the
+authority gate (`write_backup_settings` copies from `charter_for`: operator directly, or a
+cited standing ruling that actually names this write) is now `settings_service.write_setting`'s
+own generic authority check, exercised per key rather than reimplemented here — same
+tests, same behavior, a different (generalized) mechanism underneath.
 """
 from __future__ import annotations
 
@@ -11,69 +14,95 @@ from src.actions.core import Actions
 from src.orchestrator.backup_settings import (
     BACKUP_TIMER_UNITS,
     get_backup_settings,
-    set_backup_settings,
     write_backup_settings,
 )
 
 
-async def test_set_backup_settings_is_partial_and_bumps_rev(actions: Actions) -> None:
+async def test_write_backup_settings_is_partial(actions: Actions) -> None:
     p = actions.pool
-    s0 = await get_backup_settings(p)
-    s1 = await set_backup_settings(p, by="operator", vault_path="/mnt/nas/osiris-vault")
+    s1 = await write_backup_settings(
+        p, actor="operator", because="switching vaults", vault_path="/mnt/nas/osiris-vault")
     assert s1["vault_path"] == "/mnt/nas/osiris-vault"
-    assert s1["rev"] > s0["rev"]
     # a later partial write leaves vault_path untouched
-    s2 = await set_backup_settings(
-        p, by="operator", timer_schedules={"osiris-backup.timer": "*-*-* 00,12:00:00"})
+    s2 = await write_backup_settings(
+        p, actor="operator", because="tightening the dump schedule",
+        timer_schedules={"osiris-backup.timer": "*-*-* 00,12:00:00"})
     assert s2["vault_path"] == "/mnt/nas/osiris-vault"
     assert s2["timer_schedules"] == {"osiris-backup.timer": "*-*-* 00,12:00:00"}
-    assert s2["rev"] > s1["rev"]
-    assert await get_backup_settings(p) == s2
+    assert await get_backup_settings(p) == {k: v for k, v in s2.items() if k != "because"}
 
 
-async def test_set_backup_settings_rejects_unknown_field(actions: Actions) -> None:
-    res = await set_backup_settings(actions.pool, by="operator", secret="oops")
+async def test_write_backup_settings_timer_schedules_is_a_full_replace(actions: Actions) -> None:
+    """Same UX the retired panel had — posting the field's FULL value each save, so a
+    unit missing from the new dict is explicitly cleared, not left over from an earlier
+    write (folded from one shared blob into 5 per-unit keys, piece 3's own design)."""
+    p = actions.pool
+    s1 = await write_backup_settings(
+        p, actor="operator", because="two overrides",
+        timer_schedules={"osiris-backup.timer": "*-*-* 06:00:00",
+                        "osiris-preflight.timer": "Mon *-*-* 03:00:00"})
+    assert s1["timer_schedules"] == {"osiris-backup.timer": "*-*-* 06:00:00",
+                                     "osiris-preflight.timer": "Mon *-*-* 03:00:00"}
+    s2 = await write_backup_settings(
+        p, actor="operator", because="dropping the preflight override",
+        timer_schedules={"osiris-backup.timer": "*-*-* 06:00:00"})
+    assert s2["timer_schedules"] == {"osiris-backup.timer": "*-*-* 06:00:00"}
+
+
+async def test_write_backup_settings_null_clears_the_vault_path(actions: Actions) -> None:
+    p = actions.pool
+    await write_backup_settings(p, actor="operator", because="set it",
+                                vault_path="/mnt/nas/osiris-vault")
+    cleared = await write_backup_settings(p, actor="operator", because="unset it",
+                                          vault_path=None)
+    assert cleared["vault_path"] is None
+
+
+async def test_write_backup_settings_rejects_unknown_field(actions: Actions) -> None:
+    res = await write_backup_settings(actions.pool, actor="operator", because="x", secret="oops")
     assert "error" in res and "unknown" in res["error"]
 
 
-async def test_set_backup_settings_rejects_relative_vault_path(actions: Actions) -> None:
-    res = await set_backup_settings(actions.pool, by="operator", vault_path="relative/path")
+async def test_write_backup_settings_rejects_relative_vault_path(actions: Actions) -> None:
+    res = await write_backup_settings(
+        actions.pool, actor="operator", because="x", vault_path="relative/path")
     assert "error" in res and "absolute" in res["error"]
 
 
-async def test_set_backup_settings_rejects_unknown_timer_unit(actions: Actions) -> None:
-    res = await set_backup_settings(
-        actions.pool, by="operator", timer_schedules={"not-a-real.timer": "daily"})
+async def test_write_backup_settings_rejects_unknown_timer_unit(actions: Actions) -> None:
+    res = await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        timer_schedules={"not-a-real.timer": "daily"})
     assert "error" in res and "unknown timer unit" in res["error"]
 
 
-async def test_set_backup_settings_rejects_a_malformed_offbox_repository(
+async def test_write_backup_settings_rejects_a_malformed_offbox_repository(
     actions: Actions,
 ) -> None:
-    res = await set_backup_settings(
-        actions.pool, by="operator", offbox_repositories=[{"url": "", "enabled": True}])
+    res = await write_backup_settings(
+        actions.pool, actor="operator", because="x",
+        offbox_repositories=[{"url": "", "enabled": True}])
     assert "error" in res and "url" in res["error"]
 
-    res2 = await set_backup_settings(
-        actions.pool, by="operator",
+    res2 = await write_backup_settings(
+        actions.pool, actor="operator", because="x",
         offbox_repositories=[{"url": "sftp://nas/repo", "enabled": "yes"}])
-    assert "error" in res2 and "enabled" in res2["error"]
+    assert "error" in res2
+    assert any("enabled" in e["field"] for e in res2.get("errors", []))
 
 
-async def test_set_backup_settings_accepts_a_well_formed_offbox_repository(
+async def test_write_backup_settings_accepts_a_well_formed_offbox_repository(
     actions: Actions,
 ) -> None:
-    entry = {"url": "sftp://nas/repo", "schedule": "daily", "enabled": False}
-    res = await set_backup_settings(actions.pool, by="operator", offbox_repositories=[entry])
+    entry = {"name": "nas", "url": "sftp://nas/repo", "schedule": "daily", "enabled": False}
+    res = await write_backup_settings(
+        actions.pool, actor="operator", because="x", offbox_repositories=[entry])
     assert res["offbox_repositories"] == [entry]
 
 
-async def test_backup_settings_survives_a_wiped_singleton(actions: Actions) -> None:
-    p = actions.pool
-    base = await get_backup_settings(p)
-    assert base["rev"] == 0 and base["vault_path"] is None
-    s = await set_backup_settings(p, by="operator", vault_path="/mnt/nas")
-    assert s["vault_path"] == "/mnt/nas"
+async def test_get_backup_settings_starts_at_defaults(actions: Actions) -> None:
+    base = await get_backup_settings(actions.pool)
+    assert base == {"vault_path": None, "timer_schedules": {}, "offbox_repositories": []}
 
 
 # --- the write door's own authority gate ------------------------------------
@@ -142,3 +171,18 @@ def test_compositions_backup_status_timer_list_matches_backup_settings_exactly()
     from src.orchestrator.compositions import _BACKUP_TIMER_UNITS
 
     assert {u for u, _ in _BACKUP_TIMER_UNITS} == set(BACKUP_TIMER_UNITS)
+
+
+def test_backup_settings_registers_every_field_in_the_registry() -> None:
+    """Piece 3's own fold: vault_path, one schedule per timer, and offbox_repositories
+    are ordinary SettingSpecs now, not a parallel implementation."""
+    from src.config.settings_registry import SETTINGS, spec_by_key
+
+    vault = spec_by_key("backup.vault_path")
+    assert vault is not None and vault.type == "path" and vault.effect == "next_deploy"
+    offbox = spec_by_key("backup.offbox_repositories")
+    assert offbox is not None and offbox.type == "records"
+    assert offbox.item_shape == {"name": "str", "url": "str", "schedule": "schedule",
+                                 "enabled": "bool"}
+    timer_keys = {s.key for s in SETTINGS if s.key.startswith("backup.timer_schedule.")}
+    assert timer_keys == {f"backup.timer_schedule.{u}" for u in BACKUP_TIMER_UNITS}

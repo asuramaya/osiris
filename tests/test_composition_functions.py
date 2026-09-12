@@ -568,10 +568,10 @@ async def test_backup_status_shows_a_configured_schedule_override_distinct_from_
     fact as what's actually running — `configured_schedule` stays None until deploy's
     own timer-install step regenerates the unit, so a caller can tell "set" from "took
     effect" instead of the two silently blurring together."""
-    from src.orchestrator.backup_settings import set_backup_settings
+    from src.orchestrator.backup_settings import write_backup_settings
 
-    await set_backup_settings(
-        actions.pool, by="operator",
+    await write_backup_settings(
+        actions.pool, actor="operator", because="testing",
         timer_schedules={"osiris-backup.timer": "*-*-* 00,12:00:00"})
     await seed_default_compositions(actions.pool)
     res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
@@ -589,9 +589,10 @@ async def test_backup_status_uses_the_configured_vault_path_when_no_test_overrid
     configured_vault = tmp_path / "configured-vault"
     (configured_vault / "basebackups").mkdir(parents=True)
     (configured_vault / "osiris-20260601-043000.dump").write_bytes(b"z" * 42)
-    from src.orchestrator.backup_settings import set_backup_settings
+    from src.orchestrator.backup_settings import write_backup_settings
 
-    await set_backup_settings(actions.pool, by="operator", vault_path=str(configured_vault))
+    await write_backup_settings(actions.pool, actor="operator", because="testing",
+                                vault_path=str(configured_vault))
     await seed_default_compositions(actions.pool)
     # no args.vault override — should fall back to the configured setting, not the
     # real production default
