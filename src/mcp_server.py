@@ -5106,16 +5106,46 @@ async def fleet(full: bool = False) -> dict[str, Any]:
 
     live_cwds = {_resolved(n["cwd"]) for n in nodes.values() if n["live"] and n["cwd"]}
     live_cwds.discard(None)
+    # false_dead CANDIDATES are precisely the OS-live cwds no mount row's own cwd already
+    # covers — computed once, shared by the correlation pass below and the filing loop.
+    false_dead_cwds = {cwd: pids for cwd, pids in bodies_by_cwd.items() if cwd not in live_cwds}
+    # THE GHOST-GAP DOUBLE-COUNT FIX (thread 2f59a0ed, decision 5a2e85ac): EnterWorktree moves
+    # a session's real OS cwd into a worktree subdirectory while agent_mounts.cwd stays stale
+    # at the pre-worktree repo root — the SAME live session then gets filed TWICE: false_live
+    # under its stale mount cwd's project, AND false_dead under the worktree cwd's own "?"
+    # bucket, because the two loops below only ever matched on exact resolved-cwd string
+    # equality. CORRELATE before filing, never after (the decision's own "probably cheaper"
+    # call — a read-side fix here, not a write-side re-mount hook at every EnterWorktree call
+    # site): CLAUDE_JOB_DIR is fixed for an OS process's entire life (trigger.py's own
+    # launch_seat docstring), the one identity anchor a cwd move cannot touch. A false_live
+    # node whose own `job_dir` matches a false_dead candidate's job_dir is one session, not
+    # two — suppress BOTH sides of that pair rather than file either.
+    try:
+        candidate_pids = [pid for pids in false_dead_cwds.values() for pid in pids]
+        job_dir_by_pid = await asyncio.to_thread(census.job_dirs_for_pids, candidate_pids)
+    except Exception:  # noqa: BLE001
+        job_dir_by_pid = {}
+    correlated_cwds: set[str] = set()
     ghost_gap: dict[str, dict[str, list[Any]]] = {}
     for canonical, n in nodes.items():
         if not n["live"]:
             continue
-        if _resolved(n["cwd"]) not in bodies_by_cwd:
-            proj = n["project"] or "?"
-            ghost_gap.setdefault(proj, {"false_live": [], "false_dead": []})
-            ghost_gap[proj]["false_live"].append(canonical)
-    for cwd, pids in bodies_by_cwd.items():
-        if cwd in live_cwds:
+        if _resolved(n["cwd"]) in bodies_by_cwd:
+            continue
+        node_job_dir = n.get("job_dir")
+        correlated = False
+        if node_job_dir:
+            for cwd, pids in false_dead_cwds.items():
+                if any(job_dir_by_pid.get(pid) == node_job_dir for pid in pids):
+                    correlated_cwds.add(cwd)
+                    correlated = True
+        if correlated:
+            continue
+        proj = n["project"] or "?"
+        ghost_gap.setdefault(proj, {"false_live": [], "false_dead": []})
+        ghost_gap[proj]["false_live"].append(canonical)
+    for cwd, pids in false_dead_cwds.items():
+        if cwd in correlated_cwds:
             continue
         proj = None
         for n in nodes.values():
