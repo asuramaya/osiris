@@ -1162,18 +1162,24 @@ async def test_wake_gate_preflight_reports_never_mounted(actions: Actions) -> No
     assert d["status"] == "no-live-body"
 
 
-async def test_wake_gate_preflight_reports_queued_live_when_only_last_active_fresh(
-    actions: Actions,
+async def test_wake_gate_preflight_reports_queued_live_when_only_transcript_fresh(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ra XXXV's specimen (msg 4901, threads 94dc4aae + 27917f1f): a mind can be live by
-    the SAME registry fleet() trusts (fresh last_active testimony, ruling 70493925) while
-    carrying NO agent_mounts row at all — wakeable_identity (agent_mounts-only) finds
-    nothing, but that lookup miss is not evidence the mind never mounted. Must report the
-    honest 'live, but no session resolved' outcome, never the false-absence 'never-mounted'."""
+    """Ra XXXV's specimen (msg 4901, threads 94dc4aae + 27917f1f), re-pinned post-7dd09031:
+    a mind can be live — writing to its own transcript right now — with NO agent_mounts
+    row at all; wakeable_identity (agent_mounts-only) finds nothing, but that lookup miss
+    is not evidence the mind never mounted. `current_assertions.last_active` used to cover
+    this (ruling 70493925) but that property goes stale forever after one miner pass
+    (thread 7dd09031) — the live fallback is now a real transcript stat against this
+    lineage's own durable `anchor_sid` ledger. Must report the honest 'live, but no
+    session resolved' outcome, never the false-absence 'never-mounted'."""
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
     a = await actions.create_or_find_object("Agent", "agent:liveonly01", "fleet-observer")
-    fresh = datetime.now(UTC).isoformat()
-    await actions.assert_property(a, "last_active", fresh, "fleet-observer", NOW, 0.9,
-                                  evidence_class="self_declared")
+    sid = "aaaa1111-bbbb-2222-cccc-333344445555"
+    (tmp_path / "-repo").mkdir()
+    (tmp_path / "-repo" / f"{sid}.jsonl").write_text('{"type":"user"}\n')
+    await actions.assert_property(a, f"anchor_sid:{sid[:8]}", sid, "test", NOW, 0.9,
+                                  evidence_class="direct_observation")
     d = await trigger_module.wake_gate_preflight(
         actions.pool, "agent:liveonly01", settings=_settings(enabled=True))
     assert d["mode"] == "queued-live-unresolved"
@@ -3741,16 +3747,21 @@ async def test_dispatch_dm_never_mounted_is_distinct_from_no_anchor(
     assert "never mounted" in d["detail"]
 
 
-async def test_dispatch_dm_reports_queued_live_not_never_mounted_when_only_last_active_fresh(
-    actions: Actions,
+async def test_dispatch_dm_reports_queued_live_not_never_mounted_when_only_transcript_fresh(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The dispatch_dm sibling of Ra's specimen: a live-by-last_active addressee with no
-    agent_mounts row must never earn the manager's 'escalate, worker is gone' receipt
-    (60bc15db's exact shape) — it queues, an outcome, not a failure."""
+    """The dispatch_dm sibling of Ra's specimen, re-pinned post-7dd09031 (the stale
+    `last_active` fallback is gone; a real transcript stat against the lineage's own
+    `anchor_sid` ledger replaces it): a live-by-transcript addressee with no agent_mounts
+    row must never earn the manager's 'escalate, worker is gone' receipt (60bc15db's
+    exact shape) — it queues, an outcome, not a failure."""
+    monkeypatch.setenv("OSIRIS_TRANSCRIPTS", str(tmp_path))
     a = await actions.create_or_find_object("Agent", "agent:liveonly02", "fleet-observer")
-    fresh = datetime.now(UTC).isoformat()
-    await actions.assert_property(a, "last_active", fresh, "fleet-observer", NOW, 0.9,
-                                  evidence_class="self_declared")
+    sid = "bbbb2222-cccc-3333-dddd-444455556666"
+    (tmp_path / "-repo").mkdir()
+    (tmp_path / "-repo" / f"{sid}.jsonl").write_text('{"type":"user"}\n')
+    await actions.assert_property(a, f"anchor_sid:{sid[:8]}", sid, "test", NOW, 0.9,
+                                  evidence_class="direct_observation")
     out = await send_message(actions.pool, from_agent="agent:sender", from_project="other",
                              to_agent="agent:liveonly02", body="hello?")
     msg_id = int(out["id"])

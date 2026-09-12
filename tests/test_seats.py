@@ -1465,17 +1465,16 @@ async def test_occupancy_is_lineage_aware_like_held_seat(actions: Actions) -> No
     assert occ["state"] == "occupied" and occ["live"] is True
 
 
-async def test_occupancy_reads_occupied_off_last_active_alone_the_tenth_instance(
+async def test_occupancy_never_reads_occupied_off_last_active_alone(
     actions: Actions,
 ) -> None:
-    """Alfred's question via Thoth (msg 4394/4405, decision 59b3092c): seat_occupancy()
-    used to run its own inline agent_mounts-only query — the exact single-source shape
-    the dispatch-listener probe had BEFORE ruling 70493925 gave it a current_assertions
-    fallback (test_agent_liveness_falls_back_to_last_active_like_fleet_always_has, this
-    same fix, one reader over). A holder with NO mount row at all but a FRESH last_active
-    assertion — the graph's own self-testimony, fleet()'s signal the whole time — now
-    reads OCCUPIED here too, not COLD. Before this fix this returned COLD; the assertion
-    below is the actual regression, not a restatement of already-passing behavior."""
+    """Thread 7dd09031 (the cupid specimen) supersedes decision 59b3092c's own earlier
+    fix here: `last_active` (this house's only real writer, the session miner's
+    `_stamp_alive`) is stamped ONCE per lineage and never refreshed as later generations
+    keep working — trusting it as a standing occupancy signal is exactly what let a
+    two-month-old property outrank a mount row minutes old. A holder with NO mount row
+    at all, only a (however fresh-LOOKING) `last_active` assertion, now correctly reads
+    COLD, never OCCUPIED — occupancy is `agent_mounts.last_seen` alone."""
     from src.orchestrator.seats import seat_occupancy
 
     seat = await ensure_seat(actions, house="osiris", handle="Sobek", source="test")
@@ -1487,27 +1486,26 @@ async def test_occupancy_reads_occupied_off_last_active_alone_the_tenth_instance
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
 
     occ = await seat_occupancy(actions.pool, seat["seat_id"])
-    assert occ == {"state": "occupied", "holder": "agent:lastactive1", "live": True}
+    assert occ == {"state": "cold", "holder": "agent:lastactive1", "live": False}
 
 
-async def test_occupancy_and_fleet_occupancy_no_longer_disagree_with_themselves(
+async def test_occupancy_and_fleet_occupancy_still_agree_with_each_other(
     actions: Actions,
 ) -> None:
-    """Thoth's own regression proof (msg 4405): fleet() used to compute agent-level
-    liveness via the fixed dual-source path and seat-level occupancy via this function's
-    OWN unfixed single-source query — one payload, two disagreeing authorities over the
-    same table. Both now delegate to the same mounts.agent_liveness(), so a holder live
-    only by last_active reads occupied through BOTH doors, not just one."""
+    """Thoth's own regression proof (msg 4405), re-pinned post-7dd09031: fleet(),
+    seat_occupancy() and agent_liveness() must never disagree about the SAME holder —
+    all three still delegate to the one shared `mounts.agent_liveness()`, so a REAL
+    mount row reads live through every door, and (per the sibling test above) a
+    last_active-only holder reads cold through every door too, not just one."""
     from src.orchestrator import mounts
     from src.orchestrator.seats import fleet_occupancy, seat_occupancy
 
     seat = await ensure_seat(actions, house="osiris", handle="Bastet", source="test")
     await actions.create_or_find_object("Agent", "agent:selfconsist1", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:selfconsist1")
-    agent_oid = await actions.create_or_find_object("Agent", "agent:selfconsist1", "test")
-    fresh = datetime.now(UTC).isoformat()
-    await actions.assert_property(agent_oid, "last_active", fresh, "fleet-observer",
-                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    await save_mount(actions.pool, job_dir="/jobs/selfconsist1", agent_id="agent:selfconsist1",
+                     project="osiris", cwd="/w/osiris", model="claude-sonnet-5",
+                     session_key=None)
 
     via_agent_liveness = await mounts.agent_liveness(actions.pool, "agent:selfconsist1")
     via_seat_occupancy = await seat_occupancy(actions.pool, seat["seat_id"])
