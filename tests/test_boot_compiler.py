@@ -738,19 +738,20 @@ async def test_reissue_requires_because_and_refuses_an_unknown_seat(
 
 # ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) — names, never counts ═══════════
 
-async def test_boot_rollout_gaps_names_each_of_the_four_reasons_distinctly(
+async def test_boot_rollout_gaps_names_each_of_the_five_reasons_distinctly(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The check's whole point: a seat missing its section for FOUR different reasons must
+    """The check's whole point: a seat missing its section for FIVE different reasons must
     never collapse into one count, because only `never_compiled` is what adopt=True fixes —
-    the other three need a completely different act (a hand fix, establish_office, or the
-    anchor_cwd bug thread 7a9c3c46 already tracks)."""
-    # compiled: not a gap.
+    the others each need a completely different act (a hand fix, establish_office, a plain
+    reissue_office, or the anchor_cwd bug thread 7a9c3c46 already tracks)."""
+    # compiled: not a gap — BOTH CLAUDE.md and its AGENTS.md mirror already exist.
     compiled = await ensure_seat(actions, house="rollouthouse", handle="RolloutCompiled",
                                  anchor_cwd=str(tmp_path / "compiled"), source="test")
     (tmp_path / "compiled").mkdir()
     (tmp_path / "compiled" / "CLAUDE.md").write_text(
         "# hand prose\n\n" + wrap_managed("compiled body", "v1"))
+    (tmp_path / "compiled" / "AGENTS.md").write_text(wrap_managed("compiled body", "v1"))
 
     # never_compiled: has an office and a CLAUDE.md, zero markers.
     never = await ensure_seat(actions, house="rollouthouse", handle="RolloutNever",
@@ -773,6 +774,13 @@ async def test_boot_rollout_gaps_names_each_of_the_four_reasons_distinctly(
     no_office = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoOffice",
                                   source="test")
 
+    # no_agents_md: CLAUDE.md is fine (compiled, well-formed) — AGENTS.md was simply never
+    # written, the pre-vendor-neutral-mirror population.
+    no_agents = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoAgents",
+                                  anchor_cwd=str(tmp_path / "noagents"), source="test")
+    (tmp_path / "noagents").mkdir()
+    (tmp_path / "noagents" / "CLAUDE.md").write_text(wrap_managed("body", "v1"))
+
     gaps = await boot_rollout_gaps(actions.pool)
     by_seat = {g["seat_id"]: g for g in gaps}
 
@@ -781,6 +789,7 @@ async def test_boot_rollout_gaps_names_each_of_the_four_reasons_distinctly(
     assert by_seat[malformed["seat_id"]]["reason"] == "malformed"
     assert by_seat[no_file["seat_id"]]["reason"] == "no_claude_md"
     assert by_seat[no_office["seat_id"]]["reason"] == "no_office"
+    assert by_seat[no_agents["seat_id"]]["reason"] == "no_agents_md"
 
 
 async def test_boot_rollout_gaps_silent_when_every_active_seat_is_compiled(
@@ -790,6 +799,7 @@ async def test_boot_rollout_gaps_silent_when_every_active_seat_is_compiled(
                              anchor_cwd=str(tmp_path / "clean"), source="test")
     (tmp_path / "clean").mkdir()
     (tmp_path / "clean" / "CLAUDE.md").write_text(wrap_managed("body", "v1"))
+    (tmp_path / "clean" / "AGENTS.md").write_text(wrap_managed("body", "v1"))
     gaps = await boot_rollout_gaps(actions.pool)
     assert seat["seat_id"] not in {g["seat_id"] for g in gaps}
 
@@ -802,6 +812,21 @@ def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
     assert len(notes) == 2
     assert "Atlas (atlas)" in notes[0] and "reissue_office(adopt=True)" in notes[0]
     assert "Bort (no house)" in notes[1] and "not an adopt target" in notes[1]
+
+
+def test_boot_rollout_gap_notes_no_agents_md_gets_its_own_wording() -> None:
+    """Distinct from every other reason's phrasing — CLAUDE.md's own section is fine here,
+    so the note must never claim the seat 'has no compiled section' (false), and the fix
+    is a plain reissue, not an adopt=True (no marker damage to self-heal)."""
+    notes = boot_rollout_gap_notes([
+        {"seat_id": "seat:ccc", "handle": "Cato", "house": "catohouse",
+         "reason": "no_agents_md"},
+    ])
+    assert len(notes) == 1
+    assert "Cato (catohouse)" in notes[0]
+    assert "no AGENTS.md" in notes[0]
+    assert "has no compiled section" not in notes[0]
+    assert "reissue_office`" in notes[0] and "adopt=True" not in notes[0]
 
 
 def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:

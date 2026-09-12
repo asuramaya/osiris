@@ -718,7 +718,7 @@ async def reissue_office(
 # just count — a >= comparison can't fail in the direction it exists to detect once other,
 # unrelated rows (here, seats with no office at all) share the same table.
 #
-# FOUR reasons a seat is not "rolled out", kept DISTINCT rather than folded into one
+# FIVE reasons a seat is not "rolled out", kept DISTINCT rather than folded into one
 # count, because only one of them is what adopt=True can fix:
 #   never_compiled — has a handle, an office, a CLAUDE.md, zero markers. adopt-ready.
 #   malformed      — has markers, but they're damaged. reissue refuses; needs a hand fix,
@@ -733,10 +733,16 @@ async def reissue_office(
 #                    reissue_office has no office to find. Reported so it is never
 #                    silently folded into "needs rollout" and miscounted as fixed by a
 #                    sweep that cannot reach it.
+#   no_agents_md   — CLAUDE.md itself is fine (compiled, well-formed); AGENTS.md (thread
+#                    f37aaf1b piece 2's vendor-neutral mirror) has never been written —
+#                    every office established/reissued before that piece shipped. A plain
+#                    `reissue_office` call fixes it (adopt not required — CLAUDE.md's own
+#                    managed section already exists).
 async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
-    """Every active Seat NOT carrying a compiled managed section, one dict per seat,
-    classified by `reason` (see the four kinds above) — never a bare count. Read-only:
-    opens each office's CLAUDE.md to inspect it, writes nothing."""
+    """Every active Seat NOT carrying a compiled managed section, OR missing its
+    vendor-neutral AGENTS.md mirror, one dict per seat, classified by `reason` (see the
+    five kinds above) — never a bare count. Read-only: opens each office's CLAUDE.md (and
+    checks for AGENTS.md's existence) to inspect it, writes nothing."""
     from src.orchestrator.seats import seat_facts
 
     rows = await pool.fetch(
@@ -762,6 +768,19 @@ async def boot_rollout_gaps(pool: asyncpg.Pool) -> list[dict[str, str]]:
             reason = "never_compiled" if "never been compiled" in str(exc) else "malformed"
             gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
                         "anchor_cwd": anchor, "reason": reason, "detail": str(exc)})
+            continue
+        # AGENTS.md AWARENESS (thread f37aaf1b piece 2's own follow-up, wave 21): a FIFTH
+        # reason, checked only once CLAUDE.md itself is confirmed compiled and well-formed
+        # — every office established or last reissued BEFORE this mirror shipped has a
+        # perfectly good CLAUDE.md and no AGENTS.md at all, a real rollout gap (a Crush
+        # session there gets no compiled standing orders) distinct from every CLAUDE.md-
+        # side reason above, never folded into one of them. Fixed by any reissue_office
+        # call — `_mirror_agents_md` writes it unconditionally, adopt not required here
+        # since CLAUDE.md's own managed section already exists and reissue_office never
+        # refuses on that path.
+        if not (Path(anchor) / "AGENTS.md").exists():
+            gaps.append({"seat_id": seat_id, "handle": handle, "house": house or "",
+                        "anchor_cwd": anchor, "reason": "no_agents_md"})
     return gaps
 
 
@@ -776,10 +795,20 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
         "malformed": "markers are damaged — needs a hand fix before any reissue",
         "no_claude_md": "no CLAUDE.md on disk — needs establish_office/mint_seat first",
         "no_office": "no handle or anchor_cwd on record — not an adopt target",
+        "no_agents_md": "run `reissue_office`",
     }
-    return [f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) has no "
-            f"compiled section — {fixes[g['reason']]}"
-            for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"]))]
+    lines = []
+    for g in sorted(gaps, key=lambda g: (g["reason"], g["handle"] or g["seat_id"])):
+        if g["reason"] == "no_agents_md":
+            # DISTINCT WORDING (not "has no compiled section" — CLAUDE.md's own section
+            # is fine here; only its vendor-neutral mirror is missing, a narrower claim
+            # that would be false if folded into the generic phrasing above).
+            lines.append(f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) "
+                        f"has no AGENTS.md — {fixes['no_agents_md']}")
+        else:
+            lines.append(f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) "
+                        f"has no compiled section — {fixes[g['reason']]}")
+    return lines
 
 
 # ═══════════ THE DRIFT CHECK (thread f37aaf1b, v1.1 follow-up piece 1) ═══════════
