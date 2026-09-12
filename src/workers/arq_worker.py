@@ -702,9 +702,12 @@ async def trigger_mail(ctx: dict[str, Any]) -> int:
     """The mailbox alarm clock: wake an agent in a project that has unread mail (bounded by a
     per-project rate cap; OFF unless osiris_trigger_enabled — the kill switch). A spawn failure
     logs, never sinks the cron. Worker-as-tripwire (rule #2); Osiris itself still has no hands."""
+    from src.orchestrator.settings_service import settings_with_overlay
+
     actions: Actions = ctx["cascade"].actions
     try:
-        report = await trigger_mail_tick(actions)
+        report = await trigger_mail_tick(
+            actions, settings=await settings_with_overlay(actions.pool))
     except Exception as exc:  # a spawn/DB hiccup must not kill the cron
         _log.warning("mail trigger failed: %r", exc)
         return 0

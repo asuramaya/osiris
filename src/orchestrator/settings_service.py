@@ -91,11 +91,93 @@ def _current_value(spec: SettingSpec, stored: Any) -> Any:
     return stored if stored is not None else spec.default
 
 
+async def _restart_unit_env_value(unit: str, env_field: str, spec_type: str) -> Any:
+    """Best-effort LIVE value off the RUNNING unit's own environment (`systemctl --user
+    show ... -p Environment`) — 'unavailable, not fabricated' the moment this isn't
+    running on a box with that unit installed (CI, a dev worktree, systemd absent
+    entirely), the same law compositions.py's own `_backup_timer_live_state` holds.
+    Bounded subprocess timeout; any error at all degrades to None, never raises."""
+    import asyncio
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "show", f"{unit}.service", "-p", "Environment",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except (OSError, TimeoutError):
+        return None
+    prefix = f"{env_field.upper()}="
+    for line in out.decode(errors="replace").splitlines():
+        if not line.startswith("Environment="):
+            continue
+        for token in line.removeprefix("Environment=").split():
+            if not token.startswith(prefix):
+                continue
+            raw = token.removeprefix(prefix)
+            if spec_type == "bool":
+                return raw.strip().lower() in ("1", "true", "yes", "on")
+            if spec_type == "int":
+                try:
+                    return int(raw)
+                except ValueError:
+                    return None
+            if spec_type == "float":
+                try:
+                    return float(raw)
+                except ValueError:
+                    return None
+            return raw
+    return None
+
+
+def _rendered_backup_timer_value(key: str) -> Any:
+    """The actually-shipped `deploy/<unit>` file's own `OnCalendar=` line — generalizing
+    compositions.py's own `_backup_timer_calendar` (same read, same file) for the
+    registry's `backup.timer_schedule.<unit>` keys. None when the key names anything
+    else (no rendered-file counterpart exists at all, e.g. `backup.vault_path` — never
+    a guess) or the file doesn't carry that line."""
+    prefix = "backup.timer_schedule."
+    if not key.startswith(prefix):
+        return None
+    from src.orchestrator.compositions import _backup_timer_calendar
+
+    return _backup_timer_calendar(key.removeprefix(prefix))
+
+
+async def live_value(pool: asyncpg.Pool, spec: SettingSpec) -> Any:
+    """THE RUNNING/SHIPPED value beside the STORED one (Thoth's mail 10111, thread
+    c5ba8681) — null whenever a cheap read doesn't exist, never fabricated. See the
+    scope note annotated on c5ba8681 for the full per-effect rationale:
+    'immediate' reads the same cached overlay list/get already pays for; 'restart:<unit>'
+    polls the running unit's own environment; 'next_deploy' reads the shipped file;
+    anything else (a secret, or 'next_tick') has no cheap live source and stays null."""
+    if spec.type == "secret_ref":
+        return None
+    if spec.effect == "immediate":
+        if not spec.env_field:
+            return None
+        try:
+            base = await settings_with_overlay(pool)
+        except Exception:  # noqa: BLE001 — a live extra is a nice-to-have, never a crash
+            return None
+        return getattr(base, spec.env_field, None)
+    if spec.effect.startswith("restart:"):
+        if not spec.env_field:
+            return None
+        unit = spec.effect.split(":", 1)[1]
+        return await _restart_unit_env_value(unit, spec.env_field, spec.type)
+    if spec.effect == "next_deploy":
+        return _rendered_backup_timer_value(spec.key)
+    return None
+
+
 async def list_settings(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every declared SettingSpec's own metadata plus its current stored value (falling
     back to the spec's default when unset) — what a menu renders from, so a new knob
     added to SETTINGS appears with zero frontend change. Secrets never carry a real
-    value here, only presence."""
+    value here, only presence. `live` (null when not cheap to compute) is the
+    running/shipped counterpart — see `live_value`'s own docstring."""
     try:
         rows = await pool.fetch("SELECT key, value FROM settings WHERE scope='box' AND scope_id=''")
         stored = {r["key"]: _row_value(r["value"]) for r in rows}
@@ -108,21 +190,23 @@ async def list_settings(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             "item_shape": spec.item_shape, "authority": spec.authority,
             "requires_because": spec.requires_because, "consequence": spec.consequence,
             "value": _current_value(spec, stored.get(spec.key)),
+            "live": await live_value(pool, spec),
         }
         for spec in SETTINGS
     ]
 
 
 async def get_setting(pool: asyncpg.Pool, key: str) -> dict[str, Any]:
-    """One key's own current value. `{"error": ...}` when the key is not registered —
-    this door only ever answers for a declared knob, never an arbitrary string."""
+    """One key's own current value plus its `live` counterpart (null when not cheap —
+    see `live_value`). `{"error": ...}` when the key is not registered — this door only
+    ever answers for a declared knob, never an arbitrary string."""
     spec = spec_by_key(key)
     if spec is None:
         return {"error": f"unknown setting key: {key!r} — not in the registry"}
     row = await pool.fetchrow(
         "SELECT value FROM settings WHERE key=$1 AND scope='box' AND scope_id=''", key)
     stored = _row_value(row["value"]) if row is not None else None
-    return {"key": key, "value": _current_value(spec, stored)}
+    return {"key": key, "value": _current_value(spec, stored), "live": await live_value(pool, spec)}
 
 
 def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:

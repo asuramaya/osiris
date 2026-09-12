@@ -3,7 +3,7 @@ piece 1) — src/config/settings_registry.py's SETTINGS tuple, the pure metadata
 service/door tests all read against."""
 from __future__ import annotations
 
-from src.config.settings import get_settings
+from src.config.settings import Settings, get_settings
 from src.config.settings_registry import SETTINGS, spec_by_key
 
 
@@ -32,13 +32,20 @@ def test_every_env_field_actually_exists_on_settings() -> None:
 
 def test_every_default_matches_the_live_settings_default() -> None:
     """The registry's own `default` is a SEPARATE literal from settings.py's own field
-    default — this test is the one place that keeps them from silently drifting apart."""
-    settings = get_settings()
+    default — this test is the one place that keeps them from silently drifting apart.
+
+    Compares against `Settings.model_fields[...].default` — the MODEL's own declared
+    default, never `get_settings()` (Thoth's mail 10158: under the gate's real -n 4
+    worker environment, OSIRIS_WAKE_HOURLY_BUDGET/etc. are genuinely set in that shell,
+    so a live `Settings()` instance picks up the box's actual env rather than the bare
+    field default — order/worker-dependent flakiness, passing alone but failing under
+    the gate. `model_fields` reads the class declaration itself, no env involved."""
     for spec in SETTINGS:
         if spec.env_field is not None:
-            assert getattr(settings, spec.env_field) == spec.default, (
+            field_default = Settings.model_fields[spec.env_field].default
+            assert field_default == spec.default, (
                 f"{spec.key!r}'s registered default {spec.default!r} disagrees with "
-                f"settings.py's own {spec.env_field}={getattr(settings, spec.env_field)!r}")
+                f"settings.py's own {spec.env_field}={field_default!r}")
 
 
 def test_daemon_kill_switches_are_immediate_and_low_stakes_ones_skip_because() -> None:
@@ -57,3 +64,29 @@ def test_miner_budgets_are_registered_next_tick() -> None:
                "miner.zero_acceptance_window_days"):
         spec = spec_by_key(key)
         assert spec is not None and spec.effect == "next_tick" and spec.type == "int"
+
+
+def test_wake_ladder_is_registered_next_tick_and_master_switches_are_high_stakes() -> None:
+    for key in ("wake.trigger.rate_cap", "wake.hourly_budget", "wake.seat_hourly_cap",
+               "wake.mail_lease_secs", "wake.owner_live_secs"):
+        spec = spec_by_key(key)
+        assert spec is not None and spec.effect == "next_tick"
+        assert spec.requires_because is False and spec.consequence == "low"
+
+    for key in ("wake.trigger.enabled", "wake.enabled"):
+        spec = spec_by_key(key)
+        assert spec is not None and spec.effect == "next_tick"
+        assert spec.requires_because is True and spec.consequence == "high"
+
+
+def test_diag_memory_enabled_is_registered_immediate() -> None:
+    spec = spec_by_key("diag.memory_enabled")
+    assert spec is not None
+    assert spec.effect == "immediate" and spec.env_field == "osiris_memory_diag_enabled"
+
+
+def test_diag_worker_boot_memtrace_is_registered_restart_osiris_worker() -> None:
+    spec = spec_by_key("diag.worker_boot_memtrace.enabled")
+    assert spec is not None
+    assert spec.effect == "restart:osiris-worker"
+    assert spec.env_field == "osiris_worker_boot_memtrace_enabled"

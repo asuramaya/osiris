@@ -10,6 +10,7 @@ from src.orchestrator.settings_service import (
     _invalidate_overlay_cache,
     get_setting,
     list_settings,
+    live_value,
     settings_with_overlay,
     write_setting,
 )
@@ -27,7 +28,7 @@ async def test_list_settings_shows_every_registered_knob_with_its_default(
 
 async def test_get_setting_falls_back_to_the_default_when_unset(actions: Actions) -> None:
     out = await get_setting(actions.pool, "miner.daily_budget_base")
-    assert out == {"key": "miner.daily_budget_base", "value": 5}
+    assert out == {"key": "miner.daily_budget_base", "value": 5, "live": None}
 
 
 async def test_get_setting_refuses_an_unregistered_key(actions: Actions) -> None:
@@ -45,7 +46,7 @@ async def test_write_setting_the_operator_writes_freely_and_bumps_rev(
         actions.pool, "daemon.pit_watch.enabled", False, actor="operator")
     assert again["value"] is False and again["rev"] == 2
     assert await get_setting(actions.pool, "daemon.pit_watch.enabled") == {
-        "key": "daemon.pit_watch.enabled", "value": False}
+        "key": "daemon.pit_watch.enabled", "value": False, "live": False}
 
 
 async def test_write_setting_requires_because_only_when_the_spec_asks(
@@ -165,6 +166,98 @@ def test_invalidate_overlay_cache_is_idempotent_on_an_empty_cache() -> None:
 
 
 # --- secrets are never written through this door --------------------------------------
+
+# --- `live`: the running/shipped counterpart, null when not cheap (thread c5ba8681) ---
+
+async def test_live_value_immediate_reads_the_overlay(actions: Actions) -> None:
+    from src.config.settings_registry import spec_by_key
+
+    spec = spec_by_key("daemon.pit_watch.enabled")
+    assert spec is not None
+    assert await live_value(actions.pool, spec) is False  # env default
+    await write_setting(actions.pool, "daemon.pit_watch.enabled", True, actor="operator")
+    assert await live_value(actions.pool, spec) is True
+
+
+async def test_live_value_next_tick_is_null(actions: Actions) -> None:
+    from src.config.settings_registry import spec_by_key
+
+    spec = spec_by_key("miner.daily_budget_base")
+    assert spec is not None
+    assert await live_value(actions.pool, spec) is None
+
+
+async def test_live_value_next_deploy_reads_the_shipped_timer_file(actions: Actions) -> None:
+    from src.config.settings_registry import BACKUP_TIMER_UNITS, spec_by_key
+
+    unit = BACKUP_TIMER_UNITS[0]
+    spec = spec_by_key(f"backup.timer_schedule.{unit}")
+    assert spec is not None
+    live = await live_value(actions.pool, spec)
+    assert live is None or isinstance(live, str)  # None on a checkout with no deploy/ unit file
+
+
+async def test_live_value_next_deploy_is_null_with_no_rendered_file(actions: Actions) -> None:
+    """`backup.vault_path` has no shipped-file counterpart at all — never a guess."""
+    from src.config.settings_registry import spec_by_key
+
+    spec = spec_by_key("backup.vault_path")
+    assert spec is not None
+    assert await live_value(actions.pool, spec) is None
+
+
+async def test_live_value_secret_ref_is_always_null(actions: Actions) -> None:
+    from dataclasses import replace
+
+    from src.config import settings_registry
+
+    fake = replace(settings_registry.SETTINGS[0], key="test.fake_secret", type="secret_ref")
+    assert await live_value(actions.pool, fake) is None
+
+
+async def test_live_value_restart_unit_fails_open_with_no_env_field(actions: Actions) -> None:
+    from dataclasses import replace
+
+    from src.config import settings_registry
+
+    fake = replace(settings_registry.SETTINGS[0], key="test.fake_restart",
+                   effect="restart:osiris-worker", env_field=None)
+    assert await live_value(actions.pool, fake) is None
+
+
+async def test_live_value_restart_unit_fails_open_when_systemd_is_unavailable(
+    actions: Actions,
+) -> None:
+    """CI/dev-worktree law: no systemd, no unit installed — 'unavailable', not raised."""
+    from dataclasses import replace
+
+    from src.config import settings_registry
+
+    fake = replace(settings_registry.SETTINGS[0], key="test.fake_restart",
+                   effect="restart:osiris-nonexistent-unit-xyz",
+                   env_field="osiris_pit_watch_enabled")
+    assert await live_value(actions.pool, fake) is None
+
+
+async def test_live_value_the_real_registered_restart_unit_spec_fails_open_in_ci(
+    actions: Actions,
+) -> None:
+    """`diag.worker_boot_memtrace.enabled` is the one REAL registered restart:<unit>
+    knob (Wave 22 piece 2) — this test env has no osiris-worker unit installed, so it
+    must degrade to null rather than raise, same law as the synthetic fakes above."""
+    from src.config.settings_registry import spec_by_key
+
+    spec = spec_by_key("diag.worker_boot_memtrace.enabled")
+    assert spec is not None
+    assert await live_value(actions.pool, spec) is None
+
+
+async def test_list_settings_and_get_setting_both_carry_a_live_key(actions: Actions) -> None:
+    out = await list_settings(actions.pool)
+    assert all("live" in row for row in out)
+    got = await get_setting(actions.pool, "daemon.pit_watch.enabled")
+    assert "live" in got
+
 
 async def test_write_setting_refuses_a_secret_ref_outright(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,

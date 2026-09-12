@@ -9344,8 +9344,9 @@ async def settings(
     `SETTINGS` tuple) — a new knob needs a new registry entry, never a new tool.
 
     `action='list'` returns every declared setting's own metadata (type, default,
-    scope, effect, authority, choices) plus its current value — secrets always redacted
-    to `{"set": bool}`. `action='get'` (with `key`) returns one current value.
+    scope, effect, authority, choices) plus `value` and `live` (the running/shipped
+    value, null when not cheap) — secrets redacted to `{"set": bool}`. `action='get'`
+    (with `key`) returns one `value`/`live` pair.
     `action='write'` (with `key`/`value`) changes it: each setting's own `authority`
     (operator | operator_or_manager | operator_or_ruling) decides who may write it
     without a manager/ruling citation; `because` is required unless the setting opts
@@ -11948,7 +11949,15 @@ async def diag_memory_route(request: Any) -> Any:
     `?stop=1` ends the window early regardless of state, canceling the guard task."""
     from starlette.responses import JSONResponse
 
-    if not get_settings().osiris_memory_diag_enabled:
+    from src.orchestrator.settings_service import settings_with_overlay
+
+    try:
+        st = await settings_with_overlay(await _pool_get())
+    except Exception:  # noqa: BLE001 — a memory-diagnostic route must survive a DB
+        # outage (possibly the very thing it's being used to diagnose): fail open to
+        # the bare env/pydantic default rather than 500 on a pool hiccup.
+        st = get_settings()
+    if not st.osiris_memory_diag_enabled:
         return JSONResponse(
             {"error": "disabled (osiris_memory_diag_enabled=0) — flip it on for a "
                      "measurement window, this never runs silently"}, status_code=404)

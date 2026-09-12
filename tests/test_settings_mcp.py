@@ -61,7 +61,7 @@ async def test_settings_tool_get_needs_no_authority(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out == {"key": "miner.daily_budget_base", "value": 5}
+    assert out == {"key": "miner.daily_budget_base", "value": 5, "live": None}
 
 
 async def test_settings_tool_operator_write_succeeds(

@@ -3853,10 +3853,11 @@ async def _fn_fleet_live(
     hollow value) when there isn't. Nothing is silently dropped: every field either renders
     readably or is omitted and named here, not decided quietly at build time."""
     from src.api.chrome import fleet_data
-    from src.config.settings import get_settings
+    from src.orchestrator.settings_service import settings_with_overlay
 
     try:
-        data = await fleet_data(pool, wake_budget=get_settings().osiris_wake_hourly_budget)
+        st = await settings_with_overlay(pool)
+        data = await fleet_data(pool, wake_budget=st.osiris_wake_hourly_budget)
     except Exception:  # noqa: BLE001 — see fleet_live_agents: unavailable, never a silent
         # empty table (msg 1894 point 4, degrade-honestly, renderer-independent) — "error"
         # replaces the WHOLE dict rather than hiding in "pulse" (thread 02e0ab9c/6190):
