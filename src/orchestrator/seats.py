@@ -2646,6 +2646,19 @@ async def resync_seat_house_third_party(
     if not reason.strip():
         return {"error": "a correction with no reason is exactly the silent overwrite "
                          "719ed5b1 rules against — refusing"}
+    # THE EXISTENCE CHECK (WAVE 21 item 4, mail 9869 ad48598f — the gap the CLI live-
+    # invocation audit found, wave 2 own-body read): this call used to reach straight for
+    # create_or_find_object below with no check the seat existed at all, so a nonexistent-
+    # seat "safe" invocation would silently MINT a stray Seat rather than refuse — unlike
+    # reconcile_seat_identity_third_party, this function's own precedent-named sibling,
+    # which DOES refuse (identity_heal.py's own `SELECT ... WHERE canonical=$1 AND
+    # type='Seat' AND status='active'` check). Same query, same refusal shape, mirrored
+    # here rather than invented fresh.
+    seat_row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if seat_row is None:
+        return {"error": f"no active seat matches {seat_id!r}"}
     facts = await seat_facts(actions.pool, seat_id)
     was = facts.get("house") or None  # normalize a stored "" back to None for the receipt
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
