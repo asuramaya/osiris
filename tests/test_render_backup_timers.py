@@ -62,10 +62,10 @@ def test_render_ignores_an_override_for_a_unit_with_no_shipped_file(tmp_path: Pa
 async def test_configured_schedules_reads_the_real_settings_table(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, pg_dsn: str,
 ) -> None:
-    from src.orchestrator.backup_settings import set_backup_settings
+    from src.orchestrator.backup_settings import write_backup_settings
 
-    await set_backup_settings(
-        actions.pool, by="operator",
+    await write_backup_settings(
+        actions.pool, actor="operator", because="testing render",
         timer_schedules={"osiris-base-backup.timer": "Sat 02:00:00"})
 
     class _FakeSettings:

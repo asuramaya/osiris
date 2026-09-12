@@ -229,39 +229,25 @@ def test_browse_bridges_composition_items_onto_the_shape_rendering_already_expec
     assert "status: it.status" in body and "created_at: it.created_at" in body
 
 
-# THE BACKUP CONFIG PANEL (Wave 21, thread f04cce36 piece 3b): a small dedicated view,
-# reached via CMD-K, reading backup_status (piece 2) and /backup-settings (piece 3a's
-# own REST door) — not composition/table-shaped, so it renders its own HTML rather than
-# going through Osiris.renderResult().
+# THE BACKUP CONFIG PANEL RETIREMENT (THE SETTINGS MENU piece 3, thread 7eb26f68, Thoth's
+# GO mail 10084): the small dedicated view Wave 21 built (thread f04cce36 piece 3b) is
+# gone — its 3 fields (vault_path, one schedule per timer, offbox_repositories) now render
+# as ordinary registry entries in the generic Settings panel below, grouped under one
+# "backup" section by the same key-prefix grouping every other group already uses.
 
 
-def test_backup_panel_reads_the_backup_status_function_and_settings_route() -> None:
-    body = _JS.split("async function renderBackupPanel()", 1)[1].split("\nfunction ", 1)[0]
-    assert "op: 'function', name: 'backup_status', args: {}" in body
-    assert "fetch('/backup-settings')" in body
+def test_backup_panel_is_fully_retired_from_console_js() -> None:
+    assert "renderBackupPanel" not in _JS
+    assert "renderBackupPanelHtml" not in _JS
+    assert "saveBackupVaultPath" not in _JS
+    assert "saveBackupTimerSchedules" not in _JS
+    assert "'Backup settings…'" not in _JS
+    assert "fetch('/backup-settings')" not in _JS
 
 
-def test_backup_panel_has_a_palette_entry_not_a_nav_tab() -> None:
-    assert "'Backup settings…'" in _JS
-    assert "run: () => renderBackupPanel()" in _JS
-    assert 'data-surface="backup"' not in _JS
-
-
-def test_backup_panel_saves_post_to_the_settings_route_with_a_because() -> None:
-    vault_body = _JS.split("async function saveBackupVaultPath()", 1)[1].split(
-        "\nasync function ", 1)[0]
-    assert "fetch('/backup-settings'" in vault_body
-    assert "because: because, vault_path: val || null" in vault_body
-
-    sched_body = _JS.split("async function saveBackupTimerSchedules()", 1)[1].split(
-        "\n// ── ", 1)[0]
-    assert "fetch('/backup-settings'" in sched_body
-    assert "because: because, timer_schedules: schedules" in sched_body
-
-
-# THE SETTINGS MENU (ruling be1b2e47, thread 7eb26f68 piece 2): a generic view over
+# THE SETTINGS MENU (ruling be1b2e47, thread 7eb26f68 pieces 2+3): a generic view over
 # settings(action='list')/GET /settings — one renderer per field type, never a hand-
-# built form per knob. Reached via CMD-K, same placement as the backup panel.
+# built form per knob. Reached via CMD-K.
 
 
 def test_settings_panel_reads_the_settings_list_route() -> None:
@@ -279,8 +265,19 @@ def test_settings_panel_has_a_palette_entry_not_a_nav_tab() -> None:
 def test_settings_panel_covers_every_registry_field_type() -> None:
     body = _JS.split("function settingsFieldInput(item)", 1)[1].split(
         "\nfunction ", 1)[0]
-    for t in ("secret_ref", "bool", "enum", "int", "float", "json", "records"):
+    for t in ("secret_ref", "bool", "enum", "int", "float", "json", "records",
+             "path", "schedule"):
         assert "'" + t + "'" in body or '"' + t + '"' in body
+
+
+def test_settings_panel_path_and_schedule_round_trip_an_empty_box_to_null() -> None:
+    """THE SETTINGS MENU piece 3 (thread 7eb26f68): clearing a path/schedule input and
+    saving must send null — the only way to un-set a real infra path or timer override
+    back to the shipped default, same UX the retired backup panel had."""
+    body = _JS.split("function settingsFieldValue(item)", 1)[1].split(
+        "\nasync function ", 1)[0]
+    assert "item.type === 'path' || item.type === 'schedule'" in body
+    assert "=== '' ? null :" in body
 
 
 def test_settings_panel_secret_ref_never_gets_a_save_button() -> None:

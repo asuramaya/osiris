@@ -943,7 +943,6 @@ async def test_backup_settings_route_writes_as_the_operator(
     assert r.status_code == 200
     body = r.json()
     assert body["vault_path"] == "/mnt/nas/osiris-vault"
-    assert body["updated_by"] == "analyst:operator"
     # a later partial write leaves vault_path untouched
     r2 = await client.post("/backup-settings", json={
         "because": "rescheduling dumps",

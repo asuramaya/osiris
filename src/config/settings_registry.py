@@ -127,7 +127,68 @@ _MINER_BUDGETS: tuple[SettingSpec, ...] = (
                env_field="osiris_miner_zero_acceptance_window_days"),
 )
 
-SETTINGS: tuple[SettingSpec, ...] = _DAEMON_KILL_SWITCHES + _MINER_BUDGETS
+# THE FIVE BACKUP-LANE TIMERS (THE SETTINGS MENU piece 3, thread 7eb26f68, Thoth's GO mail
+# 10084) — moved here from `src/orchestrator/backup_settings.py` (which re-exports this
+# name so its own existing importers, compositions.py's `backup_status` and
+# scripts/render_backup_timers.py, keep working unchanged) so the registry — the
+# declarations layer — never has to import FROM the orchestrator layer to build its own
+# SettingSpecs, only the reverse.
+BACKUP_TIMER_UNITS: tuple[str, ...] = (
+    "osiris-backup.timer",
+    "osiris-base-backup.timer",
+    "osiris-prune-manifest.timer",
+    "osiris-prune-apply.timer",
+    "osiris-preflight.timer",
+)
+
+
+def _validate_offbox_repositories(value: Any) -> str | None:
+    """Restores the exact required-field check `backup_settings.py`'s own bespoke
+    `_validate` used to run — the generic `records` validator (settings_service.py's
+    `_validate_value`) only type-checks a field when it's PRESENT, never requires one,
+    so a per-spec `validate` callable is where "url and enabled are mandatory" still
+    lives, same division of labor the registry's own docstring describes."""
+    if not isinstance(value, list):
+        return None  # the generic type check already covers "must be a list"
+    for i, r in enumerate(value):
+        if not isinstance(r, dict):
+            continue  # the generic check already covers "each item must be an object"
+        if not isinstance(r.get("url"), str) or not r["url"]:
+            return f"offbox_repositories[{i}] needs a non-empty string 'url'"
+        if not isinstance(r.get("enabled"), bool):
+            return f"offbox_repositories[{i}] needs a boolean 'enabled'"
+    return None
+
+
+# THE BACKUP CONFIG PANEL'S OWN FIELDS (THE SETTINGS MENU piece 3, thread 7eb26f68,
+# Thoth's GO mail 10084/10094), folded in from `backup_settings.py`'s own singleton
+# table (Wave 21, thread f04cce36 piece 3) — same authority shape that table's write
+# door always had (`operator_or_ruling`, `write_name='backup_settings'`), generalized
+# rather than reinvented. All three `effect='next_deploy'`: none of them take hold until
+# `render_backup_timers.py` regenerates the shipped units on the next `osiris deploy`.
+# `path`/`schedule` both accept `None` as a value (settings_service.py's
+# `_validate_value`) meaning "no override" — how an operator clears one back to the
+# shipped default, the same "clearing an input and saving drops it" UX the old panel had.
+_BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
+    SettingSpec("backup.vault_path", "path", None, effect="next_deploy",
+               authority="operator_or_ruling", requires_because=True,
+               consequence="high", write_name="backup_settings"),
+    *(
+        SettingSpec(f"backup.timer_schedule.{unit}", "schedule", None,
+                   effect="next_deploy", authority="operator_or_ruling",
+                   requires_because=True, consequence="high",
+                   write_name="backup_settings")
+        for unit in BACKUP_TIMER_UNITS
+    ),
+    SettingSpec("backup.offbox_repositories", "records", [], effect="next_deploy",
+               item_shape={"name": "str", "url": "str", "schedule": "schedule",
+                          "enabled": "bool"},
+               validate=_validate_offbox_repositories,
+               authority="operator_or_ruling", requires_because=True,
+               consequence="high", write_name="backup_settings"),
+)
+
+SETTINGS: tuple[SettingSpec, ...] = _DAEMON_KILL_SWITCHES + _MINER_BUDGETS + _BACKUP_SETTINGS
 
 
 _BY_KEY: dict[str, SettingSpec] = {s.key: s for s in SETTINGS}

@@ -137,12 +137,18 @@ def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
         return {"field": spec.key, "message": "must be an integer"}
     if t in ("float",) and not (isinstance(value, (int, float)) and not isinstance(value, bool)):
         return {"field": spec.key, "message": "must be a number"}
-    if t in ("str", "path") and not isinstance(value, str):
+    if t == "str" and not isinstance(value, str):
         return {"field": spec.key, "message": "must be a string"}
+    # 'path'/'schedule' both accept None meaning "no override, use the shipped default"
+    # (THE SETTINGS MENU piece 3, thread 7eb26f68) — the only way to CLEAR a real infra
+    # path or schedule back off, not just overwrite it with another one.
+    if t == "path" and value is not None and not isinstance(value, str):
+        return {"field": spec.key, "message": "must be a string, or null to unset"}
     if t == "path" and isinstance(value, str) and not value.startswith("/"):
         return {"field": spec.key, "message": "must be an absolute filesystem path"}
-    if t == "schedule" and not (isinstance(value, str) and value.strip()):
-        return {"field": spec.key, "message": "must be a non-empty OnCalendar= expression"}
+    if t == "schedule" and value is not None and not (isinstance(value, str) and value.strip()):
+        return {"field": spec.key,
+                "message": "must be a non-empty OnCalendar= expression, or null to unset"}
     if t == "enum":
         if not spec.choices:
             return {"field": spec.key, "message": "spec declares type='enum' with no choices"}

@@ -602,103 +602,19 @@ async function sendPaneReply() {
   }
 }
 
-// ── Backup Settings (Wave 21, operator's word 2026-09-11, thread f04cce36 piece 3b) ───
-// The config panel: reads backup_status (a Function, no graph object to select over —
-// piece 2's own finding) plus /backup-settings (the write door's own read half), renders
-// a small dedicated view — not browse/table-shaped like every other composition surface,
-// so it doesn't run through the generic Osiris.renderResult() pipeline. Reached via
-// CMD-K ("Backup settings…"), not a nav tab: an admin panel, not a standing lens.
-var BACKUP_STATUS = null, BACKUP_SETTINGS = null;
-async function renderBackupPanel() {
-  const container = $('result'); showBoard(); (ensureBoard()).clear(); showPanel();
-  $('entity-taxonomy-bar').style.display = 'none'; $('viewsw').style.display = 'none';
-  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading backup status…</div>';
-  try {
-    const [statusRes, settings] = await Promise.all([
-      fetch('/compositions/run-spec', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ spec: { op: 'function', name: 'backup_status', args: {} },
-                               name: 'backup_status' }),
-      }).then(r => r.json()),
-      fetch('/backup-settings').then(r => r.json()),
-    ]);
-    BACKUP_STATUS = statusRes.items; BACKUP_SETTINGS = settings;
-  } catch(e) {
-    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load backup status.</div>';
-    return;
-  }
-  container.innerHTML = renderBackupPanelHtml(BACKUP_STATUS, BACKUP_SETTINGS);
-}
-function renderBackupPanelHtml(status, settings) {
-  var timersHtml = (status.timers || []).map(function(t) {
-    return '<tr><td>' + esc(t.label) + '</td><td class="o-faint">' + esc(t.schedule || '?') + '</td>' +
-      '<td><input type="text" id="backup-sched-' + esc(t.unit) + '" value="' +
-      esc(t.configured_schedule || '') +
-      '" placeholder="(unset — uses shipped default)" style="width:220px" /></td></tr>';
-  }).join('');
-  var vaultInfo = (status.vault && !status.vault.error)
-    ? status.vault.dumps.count + ' dump(s), ' + status.vault.base_backups.count +
-      ' base backup(s), ' + status.vault.wal_segments_kept + ' WAL segment(s) kept'
-    : '<span class="o-faint">' + esc((status.vault || {}).error || 'unavailable') + '</span>';
-  var diskInfo = (status.disk && !status.disk.error)
-    ? status.disk.free_gb + ' GB free' + (status.disk.headroom_ok === false
-        ? ' — <b style="color:#e5534b">BELOW HEADROOM</b>' : '')
-    : '<span class="o-faint">' + esc((status.disk || {}).error || 'unavailable') + '</span>';
-  var manifestInfo = (status.prune_manifest && !status.prune_manifest.error)
-    ? (status.prune_manifest.clear_to_apply ? 'clear to apply' : 'not yet clear') +
-      ' — ' + esc(status.prune_manifest.reason)
-    : '<span class="o-faint">' + esc((status.prune_manifest || {}).error || 'unavailable') + '</span>';
-  return '<div style="padding:16px;max-width:900px;margin:0 auto">' +
-    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Backup Settings</h2>' +
-    '<div style="margin-bottom:16px"><label class="o-faint">Vault path (local disk, or an OS-mounted NAS share — Postgres doesn\'t distinguish the two)</label><br/>' +
-    '<input type="text" id="backup-vault-path" value="' + esc(settings.vault_path || '') +
-    '" placeholder="(unset — uses the shipped default)" style="width:400px" /> ' +
-    '<button class="iconbtn" onclick="saveBackupVaultPath()">Save</button></div>' +
-    '<table class="ee-table"><thead><tr><th>Timer</th><th>Live schedule</th><th>Configured override</th></tr></thead><tbody>' +
-    timersHtml + '</tbody></table>' +
-    '<div style="margin:8px 0 24px"><button class="iconbtn" onclick="saveBackupTimerSchedules()">Save schedules</button> ' +
-    '<span class="o-faint">Takes effect on the next osiris deploy — "Live schedule" won\'t move until then.</span></div>' +
-    '<div style="margin-bottom:8px"><b>Vault:</b> ' + vaultInfo + '</div>' +
-    '<div style="margin-bottom:8px"><b>Disk:</b> ' + diskInfo + '</div>' +
-    '<div style="margin-bottom:8px"><b>Prune manifest:</b> ' + manifestInfo + '</div>' +
-    '<div style="margin-bottom:8px" class="o-faint"><b>PITR drill:</b> ' + esc((status.pitr_drill || {}).note || '') + '</div>' +
-    '<div style="margin-bottom:8px" class="o-faint"><b>Off-box:</b> ' + esc((status.offbox || {}).note || '') + '</div>' +
-    '</div>';
-}
-async function saveBackupVaultPath() {
-  var val = $('backup-vault-path').value.trim();
-  var because = prompt('Why this change? (required)'); if (!because) return;
-  var res = await fetch('/backup-settings', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ because: because, vault_path: val || null }),
-  }).then(function(r){ return r.json(); });
-  if (res.error) { setStatus('Save failed: ' + res.error); return; }
-  setStatus('Vault path saved.'); renderBackupPanel();
-}
-async function saveBackupTimerSchedules() {
-  var because = prompt('Why this change? (required)'); if (!because) return;
-  var schedules = {};
-  (BACKUP_STATUS.timers || []).forEach(function(t) {
-    var el = $('backup-sched-' + t.unit);
-    if (el && el.value.trim()) schedules[t.unit] = el.value.trim();
-  });
-  var res = await fetch('/backup-settings', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ because: because, timer_schedules: schedules }),
-  }).then(function(r){ return r.json(); });
-  if (res.error) { setStatus('Save failed: ' + res.error); return; }
-  setStatus('Timer schedules saved — takes effect on the next osiris deploy.');
-  renderBackupPanel();
-}
-
-// ── Settings Menu (THE SETTINGS MENU, ruling be1b2e47, thread 7eb26f68 piece 2) ───────
+// ── Settings Menu (THE SETTINGS MENU, ruling be1b2e47, thread 7eb26f68 pieces 2+3) ────
 // One generic view over src/config/settings_registry.py's own SETTINGS tuple, rendered
 // from settings(action='list') — a new knob needs a new registry entry, never a new
 // renderer, unless it introduces a genuinely new `type` this switch doesn't yet cover.
+// Piece 3 folded the old dedicated "Backup settings…" panel's own 3 fields
+// (backup.vault_path, one backup.timer_schedule.<unit> per timer, backup.offbox_
+// repositories) into this same tuple — they render here, grouped under one "backup"
+// section (key-prefix grouping, see renderSettingsPanelHtml below), no separate panel or
+// CMD-K entry anymore.
 // `live` (thread c5ba8681, Imhotep's own follow-up, not yet built) is read defensively
 // here — when a future list_settings response carries a non-null `live` per item, it
 // just appears beside `value`; no UI change needed when it arrives. Reached via CMD-K
-// ("Settings…"), same placement as the backup panel — no standing-lens case for a tab.
+// ("Settings…") — no standing-lens case for a tab.
 function settingsEffectProse(effect) {
   if (effect === 'immediate') return 'takes effect immediately';
   if (effect === 'next_tick') return 'takes effect on the next tick';
@@ -745,8 +661,12 @@ function settingsFieldInput(item) {
     return '<textarea id="' + id + '" rows="3" style="width:360px;font-family:monospace">' +
       esc(JSON.stringify(v, null, 2)) + '</textarea>';
   }
-  // str / path / schedule — plain text
-  return '<input type="text" id="' + id + '" value="' + esc(v == null ? '' : v) + '" style="width:280px" />';
+  // str / path / schedule — plain text; path/schedule may be null (no override, uses
+  // the shipped default) — an empty box round-trips to null on save (settingsFieldValue).
+  var ph = (item.type === 'path' || item.type === 'schedule')
+    ? ' placeholder="(unset — uses shipped default)"' : '';
+  return '<input type="text" id="' + id + '" value="' + esc(v == null ? '' : v) + '"' +
+    ph + ' style="width:280px" />';
 }
 function renderSettingsPanelHtml(items) {
   var groups = {}, order = [];
@@ -784,6 +704,9 @@ function settingsFieldValue(item) {
   if (item.type === 'int') return parseInt(el.value, 10);
   if (item.type === 'float') return parseFloat(el.value);
   if (item.type === 'json' || item.type === 'records') return JSON.parse(el.value);
+  if (item.type === 'path' || item.type === 'schedule') {
+    return el.value.trim() === '' ? null : el.value.trim();
+  }
   return el.value;
 }
 async function saveSetting(key) {
@@ -1064,8 +987,7 @@ const POWER_TOOLS = [
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
-  { label: 'Backup settings…', hint: 'Vault path, timer schedules', cat: 'Admin', run: () => renderBackupPanel() },
-  { label: 'Settings…', hint: 'Every configuration knob', cat: 'Admin', run: () => renderSettingsPanel() },
+  { label: 'Settings…', hint: 'Every configuration knob, including backup', cat: 'Admin', run: () => renderSettingsPanel() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
