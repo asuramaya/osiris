@@ -708,6 +708,44 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
                        cwd=r["cwd"], model=r["model"])
 
 
+async def resolve_dirty_tree_owner(
+    pool: asyncpg.Pool, repo_dir: str | None,
+) -> dict[str, Any] | None:
+    """WHO OWNS an uncommitted hunk at `repo_dir` (thread fe1d91bc, Thoth dispatch 9870/
+    9976/10000 — "map an uncommitted hunk to its owner by the worktree and mount that
+    touched it"). The join nobody had built: `settle.py`'s own `uncommitted_git_work`
+    (the dirty-check) against `agent_mounts.cwd` (no shared function resolved "who is
+    mounted at this cwd" before this — every prior read site did its own ad-hoc inline
+    SELECT). EXACT cwd match only, never fuzzy path containment — a worktree's own root
+    IS a mount's own cwd by this house's own convention (measured live: 60+ worktrees,
+    one per task branch, cwd == the worktree root every time), so a substring/prefix
+    match would risk matching a SIBLING worktree that merely shares a path segment.
+
+    Most-recently-active mount at that exact cwd wins (`ORDER BY last_seen DESC LIMIT 1`)
+    — including a VACATED seat's own stale row, deliberately: this function never
+    decides a mount is "too old to count," it returns `last_seen` so the CALLER can judge
+    staleness itself (a settle() reader is in a much better position to weigh "this mount
+    is 6 hours old" than a blind cutoff baked in here would ever be).
+
+    Returns None in the two honest "cannot answer" cases: `repo_dir` has no uncommitted
+    work at all (nothing to attribute), or no mount row's cwd matches exactly (never a
+    guess — the caller keeps its OWN disclaimer verbatim, same fail-open law
+    `uncommitted_git_work` itself already holds for `repo_dir` outside a git worktree
+    entirely). Otherwise `{"agent_id", "last_seen"}` — `last_seen` as a live `datetime`,
+    the caller's own concern to format or age-check."""
+    from src.orchestrator.settle import uncommitted_git_work
+
+    dirty = await uncommitted_git_work(repo_dir)
+    if not dirty:
+        return None
+    row = await pool.fetchrow(
+        "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
+        "ORDER BY last_seen DESC LIMIT 1", repo_dir)
+    if row is None:
+        return None
+    return {"agent_id": row["agent_id"], "last_seen": row["last_seen"]}
+
+
 LIVENESS_WINDOW_MINUTES = 15
 
 
