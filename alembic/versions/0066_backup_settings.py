@@ -9,16 +9,20 @@ monotonic `rev`, `updated_by` recording who moved it last — the write door's o
 `backup_settings_write` stamps the caller's resolved identity there, same law
 `charter_for`'s own `because`/actor testimony holds.
 
-Revision ID: 0065
-Revises: 0064
+Revision ID: 0066
+Revises: 0065
 Create Date: 2026-09-12
+
+RENUMBERED 0065 -> 0066 (rebased onto main 2bd5013, Thoth dispatch 9976): 0065 collided
+with earned_pulse_at's own migration, landed independently on main as 0065_earned_pulse.py
+while this branch was in flight. Content unchanged — a pure rename + down_revision bump.
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0065"
-down_revision = "0064"
+revision = "0066"
+down_revision = "0065"
 branch_labels = None
 depends_on = None
 

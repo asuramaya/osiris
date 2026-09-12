@@ -84,7 +84,7 @@ from testcontainers.redis import RedisContainer
 # tests/ or src/ asserts a literal id for any of these 31 tables (regex-swept, not
 # just spot-checked — one incidental false positive, a UA-string, zero real hits).
 #
-# `backup_settings` (migration 0065, thread f04cce36 piece 3) joined here the same
+# `backup_settings` (migration 0066, thread f04cce36 piece 3) joined here the same
 # night it shipped — FK-free by construction (a singleton settings row, no
 # REFERENCES at all), so no ordering constraint, added to this unordered group
 # BEFORE it could repeat harness_messages'/soul_lines' own missing-from-day-one gap
