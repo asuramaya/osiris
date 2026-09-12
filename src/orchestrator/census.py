@@ -85,6 +85,17 @@ def _proc_exe(pid: int) -> str | None:
         return None
 
 
+def _proc_environ(pid: int) -> bytes:
+    """A body's raw NUL-separated environ — empty bytes on the same vanished-process race
+    the sibling probes above absorb, or when the caller (us) lacks permission to read
+    another uid's /proc/<pid>/environ (root-owned or another user's session, never ours
+    to read); never raises."""
+    try:
+        return Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return b""
+
+
 def _proc_cmdline(pid: int) -> bytes:
     """The raw NUL-separated argv `osiris_hook.py`'s own `_is_bg_spare_process` already
     reads for its PARENT (`b"bg-spare" in cmdline`) — same probe, any pid, so a
@@ -186,3 +197,30 @@ def live_bodies_by_cwd(
             continue
         out[str(Path(cwd).resolve())].append(pid)
     return dict(out)
+
+
+def job_dirs_for_pids(
+    pids: list[int], *, read_environ: Callable[[int], bytes] = _proc_environ,
+) -> dict[int, str]:
+    """{pid: CLAUDE_JOB_DIR} for whichever of `pids` actually carry the env var — the ONE
+    identity anchor that survives an `EnterWorktree` cwd move (fixed for an OS process's
+    entire life, per `launch_seat`'s own docstring in trigger.py), where a resolved-cwd
+    string match cannot see through it (thread 2f59a0ed, decision 5a2e85ac: the ghost-gap
+    double-count). Pure OS truth, no graph read — `fleet()`'s own ghost_gap is the one
+    caller, correlating a false_live node's own `job_dir` against this before filing either
+    side of what might really be one session, not two. A pid absent from the returned dict
+    either vanished (the same race every sibling probe here absorbs) or never had the var
+    set (a non-osiris process the exe/cwd checks upstream already filtered by construction,
+    or a permission-denied read) — always omitted, never guessed as a false correlation."""
+    out: dict[int, str] = {}
+    for pid in pids:
+        raw = read_environ(pid)
+        if not raw:
+            continue
+        for entry in raw.split(b"\0"):
+            if entry.startswith(b"CLAUDE_JOB_DIR="):
+                value = entry[len(b"CLAUDE_JOB_DIR="):].decode("utf-8", errors="replace")
+                if value:
+                    out[pid] = value
+                break
+    return out

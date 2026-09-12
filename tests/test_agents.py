@@ -4577,6 +4577,88 @@ async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> N
     assert "⚠ 2 ghosts (1 false-live, 1 unclaimed body)" in ghosttown_line
 
 
+async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_counted(
+    actions: Actions,
+) -> None:
+    """WAVE 21 item 5 (mail 9869 2f59a0ed, decision 5a2e85ac): EnterWorktree moves a live
+    session's real OS cwd into a worktree subdirectory while agent_mounts.cwd stays stale
+    at the pre-worktree repo root — the SAME session used to be filed TWICE (false_live
+    under its stale mount cwd's project, false_dead under the worktree cwd's own "?"
+    bucket). CLAUDE_JOB_DIR is fixed for an OS process's entire life and survives the cwd
+    move — correlating on it must suppress BOTH sides of the pair, leaving 'movedproj'
+    with no gap at all, while a genuinely unrelated false_live/false_dead pair (no shared
+    job_dir) still files normally."""
+    from src import mcp_server as srv
+    from src.orchestrator import census, mounts
+
+    for label in ("movedproj", "ghosttown2"):
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{label}", "test")
+        await actions.assert_property(proj, "name", label, "test", datetime.now(UTC), 0.9)
+
+    # movedproj/moved0: mount row's cwd is the stale pre-worktree repo root; the real body
+    # lives at the worktree cwd instead — no cwd string ever matches, only job_dir does.
+    a_moved = "agent:moved0"
+    obj = await actions.create_or_find_object("Agent", a_moved, a_moved)
+    await actions.assert_property(obj, "project", "movedproj", a_moved, datetime.now(UTC),
+                                  0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/moved0", agent_id=a_moved,
+                            project="movedproj", cwd="/movedproj", model="claude-fable-5",
+                            session_key=a_moved, alive=True)
+
+    # ghosttown2/unrelated0: a genuine false_live with NO matching job_dir anywhere in the
+    # OS census — must still file normally, proving correlation doesn't over-suppress.
+    a_unrelated = "agent:unrelated0"
+    obj2 = await actions.create_or_find_object("Agent", a_unrelated, a_unrelated)
+    await actions.assert_property(obj2, "project", "ghosttown2", a_unrelated,
+                                  datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/unrelated0", agent_id=a_unrelated,
+                            project="ghosttown2", cwd="/gt2/a", model="claude-fable-5",
+                            session_key=a_unrelated, alive=True)
+    # a PROVISIONAL (not live) row at the unrelated false_dead body's own cwd, same role
+    # census3 plays in the sibling test above: carries the project label for the false_dead
+    # attribution loop without itself counting as a live false-positive.
+    a_anchor = "agent:anchor0"
+    obj3 = await actions.create_or_find_object("Agent", a_anchor, a_anchor)
+    await actions.assert_property(obj3, "project", "ghosttown2", a_anchor,
+                                  datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/anchor0", agent_id=a_anchor,
+                            project="ghosttown2", cwd="/gt2/b", model="claude-fable-5",
+                            session_key=a_anchor, alive=False)
+
+    saved_pool = srv._pool
+    saved_live_bodies = census.live_bodies
+    saved_by_cwd = census.live_bodies_by_cwd
+    saved_job_dirs = census.job_dirs_for_pids
+    srv._pool = actions.pool
+    census.live_bodies = lambda: {}  # type: ignore
+    census.live_bodies_by_cwd = lambda: {  # type: ignore
+        "/movedproj/.claude/worktrees/wt1": [444], "/gt2/b": [555],
+    }
+    census.job_dirs_for_pids = lambda pids: {  # type: ignore
+        pid: jd for pid, jd in {444: "/j/moved0", 555: "/j/some-other-body"}.items()
+        if pid in pids}
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
+        census.job_dirs_for_pids = saved_job_dirs  # type: ignore
+
+    assert "movedproj" not in out["ghost_gap"]  # correlated: neither side filed
+    assert out["ghost_gap"]["ghosttown2"]["false_live"] == ["agent:unrelated0"]
+    assert out["ghost_gap"]["ghosttown2"]["false_dead"] == [
+        {"cwd": "/gt2/b", "pids": [555]}]
+    # the correlated worktree cwd must not leak into the catch-all "?" bucket either — a
+    # weaker fix that only dropped the false_LIVE side would still surface the false_dead
+    # half here, which this specifically rules out.
+    unclaimed_cwds = [d["cwd"] for entries in out["ghost_gap"].values()
+                      for d in entries["false_dead"]]
+    assert "/movedproj/.claude/worktrees/wt1" not in unclaimed_cwds
+
+
 async def test_fleet_folds_registry_census_bodies_with_ghost_status(
     actions: Actions,
 ) -> None:
@@ -4742,6 +4824,49 @@ async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
         census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
     assert out["os_bodies"] == {}
     assert "ghost_gap" not in out or out["ghost_gap"] == {}
+
+
+async def test_fleet_ghost_gap_survives_a_job_dir_correlation_read_that_fails(
+    actions: Actions,
+) -> None:
+    """The job_dir correlation read (WAVE 21 item 5, thread 2f59a0ed) is best-effort too,
+    same law as the rest of this OS census: a raise there must never cost the false_live/
+    false_dead entries it would otherwise have merely failed to correlate — fleet()
+    degrades to filing both sides uncorrelated, never to crashing."""
+    from src import mcp_server as srv
+    from src.orchestrator import census, mounts
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:jdboom", "test")
+    await actions.assert_property(proj, "name", "jdboom", "test", datetime.now(UTC), 0.9)
+    a = "agent:jdboom0"
+    obj = await actions.create_or_find_object("Agent", a, a)
+    await actions.assert_property(obj, "project", "jdboom", a, datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await mounts.save_mount(actions.pool, job_dir="/j/jdboom0", agent_id=a, project="jdboom",
+                            cwd="/jdboom", model="claude-fable-5", session_key=a, alive=True)
+
+    saved_pool = srv._pool
+    saved_live_bodies = census.live_bodies
+    saved_by_cwd = census.live_bodies_by_cwd
+    saved_job_dirs = census.job_dirs_for_pids
+
+    def _boom(pids: list[int]) -> dict[int, str]:
+        raise RuntimeError("no /proc/<pid>/environ on this box")
+
+    srv._pool = actions.pool
+    census.live_bodies = lambda: {}  # type: ignore
+    census.live_bodies_by_cwd = lambda: {"/jdboom/wt": [666]}  # type: ignore
+    census.job_dirs_for_pids = _boom  # type: ignore
+    try:
+        out = await srv.fleet()
+    finally:
+        srv._pool = saved_pool
+        census.live_bodies = saved_live_bodies  # type: ignore
+        census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
+        census.job_dirs_for_pids = saved_job_dirs  # type: ignore
+
+    assert out["ghost_gap"]["jdboom"]["false_live"] == ["agent:jdboom0"]
+    assert out["ghost_gap"]["?"]["false_dead"] == [{"cwd": "/jdboom/wt", "pids": [666]}]
 
 
 async def test_fleet_surfaces_occupancy_including_a_seat_with_no_agent_at_all(
