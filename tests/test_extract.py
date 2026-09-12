@@ -8,6 +8,7 @@ guess is a speculative leaf, not an authoritative fact.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 from src.actions.core import Actions
@@ -30,16 +31,22 @@ _DOC_JSON = """
 
 
 class _FakeLLM:
-    """Returns a fixed completion; records the model it was asked to use."""
+    """Returns a fixed completion; records the model it was asked to use. `usage` (when
+    given) is appended to `usage_out`, the same shape a real provider's own envelope
+    reader populates it with — lets tests prove record_usage's own wiring."""
 
-    def __init__(self, reply: str) -> None:
+    def __init__(self, reply: str, usage: Any = None) -> None:
         self.reply = reply
         self.model_used: str | None = None
+        self.usage = usage
 
     async def complete(
-        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048
+        self, *, system: str, prompt: str, model: str, max_tokens: int = 2048,
+        usage_out: list[Any] | None = None,
     ) -> str:
         self.model_used = model
+        if usage_out is not None and self.usage is not None:
+            usage_out.append(self.usage)
         return self.reply
 
 
@@ -95,6 +102,26 @@ async def test_extract_document_emits_graded_nodes(actions: Actions, case_id: st
     assert classes == {"derived"}
     link_class = await actions.pool.fetchval("SELECT evidence_class FROM links")
     assert link_class == "derived"
+
+
+async def test_extract_document_records_its_own_usage(actions: Actions, case_id: str) -> None:
+    """Auto-ingest cost levers (thread ccee2304, mail 9873): before this, only
+    session-extract called record_usage — usage_summary's own totals were the
+    auto-ingest's cost, not all LLM spend, silently missing every document-extract call.
+    A distinct purpose ('document-extract') keeps its own line in the telemetry."""
+    from src.ingest.providers import Usage
+
+    cid = uuid.UUID(case_id)
+    usage = Usage(model="claude-haiku-4-5-20251001", input_tokens=500, output_tokens=120)
+    llm: LLMClient = _FakeLLM(_DOC_JSON, usage=usage)
+    await extract_document(actions, "raw filing text...", llm, case_id=cid,
+                           model="claude-haiku-4-5-20251001")
+    row = await actions.pool.fetchrow(
+        "SELECT purpose, model, input_tokens, output_tokens FROM llm_usage")
+    assert row is not None
+    assert row["purpose"] == "document-extract"
+    assert row["model"] == "claude-haiku-4-5-20251001"
+    assert row["input_tokens"] == 500 and row["output_tokens"] == 120
 
 
 async def test_extract_document_is_idempotent(actions: Actions, case_id: str) -> None:

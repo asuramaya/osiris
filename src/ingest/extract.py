@@ -29,7 +29,8 @@ from typing import Any
 
 from src.actions.core import Actions
 from src.config.settings import get_settings
-from src.ingest.providers import LLMClient, llm_provider
+from src.ingest.providers import LLMClient, Usage, llm_provider
+from src.ingest.usage import record_usage
 from src.ontology.catalog import is_known_link_type
 from src.ontology.entity_type import classify_entity_type, clean_entity_name
 from src.parsers.base import EvidenceClass
@@ -156,12 +157,22 @@ async def extract_document(
 ) -> dict[str, Any]:
     """Extract entities/relationships from `text` and emit them DERIVED. `llm` defaults
     to the configured provider (the deployment wires the model by key, not by passing a
-    client); tests inject a fake. Returns counts + each canonical. Idempotent."""
+    client); tests inject a fake. Returns counts + each canonical. Idempotent.
+
+    RECORDS ITS OWN SPEND (auto-ingest cost levers, thread ccee2304, mail 9873): before
+    this, only session-extract called `record_usage` — `usage_summary`'s own totals were
+    the auto-ingest's cost, not all LLM spend, silently missing every document-extract
+    call. Same shape session-extract already uses: `usage_out` collects the completion's
+    real tokens/cost, `purpose='document-extract'` keeps it a distinct line in the
+    per-purpose telemetry rather than merging into session-extract's own count."""
     llm = llm or llm_provider()
     if llm is None:
         raise RuntimeError("no LLM provider — set ANTHROPIC_API_KEY (the extraction seam)")
     model = model or get_settings().osiris_extract_model
-    raw = await llm.complete(system=_SYSTEM, prompt=text, model=model)
+    usage_out: list[Usage] = []
+    raw = await llm.complete(system=_SYSTEM, prompt=text, model=model, usage_out=usage_out)
+    if usage_out:
+        await record_usage(actions.pool, purpose="document-extract", usage=usage_out[-1])
     result = parse_extraction(raw)
     observed = observed_at or datetime.now(UTC)
 

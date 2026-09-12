@@ -190,6 +190,17 @@ class ClaudeCliClient:
     borrows the local Claude instance for per-document extraction, and API keys are reserved
     for SATELLITES / remote deployments that have no CLI. `--system-prompt` replaces the heavy
     default Code prompt, so each extraction call stays lean.
+
+    `max_tokens` IS CONFESSED, NOT ENFORCED, ON THIS BACKEND (Thoth's own cost-levers audit,
+    thread ccee2304, mail 9873): accepted only for `LLMClient` Protocol conformance with
+    `AnthropicClient` (which genuinely passes it as the API's own `max_tokens` field) — it
+    never reaches this subprocess's argv. Checked directly against a live `claude -p --help`
+    (2026-09): there is no output-token-cap flag at all — `--max-budget-usd <amount>` caps a
+    DOLLAR total (a different lever, unwired here, out of this ruling's scope), `--autocompact
+    <auto|tokens>` caps the CONTEXT WINDOW before auto-compaction (an input-side knob, not an
+    output cap), and `--json-schema <schema>` constrains SHAPE, not length. So an extract's
+    output today runs exactly as long as the model chooses — the 2-3K-token figure the cost-
+    levers audit measured is real and, on this backend, not currently capped by any flag.
     """
 
     binary: str = "claude"
