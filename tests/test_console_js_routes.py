@@ -311,7 +311,48 @@ def test_settings_panel_saves_post_to_the_settings_route() -> None:
     body = _JS.split("async function saveSetting(key)", 1)[1].split(
         "\n// ── ", 1)[0]
     assert "fetch('/settings'" in body
-    assert "key: key, value: value, because: because" in body
+
+
+# ── Repairs panel (thread c89a9873, wave 22, ruling 7be61879) ──────────────────────────
+
+def test_repairs_panel_has_a_palette_entry() -> None:
+    assert "'Repairs…'" in _JS
+    assert "run: () => renderRepairsPanel()" in _JS
+
+
+def test_repairs_panel_lists_all_seven_targets() -> None:
+    body = _JS.split("var REPAIRS_TARGETS", 1)[1].split(
+        "\nfunction renderRepairsPanel", 1)[0]
+    for target in (
+        "bootstrap_orphan_references", "boot_alarm_commit_links",
+        "task_sync_citation_links", "lineage_repo_links", "agent_project_links",
+        "closed_by_real_sources", "operator_charter",
+    ):
+        assert "'" + target + "'" in body
+
+
+def test_repairs_panel_operator_charter_has_no_apply_control() -> None:
+    """The one target excluded from UI apply (thread c89a9873's own scope note) —
+    structurally no button, not merely hidden behind a confirm."""
+    body = _JS.split("function renderRepairsPanel()", 1)[1].split(
+        "\nasync function dryRunRepair", 1)[0]
+    assert "cliOnly" in body
+    assert ">CLI-only<" in body
+
+
+def test_repairs_panel_dry_run_posts_to_the_backfill_route() -> None:
+    body = _JS.split("async function dryRunRepair(target)", 1)[1].split(
+        "\nasync function applyRepair", 1)[0]
+    assert "fetch('/backfill'" in body
+    assert "dry_run: true" in body
+
+
+def test_repairs_panel_apply_confirms_and_requires_because() -> None:
+    body = _JS.split("async function applyRepair(target)", 1)[1].split(
+        "\n// ── Projects", 1)[0]
+    assert "confirm(" in body
+    assert "prompt(" in body
+    assert "dry_run: false" in body
 
 
 def test_settings_panel_shows_structured_per_field_errors_inline() -> None:

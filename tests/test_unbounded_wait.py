@@ -63,7 +63,10 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # 68 -> 70 (2026-09-12, Khnum, WAVE 22 item 2, mail 10109): two new dispatch lines,
     # `asyncio.run(cmd_lint(...))` and `asyncio.run(cmd_audit(...))`, same false-positive
     # class as the comment above — not genuine new unbounded subprocess calls.
-    "src/cli.py": 70,
+    # 70 -> 71 (2026-09-12, Sekhmet, WAVE 22 backfill CLI door, thread c89a9873): one new
+    # dispatch line, `asyncio.run(cmd_backfill(...))`, same false-positive class as both
+    # comments above — not a genuine new unbounded subprocess call.
+    "src/cli.py": 71,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     "src/ingest/sessions.py": 3,

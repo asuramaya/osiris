@@ -1565,7 +1565,12 @@ TOOL_CONTRACT_EXPECTED_COUNT = 86
 # list/get gain a `live` counterpart per key (the running/shipped value, null when not
 # cheap) — a genuinely new return field, not a new @mcp.tool() (tool count unchanged).
 # Trimmed to one clause per action before raising. Measured exact (136,834).
-TOOL_CONTRACT_CEILING_CHARS = 136834
+# 136781 -> 137011 (2026-09-12, Sekhmet, thread c89a9873, wave 22): `backfill`'s own
+# docstring gains one sentence naming its new CLI/UI siblings (osiris backfill, the
+# Repairs panel) — no new @mcp.tool(), tool count unchanged, dispatched through the
+# same door as always, now delegating to src.orchestrator.backfill.run_backfill.
+# Measured exact (137,011).
+TOOL_CONTRACT_CEILING_CHARS = 137064
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

@@ -999,3 +999,64 @@ async def test_settings_route_rejects_a_bad_value_without_writing(
     listed = (await client.get("/settings")).json()["settings"]
     row = next(s for s in listed if s["key"] == "daemon.pit_watch.enabled")
     assert row["value"] is False  # untouched
+
+
+async def test_backfill_route_dry_run_reports_the_plan(
+    client: httpx.AsyncClient,
+) -> None:
+    """A dry-run request is never authority-gated — read-only, no write, no because."""
+    r = await client.post("/backfill", json={
+        "target": "bootstrap_orphan_references", "dry_run": True})
+    assert r.status_code == 200
+    assert "error" not in r.json()
+
+
+async def test_backfill_route_unknown_target_refuses(client: httpx.AsyncClient) -> None:
+    r = await client.post("/backfill", json={"target": "not-a-real-target"})
+    body = r.json()
+    assert "error" in body and "not-a-real-target" in body["error"]
+
+
+async def test_backfill_route_apply_as_the_operator_writes(
+    client: httpx.AsyncClient,
+) -> None:
+    """The console posts as analyst:operator (an _OPERATOR_ACTORS member) — authorized
+    by construction, same reasoning /settings' own write route already documents."""
+    r = await client.post("/backfill", json={
+        "target": "bootstrap_orphan_references", "dry_run": False,
+        "because": "testing the apply path"})
+    assert r.status_code == 200
+    assert "error" not in r.json()
+
+
+async def test_backfill_route_apply_without_because_refuses(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/backfill", json={
+        "target": "bootstrap_orphan_references", "dry_run": False})
+    assert "error" in r.json() and "because" in r.json()["error"]
+
+
+async def test_backfill_route_refuses_operator_charter_apply_even_as_the_operator(
+    client: httpx.AsyncClient,
+) -> None:
+    """THE ONE STRUCTURAL EXCLUSION (thread c89a9873): operator_charter's own blast
+    radius (fleet-wide operator authority) is refused here regardless of the caller's
+    own authority — never merely hidden behind the UI's own missing button. Posting
+    directly, as the fully-authorized console operator actor, must still refuse."""
+    r = await client.post("/backfill", json={
+        "target": "operator_charter", "dry_run": False, "because": "trying anyway"})
+    body = r.json()
+    assert "error" in body
+    assert "CLI-only" in body["error"] or "cannot be applied from the UI" in body["error"]
+
+
+async def test_backfill_route_operator_charter_dry_run_still_works(
+    client: httpx.AsyncClient,
+) -> None:
+    """The exclusion is APPLY-only — the panel's own dry-run preview for this target
+    stays informational and harmless."""
+    r = await client.post("/backfill", json={
+        "target": "operator_charter", "dry_run": True})
+    assert r.status_code == 200
+    assert "error" not in r.json()

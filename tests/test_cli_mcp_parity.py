@@ -201,6 +201,11 @@ CLI_ONLY_PARAMS = {
         "own entry below.",
     ("settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
         "own entry below.",
+    ("backfill", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
+    ("backfill", "apply"): "the CLI's own --apply is the same concept as the MCP tool's "
+        "dry_run, inverted and renamed to match this house's --apply repair convention "
+        "(thread c89a9873) — identical shape to seat:heal_anchor's own entry below.",
     ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
         "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
         "bare console caller has no mount to derive it from, so this names the gap with "
@@ -389,6 +394,10 @@ MCP_ONLY_PARAMS = {
         "above) is the same concept, inverted and renamed to match this house's --apply "
         "repair convention rather than the MCP tools' own dry_run=True default — "
         "identical shape to seat:heal_anchor's own entry above.",
+    ("backfill", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) is the "
+        "same concept, inverted and renamed to match this house's --apply repair "
+        "convention (thread c89a9873) — identical shape to seat:heal_anchor's own entry "
+        "above.",
     ("backlog", "render"): "the read triangle's own server-side text mode (thread "
         "68f1bafa/3703a3a9) — a slash-command/model caller's concern (avoid the model "
         "re-prettifying JSON at token cost). The CLI already has its own presentation "
