@@ -188,7 +188,110 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
                consequence="high", write_name="backup_settings"),
 )
 
-SETTINGS: tuple[SettingSpec, ...] = _DAEMON_KILL_SWITCHES + _MINER_BUDGETS + _BACKUP_SETTINGS
+# THE WAKE/TRIGGER LADDER (Wave 22 piece 2, Census gap-list-1 #2, Thoth's dispatch mail
+# 10111) — every env-only settings.py field src/orchestrator/trigger.py's own mail-wake
+# machinery reads, ALL fresh per call (`st = settings or get_settings()`, the exact test
+# seam trigger_mail_tick/dispatch_dm/wake_gate_preflight/wake_worker/launch_seat already
+# use), never cached at process boot — so `effect='next_tick'` is honest here in the same
+# sense it is for the miner budgets: a write is live on the very NEXT trigger_mail cron
+# pass (arq_worker.py's own `trigger_mail` wrapper now threads
+# `settings_with_overlay(actions.pool)` down through `trigger_mail_tick`'s own `st`,
+# which is what every one of these fields is actually read from). Two knobs deliberately
+# NOT included here: `osiris_lease_refuse` lives on a different process entirely (the
+# manager daemon, manager/daemon.py's own `_lease_gate`) with no existing
+# `settings_with_overlay` wiring anywhere in that module — a bigger, riskier first step
+# than this pass's own scope, flagged as a follow-up rather than rushed. The
+# `wake_worker`/`dispatch_dm` pass-through at trigger.py's own wake() tool path (line
+# ~2721 passes the wake_worker's raw incoming `settings` param, not its resolved `st`)
+# is a pre-existing inconsistency, harmless today (both resolve to the same bare read)
+# but flagged, not touched, by this pass.
+_WAKE_LADDER: tuple[SettingSpec, ...] = (
+    SettingSpec("wake.trigger.enabled", "bool", False, effect="next_tick",
+               consequence="high", requires_because=True,
+               env_field="osiris_trigger_enabled"),
+    SettingSpec("wake.trigger.projects", "str", "", effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_trigger_projects"),
+    SettingSpec("wake.trigger.rate_cap", "int", 15, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_trigger_rate_cap"),
+    SettingSpec("wake.trigger.window_secs", "int", 3600, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_trigger_window_secs"),
+    SettingSpec("wake.trigger.grace_secs", "int", 300, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_trigger_grace_secs"),
+    SettingSpec("wake.trigger.poke_only", "bool", False, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_trigger_poke_only"),
+    SettingSpec("wake.mail_lease_secs", "int", 900, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_mail_lease_secs"),
+    SettingSpec("wake.resume.ceiling_bytes", "int", 64_000_000, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_resume_ceiling_bytes"),
+    SettingSpec("wake.resume.min_tail_bytes", "int", 200, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_resume_min_tail_bytes"),
+    SettingSpec("wake.owner_live_secs", "int", 900, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_owner_live_secs"),
+    SettingSpec("wake.model", "str", "", effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_wake_model"),
+    SettingSpec("wake.poke_min_idle_secs", "int", 600, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_poke_min_idle_secs"),
+    SettingSpec("wake.allowed_tools", "str", "mcp__osiris", effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_wake_allowed_tools"),
+    SettingSpec("wake.hourly_budget", "int", 30, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_wake_hourly_budget"),
+    SettingSpec("wake.message_attempts", "int", 3, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_wake_message_attempts"),
+    SettingSpec("wake.dm_resume", "bool", True, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_dm_resume"),
+    SettingSpec("wake.dm_active_secs", "int", 120, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_dm_active_secs"),
+    SettingSpec("wake.seat_hourly_cap", "int", 6, effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_seat_wake_hourly_cap"),
+    SettingSpec("wake.dm_resume_model", "str", "", effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_dm_resume_model"),
+    SettingSpec("wake.launch_substrate", "str", "harness", effect="next_tick",
+               consequence="low", requires_because=False,
+               env_field="osiris_launch_substrate"),
+    SettingSpec("wake.enabled", "bool", True, effect="next_tick",
+               consequence="high", requires_because=True,
+               env_field="osiris_wake_enabled"),
+)
+
+# DIAGNOSTICS (Wave 22 piece 2) — `osiris_memory_diag_enabled` gates the /diag/memory
+# route (mcp_server.py); unlike the wake ladder above it has no "tick" at all (an HTTP
+# route, not a cron), but IS read fresh on every call once wired to the overlay
+# (mcp_server.py's diag_memory_route now calls settings_with_overlay), so 'immediate' —
+# the same label the daemon kill-switches use — is the honest one, not 'next_tick'.
+# `osiris_worker_boot_memtrace_enabled` is the opposite shape, confirmed by reading the
+# ONE call site (arq_worker.py's own `startup()`): read exactly once at process boot and
+# never again — the genuine 'restart:<unit>' case, the one this pass's own `live` feature
+# (thread c5ba8681) needed a real registered example of to exercise that branch honestly.
+_DIAGNOSTICS: tuple[SettingSpec, ...] = (
+    SettingSpec("diag.memory_enabled", "bool", False, effect="immediate",
+               consequence="low", requires_because=False,
+               env_field="osiris_memory_diag_enabled"),
+    SettingSpec("diag.worker_boot_memtrace.enabled", "bool", False,
+               effect="restart:osiris-worker", consequence="low", requires_because=False,
+               env_field="osiris_worker_boot_memtrace_enabled"),
+)
+
+SETTINGS: tuple[SettingSpec, ...] = (
+    _DAEMON_KILL_SWITCHES + _MINER_BUDGETS + _BACKUP_SETTINGS + _WAKE_LADDER + _DIAGNOSTICS
+)
 
 
 _BY_KEY: dict[str, SettingSpec] = {s.key: s for s in SETTINGS}

@@ -1700,8 +1700,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def fleet_page(partial: int = 0, p: asyncpg.Pool = Depends(get_pool)) -> Response:
         """Who is mounted RIGHT NOW (live dots, seats, models, worktrees) + the wake ledger
         and the hourly spend against its budget."""
-        data = await chrome.fleet_data(
-            p, wake_budget=get_settings().osiris_wake_hourly_budget)
+        from src.orchestrator.settings_service import settings_with_overlay
+
+        st = await settings_with_overlay(p)
+        data = await chrome.fleet_data(p, wake_budget=st.osiris_wake_hourly_budget)
         inner = chrome.render_fleet(data)
         return Response(inner if partial else chrome.page("fleet", "fleet", inner),
                         media_type="text/html")

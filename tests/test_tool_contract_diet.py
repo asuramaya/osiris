@@ -1561,7 +1561,11 @@ TOOL_CONTRACT_EXPECTED_COUNT = 86
 # domain never had, same class as backup_settings' own raise above. Docstring trimmed
 # to the category rule's lean end before raising (dated citations/provenance cut).
 # Tool count 85 -> 86. Measured exact (136,781).
-TOOL_CONTRACT_CEILING_CHARS = 136781
+# 136781 -> 136834 (2026-09-12, Imhotep, thread c5ba8681, Wave 22 piece 1): `settings`
+# list/get gain a `live` counterpart per key (the running/shipped value, null when not
+# cheap) — a genuinely new return field, not a new @mcp.tool() (tool count unchanged).
+# Trimmed to one clause per action before raising. Measured exact (136,834).
+TOOL_CONTRACT_CEILING_CHARS = 136834
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

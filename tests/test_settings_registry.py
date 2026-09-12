@@ -57,3 +57,29 @@ def test_miner_budgets_are_registered_next_tick() -> None:
                "miner.zero_acceptance_window_days"):
         spec = spec_by_key(key)
         assert spec is not None and spec.effect == "next_tick" and spec.type == "int"
+
+
+def test_wake_ladder_is_registered_next_tick_and_master_switches_are_high_stakes() -> None:
+    for key in ("wake.trigger.rate_cap", "wake.hourly_budget", "wake.seat_hourly_cap",
+               "wake.mail_lease_secs", "wake.owner_live_secs"):
+        spec = spec_by_key(key)
+        assert spec is not None and spec.effect == "next_tick"
+        assert spec.requires_because is False and spec.consequence == "low"
+
+    for key in ("wake.trigger.enabled", "wake.enabled"):
+        spec = spec_by_key(key)
+        assert spec is not None and spec.effect == "next_tick"
+        assert spec.requires_because is True and spec.consequence == "high"
+
+
+def test_diag_memory_enabled_is_registered_immediate() -> None:
+    spec = spec_by_key("diag.memory_enabled")
+    assert spec is not None
+    assert spec.effect == "immediate" and spec.env_field == "osiris_memory_diag_enabled"
+
+
+def test_diag_worker_boot_memtrace_is_registered_restart_osiris_worker() -> None:
+    spec = spec_by_key("diag.worker_boot_memtrace.enabled")
+    assert spec is not None
+    assert spec.effect == "restart:osiris-worker"
+    assert spec.env_field == "osiris_worker_boot_memtrace_enabled"
