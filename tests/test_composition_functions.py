@@ -15,6 +15,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+import scripts.osiris_prune_ladder as _ladder
 from src.actions.core import Actions
 from src.ingest.opensanctions import ingest_ftm
 from src.ontology.resolution import screen_network
@@ -110,7 +111,8 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
     # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
     # `roadmap_open`/`desk_decisions` (ruling c5b184cd, thread d56e7073/#44) ARE here — real
     # domain logic (echo-filtering, fleet_messages) neither op-tree nor `group` can express.
-    assert list_functions() == ["canon", "census", "closure_health", "coinvest", "desk_decisions",
+    assert list_functions() == ["backup_status", "canon", "census", "closure_health", "coinvest",
+                                "desk_decisions",
                                 "desk_overview", "desk_project", "echoes", "family",
                                 "family_drift", "fleet_live", "fleet_live_agents",
                                 "fleet_pulse_line", "lap", "lint", "mail_overview",
@@ -446,3 +448,114 @@ async def test_projects_decomposed_to_a_table_op(actions: Actions) -> None:
     assert by["osiris"]["files"] == 1 and by["kast"]["files"] == 0      # a second rollup, typed
     assert res["items"][0]["project"] == "osiris"                       # order by last_touched desc
     assert "projects" not in list_functions()                          # the slop is gone
+
+
+# --- backup_status (Wave 21, thread f04cce36 piece 2 — the config panel's read half) -------
+# There's no graph object to `select` over here (the scope report's own finding) — every
+# section is a live filesystem/process read, wrapping osiris_prune_ladder.py's/
+# osiris_disk_guard.py's own definitions rather than re-deriving them. `args.vault`/
+# `args.backups` let a test point at a tmp_path instead of the real production paths.
+# `find_clear_manifest` connects via its own hardcoded module-level `DSN`, never the
+# fixture pool (the SAME reason test_prune_ladder_manifest.py's own `_use_test_dsn`
+# exists) — reused here rather than a second monkeypatch convention.
+
+@pytest.fixture
+def _use_test_dsn(pg_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_ladder, "DSN", pg_dsn)
+
+
+def _make_vault(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "basebackups").mkdir(parents=True)
+    (vault / "wal_archive").mkdir(parents=True)
+    (vault / "osiris-20260601-043000.dump").write_bytes(b"x" * 1000)
+    (vault / "osiris-20260602-043000.dump").write_bytes(b"x" * 2000)  # the newest dump
+    (vault / "basebackups" / "osiris-basebackup-20260531-020000.tar.gz").write_bytes(b"y" * 500)
+    (vault / "wal_archive" / "000000010000000000000001").write_bytes(b"w")
+    return vault
+
+
+async def test_backup_status_reads_the_vault_it_is_pointed_at(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    vault = _make_vault(tmp_path)
+    await seed_default_compositions(actions.pool)
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"vault": str(vault),
+                                                 "backups": str(tmp_path / "backups")}}, None)
+    data = res["items"]
+    assert data["vault"]["dumps"]["count"] == 2
+    assert data["vault"]["dumps"]["newest_size_bytes"] == 2000
+    assert data["vault"]["base_backups"]["count"] == 1
+    assert data["vault"]["wal_segments_kept"] + data["vault"]["wal_segments_prunable"] == 1
+    assert "error" not in data["disk"]
+    assert data["disk"]["last_dump_size_bytes"] == 2000
+    assert "headroom_ok" in data["disk"]
+
+
+async def test_backup_status_ladder_tiers_read_off_plan_prunes_own_defaults(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    import inspect
+
+    params = inspect.signature(_ladder.plan_prune).parameters
+    vault = _make_vault(tmp_path)
+    await seed_default_compositions(actions.pool)
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"vault": str(vault),
+                                                 "backups": str(tmp_path / "backups")}}, None)
+    ladder = res["items"]["ladder"]
+    # the tiers are read via inspect.signature on plan_prune itself, not a hand-copied
+    # second set of numbers — proven here by matching osiris_prune_ladder's own live
+    # defaults rather than a magic literal in this test.
+    assert ladder["hot_window_hours"] == params["hot_window"].default.total_seconds() / 3600
+    assert ladder["daily_window_days"] == params["daily_window"].default.days
+    assert ladder["weekly_window_days"] == params["weekly_window"].default.days
+    assert ladder["configurable"] is False
+
+
+async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sections(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    await seed_default_compositions(actions.pool)
+    missing = tmp_path / "does-not-exist"
+    res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
+                                        "args": {"vault": str(missing),
+                                                 "backups": str(tmp_path / "backups")}}, None)
+    data = res["items"]
+    # `_scan`'s own convention (osiris_prune_ladder.py) — a missing directory is an empty
+    # population, not an error; `disk` genuinely can't answer (shutil.disk_usage needs the
+    # path to exist) and degrades honestly instead.
+    assert data["vault"]["dumps"]["count"] == 0
+    assert data["vault"]["base_backups"]["count"] == 0
+    assert "error" in data["disk"]
+    # every OTHER section still renders — a missing vault dir doesn't blank the panel
+    assert len(data["timers"]) == 5
+    assert "prune_manifest" in data and "error" not in data["prune_manifest"]
+    assert data["offbox"]["wired"] is False
+    assert data["pitr_drill"]["wired_to_a_timer"] is False
+
+
+async def test_backup_status_timers_carry_their_shipped_schedule(
+    actions: Actions, tmp_path, _use_test_dsn: None,
+) -> None:
+    from src.orchestrator.compositions import _fn_backup_status
+
+    del actions  # triggers catalog seeding only — DSN monkeypatched to the same DB
+    # tmp_path overrides keep this hermetic — the timer schedules themselves come from
+    # the shipped deploy/ files, unrelated to the vault/backups dirs.
+    res = await _fn_backup_status(None, None, {"vault": str(tmp_path / "v"),
+                                               "backups": str(tmp_path / "b")})
+    by_unit = {t["unit"]: t for t in res["timers"]}
+    assert by_unit["osiris-backup.timer"]["schedule"] == "*-*-* 04,10,16,22:30:00"
+    assert by_unit["osiris-base-backup.timer"]["schedule"] == "Sun 02:00:00"
+    assert by_unit["osiris-prune-manifest.timer"]["schedule"] == "Sat 03:00:00"
+    assert by_unit["osiris-prune-apply.timer"]["schedule"] == "Sun 03:00:00"
+    assert by_unit["osiris-preflight.timer"]["schedule"] == "Mon *-*-* 05:00:00"
+
+
+def test_backup_status_is_subject_free_and_registered() -> None:
+    from src.orchestrator.compositions import _SUBJECT_FREE
+
+    assert "backup_status" in list_functions()
+    assert "backup_status" in _SUBJECT_FREE
