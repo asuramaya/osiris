@@ -173,6 +173,29 @@ async def release_session_mounts(
     return int(n or 0)
 
 
+async def suspend_mounts_for_agents(pool: asyncpg.Pool, agent_ids: list[str]) -> int:
+    """THE KILL PATH'S OWN AGENT-SCOPED SUSPEND (thread b0699dcc, Thoth mail 9873/9896):
+    `release_session_mounts`'s sibling, keyed by exact `agent_id` membership rather than
+    `job_dir`/`session_key` — for a caller (`stop_seat`) that already knows WHICH minds
+    to release but not, in advance, which door each one mounted at. A `--fork-session`
+    child (`agent_type='fork'`, spawned_by-linked, no seat of its own) mounts its own
+    row under its own agent_id at its own job_dir — stop_seat's own release step never
+    reached it (neither the seat's stable anchor nor any succession_chain generation's
+    own derived job_dir matches a fork's row), so a live fork process under a stopped
+    seat stayed falsely 'live' indefinitely. Same law as release_session_mounts: SUSPEND
+    (never delete, constitution #3) — `last_seen` flips to the epoch sentinel, the row
+    itself survives. Idempotent: a row already suspended is excluded from the receipt.
+    Empty `agent_ids` is a no-op, never a wildcard match."""
+    if not agent_ids:
+        return 0
+    n = await pool.fetchval(
+        "WITH gone AS (UPDATE agent_mounts SET last_seen=$2 "
+        "WHERE agent_id = ANY($1::text[]) AND last_seen IS DISTINCT FROM $2 "
+        "RETURNING 1) SELECT count(*) FROM gone",
+        agent_ids, SUSPENDED_AT)
+    return int(n or 0)
+
+
 AgentsJsonFn = Callable[[], Awaitable[list[dict[str, Any]]]]
 ProcReadFn = Callable[[int], str | None]
 

@@ -6173,6 +6173,58 @@ async def test_stop_seat_releases_both_the_anchor_and_session_derived_mount_rows
         assert not is_live(row["last_seen"]), f"{jd} still reads live after stop"
 
 
+async def test_stop_seat_also_releases_a_fork_sessions_own_mount_row(
+    actions: Actions,
+) -> None:
+    """THE UNDER-REPORT (thread b0699dcc, Thoth mail 9873/9896): a `--fork-session` child
+    (`_fork_child`, mail 9241/commit 75ee6ea) mounts its OWN row, under its OWN agent_id,
+    at its OWN job_dir — a genuinely separate live process. Neither release pass reached
+    it: it is `spawned_by`-linked to its parent generation, never a `succeeded_from`
+    member of `succession_chain`, so it matched no anchor and no chain-derived job_dir.
+    A live fork process under a stopped seat stayed falsely 'live' indefinitely. This
+    proves it is now suspended too, and counted in the same `released_mounts` receipt."""
+    from src.orchestrator.handshake import _derive_job_dir
+    from src.orchestrator.lineage import register_spawn
+    from src.orchestrator.mounts import is_live
+
+    session_id = "f0f0f0f0-0000-4000-8000-000000000000"
+    fork_session_id = "fc1fc1fc-0000-4000-8000-000000000000"
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stopfork01", manager_agent="agent:stopforkm01",
+        worker_handle="Stop-Fork-Test", house="osiris")
+    session_job_dir = _derive_job_dir(session_id)
+    assert session_job_dir is not None
+    await save_mount(actions.pool, job_dir=session_job_dir, agent_id="agent:stopfork01",
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    # THE FORK CHILD — a whole second live process, spawned_by the seat's own holder,
+    # never a succession_chain member, mounted at its own job_dir.
+    fork_child = await register_spawn(
+        actions, fork_session_id[:8], agent_type="fork",
+        parent_agent="agent:stopfork01", project="osiris",
+        session=fork_session_id, witnessed=True)
+    assert fork_child is not None
+    fork_job_dir = _derive_job_dir(fork_session_id)
+    assert fork_job_dir is not None
+    await save_mount(actions.pool, job_dir=fork_job_dir, agent_id=fork_child,
+                            project="osiris", cwd="/repo/demo", model=None, session_key=None)
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        pass
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:stopforkm01", target=worker_seat,
+        agents_json=_fake_census_agents_json(5353, session_id=session_id),
+        read_exe=_fake_claude_exe, read_cwd=lambda pid: "/repo/demo", kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d.get("released_mounts", 0) >= 2  # the worker's own row AND the fork's
+    fork_row = await actions.pool.fetchrow(
+        "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", fork_job_dir)
+    assert fork_row is not None
+    assert not is_live(fork_row["last_seen"]), "the fork's own row still reads live after stop"
+
+
 async def test_stop_seat_reports_no_live_body_when_registry_census_finds_nothing(
     actions: Actions,
 ) -> None:

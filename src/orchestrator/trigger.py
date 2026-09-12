@@ -4046,6 +4046,14 @@ async def stop_seat(
     generation, not just today's exact label" widening the lineage-fallback match above
     already needed, for the identical staleness reason.
 
+    ALSO RELEASES FORK/SPAWN CHILDREN (thread b0699dcc, Thoth mail 9873/9896, under-
+    reported released_mounts): a `--fork-session` child mounts under its OWN agent_id at
+    its OWN job_dir — `spawned_by`-linked to its parent generation, never a
+    `succeeded_from` member of `succession_chain`, so neither release pass above ever
+    reached it. Every child of ANY generation in this lineage's chain (holder included)
+    is suspended too (`mounts.suspend_mounts_for_agents`, agent-id-scoped), and counted
+    into the same `released_mounts` receipt.
+
     MATCHES BY LINEAGE TOO, NOT ONLY BY EXACT HOLDER ID (obligation 2e110f63, the same
     branch `_launch_twin_check` already carries): `registry_census`'s own `matched` list
     reconciles a live body to whatever `agent_mounts.agent_id` its job_dir cache last
@@ -4122,8 +4130,13 @@ async def stop_seat(
     # a stale mount row can be filed under any ancestor generation's own session, not only
     # the current holder's.
     from src.orchestrator.succession import succession_chain
-    sessions = {str(h["session"]) for h in await succession_chain(pool, holder)
-                if h.get("session")}
+    chain = await succession_chain(pool, holder)
+    sessions = {str(h["session"]) for h in chain if h.get("session")}
+    # THE CHAIN'S OWN AGENT CANONICALS (thread b0699dcc, Thoth mail 9873/9896): every
+    # generation's own id, holder included (succession_chain starts there) — the release
+    # step below needs the full chain, not just the subset that happened to log a
+    # session, to find every fork/spawn CHILD of any of them.
+    chain_agent_ids = [str(h["agent_id"]) for h in chain]
     if match is None:
         # THE LINEAGE FALLBACK (obligation 2e110f63, the same branch _launch_twin_check
         # already carries): `matched` reconciles by job_dir -> agent_mounts.agent_id, a
@@ -4221,6 +4234,22 @@ async def stop_seat(
         if jd:
             released_mounts += await release_session_mounts(
                 pool, job_dir=jd, session_id=sid)
+
+    # FORK/SPAWN CHILDREN, ALSO RELEASED (thread b0699dcc, Thoth mail 9873/9896): a
+    # `--fork-session` child (`_fork_child`, mail 9241/commit 75ee6ea) mounts its OWN
+    # row, under its OWN agent_id, at its OWN job_dir — a genuinely separate live process
+    # the two release passes above never reach, since a fork is `spawned_by`-linked to
+    # its parent generation, never a `succeeded_from` member of `succession_chain`. A
+    # fork under a stopped seat used to stay falsely 'live' indefinitely. Scoped to
+    # children of ANY generation in this lineage's own chain (holder included), never
+    # widened past that.
+    from src.orchestrator.mounts import suspend_mounts_for_agents
+    fork_children = [str(r["canonical"]) for r in await pool.fetch(
+        "SELECT DISTINCT f.canonical FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE l.type='spawned_by' AND t.canonical = ANY($1::text[]) "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", chain_agent_ids)]
+    released_mounts += await suspend_mounts_for_agents(pool, fork_children)
 
     now = datetime.now(UTC)
     oid = await actions.create_or_find_object("Seat", target_seat, caller)
