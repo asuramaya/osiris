@@ -63,6 +63,7 @@ from src.cli import (
     cmd_cite,
     cmd_composition,
     cmd_correct_agent_house,
+    cmd_correct_agent_project,
     cmd_correct_pin_value,
     cmd_declare_machine_identity,
     cmd_desk,
@@ -99,7 +100,7 @@ from src.cli import (
     cmd_rename_project,
     cmd_rename_seat,
     cmd_resume,
-    cmd_resync_seat_house,
+    cmd_resync_seat_project,
     cmd_retention,
     cmd_retire_agent,
     cmd_retire_assertion,
@@ -291,8 +292,8 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-seat-or-agent-anywhere", actor="operator", pool=a.pool),
     "reconcile-seat-identity": lambda a: cmd_reconcile_seat_identity(
         "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
-    "resync-seat-house": lambda a: cmd_resync_seat_house(
-        "no-such-seat-anywhere", "some-house", "test", actor="operator", pool=a.pool),
+    "resync-seat-project": lambda a: cmd_resync_seat_project(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
     "retire-project": lambda a: cmd_retire_project(
         "no-such-project-anywhere", "test", actor="operator", pool=a.pool),
     "retire-object": lambda a: cmd_retire_object(
@@ -306,6 +307,8 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-seat-anywhere", [], "test", actor="operator", pool=a.pool),
     "correct-pin-value": lambda a: cmd_correct_pin_value(
         "no-such-handle-anywhere", "some_key", "some_value", "test", pool=a.pool),
+    "correct-agent-project": lambda a: cmd_correct_agent_project(
+        "no-such-handle-anywhere", actor="operator", pool=a.pool),
     "correct-agent-house": lambda a: cmd_correct_agent_house(
         "no-such-handle-anywhere", actor="operator", pool=a.pool),
     "declare-machine-identity": lambda a: cmd_declare_machine_identity(

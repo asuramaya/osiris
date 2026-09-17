@@ -108,7 +108,7 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # 87 -> 88 (2026-09-17, Imhotep, #93 THE MECHANICAL SETTLE, Thoth mail 11789):
     # one new dispatch line, `asyncio.run(cmd_settle(...))`, same false-positive
     # class as every comment above — not a genuine new unbounded subprocess call.
-    "src/cli.py": 88,
+    "src/cli.py": 87,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new

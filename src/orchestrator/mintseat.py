@@ -455,7 +455,7 @@ async def mint_seat(
 
 async def found_seat(
     actions: Actions, *, handle: str, path: str | None = None,
-    project: str | None = None, house: str | None = None,
+    project: str | None = None,
     intended_model: str = DEFAULT_WORKER_MODEL,
     office_root: Path | None = None, actor: str,
 ) -> dict[str, Any]:
@@ -478,17 +478,21 @@ async def found_seat(
     overwritten if already present — fill-missing-only, the same law every office write
     in this codebase holds.
 
-    `house`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
-    (ruling 68fba2e4 item B/thread ef0e94d5, the operator's own house/project ruling
-    extended from the pin layer to Seat.house: "a direct mint with no --house stays
-    homeless"). This mirrors `project`'s own fix immediately below exactly, and closes
-    the SAME class of bug one field over — this door used to write `house=handle`
-    unconditionally, which is precisely how Chad/Jesus/Lilguy/atlas ended up with a
+    NO SEPARATE house DECLARATION (Thoth mail 12000, implements 70c001ec, "ONE
+    TAXONOMY"): a self-managed seat's own Seat.house property is ALWAYS `project`'s own
+    value — never a second, independently-given value that could disagree with it.
+    `mint_seat`'s own org-chart path already held this law one field over (`house or
+    manager_house` — a managed worker inherits its real manager's real project, never
+    invents one, never takes a second value either); this closes the direct-mint twin
+    of that same law by removing the second flag rather than merely deferring to it.
+    Older ruling 68fba2e4 item B/thread ef0e94d5 ("a direct mint with no --house stays
+    homeless") is superseded here in the same direction it was already pointing: house
+    never diverges from project, so no --house flag survives to disagree with `project`
+    below in the first place — this door used to write `house=handle` unconditionally
+    before that fix, which is precisely how Chad/Jesus/Lilguy/atlas ended up with a
     Seat.house indistinguishable from a deliberately-chosen one by any test except
-    "does it equal the handle" (decision 68fba2e4's own measurement). `mint_seat`'s
-    org-chart path was already compliant (`house or manager_house` — a managed worker
-    inherits its real manager's real house, never invents one); this is the direct-mint
-    twin of that same law.
+    "does it equal the handle" (decision 68fba2e4's own measurement); the fix here is
+    the same "never fabricate from the handle" law, just enforced by construction now.
 
     `project`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
     (the operator, live, 2026-09-02: "the thing cannot handle 'no project' — it falsely
@@ -534,7 +538,13 @@ async def found_seat(
     root = office_root or _default_office_root()
     office_path = root / handle.lower()
     project_name = (project or "").strip() or None
-    house_name = (house or "").strip() or None
+    # NO SEPARATE house DECLARATION (Thoth mail 12000, implements 70c001ec, "ONE
+    # TAXONOMY"): a self-managed seat has no manager to derive its own project from
+    # (mint_seat's own worker path uses `house or manager_house`; there is no
+    # manager_house here at all), so the one remaining source of truth is this same
+    # call's own --project — never a second, independently-given value that could
+    # disagree with it.
+    house_name = project_name
     # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,
     # flags that specific method inside an async def; a shell has already expanded a
     # literal `~` in `path` by the time argv reaches this call anyway — this only

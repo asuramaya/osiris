@@ -10,6 +10,7 @@ from src.orchestrator.graph_migrations import (
     migrate_commits_to_agents,
     migrate_file_the_residual,
     migrate_file_the_unfiled,
+    migrate_house_to_project,
     migrate_owned_by_second_pass,
     migrate_repo_seats_fix,
     run_migration,
@@ -689,3 +690,73 @@ async def test_commits_to_agents_abstains_when_the_commit_predates_any_holder(
     assert out["abstained_reasons"].get("no-holder-at-author-time", 0) >= 1
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='committed_by'", commit) == 0
+
+
+# --- house_to_project (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY") --------------
+
+async def test_migrate_house_to_project_repairs_a_fabricated_house_on_apply(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="gm-h2p-fabricated", handle="GmH2pRepair",
+                             source="test")
+    await actions.create_or_find_object("SoftwareProject", "repo:gm-h2p-realproj", "test")
+    await set_charter(actions, seat["seat_id"], ["gm-h2p-realproj"], actor="test")
+
+    dry = await migrate_house_to_project(actions, actor="test", dry_run=True)
+    entry = next(e for e in dry["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["old_house"] == "gm-h2p-fabricated"
+    assert entry["new_project"] == "gm-h2p-realproj"
+    assert entry["refused_why"] is None
+    # dry run writes nothing
+    still = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND name='house' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", seat["seat_id"])
+    assert still == "gm-h2p-fabricated"
+
+    out = await migrate_house_to_project(
+        actions, actor="test", dry_run=False, because="test repair")
+    assert out["repaired"] >= 1
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND name='house'", seat["seat_id"])
+    assert len(rows) == 1
+    assert rows[0]["v"] == "gm-h2p-realproj"
+
+
+async def test_migrate_house_to_project_reports_no_charter_without_guessing(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="gm-h2p-nocharter", handle="GmH2pNoCharter",
+                             source="test")
+
+    out = await migrate_house_to_project(actions, actor="test", dry_run=True)
+    entry = next(e for e in out["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["new_project"] is None
+    assert entry["refused_why"] == "no charter"
+
+
+async def test_migrate_house_to_project_skips_a_seat_already_correct(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="gm-h2p-already", handle="GmH2pAlready",
+                             source="test")
+    await actions.create_or_find_object("SoftwareProject", "repo:gm-h2p-already", "test")
+    await set_charter(actions, seat["seat_id"], ["gm-h2p-already"], actor="test")
+
+    out = await migrate_house_to_project(actions, actor="test", dry_run=True)
+    assert not any(e["seat"] == seat["seat_id"] for e in out["entries"])
+
+
+async def test_run_migration_accepts_house_to_project(actions: Actions) -> None:
+    out = await run_migration(actions.pool, "house_to_project", actor="test")
+    assert "error" not in out
+    assert out["dry_run"] is True

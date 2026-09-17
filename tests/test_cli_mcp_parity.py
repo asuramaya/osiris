@@ -192,10 +192,16 @@ NO_MCP_EQUIVALENT = {
         "establish_office (Sekhmet's own MCP-surface rename lands separately, ONE "
         "TAXONOMY wave 28) — this CLI door renamed ahead of it, ruling 52a59652/"
         "70c001ec.",
-    "resync-seat-house": "NOT actually MCP-less — same hidden-alias shape as correct-"
-        "agent-house's own entry above; resync_seat_house carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
-        "fully callable.",
+    "correct-agent-project": "NOT actually MCP-less — same hidden-alias shape as "
+        "correct-agent-house's own entry above; the underlying MCP action is still "
+        "named correct_agent_house (Sekhmet's own MCP-surface rename lands "
+        "separately, ONE TAXONOMY wave 28) — this CLI door renamed ahead of it, "
+        "ruling 52a59652/70c001ec.",
+    "resync-seat-project": "a GENUINELY NEW door (Thoth mail 12000, implements "
+        "70c001ec, \"ONE TAXONOMY\"): collapses the two MCP actions correct_house "
+        "(self-scoped) and resync_seat_house (third-party) into one re-derive-from-"
+        "charter door with no single MCP tool of its own to match — an MCP tool can "
+        "follow if a live caller actually needs one; none was asked for in this tip.",
     "reconcile-seat-identity": "NOT actually MCP-less — same hidden-alias shape as "
         "correct-agent-house's own entry above; reconcile_seat_identity carries meta="
         "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
@@ -520,6 +526,13 @@ CLI_TO_MCP_NAME: dict[str, str] = {
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
 MCP_ONLY_PARAMS = {
+    ("seat:mint", "house"): "Thoth mail 12000, implements 70c001ec, \"ONE TAXONOMY\": "
+        "mint-seat's own --house flag retired outright, no alias — a seat's project "
+        "is never a second, independently-given value; the new worker's project "
+        "comes from its manager's own project by construction (mint_seat's own "
+        "`house or manager_house`, house always omitted from this CLI door now). "
+        "The MCP tool's own `house` param stays for now (Sekhmet's own MCP-surface "
+        "rename, if any, lands separately).",
     ("launch", "message"): "the CLI has no way to deliver an opening brief in one act "
         "today — a real gap, named rather than hidden, not yet built",
     ("resume", "message"): "same gap as launch's own message param above — the CLI has "
@@ -757,6 +770,11 @@ NO_CLI_EQUIVALENT = {
         "the CALLING agent's own mounted identity (set_charter), and a raw terminal holds "
         "no such identity to be self about. charter_for (the operator-on-another's-behalf "
         "form) already has one, --repos and all.",
+    "resync_seat_house": "RETIRED from the CLI outright, no alias (Thoth mail 12000, "
+        "implements 70c001ec, \"ONE TAXONOMY\"): resync-seat-project collapses this "
+        "AND correct_house into one door that re-derives from the charter, taking no "
+        "arbitrary declared value at all — there is no CLI shape left that mirrors "
+        "this MCP action's own (new_house, source, reason) signature.",
     # WAVE 3 (thread 5bf6447c, Thoth dispatch 7943, "re-read the 25 excuses one by one"):
     # sixteen of the twenty-five below turned out to have a real, standalone, third-party-
     # capable orchestrator function all along, verified by reading each MCP tool's own
