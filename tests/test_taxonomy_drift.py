@@ -59,6 +59,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = ROOT / "tests" / "taxonomy_drift_baseline.json"
+# THE FLEET RULE (Thoth mail 12026): a tip that changes these counts regenerates the
+# baseline in the SAME commit -- the gate refuses a baseline that grew. This is the one
+# command that does it, named here so both failure messages below can print it verbatim.
+REGEN_CMD = "uv run python tests/test_taxonomy_drift.py --write"
 
 _WORDS = ["house", "houses", "housed", "housing", "office", "offices", "district",
           "districts", "cluster", "clusters", "clustering", "clustered",
@@ -153,10 +157,32 @@ def test_taxonomy_drift_matches_the_committed_baseline_exactly() -> None:
         "reader-facing surface; use the current taxonomy instead, or if this really is "
         "content (not hierarchy -- e.g. the analyst ontology's own IntrusionSet/cluster: "
         "id-prefix use, ruled to stay by decision 70c001ec), raise the baseline here with "
-        "a comment saying why")
+        f"a comment saying why. Regenerate with: {REGEN_CMD}")
     assert not shrunk_or_gone, (
         "retired-word mentions DECREASED in these files versus the committed baseline "
         f"(was -> now): {shrunk_or_gone} -- good news, but the baseline in "
         "tests/taxonomy_drift_baseline.json is now stale and must be lowered (or "
-        "the file's entry removed once it reaches zero) in the same tip as the rename "
-        "that did this")
+        "the file's entry removed once it reaches zero) in the SAME tip as the rename "
+        f"that did this. Regenerate with: {REGEN_CMD}")
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--write" not in sys.argv:
+        print(f"usage: {REGEN_CMD}", file=sys.stderr)
+        raise SystemExit(1)
+    before = json.loads(BASELINE_PATH.read_text()) if BASELINE_PATH.exists() else {}
+    after = _live_counts()
+    BASELINE_PATH.write_text(json.dumps(dict(sorted(after.items())), indent=2) + "\n")
+    changed = {f: (before.get(f, 0), n) for f, n in after.items() if before.get(f, 0) != n}
+    changed |= {f: (before[f], after.get(f, 0)) for f in before
+                if f not in after and before[f] != 0}
+    print(f"wrote {BASELINE_PATH.relative_to(ROOT)} -- {len(after)} files, "
+          f"{sum(after.values())} total mentions")
+    if changed:
+        print("changed (was -> now):")
+        for f, (b, n) in sorted(changed.items()):
+            print(f"  {f}: {b} -> {n}")
+    else:
+        print("no change")
