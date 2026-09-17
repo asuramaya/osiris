@@ -1627,7 +1627,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 89
 # genuinely different execution shape from layout_migrate (a single global force
 # simulation, not a batch loop) so not a parameterization of it. Measured exact
 # (141,046).
-TOOL_CONTRACT_CEILING_CHARS = 141046
+TOOL_CONTRACT_CEILING_CHARS = 141045
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
