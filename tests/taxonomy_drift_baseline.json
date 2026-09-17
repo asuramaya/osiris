@@ -3,7 +3,7 @@
   "commands/seat.md": 1,
   "commands/wake.md": 1,
   "docs/CANVAS.md": 25,
-  "docs/CLI.md": 23,
+  "docs/CLI.md": 14,
   "docs/COMPOSER.md": 1,
   "docs/CROSS_HARNESS.md": 1,
   "docs/DEPLOY.md": 1,
@@ -18,6 +18,5 @@
   "src/orchestrator/graph_stream.py": 2,
   "src/orchestrator/textrender.py": 10,
   "src/ui/static/console.js": 6,
-  "src/ui/static/index.html": 1,
   "src/ui/static/space.js": 31
 }

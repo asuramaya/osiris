@@ -417,7 +417,7 @@ async def test_establish_office_by_seat_canonical_resolves_a_cold_holder(
 
     assert "error" not in again
     assert again["seat"] == seat["seat_id"]
-    assert again["office_deed"] != "n/a — no claimed occupant yet to deed an office to"
+    assert again["office_deed"] != "n/a — no claimed occupant yet to deed a seat directory to"
     assert again["standing_orders"].startswith("left in place")
     assert (office / "CLAUDE.md").stat().st_mtime == before_mtime
     assert (office / "CLAUDE.md").stat().st_size == before_size
