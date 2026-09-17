@@ -98,9 +98,11 @@ def test_community_ribbon_lines_never_draw_below_mid_zoom() -> None:
 
 
 def test_sync_community_visibility_only_rebuilds_when_something_actually_changed() -> None:
-    body = _SPACE_JS.split("function syncCommunityVisibility()", 1)[1][:900]
-    assert "communityRegionsVisible = communityZoomViewSize > 0 && " \
-        "viewSize < communityZoomViewSize;" in body
+    # WAVE 27, THE LENS PANEL: the zoom gate is now AND-ed with the lens's own hide -- a
+    # checkbox toggle re-invokes this same function directly (see tests/test_lens_panel.py).
+    body = _SPACE_JS.split("function syncCommunityVisibility()", 1)[1][:1100]
+    assert "communityRegionsVisible = !communitiesHiddenByLens &&\n      " \
+        "communityZoomViewSize > 0 && viewSize < communityZoomViewSize;" in body
     assert "if (wasVisible === communityRegionsVisible && !resolvedChanged) return;" in body
     assert "buildEdgeLines(idToNode, edges);" in body
     assert "buildCommunityRibbonLines();" in body
@@ -120,7 +122,7 @@ def test_sync_community_visibility_is_wired_into_both_zoom_and_fit() -> None:
 # --- buildEdgeLines: a same-district cross-community edge refines one level further -------
 
 def test_build_edge_lines_refines_same_district_edges_by_community_when_visible() -> None:
-    body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2300]
+    body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2700]
     assert "} else if (communityRegionsVisible && na && nb && na.project === nb.project &&" \
         in body
     assert "na.communityCode && nb.communityCode && na.communityCode !== nb.communityCode) {" \
@@ -132,7 +134,7 @@ def test_build_edge_lines_refines_same_district_edges_by_community_when_visible(
 # --- accounting: a new bucket, live only when communities are actually visible -----------
 
 def test_edge_accounting_adds_a_community_ribbon_bucket_gated_on_visibility() -> None:
-    body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:1900]
+    body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:2200]
     assert "let fill = 0, landmark = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;" \
         in body
     assert "if (communityRegionsVisible && na && nb && na.project === nb.project &&" in body

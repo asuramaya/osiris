@@ -71,7 +71,7 @@ def test_a_resolved_ribbon_is_dropped_from_the_ribbon_mesh_never_drawn_twice() -
 
 
 def test_build_edge_lines_draws_a_cross_district_edge_only_once_its_own_ribbon_resolved() -> None:
-    body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:1600]
+    body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:1900]
     assert "if (!ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) return false;" in body
 
 
@@ -85,10 +85,14 @@ def test_landmark_types_are_acts_for_and_authored_by_found_data_driven() -> None
 
 
 def test_a_landmark_own_incoming_edge_is_excluded_from_lines_and_folded_into_its_badge() -> None:
-    edge_body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:1200]
+    # WAVE 27, THE LENS PANEL: the flat `return false` became conditional on the lens --
+    # folded into the badge (landmark bucket, no line) when shown, an ordinary line when the
+    # reader has toggled the badge off (see tests/test_lens_panel.py for the toggle itself).
+    edge_body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:1500]
     assert "const lm = landmarks[e.type];" in edge_body
-    assert "if (lm && e.target === lm.id) return false;" in edge_body
-    badge_body = _SPACE_JS.split("function buildLandmarkBadges()", 1)[1][:700]
+    assert "if (lm && e.target === lm.id) {" in edge_body
+    assert "if (!highDegreeBadgesHiddenByLens) return false;" in edge_body
+    badge_body = _SPACE_JS.split("function buildLandmarkBadges()", 1)[1][:900]
     assert "div.textContent = `${nd ? labelTextFor(nd) : lm.id} — ${lm.count} ${t}`;" \
         in badge_body
 
@@ -160,9 +164,9 @@ def test_supersedes_stays_in_the_path_walk() -> None:
 # --- accounting exact (the receipt's own acceptance line) -----------------------------------
 
 def test_edge_accounting_classifies_every_edge_into_exactly_one_bucket() -> None:
-    body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:1900]
+    body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:2200]
     assert "if (DISTRICT_FILL_TYPES.has(e.type)) { fill++; continue; }" in body
-    assert "if (lm && e.target === lm.id) { landmark++; continue; }" in body
+    assert "if (highDegreeBadgesHiddenByLens) { line++; } else { landmark++; }" in body
     assert "if (ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) line++; else ribbon++;" in body
     assert "accounted: fill + landmark + line + ribbon + communityRibbon + other };" in body
 

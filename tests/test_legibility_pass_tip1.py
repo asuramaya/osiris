@@ -89,10 +89,13 @@ def test_focus_uses_a_per_instance_visibility_flag_not_a_dim_scalar() -> None:
 
 def test_a_focused_node_with_no_semantic_edges_still_lights_its_structural_neighbours() -> None:
     # THE DRILL (ruling d7d55257) inserted a container-focus dispatch and clearDrillState()
-    # call at the top of focusObject, pushing this fallback further into the body.
+    # call at the top of focusObject, pushing this fallback further into the body. WAVE 27,
+    # THE LENS PANEL: the literal "structural" check became isStructuralLike() so a genuine
+    # "container"-class edge (now distinct from "structural") still widens this fallback the
+    # same as before.
     body = _SPACE_JS.split("async function focusObject(id, opts)", 1)[1][:2900]
     assert "if (pathReachable.size <= 1) {" in body
-    assert 'if (e.edgeClass !== "structural") continue;' in body
+    assert "if (!isStructuralLike(e.edgeClass)) continue;" in body
     assert "pathReachable.add(other);" in body
 
 
@@ -151,7 +154,7 @@ def test_header_repo_selector_drives_the_same_visibility_flag_by_project() -> No
 
 
 def test_legend_gains_a_node_types_section() -> None:
-    body = _SPACE_JS.split("function renderLegend(edgeList, nodeList)", 1)[1][:1900]
+    body = _SPACE_JS.split("function renderLegend(edgeList, nodeList)", 1)[1][:2200]
     assert "legend-node-type" in body
     assert "node types" in body
 
