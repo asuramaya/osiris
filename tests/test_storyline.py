@@ -85,7 +85,55 @@ def test_chain_members_sit_on_the_time_axis_at_y_zero() -> None:
 def test_sub_agents_branch_off_their_own_parent_at_their_own_spawn_time() -> None:
     body = _SPACE_JS.split("async function renderStoryline(id, opts)", 1)[1][:3800]
     assert "for (const [subId, parentId] of subAgentOf) {" in body
-    assert "nd.y = dir * (rowOffset + tier * subrowStep);" in body
+    assert "nd.y = dir * offsetPx * wpp;" in body
+
+
+# --- WAVE 27, THE SPAWN ROW (Thoth mail 11754): a burst-spawned parent's siblings never ---
+# --- collapse onto a shared (dir, tier) -- the tier is unbounded, not capped mod a constant.
+
+def test_spawn_row_tier_is_never_capped_and_never_collides() -> None:
+    # the old `% STORYLINE_SUBROW_TIERS` wrap put siblings 10 apart in spawn order back on
+    # the exact same (dir, tier) -- with a real burst spawn (near-identical createdAt too),
+    # the exact same (x, y). sqrt(tier) is injective on non-negative integers: no two
+    # siblings of one parent ever collide, at any burst size.
+    body = _SPACE_JS.split("async function renderStoryline(id, opts)", 1)[1][:3800]
+    assert "const tier = Math.floor(n / 2); // sqrt(tier) is injective on tier -- " \
+        "never repeats" in body
+    assert "STORYLINE_SUBROW_TIERS" not in _SPACE_JS
+
+
+def test_spawn_row_offset_grows_with_sqrt_not_linearly() -> None:
+    # live-verification finding: a linear tier * STEP_PX offset fixes the collision but a
+    # real fleet burst (measured live: one parent, 1188 siblings) exploded the vertical
+    # extent to +-12,000 world units -- "0 label overlaps" only because nothing was legible
+    # any more. sqrt(tier) keeps every position distinct while growing sub-linearly, so a
+    # burst 100x bigger only needs ~10x the height.
+    body = _SPACE_JS.split("async function renderStoryline(id, opts)", 1)[1][:3800]
+    assert "const offsetPx = STORYLINE_ROW_OFFSET_PX + Math.sqrt(tier) * " \
+        "STORYLINE_SUBROW_STEP_PX;" in body
+    assert "nd.y = dir * offsetPx * wpp;" in body
+
+
+def test_spawn_row_tracks_the_deepest_offset_actually_used_this_render() -> None:
+    body = _SPACE_JS.split("async function renderStoryline(id, opts)", 1)[1][:3800]
+    assert "storylineMaxSubrowOffsetPx = STORYLINE_ROW_OFFSET_PX;" in body
+    assert "if (offsetPx > storylineMaxSubrowOffsetPx) " \
+        "storylineMaxSubrowOffsetPx = offsetPx;" in body
+
+
+def test_spawn_row_axis_clearance_follows_the_actual_max_offset_not_a_fixed_constant() -> None:
+    body = _SPACE_JS.split("function buildStorylineAxis(fromT, toT)", 1)[1][:900]
+    assert "const axisY = -((storylineMaxSubrowOffsetPx + 40) * wpp);" in body
+
+
+def test_clear_storyline_state_resets_the_spawn_row_offset_tracker() -> None:
+    body = _SPACE_JS.split("function clearStorylineState()", 1)[1][:800]
+    assert "storylineMaxSubrowOffsetPx = 0;" in body
+
+
+def test_debug_api_exposes_the_spawn_row_offset_hook() -> None:
+    body = _SPACE_JS.split("const api = {", 1)[1]
+    assert "get storylineMaxSubrowOffsetPx()" in body
 
 
 def test_ticks_sit_on_their_own_body_row_not_a_separate_tier() -> None:
@@ -140,8 +188,7 @@ def test_axis_labels_never_join_the_shared_lbl_declutter_pool() -> None:
     # sub-agent tier so it never collides with an object label floating above its own node.
     body = _SPACE_JS.split("function buildStorylineAxis(fromT, toT)", 1)[1][:900]
     assert 'div.className = "lod-glyph-label storyline-axis-label";' in body
-    assert "const axisY = -((STORYLINE_ROW_OFFSET_PX + STORYLINE_SUBROW_TIERS * " \
-        "STORYLINE_SUBROW_STEP_PX + 40) * wpp);" in body
+    assert "const axisY = -((storylineMaxSubrowOffsetPx + 40) * wpp);" in body
 
 
 def test_storyline_axis_label_css_exists_in_both_pages() -> None:
