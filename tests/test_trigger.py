@@ -4126,24 +4126,32 @@ async def test_launch_hands_the_attach_line_on_the_idempotent_path_too(
 
 
 async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupies(
-    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+    actions: Actions,
 ) -> None:
     """ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1, obligation 164fc26c) — the
     halcyon specimen: xxi job 39ece19d + xxiii job db9ff657, both heartbeating on the same
     seat, because launch_seat's own idempotency checks never consulted the single occupancy
-    authority (`is_occupied_by_a_live_body`) the fold/reanimation/send() doors already
-    share. A launch onto a seat whose CURRENT HOLDER that authority confirms is a live body
-    must refuse outright, before either spawn lane, regardless of substrate."""
-    from src.orchestrator import agents as agents_module
+    authority the fold/reanimation/send() doors already share. A launch onto a seat whose
+    CURRENT HOLDER that authority confirms is a live body must refuse outright, before
+    either spawn lane, regardless of substrate.
+
+    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    was `is_occupied_by_a_live_body` (registry_census's harness+/proc check); now
+    `mounts.agent_liveness`, the SAME single source `team()`/`vacate_dead_seat` share —
+    a real, fresh `agent_mounts` row (never a monkeypatched occupancy authority) is what
+    makes this holder read live. Status stays `already-live` for LAUNCH specifically
+    (cli.py's own contract: a body already existing is the GOAL STATE, exit 0, never a
+    refusal) — `_launch_target_setup`'s `occupied_status` param is what lets the SAME
+    detection logic report itself differently to launch vs. resume."""
+    from src.orchestrator.mounts import save_mount
 
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:occ01", manager_agent="agent:occm01",
         worker_handle="Halcyon-Test", house="osiris")
     await _office(actions, worker_seat, "/tmp/halcyon-test")
-
-    async def _occupied(pool: Any, agent_id: str, **kw: Any) -> bool:
-        return agent_id == "agent:occ01"
-    monkeypatch.setattr(agents_module, "is_occupied_by_a_live_body", _occupied)
+    await save_mount(actions.pool, job_dir="/jobs/occ01", agent_id="agent:occ01",
+                     project="osiris", cwd="/tmp/halcyon-test", model="claude-sonnet-5",
+                     session_key=None)
 
     async def _boom(*a: Any, **kw: Any) -> None:
         raise AssertionError("a refused launch must spawn nothing")
@@ -4152,9 +4160,35 @@ async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupi
         actions, caller="agent:occm01", target=worker_seat,
         spawn=_boom, agents_json=_fake_agents_json([[]]))
 
-    assert d["status"] == "refused-occupied"
+    assert d["status"] == "already-live"
     assert d["holder"] == "agent:occ01"
     assert d["body_exists"] is True and d["can_receive"] is True
+
+
+async def test_resume_refuses_occupied_when_agent_liveness_says_live(
+    actions: Actions,
+) -> None:
+    """THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/
+    11760): resume's own occupancy gate is the SAME shared `_launch_target_setup` check
+    as launch's, but keeps its default `occupied_status="refused-occupied"` — a genuine
+    conflict for resume (there is nothing to idempotently return, unlike launch's own
+    goal-state framing), never `already-live`."""
+    from src.orchestrator.mounts import save_mount
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:rsoc01", manager_agent="agent:rsocm01",
+        worker_handle="Resume-Occupied", house="osiris")
+    await _office(actions, worker_seat, "/tmp/resume-occupied")
+    await save_mount(actions.pool, job_dir="/jobs/rsoc01", agent_id="agent:rsoc01",
+                     project="osiris", cwd="/tmp/resume-occupied", model="claude-sonnet-5",
+                     session_key=None)
+
+    d = await trigger_module.resume_seat(
+        actions, caller="agent:rsocm01", target=worker_seat,
+        agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "refused-occupied"
+    assert d["holder"] == "agent:rsoc01"
 
 
 async def test_launch_resolves_a_vacant_seat_by_handle(actions: Actions) -> None:
@@ -4688,9 +4722,16 @@ async def test_launch_harness_lane_catches_a_resumed_body_the_harness_roster_can
     (`-p --resume`) body BY CONSTRUCTION — an EMPTY harness roster used to mean "safe to
     mint," even when a resumed session is genuinely live at this exact cwd, reachable only
     through agent_mounts (its own mid-turn mount() call lands there, never in the harness's
-    `--bg`-only roster). The shared twin guard now reads BOTH and refuses on either,
-    naming agent_mounts by name in the receipt so the refusal is never mistaken for the
-    harness-roster case."""
+    `--bg`-only roster).
+
+    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    `_launch_target_setup`'s own shared occupancy gate (both launch and resume) now
+    reads `mounts.agent_liveness` too, so it catches this exact agent_mounts-only-visible
+    body BEFORE `_launch_twin_check`'s own richer, cwd-scoped evidence-gathering ever
+    runs -- still never twins the body (task #148's real safety property), still under
+    `already-live` for LAUNCH (`occupied_status="already-live"`, matching cli.py's own
+    exit-0 goal-state contract) even though the DETECTION now comes from the shared
+    gate rather than `_launch_twin_check`'s own cwd-scoped harness+mounts probe."""
     worker_seat, _manager_seat = await _managed_pair(
         actions, worker_agent="agent:hw03", manager_agent="agent:hm03",
         worker_handle="Sobek-Resumed", house="osiris")
@@ -4706,8 +4747,8 @@ async def test_launch_harness_lane_catches_a_resumed_body_the_harness_roster_can
 
     assert d["status"] == "already-live"
     assert spawned == []  # NO twin spawned, even though the harness roster was empty
-    assert any("agent_mounts" in s for s in d["seen_via"])
-    assert d["window"] is None  # nothing to name from the (empty) harness roster
+    assert d["holder"] == "agent:hw03"
+    assert d["body_exists"] is True and d["can_receive"] is True
 
 
 async def test_launch_harness_lane_refuses_an_over_budget_mint(
@@ -5717,15 +5758,17 @@ async def test_launch_harness_lane_idempotency_matches_on_tree_cwd_not_office(
     assert spawned == []                                # no twin
 
 
-# ═══ vacate_dead_seat (thread 445a7356, Thoth's ruling msg 1611) — the evidence-gathering
-# complement to seats.vacate_holder / seats.retire_seat's stale-holder refusal, never its
-# bypass. `agents_json`/`transcript_activity` are injected so tests assert the DECISION
-# without a real `claude` binary or real transcript files.
+# ═══ vacate_dead_seat (thread 445a7356, Thoth's ruling msg 1611; THE LIVENESS
+# CONVERGENCE FIX, Nebbercracker's monsterhouse report, DM 11747/11760) — the evidence-
+# gathering complement to seats.vacate_holder / seats.retire_seat's stale-holder
+# refusal, never its bypass. `liveness_fn` is injected so tests assert the DECISION
+# without depending on the real `mounts.agent_liveness` cache state.
 
-def _fake_transcript_activity(checked: bool, fresh: bool) -> Any:
-    async def _t(pool: Any, holder: str, st: Any) -> tuple[bool, bool]:
-        return checked, fresh
-    return _t
+def _fake_liveness(live: bool) -> Any:
+    async def _fn(pool: Any, agent_id: str) -> dict[str, Any]:
+        return {"live": live, "last_seen": "2026-01-01T00:00:00+00:00",
+               "ever_mounted": True}
+    return _fn
 
 
 async def test_vacate_dead_seat_refuses_a_vacant_seat(actions: Actions) -> None:
@@ -5754,11 +5797,12 @@ async def test_vacate_dead_seat_refuses_no_office(actions: Actions) -> None:
     assert d["status"] == "refused-no-office"
 
 
-async def test_vacate_dead_seat_refuses_when_the_roster_shows_a_live_session(
+async def test_vacate_dead_seat_refuses_when_agent_liveness_says_live(
     actions: Actions,
 ) -> None:
-    """Signal 1 alone showing life is enough to refuse — the transcript check never even
-    runs (the fake would raise if called, proving short-circuit)."""
+    """THE SINGLE SOURCE (Nebbercracker's report): `agent_liveness` saying live is
+    enough to refuse on its own — the same instrument `team()`'s `live` column and
+    resume's occupancy gate already answer with, never a second, disagreeing check."""
     from src.orchestrator import trigger as tm
 
     worker_seat, _manager_seat = await _managed_pair(
@@ -5766,63 +5810,18 @@ async def test_vacate_dead_seat_refuses_when_the_roster_shows_a_live_session(
         worker_handle="Sekhmet-Alive", house="osiris")
     await _office(actions, worker_seat, "/tmp/sekhmet-alive")
 
-    async def _boom(pool: Any, holder: str, st: Any) -> tuple[bool, bool]:
-        raise AssertionError("transcript check must not run when the roster shows life")
-
     d = await tm.vacate_dead_seat(
         actions, seat_id=worker_seat, actor="test", because="dead",
-        agents_json=_fake_agents_json(
-            [[{"cwd": "/tmp/sekhmet-alive", "name": "[OS] Sekhmet-Alive"}]]),
-        transcript_activity=_boom)
+        liveness_fn=_fake_liveness(live=True))
     assert d["status"] == "refused-live"
-    assert "Sekhmet-Alive" in d["detail"]
+    assert "agent:vd3holdr" in d["detail"]
 
 
-async def test_vacate_dead_seat_refuses_when_the_transcript_is_fresh(
+async def test_vacate_dead_seat_vacates_when_agent_liveness_says_dead(
     actions: Actions,
 ) -> None:
-    """Signal 1 (roster) is silent, but signal 2 (the transcript's own timestamped
-    content) disagrees — refused, the Aegis-phantom case (mtime alone would have lied
-    the other way)."""
-    from src.orchestrator import trigger as tm
-
-    worker_seat, _manager_seat = await _managed_pair(
-        actions, worker_agent="agent:vd4holdr", manager_agent="agent:vd4mgr0",
-        worker_handle="Bastet-Working", house="osiris")
-    await _office(actions, worker_seat, "/tmp/bastet-working")
-
-    d = await tm.vacate_dead_seat(
-        actions, seat_id=worker_seat, actor="test", because="dead",
-        agents_json=_fake_agents_json([[]]),
-        transcript_activity=_fake_transcript_activity(checked=True, fresh=True))
-    assert d["status"] == "refused-live"
-    assert "agent:vd4holdr" in d["detail"]
-
-
-async def test_vacate_dead_seat_refuses_ambiguous_on_an_unreadable_roster(
-    actions: Actions,
-) -> None:
-    from src.orchestrator import trigger as tm
-
-    worker_seat, _manager_seat = await _managed_pair(
-        actions, worker_agent="agent:vd5holdr", manager_agent="agent:vd5mgr0",
-        worker_handle="Nut-Unreadable", house="osiris")
-    await _office(actions, worker_seat, "/tmp/nut-unreadable")
-
-    async def _boom(*, cwd: str | None = None,
-                    include_completed: bool = False) -> list[dict[str, Any]]:
-        raise OSError("no such file or directory: claude")
-
-    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test",
-                                  because="dead", agents_json=_boom)
-    assert d["status"] == "refused-ambiguous"
-
-
-async def test_vacate_dead_seat_vacates_when_both_signals_confirm_death(
-    actions: Actions,
-) -> None:
-    """The core: no live roster entry AND a stale (or absent) transcript → vacated —
-    proof this reaches seats.vacate_holder's own write, not just a receipt shape."""
+    """The core: `agent_liveness` says dead → vacated — proof this reaches
+    seats.vacate_holder's own write, not just a receipt shape."""
     from src.orchestrator import trigger as tm
 
     worker_seat, _manager_seat = await _managed_pair(
@@ -5832,16 +5831,36 @@ async def test_vacate_dead_seat_vacates_when_both_signals_confirm_death(
 
     d = await tm.vacate_dead_seat(
         actions, seat_id=worker_seat, actor="test", because="process confirmed dead",
-        agents_json=_fake_agents_json([[]]),
-        transcript_activity=_fake_transcript_activity(checked=False, fresh=False))
+        liveness_fn=_fake_liveness(live=False))
     assert d["status"] == "vacated"
     assert d["was_held_by"] == ["agent:vd6corps"]
-    assert d["evidence"] == {"roster_checked": True, "transcript_checked": False}
+    assert d["evidence"]["liveness"]["live"] is False
     holder = await actions.pool.fetchval(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_seat)
     assert holder is None
+
+
+async def test_vacate_dead_seat_uses_the_real_agent_liveness_by_default(
+    actions: Actions,
+) -> None:
+    """No injected `liveness_fn` → the real `mounts.agent_liveness` runs, reading the
+    freshly-bound holder's own agent_mounts row as live (never vacated) — proof the
+    default wiring is the shared instrument, not a silent no-op."""
+    from src.orchestrator import trigger as tm
+    from src.orchestrator.mounts import save_mount
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:vd7fresh", manager_agent="agent:vd7mgr0",
+        worker_handle="Anubis-Fresh", house="osiris")
+    await _office(actions, worker_seat, "/tmp/anubis-fresh")
+    await save_mount(actions.pool, job_dir="/jobs/anubis-fresh", agent_id="agent:vd7fresh",
+                     project="osiris", cwd="/tmp/anubis-fresh", model="claude-sonnet-5",
+                     session_key=None)
+
+    d = await tm.vacate_dead_seat(actions, seat_id=worker_seat, actor="test", because="dead")
+    assert d["status"] == "refused-live"
 
 
 # ═══ THE HARNESS-NATIVE SUBSTRATE (task #68 item 9, ruling 33d6a2eb; spike f2dc98549521) ══════

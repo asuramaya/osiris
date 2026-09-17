@@ -6290,7 +6290,17 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
     sitting at the OLD cwd was invisible to the cwd-keyed twin check, and the next launch
     forked the mind. The twin guard now also reads the holder lineage — a live
     agent_mounts row for the lineage at ANY cwd reads as already-live (exit 0, nothing
-    spawned). Negative control: a stale row (not live) lets the launch proceed."""
+    spawned). Negative control: a stale row (not live) lets the launch proceed.
+
+    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    `_launch_target_setup`'s own shared occupancy gate now catches this case FIRST, via
+    `mounts.agent_liveness` (lineage-widened, same as before) — evidence now names the
+    seat's own recorded holder canonical ("agent:1ineage1"), not the specific live
+    generation's own mount row ("agent:1ineage1-ii"): `agent_liveness`'s contract
+    reports live/dead for a lineage, never which exact row matched, a coarser but
+    single, consistent source rather than `_launch_twin_check`'s own richer per-row
+    naming (now shadowed for this case, same trade already made for task #148's own
+    specimen)."""
     import io
     from contextlib import redirect_stderr, redirect_stdout
 
@@ -6324,7 +6334,7 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
     assert out == 0
     assert spawned == []
     assert "already-live" in out_buf.getvalue()
-    assert "agent:1ineage1-ii" in err_buf.getvalue()
+    assert "agent:1ineage1" in err_buf.getvalue()
 
     # NEGATIVE CONTROL: the same row gone stale is no twin — the launch proceeds
     await actions.pool.execute(
