@@ -323,7 +323,7 @@ Appends reasoning to a LIVE decision as understanding develops, WITHOUT supersed
 already superseded (amend the successor instead, or use `record_decision(supersedes=...)`
 for an actual correction).
 
-## `osiris mint-seat <handle> [--manager <seat>] [--project] [--house] [--model] [--actor] [--adopt] [--force]`
+## `osiris mint-seat <handle> [--manager <seat>] [--project] [--model] [--actor] [--adopt] [--force]`
 
 The sanctioned second door onto `mintseat.mint_seat` — a DIFFERENT shape of gap than the
 doors above: those exist because a client's tool index can go stale; this one exists because
@@ -332,27 +332,30 @@ the calling agent's own held seat ("the calling seat is always the manager... mi
 someone else's org is a console act, deliberately absent here," `mint_seat`'s own
 docstring). A raw terminal has no mounted agent identity to infer from.
 
-**`--manager` is inferred, not required** (dispatch 3678/3681): omit it and this door looks
-for the *sole* existing seat in the target house — `--house` if given, else the cwd's own
-`.osiris` pin, else the cwd's own directory name — and uses it. Zero or several candidate
-seats refuses loudly, naming what was tried and how to disambiguate, never a silent guess.
-Naming a `--house` with no seats in it at all (a brand-new house/project) always needs an
-explicit `--manager` naming any existing seat elsewhere — crossing into an empty house has
-nothing to infer from by construction, and `mint_seat`'s own cross-house guard requires it
-anyway (satisfied automatically: `--actor` already defaults to an operator actor).
+**`--manager` is inferred, not required**: omit it and this door looks for the *sole*
+existing seat in the cwd's own pinned project and uses it. Zero or several candidate seats
+refuses loudly, naming what was tried and how to disambiguate, never a silent guess. There
+is no `--house`/`--project` flag for the NEW seat's own project here — a worker's project is
+never a second, independently-given value; it comes from its manager's own project by
+construction, so naming `--manager` explicitly is the only way to mint into a project the
+cwd isn't already pinned to (satisfied automatically: `--actor` already defaults to an
+operator actor). `--project` still exists, but stamps a DIFFERENT thing — the new seat's own
+`.osiris` pin (never invented if omitted; declare it later with `charter(repos=[...])` once
+it actually governs one), distinct from which project the seat itself belongs to.
 
-One call does the whole ceremony: `ensure_seat` + the office scaffold (dir, `.osiris` pin,
-`CLAUDE.md` + `charter.md`) + an `intended_model` stamp + the `managed_by` edge to the
-manager. Idempotent — a handle that already names a living seat is *adopted*
-(fill-missing-only), never twinned; `--adopt` states that intent explicitly (refuses on no
-match rather than silently minting fresh), `--force` is the only door past a near-miss
-handle refusal (ruling `7cffda8f`). Both are **deliberate console-only escape hatches** —
-stated explicitly in `mint_seat`'s own MCP docstring since dispatch 3683's addendum — an
-agent caller can never reach them, on purpose: an ordinary coordinator's mint never needs to
-refuse-instead-of-adopt or force past a safety guard. The receipt prints `mint_seat`'s own
-occupancy-aware next step — vacant names the exact `launch(target=...)` call to body it next.
+One call does the whole ceremony: `ensure_seat` + the seat-directory scaffold (dir,
+`.osiris` pin carrying project AND model, `CLAUDE.md` + `charter.md`) + an `intended_model`
+stamp + the `managed_by` edge to the manager. Idempotent — a handle that already names a
+living seat is *adopted* (fill-missing-only), never twinned; `--adopt` states that intent
+explicitly (refuses on no match rather than silently minting fresh), `--force` is the only
+door past a near-miss handle refusal (ruling `7cffda8f`). Both are **deliberate
+console-only escape hatches** — stated explicitly in `mint_seat`'s own MCP docstring since
+dispatch 3683's addendum — an agent caller can never reach them, on purpose: an ordinary
+coordinator's mint never needs to refuse-instead-of-adopt or force past a safety guard. The
+receipt prints `mint_seat`'s own occupancy-aware next step — vacant names the exact
+`launch(target=...)` call to body it next.
 
-This closes the exact gap this file's own house law names below: before this command
+This closes the exact gap this file's own project law names below: before this command
 existed, standing up a brand-new seat from a terminal had no door but a hand-rolled
 `python -c` heredoc against the live DB — precisely what ruling `45b074bf` bans.
 
@@ -393,7 +396,7 @@ instance) — same convention as `osiris composition run-spec`'s own `--spec`. B
 scripts/osiris_hook.py's PreCompact fallback (THE MECHANICAL SETTLE, below) has a real
 subcommand to mint a machine-handoff decision through.
 
-## The house law behind every subcommand
+## The project law behind every subcommand
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an
 agent uses. Both exist so that "how do I do X" always has a documented, honest, idempotent
