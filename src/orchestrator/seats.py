@@ -2071,42 +2071,73 @@ async def sweep_seat_trees(
     reported, never guessed: no tree_cwd problem at all (skipped, not listed), no
     charter (`refused-why: no charter`), more than one real governed tree
     (`refused-why: ambiguous charter`), or a charter whose own recorded path isn't
-    actually a git tree either (`refused-why: no real governed tree`)."""
+    actually a git tree either (`refused-why: no real governed tree`).
+
+    THE COLLAPSE GAP (Thoth mail 11844, found on the live w329 sweep): the original
+    read here was `ORDER BY ... LIMIT 1` — a seat carrying TWO simultaneously-current
+    tree_cwd rows (the exact disease this whole door exists to fix) was skipped
+    whenever the LIMIT-1 read happened to surface the real one first, leaving its
+    fabricated or duplicate sibling row current forever. dustin/chowder (a real row
+    beside a fabricated console row) and jenny (the same real value asserted twice, by
+    console and by a manager) all specimens. Fixed by reading EVERY current row per
+    seat: a seat with more than one current row is never skipped just because one of
+    them happens to be real — its real value (if exactly one distinct real value is
+    present) is rewritten through `bind_seat_tree`, which collapses every other
+    current row via `assert_singular_property` regardless of source, same as the
+    charter-repair path already did."""
     from src.orchestrator.charter import governed_trees
     from src.orchestrator.trigger import _is_git_tree, _tree_exists
 
     rows = await actions.pool.fetch(
         "SELECT o.canonical AS seat_id, "
-        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
-        "   AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
-        "   AS tree_cwd "
-        "FROM objects o WHERE o.type='Seat' AND o.status='active'")
+        "  array_remove(array_agg(a.value #>> '{}'), NULL) AS tree_cwds "
+        "FROM objects o "
+        "LEFT JOIN current_assertions a ON a.object_id=o.id AND a.name='tree_cwd' "
+        "WHERE o.type='Seat' AND o.status='active' "
+        "GROUP BY o.canonical")
 
     entries: list[dict[str, Any]] = []
     for r in rows:
-        seat_id, tree_cwd = r["seat_id"], r["tree_cwd"]
-        if tree_cwd and _tree_exists(tree_cwd) and _is_git_tree(tree_cwd):
-            continue  # a real, bound tree — nothing to sweep
-        real_trees = [
-            (repo, p) for repo, p in await governed_trees(actions.pool, seat_id)
-            if _tree_exists(p) and _is_git_tree(p)]
-        if len(real_trees) != 1:
+        seat_id, tree_cwds = r["seat_id"], list(r["tree_cwds"] or [])
+        distinct = sorted(set(tree_cwds))
+        real_current = [v for v in distinct if _tree_exists(v) and _is_git_tree(v)]
+        old_display: Any = tree_cwds[0] if len(tree_cwds) <= 1 else tree_cwds
+        if len(tree_cwds) <= 1 and len(real_current) == 1:
+            continue  # exactly one current row, and it's a real, bound tree
+        if len(real_current) > 1:
             entries.append({
-                "seat": seat_id, "old_tree_cwd": tree_cwd, "new_tree_cwd": None,
-                "refused_why": "no charter" if not real_trees else "ambiguous charter",
+                "seat": seat_id, "old_tree_cwd": old_display, "new_tree_cwd": None,
+                "refused_why": "ambiguous current values",
             })
             continue
-        repo, real_path = real_trees[0]
+        repo: str | None
+        if len(real_current) == 1 and len(tree_cwds) > 1:
+            # a real value is already present, just duplicated alongside a stale or
+            # fabricated sibling row -- collapse straight to it, no charter guess needed
+            winner, repo = real_current[0], None
+        else:
+            real_trees = [
+                (rp, p) for rp, p in await governed_trees(actions.pool, seat_id)
+                if _tree_exists(p) and _is_git_tree(p)]
+            if len(real_trees) != 1:
+                entries.append({
+                    "seat": seat_id, "old_tree_cwd": old_display, "new_tree_cwd": None,
+                    "refused_why": "no charter" if not real_trees else "ambiguous charter",
+                })
+                continue
+            repo, winner = real_trees[0]
         if not apply:
             entries.append({
-                "seat": seat_id, "old_tree_cwd": tree_cwd, "new_tree_cwd": real_path,
+                "seat": seat_id, "old_tree_cwd": old_display, "new_tree_cwd": winner,
                 "refused_why": None, "repo": repo})
             continue
+        because = (f"sweep_seat_trees: collapsed {len(tree_cwds)} current tree_cwd "
+                   "rows onto its own already-real value" if repo is None else
+                   f"sweep_seat_trees: repaired from its own charter ({repo})")
         bound = await bind_seat_tree(
-            actions, seat_id=seat_id, tree_cwd=real_path, actor=actor,
-            because=f"sweep_seat_trees: repaired from its own charter ({repo})")
+            actions, seat_id=seat_id, tree_cwd=winner, actor=actor, because=because)
         entries.append({
-            "seat": seat_id, "old_tree_cwd": tree_cwd,
+            "seat": seat_id, "old_tree_cwd": old_display,
             "new_tree_cwd": bound.get("tree_cwd") if "error" not in bound else None,
             "refused_why": bound.get("error"), "repo": repo})
     return {
