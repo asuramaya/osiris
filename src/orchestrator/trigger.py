@@ -3363,7 +3363,7 @@ async def _launch_twin_check(
 
 async def _launch_target_setup(
     actions: Actions, *, caller: str, target: str, agents_json: Any,
-    operator_authorized: bool = False,
+    operator_authorized: bool = False, occupied_status: str = "refused-occupied",
 ) -> dict[str, Any]:
     """THE GATE + FACTS SHARED BY BOTH launch_seat AND resume_seat (extracted, task #199
     lane 3C, ruling 41a41437/msgs 6823/6831: "one shared orchestration shell, the
@@ -3460,17 +3460,43 @@ async def _launch_target_setup(
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "{name}"'}
 
-    from src.orchestrator.agents import is_occupied_by_a_live_body
+    # THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    # was `agents.is_occupied_by_a_live_body` (registry_census's own harness+/proc
+    # cross-check) -- a real, /proc-VERIFIED signal, but a DIFFERENT one from what
+    # team()/vacate_dead_seat trust, and the three disagreeing in production (a body the
+    # census confirmed live moments after team() read it cold from a stale mount row) is
+    # exactly the operator's own bug report. `mounts.agent_liveness` is now THE single
+    # source for this gate too -- coarser (agent_mounts.last_seen + transcript-mtime
+    # fallback, a 15-minute cache window, never a live /proc read) but the SAME instrument
+    # `team()` and `vacate_dead_seat` now answer with, so a seat never reads occupied to
+    # one reader and vacant to another. `current_holder` dead under this source now falls
+    # straight through to a fresh mint below -- NO separate vacate_seat step required.
+    #
+    # `occupied_status` (launch_seat passes "already-live"): the shared gate's LOGIC is
+    # one instrument for both callers, but its LABEL is not -- cli.py's own launch door
+    # treats "already-live" as THE GOAL STATE (exit 0, "nothing to do", never a refusal:
+    # see _cmd_launch_harness's own docstring/comment), while resume's occupancy gate
+    # means a genuine conflict (a caller trying to fork a second live head) and must stay
+    # "refused-occupied". Same detection, different meaning to each caller's own contract
+    # -- collapsing the label too would make `osiris launch` exit 1 for a state that was
+    # never an error.
+    from src.orchestrator.mounts import agent_liveness
     current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
-    if current_holder and await is_occupied_by_a_live_body(
-        pool, current_holder, agents_json=agents_json,
-    ):
-        return {"status": "refused-occupied", "seat": target_seat, "holder": current_holder,
+    liveness_verdict = await agent_liveness(pool, current_holder) if current_holder else None
+    if liveness_verdict is not None and liveness_verdict["live"]:
+        seen_via = [f"agent_liveness ({current_holder}, last_seen "
+                    f"{liveness_verdict['last_seen']})"]
+        if occupied_status == "already-live":
+            detail = (f"a live body already holds {handle} — not minting a twin "
+                      f"(seen via {', '.join(seen_via)})")
+        else:
+            detail = (f"{handle} ({target_seat}) is already occupied by a live body "
+                      f"({current_holder}, confirmed via agent_liveness) — one seat, "
+                      "one live lineage head; refusing rather than forking a second "
+                      "eligible head. If this is stale, vacate_seat first.")
+        return {"status": occupied_status, "seat": target_seat, "holder": current_holder,
                 "body_exists": True, "can_receive": True, "attach": attach,
-                "detail": f"{handle} ({target_seat}) is already occupied by a live body "
-                          f"({current_holder}, confirmed via registry_census) — one seat, "
-                          "one live lineage head; refusing rather than forking a second "
-                          "eligible head. If this is stale, vacate_seat first."}
+                "seen_via": seen_via, "detail": detail}
 
     return {"target_seat": target_seat, "handle": handle, "house": house, "office": office,
             "tree_cwd": tree_cwd, "launch_cwd": launch_cwd, "attach": attach, "anchor": anchor,
@@ -3525,7 +3551,7 @@ async def launch_seat(
 
     setup = await _launch_target_setup(
         actions, caller=caller, target=target, agents_json=agents_json,
-        operator_authorized=operator_authorized)
+        operator_authorized=operator_authorized, occupied_status="already-live")
     if "target_seat" not in setup:
         return setup
     target_seat, handle, house = setup["target_seat"], setup["handle"], setup["house"]
@@ -4353,8 +4379,7 @@ async def _transcript_activity(
 
 async def vacate_dead_seat(
     actions: Actions, *, seat_id: str, actor: str, because: str,
-    agents_json: Any = None, settings: Settings | None = None,
-    transcript_activity: Any = None,
+    liveness_fn: Any = None,
 ) -> dict[str, Any]:
     """THE VACATE-DEAD-HOLDER VERB (thread 445a7356, Thoth's ruling msg 1611) — the
     evidence-gathering complement to seats.vacate_holder's bare write, and to
@@ -4363,28 +4388,25 @@ async def vacate_dead_seat(
     case it correctly can't resolve alone, a holder whose PROCESS actually died without
     ever calling retire() on itself; found live during task #68's acceptance demo).
 
-    GATED ON REAL LIVENESS EVIDENCE, CONJUNCTIVELY — refuses loudly, never guesses, if
-    EITHER signal disagrees with the other:
-      (1) the harness roster (`claude agents --json`) shows NO live session at the
-          seat's own office cwd — the substrate-agnostic front door (works for a
-          harness-native body same as a PTY one, since both register under the office);
-      (2) the holder's own transcript's newest TIMESTAMPED LINE is stale — NOT mtime
-          (the Aegis phantom, 2026-07-21: a session 13h dead wore a seconds-old mtime,
-          bumped by something in the chrome/daemon that is not a turn) — the same
-          `_turn_fresh_sync` reads dispatch_dm's own mid-turn gate already trusts.
-    Neither signal alone is enough: a fresh mtime with no roster entry could be a
-    just-exited process the roster hasn't dropped yet; a roster miss with a genuinely
-    fresh transcript line could be a body whose live process sits outside this office's
-    own cwd tracking. Both agreeing is the bar. A holder with NO findable transcript at
-    all is not treated as ambiguous — the roster (a direct, present-tense signal) already
-    settles it, and being unable to find MORE evidence of life is not evidence of life.
+    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    was its OWN two-signal check (the harness roster conjunctively with a transcript's
+    newest timestamped line) — a real, careful design, but a THIRD independent liveness
+    mechanism disagreeing with `team()`/resume's occupancy gate in production is exactly
+    the operator's own bug report (team() read a seat cold from a stale mount row while
+    the harness roster confirmed it live moments earlier; this verb then read the SAME
+    seat dead by its own two signals). `mounts.agent_liveness` is now THE single source
+    for every one of these readers — a seat vacates only when the SAME instrument that
+    refuses `resume` and reports `team()`'s `live` column already says this holder is
+    dead, never a fourth opinion. The old "refused-ambiguous" state (an unreadable
+    harness roster) is gone with it — `agent_liveness` never fails to answer, it just
+    answers from a cache (agent_mounts.last_seen, transcript-mtime fallback) rather than
+    a live process read, so there is nothing left to be ambiguous about.
 
     AUTO-INVOCATION IS OUT OF SCOPE (reaper #59, stays operator-gated per Thoth's
     ruling) — this is for a deliberate hand, called once on a specific seat, never a
     sweep."""
-    st = settings or get_settings()
-    agents_json = agents_json or _claude_agents_json
-    transcript_activity = transcript_activity or _transcript_activity
+    from src.orchestrator.mounts import agent_liveness
+    liveness_fn = liveness_fn or agent_liveness
     pool = actions.pool
     from src.orchestrator.seats import seat_facts, seat_receipt, vacate_holder
 
@@ -4400,37 +4422,19 @@ async def vacate_dead_seat(
                 "detail": f"{seat_id} has no anchor_cwd on record — a liveness check with "
                           "nowhere to look is not evidence of death"}
 
-    # SIGNAL 1 — the harness roster, the substrate-agnostic front door.
-    try:
-        roster = await agents_json(cwd=office)
-    except (OSError, TimeoutError, ValueError):
-        return {"status": "refused-ambiguous", "seat": seat_id,
-                "detail": "the harness roster could not be read — a liveness check that "
-                          "cannot see is not evidence of death; refusing rather than "
-                          "guessing"}
-    live_row = next((r for r in roster if isinstance(r, dict) and r.get("cwd") == office),
-                    None)
-    if live_row is not None:
+    verdict = await liveness_fn(pool, holder)
+    if verdict["live"]:
         return {"status": "refused-live", "seat": seat_id,
-                "detail": f"a live session ({live_row.get('name', 'unnamed')!r}) still "
-                          f"sits at {office} — never evicts a live mind"}
-
-    # SIGNAL 2 — the holder's own transcript, by its newest TIMESTAMPED line (never mtime).
-    transcript_checked, fresh = await transcript_activity(pool, holder, st)
-    if fresh:
-        return {"status": "refused-live", "seat": seat_id,
-                "detail": f"{holder}'s own transcript shows a turn within the last "
-                          f"{st.osiris_dm_active_secs}s — mtime alone lies (the Aegis "
-                          "phantom); this reads the transcript's own timestamped "
-                          "content and it disagrees with the roster"}
+                "detail": f"{holder} reads live via agent_liveness (last_seen "
+                          f"{verdict['last_seen']}) — never evicts a live mind"}
 
     out = await vacate_holder(actions, seat_id=seat_id, actor=actor, because=because)
     if "error" in out:
         return {"status": "refused", "seat": seat_id, "detail": out["error"]}
     return {"status": "vacated", "seat": seat_id, "was_held_by": out["was_held_by"],
-            "evidence": {"roster_checked": True, "transcript_checked": transcript_checked},
-            "detail": f"no live process at {office} and no fresh transcript activity from "
-                      f"{holder} — vacated"}
+            "evidence": {"liveness": verdict},
+            "detail": f"{holder} reads dead via agent_liveness (last_seen "
+                      f"{verdict['last_seen']}) — vacated"}
 
 
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:

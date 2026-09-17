@@ -1467,26 +1467,35 @@ async def seats_managed_by(pool: asyncpg.Pool, seat_id: str) -> list[str]:
 
 async def team_roster(
     pool: asyncpg.Pool, manager_seat_id: str, *, manager_house: str | None = None,
-    live_secs: int = _LIVE_SECS,
 ) -> list[dict[str, Any]]:
     """The `team` MCP tool's own core query, pulled out of mcp_server.py (thread 68f1bafa/
     642c4754) so the console door's own seat-argument path (a direct-DB console command,
     same shape as cmd_stop/cmd_correct_pin_value -- it resolves a handle to a seat and
     calls the SAME logic, never a second copy) can call it without going through team()'s
     own deliberately self-scoped MCP contract. Every seat `managed_by` `manager_seat_id`:
-    `live` (a body mounted within `live_secs`), `owe`/`stale` (open obligations owned by
-    that seat's handle, same definition `owned_obligations` uses), `envelope` (that seat's
-    current holder's own unread ASK count, scoped to `manager_house` -- 0 with no live
-    holder). Empty list means manages nobody; the caller decides what that means."""
+    `live` (THE ONE LIVENESS AUTHORITY, `mounts.agent_liveness` -- see below), `owe`/
+    `stale` (open obligations owned by that seat's handle, same definition
+    `owned_obligations` uses), `envelope` (that seat's current holder's own unread ASK
+    count, scoped to `manager_house` -- 0 with no live holder). Empty list means manages
+    nobody; the caller decides what that means.
+
+    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    the exact-holder, mounts-only, non-lineage-widened `EXISTS` this query used to run
+    inline disagreed with `agent_liveness` in two ways at once -- no lineage-base
+    widening (a promoted successor generation's own mount row wears a different
+    numeral than the `holds` edge's exact `holder` canonical, reading COLD here while
+    `agent_liveness` correctly followed the lineage) and no transcript-mtime fallback
+    (Ra XXXV's own specimen: a mind live and writing, with no fresh `agent_mounts` row
+    to say so). The `live_secs`-scoped `EXISTS` is gone entirely -- `agent_liveness` owns
+    its own window -- so the verdict now comes from the SAME single source `resume`'s
+    occupancy gate and `vacate_dead_seat` also call -- one instrument, not three
+    disagreeing ones."""
     rows = await pool.fetch(
         "SELECT s.canonical AS seat, "
         "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=s.id "
         "   AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
         "   AS handle, "
-        "  h.holder AS holder, "
-        "  (h.holder IS NOT NULL AND EXISTS ("
-        "    SELECT 1 FROM agent_mounts m WHERE m.agent_id=h.holder "
-        "      AND m.last_seen > now() - make_interval(secs => $2::float8))) AS live "
+        "  h.holder AS holder "
         "FROM links mb JOIN objects s ON s.id=mb.from_id "
         "JOIN objects mgr ON mgr.id=mb.to_id "
         "LEFT JOIN LATERAL ("
@@ -1498,19 +1507,22 @@ async def team_roster(
         "WHERE mgr.canonical=$1::text AND mb.type='managed_by' AND s.status='active' "
         "  AND (mb.valid_until IS NULL OR mb.valid_until > now()) "
         "ORDER BY handle ASC",
-        manager_seat_id, float(live_secs))
+        manager_seat_id)
     from src.orchestrator.mailbox import unread_counts
+    from src.orchestrator.mounts import agent_liveness
     from src.orchestrator.stophook_logic import owned_obligations
 
     out_rows: list[dict[str, Any]] = []
     for r in rows:
         obl = await owned_obligations(pool, r["handle"] or r["seat"])
         envelope = 0
+        live = False
         if r["holder"]:
             counts = await unread_counts(pool, manager_house or "", reader_agent=r["holder"])
             envelope = counts["ask"]
+            live = (await agent_liveness(pool, r["holder"]))["live"]
         out_rows.append({
-            "handle": r["handle"], "live": bool(r["live"]), "owe": obl["owned"],
+            "handle": r["handle"], "live": live, "owe": obl["owned"],
             "stale": obl["stale"], "envelope": envelope,
         })
     return out_rows
