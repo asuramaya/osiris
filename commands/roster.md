@@ -1,1 +1,3 @@
 Call the osiris MCP tool `roster` with render='text' and print the returned `text` field verbatim in a code block. No commentary, no re-rendering. Pass repo=<name> only if the human names a specific repo to look up.
+
+Served by the hook without a model turn; falls through when arguments imply an act.

@@ -174,6 +174,33 @@ def test_session_end_installs_the_release_hook(tmp_path: Path) -> None:
     assert changed is False
 
 
+def test_reads_installs_the_zero_token_read_hook(tmp_path: Path) -> None:
+    """--reads wires UserPromptSubmit to osiris_hook.py's own "read" subcommand (#92,
+    Thoth mail 11780 item B) — no --project given, so no OSIRIS_HOOK_PROJECT prefix."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, reads=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    cmds = [h["command"] for g in settings["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+    assert any(c.endswith("scripts/osiris_hook.py read") for c in cmds)
+    assert not any("OSIRIS_HOOK_PROJECT" in c for c in cmds)
+    _, changed = merge_settings(settings, tmp_path, reads=True)
+    assert changed is False
+
+
+def test_reads_with_project_bakes_the_env_prefix(tmp_path: Path) -> None:
+    """--reads --name <project> bakes OSIRIS_HOOK_PROJECT=<project> onto the wired command
+    itself (a settings.json is tied to one repo/project by definition — resolved once at
+    onboarding time, never guessed per-keystroke by the hook)."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, reads=True, project="osiris", osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    cmds = [h["command"] for g in settings["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+    assert any(c.startswith("OSIRIS_HOOK_PROJECT=osiris ")
+               and c.endswith("scripts/osiris_hook.py read") for c in cmds)
+
+
 def test_settings_merge_preserves_other_keys(tmp_path: Path) -> None:
     repo = tmp_path / "hassettings"
     (repo / ".claude").mkdir(parents=True)

@@ -17,8 +17,11 @@ import scripts.osiris_hook as osiris_hook
 from scripts.osiris_hook import (
     ALARM_PCT,
     HARD_ALARM_PCT,
+    _cmd_read,
     _cmd_stop,
     _fire_stage_a,
+    _implies_an_act,
+    _parse_slash_read,
     _swap_confession,
 )
 
@@ -1513,3 +1516,195 @@ def test_self_compacted_marker_from_a_dead_life_does_not_mute_the_seam(
     # a marker written in THIS life (newer than the boundary) still holds
     assert osiris_hook._cmd_stop(hook) == 0
     assert phases.count("self_compact") == 1
+
+
+# --- read (UserPromptSubmit) — THE ZERO-TOKEN READ HOOK (#92, Thoth mail 11780 item B):
+# the matcher, the act-word fall-through, and one full rendered-read round trip, subprocess
+# mocked (never a real osiris CLI/MCP round trip — pure/no-DB, same discipline this whole
+# file already keeps). -------------------------------------------------------------------
+
+def test_parse_slash_read_matches_a_served_verb_and_splits_its_args() -> None:
+    assert _parse_slash_read("/status") == ("status", [])
+    assert _parse_slash_read("/search quorumlatch counter") == (
+        "search", ["quorumlatch", "counter"])
+    assert _parse_slash_read("  /roster --repo osiris  ") == ("roster", ["--repo", "osiris"])
+
+
+def test_parse_slash_read_only_the_first_line_first_word() -> None:
+    assert _parse_slash_read("not a slash command at all") is None
+    assert _parse_slash_read("/") is None
+    assert _parse_slash_read("/status\nplease also tell me about X") == ("status", [])
+    assert _parse_slash_read("some prose that mentions /status mid-sentence") is None
+
+
+def test_parse_slash_read_ignores_an_unserved_verb() -> None:
+    """/seat, /launch, and every write-triangle face are deliberately NOT in
+    _READ_HOOK_VERBS -- an act-shaped command always reaches the model."""
+    assert _parse_slash_read("/seat roster") is None
+    assert _parse_slash_read("/launch Thoth") is None
+    assert _parse_slash_read("/merge dupe into --evidence x") is None
+
+
+def test_implies_an_act_catches_the_named_act_words() -> None:
+    assert _implies_an_act(["settle"]) is True
+    assert _implies_an_act(["--project", "osiris", "clear"]) is True
+    assert _implies_an_act(["ack=123"]) is False  # not an exact token match, by design
+    assert _implies_an_act([]) is False
+    assert _implies_an_act(["--repo", "osiris"]) is False
+
+
+def test_cmd_read_falls_through_on_an_act_implying_argument(monkeypatch: Any) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or None)
+    assert _cmd_read({"prompt": "/desk settle"}) == 0
+    assert calls == []  # never even shelled out -- an act-word refuses before the subprocess
+
+
+def test_cmd_read_falls_through_on_unmatched_prompt(monkeypatch: Any) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or None)
+    assert _cmd_read({"prompt": "what does this codebase do?"}) == 0
+    assert calls == []
+
+
+def test_cmd_read_falls_through_when_the_cli_subcommand_does_not_exist_yet(
+    monkeypatch: Any,
+) -> None:
+    """/practices matches a verb this hook knows about, but its CLI door (Khnum's own
+    branch, not yet merged as of this wave) may not exist on a given machine -- a
+    nonzero exit from an unrecognized subcommand is a clean fall-through, never a crash
+    or a stray block."""
+    import subprocess as _subprocess
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        return _subprocess.CompletedProcess(args, returncode=2, stdout="", stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    assert _cmd_read({"prompt": "/practices list"}) == 0
+
+
+def test_cmd_read_falls_through_on_subprocess_timeout(monkeypatch: Any) -> None:
+    import subprocess as _subprocess
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        raise _subprocess.TimeoutExpired(cmd=args, timeout=8)
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    assert _cmd_read({"prompt": "/status"}) == 0
+
+
+def test_cmd_read_mail_falls_through_with_no_project_baked_in(monkeypatch: Any) -> None:
+    """`/mail` needs OSIRIS_HOOK_PROJECT (baked at onboarding time, merge_settings(...,
+    reads=True, project=...)) -- unset, it degrades to a clean fall-through rather than
+    guessing a project."""
+    monkeypatch.delenv("OSIRIS_HOOK_PROJECT", raising=False)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or None)
+    assert _cmd_read({"prompt": "/mail"}) == 0
+    assert calls == []
+
+
+def test_cmd_read_renders_a_matched_verb_as_a_block_decision(monkeypatch: Any) -> None:
+    """THE FULL ROUND TRIP: a served verb with no act-word shells out to `osiris <verb>
+    --text`, and a clean render becomes {"decision": "block", "reason": <rendered text>}
+    -- shown on screen, never reaching the model (the whole point of #92)."""
+    import subprocess as _subprocess
+
+    seen: dict[str, Any] = {}
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen["args"] = args
+        return _subprocess.CompletedProcess(
+            args, returncode=0, stdout="osiris: 3 open — oldest: Thoth\n", stderr="")
+
+    printed: list[str] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_read({"prompt": "/status"}) == 0
+    assert seen["args"] == [osiris_hook._OSIRIS_BIN, "status", "--text"]
+    assert len(printed) == 1
+    payload = json.loads(printed[0])
+    assert payload == {"decision": "block", "reason": "osiris: 3 open — oldest: Thoth"}
+
+
+def test_cmd_read_search_joins_its_words_into_one_query_arg(monkeypatch: Any) -> None:
+    import subprocess as _subprocess
+
+    seen: dict[str, Any] = {}
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen["args"] = args
+        return _subprocess.CompletedProcess(args, returncode=0, stdout="1 hit\n", stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    assert _cmd_read({"prompt": "/search quorumlatch counter"}) == 0
+    assert seen["args"] == [
+        osiris_hook._OSIRIS_BIN, "search", "quorumlatch counter", "--text"]
+
+
+def test_cmd_read_ref_verb_with_no_ref_falls_through(monkeypatch: Any) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or None)
+    assert _cmd_read({"prompt": "/inspect"}) == 0
+    assert calls == []
+
+
+def test_cmd_read_falls_through_on_an_unhandled_flag_rather_than_serving_unscoped(
+    monkeypatch: Any,
+) -> None:
+    """`/roster --repo osiris` must never silently render the BARE (unscoped) roster --
+    a flag this hook doesn't itself pass through falls all the way to the model, which
+    reads it correctly, rather than the hook guessing at a scope by dropping it."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: calls.append(args) or None)
+    assert _cmd_read({"prompt": "/roster --repo osiris"}) == 0
+    assert calls == []
+
+
+def test_cmd_read_practices_list_is_served_practices_show_is_not(monkeypatch: Any) -> None:
+    """Thoth's own spec names `/practices list` specifically, never `show <ref>` — the
+    hook accepts the bare form and an explicit `list`, refuses (falls through) anything
+    else, even though `osiris practices` itself is Khnum's own not-yet-merged CLI door
+    (a nonzero exit from the real thing would ALSO fall through, per the earlier test)."""
+    import subprocess as _subprocess
+
+    seen: list[list[str]] = []
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen.append(args)
+        return _subprocess.CompletedProcess(args, returncode=0, stdout="5 practices\n",
+                                            stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    assert _cmd_read({"prompt": "/practices list"}) == 0
+    assert seen == [[osiris_hook._OSIRIS_BIN, "practices", "list", "--text"]]
+
+    seen.clear()
+    assert _cmd_read({"prompt": "/practices"}) == 0
+    assert seen == [[osiris_hook._OSIRIS_BIN, "practices", "--text"]]
+
+    seen.clear()
+    assert _cmd_read({"prompt": "/practices show abc12345"}) == 0
+    assert seen == []
+
+
+def test_cmd_read_blank_render_is_a_clean_fall_through(monkeypatch: Any) -> None:
+    """A door that exists but returns nothing renderable is still a fall-through, never
+    an empty block decision shown on screen."""
+    import subprocess as _subprocess
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        return _subprocess.CompletedProcess(args, returncode=0, stdout="   \n", stderr="")
+
+    printed: list[str] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_read({"prompt": "/backlog"}) == 0
+    assert printed == []

@@ -16,6 +16,8 @@ Subcommands:
   precompact     PreCompact death rite — ring sweep doorbell
   spawn          SubagentStart/SubagentStop
   anchor         PreToolUse stdin filter — inject session_anchor + subagent_id
+  read           UserPromptSubmit — the zero-token read hook: a matched bare slash read
+                 renders straight to the screen (block+reason), never reaches the model
 
 FAIL-OPEN: any error exits 0 silently — a session is never blocked by a hook glitch.
 """
@@ -24,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -1224,10 +1227,143 @@ def _cmd_anchor(hook: dict[str, Any]) -> int:
     return 0
 
 
+# --- read (UserPromptSubmit) — THE ZERO-TOKEN READ HOOK (operator: "some of the slash
+# commands should not go through the agent, when they can just be rendered into the
+# screen", Thoth mail 11780 item B). A bare slash command that only ever READS gets
+# rendered here, server-rendered text, and never reaches the model at all — `decision:
+# block` (the same JSON protocol `_cmd_stop` already uses) with the rendered text as the
+# `reason` shows it on screen and costs zero tokens. Anything else (an argument that
+# implies an act, an unmatched verb, a CLI door that doesn't exist yet on this machine,
+# any subprocess trouble) falls through silently — return 0 with no output, exactly the
+# same as no hook fired at all, so the model handles it the ordinary way.
+#
+# SHELLS OUT to the already-installed `osiris` console script rather than importing the
+# MCP client here: this file is deliberately stdlib-only (module docstring, "zero cold
+# connections") and `call_mcp_tool` needs the `mcp` package + an event loop, the exact
+# weight the whole hook-unification effort exists to avoid paying on every keystroke.
+# `osiris <verb> --text` is a SEPARATE, already-venv'd process (same "statusline needs
+# the venv" shape `_hook_command(..., venv=True)` already uses elsewhere) -- cheap
+# relative to a model turn, not free, which is why the matcher below refuses anything
+# that isn't a bare, unambiguous read before ever spawning it.
+
+_OSIRIS_BIN = os.environ.get("OSIRIS_CLI_BIN", "osiris")
+
+# verb -> (cli subcommand, needs_project). needs_project verbs read `OSIRIS_HOOK_PROJECT`
+# from the environment (baked into the wired hook command at onboarding time, `merge_
+# settings(..., reads=True, project=<name>)` — a per-repo settings.json is tied to one
+# project by definition, so this is resolved once, not guessed per-invocation) and fall
+# through when it's unset, rather than ever guessing a project from cwd.
+_READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
+    "status": ("status", False),
+    "backlog": ("backlog", False),
+    "threads": ("threads", False),
+    "roster": ("roster", False),
+    "team": ("team", False),
+    "search": ("search", False),
+    "recall": ("show", False),
+    # `osiris inspect` (Khnum's own fan-out aggregator, WAVE 27 PARITY GAPS 2/5/6, branch
+    # khnum-parity-gaps commit a7ca7dc9) is not yet on main as of this wave — served here
+    # off the flat `dossier` door (identity properties only, no --events/--chain/
+    # --candidates) until that branch lands; update to `inspect` then, not before.
+    "inspect": ("dossier", False),
+    "digest": ("digest", False),
+    "mail": ("inbox", True),
+    "desk": ("desk", False),
+    # `osiris practices` (Khnum's own CLI door, same branch/commit as `inspect` above) is
+    # also not yet on main -- served here anyway, on purpose: a subprocess call to an
+    # unrecognized subcommand exits nonzero, which `_cmd_read` already treats as a clean
+    # fall-through (see below), so this starts working the instant that branch merges,
+    # with no further change needed here.
+    "practices": ("practices", False),
+}
+
+# arguments that imply an ACT rather than a read — never served by the hook, always falls
+# through to the model. Deliberately generous (a false positive here just costs one
+# ordinary model turn; a false negative would silently hide a real mutation from view).
+_ACT_WORDS = frozenset({
+    "settle", "clear", "ack", "mark_seen", "mark-seen", "seen", "resolve", "write",
+    "set", "annotate",
+})
+
+
+def _parse_slash_read(prompt: str) -> tuple[str, list[str]] | None:
+    """`/verb rest...` -> (verb, [args]) iff verb is one this hook serves; else None. Only
+    ever the prompt's own FIRST line, first word -- a slash command mid-paragraph, or
+    trailing prose after it, is never a real invocation of it."""
+    text = prompt.strip()
+    if not text.startswith("/"):
+        return None
+    first_line = text.splitlines()[0]
+    parts = first_line[1:].split()
+    if not parts:
+        return None
+    verb = parts[0].lower()
+    if verb not in _READ_HOOK_VERBS:
+        return None
+    return verb, parts[1:]
+
+
+def _implies_an_act(args: list[str]) -> bool:
+    return any(a.lower().strip("-") in _ACT_WORDS for a in args)
+
+
+def _cmd_read(hook: dict[str, Any]) -> int:
+    """UserPromptSubmit filter. Never raises past `main`'s own fail-open wrapper; every
+    branch below that isn't a clean serve returns 0 with no output, the same as if this
+    hook never fired -- a miss here costs nothing, a wrong serve would hide a real act."""
+    prompt = str(hook.get("prompt") or "")
+    parsed = _parse_slash_read(prompt)
+    if parsed is None:
+        return 0
+    verb, args = parsed
+    if _implies_an_act(args):
+        return 0
+    subcmd, needs_project = _READ_HOOK_VERBS[verb]
+    cli_args = [_OSIRIS_BIN, subcmd]
+    if needs_project:
+        project = os.environ.get("OSIRIS_HOOK_PROJECT", "")
+        if not project:
+            return 0  # no project baked into this seat's own wired hook command
+        cli_args += ["--project", project]
+    if subcmd in ("dossier", "show"):
+        if not args:
+            return 0  # a ref-taking door with no ref -- nothing to render
+        cli_args.append(args[0])
+    elif subcmd == "search":
+        if not args:
+            return 0
+        cli_args.append(" ".join(args))
+    elif subcmd == "practices":
+        if args and args != ["list"]:
+            return 0  # only the bare form or an explicit `list` -- never `show <ref>`
+        if args == ["list"]:
+            cli_args.append("list")
+    elif args:
+        # every other served door here is BARE-ONLY -- a flag like `--repo`/`--seat`/
+        # `--project` this hook does not itself know how to pass through would otherwise
+        # get silently dropped, serving the UNSCOPED bare form as if it were what was
+        # asked for. Falling through to the model (which reads the real flag correctly)
+        # is the safe failure; guessing at a scope is not.
+        return 0
+    cli_args.append("--text")
+    try:
+        proc = subprocess.run(cli_args, capture_output=True, text=True, timeout=8,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if proc.returncode != 0:
+        return 0  # includes an unrecognized subcommand -- a door not yet on this machine
+    rendered = proc.stdout.strip()
+    if not rendered:
+        return 0
+    print(json.dumps({"decision": "block", "reason": rendered}))
+    return 0
+
+
 _CMDS = {
     "statusline": _cmd_statusline, "stop": _cmd_stop, "whisper": _cmd_whisper,
     "session-end": _cmd_session_end, "precompact": _cmd_precompact,
-    "spawn": _cmd_spawn, "anchor": _cmd_anchor,
+    "spawn": _cmd_spawn, "anchor": _cmd_anchor, "read": _cmd_read,
 }
 
 

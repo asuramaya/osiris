@@ -255,11 +255,39 @@ async def test_cmd_desk_calls_inbox_pinned_to_the_operator_project(monkeypatch: 
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"owed": 0, "letters": 0, "needs_decision": [], "needs_hands": [], "fyi": []}
+        return {"text": "operator desk: 0 owed"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_desk() == 0
+    # #92: now routed through _call_and_emit_text, same "ask the server for render='text'"
+    # discipline roster/backlog/threads/team already carry (previously missing here).
+    assert calls == [("inbox", {"project": "operator", "peek": True, "render": "text"})]
+
+
+async def test_cmd_desk_json_mode_never_asks_for_render_text(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"owed": 0, "letters": 0, "needs_decision": [], "needs_hands": [], "fyi": []}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_desk(as_json=True) == 0
     assert calls == [("inbox", {"project": "operator", "peek": True})]
+
+
+async def test_cmd_desk_text_mode_prints_the_servers_text_verbatim(
+    monkeypatch: Any, capsys: Any,
+) -> None:
+    """#92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `--text` prints the raw
+    server string, no box, no title — what the hook feeds into its block `reason`."""
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"text": "operator desk: 2 owed"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_desk(text=True) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == "operator desk: 2 owed"
 
 
 async def test_cmd_desk_reports_a_dark_daemon_honestly(

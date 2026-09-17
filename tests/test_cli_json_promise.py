@@ -79,6 +79,9 @@ JSON_COMMANDS = frozenset({
     "sweep-seat-trees",
     # WAVE 27, PARITY GAPS 5/6 (Thoth mail 11752)
     "inspect", "practices",
+    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): fleet_digest had no CLI
+    # door at all until now — needed so the hook has a real subcommand to shell out to.
+    "digest",
 })
 
 

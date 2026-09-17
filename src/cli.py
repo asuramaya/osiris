@@ -1721,15 +1721,17 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
 
 # --- status (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
 
-async def cmd_status(*, as_json: bool = False) -> int:
+async def cmd_status(*, as_json: bool = False, text: bool = False) -> int:
     url = await _mcp_url()
     return await _call_and_emit_text(
-        url, "get_status", {}, as_json=as_json, title="status", error_prefix="osiris status")
+        url, "get_status", {}, as_json=as_json, title="status", error_prefix="osiris status",
+        text_only=text)
 
 
 # --- search (thread 68f1bafa/3703a3a9, the read triangle's own new verb) ---------------------
 
-async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False) -> int:
+async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False,
+                     text: bool = False) -> int:
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
@@ -1739,7 +1741,10 @@ async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False) -> i
         print(f"osiris search: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    render.emit(result, as_json=as_json, title=f"search · {query}")
+    # search() has no server-side render='text' shape (no single-string form exists to ask
+    # for) — `--text` falls back to the same human render `--text`-less mode already gives
+    # (box included), still terminal-clean since color auto-disables off a real tty.
+    render.emit(result, as_json=as_json and not text, title=f"search · {query}")
     return 0
 
 
@@ -1752,7 +1757,7 @@ async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False) -> i
 # for by name (cite/citation, CLI_TO_MCP_NAME-mapped onto cite_transcript/read_citation).
 
 async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
-                      as_json: bool = False) -> int:
+                      as_json: bool = False, text: bool = False) -> int:
     """osiris dossier <ref> [--want-relationships] — the console-script door onto the
     dossier MCP tool, called over the wire (same object_ref/want_relationships params,
     no duplicated resolve/relationship logic)."""
@@ -1766,7 +1771,9 @@ async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
         print(f"osiris dossier: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    render.emit(result, as_json=as_json, title=f"dossier · {object_ref}")
+    # dossier() has no server-side render='text' shape — `--text` falls back to the same
+    # human render (box included, color-free off a real tty), same as cmd_search's own note.
+    render.emit(result, as_json=as_json and not text, title=f"dossier · {object_ref}")
     return 1 if isinstance(result, dict) and result.get("error") else 0
 
 
@@ -1883,6 +1890,32 @@ async def cmd_inspect(
 
     render.emit(out, as_json=as_json, title=f"inspect · {ref}")
     return rc
+
+
+# --- digest (#92, THE ZERO-TOKEN READ HOOK, Thoth mail 11780 item B): fleet_digest had no
+# CLI door at all until now — needed so the hook's static `osiris digest --text` invocation
+# has a real subcommand to shell out to, same as every other verb it serves.
+
+async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
+                     as_json: bool = False, text: bool = False) -> int:
+    """osiris digest [--hours N] [--mark-seen] — the console-script door onto the
+    fleet_digest MCP tool, called over the wire (same hours/mark_seen params). Omitting
+    --hours matches the tool's own watermark-mode default: what's new since the operator
+    last looked, never advancing the watermark unless --mark-seen says so explicitly."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    result = await call_mcp_tool(
+        url, "fleet_digest", {"hours": hours, "mark_seen": mark_seen})
+    if isinstance(result, str):
+        print(f"osiris digest: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    # fleet_digest() has no server-side render='text' shape — same fallback note as
+    # cmd_search/cmd_dossier/cmd_show above.
+    render.emit(result, as_json=as_json and not text, title="digest")
+    return 0
 
 
 async def cmd_composition(
@@ -2198,7 +2231,7 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
 
 async def _call_and_emit_text(
     url: str, tool: str, params: dict[str, Any], *, as_json: bool, title: str,
-    error_prefix: str,
+    error_prefix: str, text_only: bool = False,
 ) -> int:
     """Shared body for the read triangle's human-paint commands (thread bad45d61, wave 10:
     backlog/threads/roster/team). `--json` gets the full structured response, unchanged.
@@ -2206,17 +2239,26 @@ async def _call_and_emit_text(
     (cli_render.emit's own `text=` door) — never re-derives grouping from the structured
     rows client-side, the exact fleet-render regression (msg 8160: 3 sections where the
     server tree has 36, from re-deriving off a capped field) this thread names by way of
-    the rule it exists to generalize."""
+    the rule it exists to generalize.
+
+    `text_only` (the zero-token read hook, Thoth mail 11780 item B): print the server's own
+    `text` field VERBATIM, no box, no title, no color — the same string a slash face already
+    prints inside a code block. Takes priority over `as_json` (a hook never wants JSON)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
 
-    call_params = dict(params) if as_json else {**params, "render": "text"}
+    want_json = as_json and not text_only
+    call_params = dict(params) if want_json else {**params, "render": "text"}
     result = await call_mcp_tool(url, tool, call_params)
     if isinstance(result, str):
         print(f"{error_prefix}: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    if as_json:
+    if text_only:
+        text = result.get("text") if isinstance(result, dict) else None
+        print(text if text is not None else json.dumps(result))
+        return 0
+    if want_json:
         render.emit(result, as_json=True)
         return 0
     text = result.get("text") if isinstance(result, dict) else None
@@ -2227,34 +2269,39 @@ async def _call_and_emit_text(
     return 0
 
 
-async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: bool = False) -> int:
+async def cmd_roster(*, repo: str | None, want_caveats: bool = False, as_json: bool = False,
+                     text: bool = False) -> int:
     url = await _mcp_url()
     return await _call_and_emit_text(
         url, "roster", {"repo": repo, "want_caveats": want_caveats}, as_json=as_json,
-        title=f"roster · {repo}" if repo else "roster", error_prefix="osiris roster")
+        title=f"roster · {repo}" if repo else "roster", error_prefix="osiris roster",
+        text_only=text)
 
 
 # --- backlog (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
 
-async def cmd_backlog(*, all_projects: bool, fleet: bool = False, as_json: bool = False) -> int:
+async def cmd_backlog(*, all_projects: bool, fleet: bool = False, as_json: bool = False,
+                      text: bool = False) -> int:
     url = await _mcp_url()
     return await _call_and_emit_text(
         url, "backlog", {"all_projects": all_projects, "fleet": fleet}, as_json=as_json,
-        title="backlog · fleet" if fleet else "backlog", error_prefix="osiris backlog")
+        title="backlog · fleet" if fleet else "backlog", error_prefix="osiris backlog",
+        text_only=text)
 
 
 # --- threads (thread 68f1bafa/3703a3a9, the read triangle's own new verb) --------------------
 
-async def cmd_threads(*, project: str | None, as_json: bool = False) -> int:
+async def cmd_threads(*, project: str | None, as_json: bool = False, text: bool = False) -> int:
     url = await _mcp_url()
     return await _call_and_emit_text(
         url, "threads", {"project": project}, as_json=as_json,
-        title=f"threads · {project}" if project else "threads", error_prefix="osiris threads")
+        title=f"threads · {project}" if project else "threads", error_prefix="osiris threads",
+        text_only=text)
 
 
 # --- team (thread 68f1bafa/3703a3a9, the read triangle's own new verb) -----------------------
 
-async def cmd_team(*, seat: str | None = None, as_json: bool = False,
+async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool = False,
                    pool: asyncpg.Pool | None = None) -> int:
     """osiris team [--seat <handle>]: a manager's own seats. WITHOUT --seat, calls the MCP
     tool over the wire, self-scoped off the caller's own held seat -- a bare terminal
@@ -2269,7 +2316,8 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False,
     if seat is None:
         url = await _mcp_url()
         return await _call_and_emit_text(
-            url, "team", {}, as_json=as_json, title="team", error_prefix="osiris team")
+            url, "team", {}, as_json=as_json, title="team", error_prefix="osiris team",
+            text_only=text)
 
     from src.orchestrator.seats import seat_by_handle, team_roster
 
@@ -2307,23 +2355,27 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False,
     # here verbatim rather than re-derived, exactly the discipline this thread names.
     from src.orchestrator.textrender import render_team_text
 
+    rendered = render_team_text(rows)
+    if text:
+        print(rendered)
+        return 0
     render.emit({"manager": mgr["handle"], "team": rows}, as_json=as_json,
                title=f"team · {mgr['handle']}",
-               text=None if as_json else render_team_text(rows))
+               text=None if as_json else rendered)
     return 0
 
 
 # --- inbox (thread 68f1bafa/3703a3a9, the read triangle's own new console face; `desk` is
 # the operator's own organized queue, this is an ORDINARY project's mailbox) -----------------
 
-async def cmd_inbox(*, project: str, as_json: bool = False) -> int:
+async def cmd_inbox(*, project: str, as_json: bool = False, text: bool = False) -> int:
     """osiris inbox --project <repo>: a peek at a project's own mailbox, terminal-native.
     Always a peek (never leases) -- settling mail is an agent's own act mid-session, not
     a human glancing from a terminal."""
     url = await _mcp_url()
     return await _call_and_emit_text(
         url, "inbox", {"project": project, "peek": True}, as_json=as_json,
-        title=f"inbox · {project}", error_prefix="osiris inbox")
+        title=f"inbox · {project}", error_prefix="osiris inbox", text_only=text)
 
 
 # --- desk / show — READING THE RECORD (thread 00913be9, Thoth's CLI-surface audit): the
@@ -2335,24 +2387,23 @@ async def cmd_inbox(*, project: str, as_json: bool = False) -> int:
 # doors, the same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new
 # was built underneath; the surface decision was which two, not which seven. --------------
 
-async def cmd_desk(*, as_json: bool = False) -> int:
+async def cmd_desk(*, as_json: bool = False, text: bool = False) -> int:
     """osiris desk — the operator's own organized queue, read at a terminal instead of only
     the web console or an agent peeking on his behalf. Always a peek: reading the desk never
-    leases a brief, and settling one is only ever the operator's own explicit word."""
-    from src import cli_render as render
-    from src.orchestrator.mcp_client import call_mcp_tool
+    leases a brief, and settling one is only ever the operator's own explicit word.
 
+    Routed through `_call_and_emit_text` (thread bad45d61's own discipline, previously
+    missed here): human mode now asks the server for its own `render='text'` shape and
+    paints THAT, the same fix roster/threads/backlog/team already carry — needed for
+    `--text` (the zero-token read hook, Thoth mail 11780 item B) to have a real server
+    string to print verbatim rather than reconstructing one client-side."""
     url = await _mcp_url()
-    result = await call_mcp_tool(url, "inbox", {"project": "operator", "peek": True})
-    if isinstance(result, str):
-        print(f"osiris desk: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
-        return 1
-    render.emit(result, as_json=as_json, title="desk")
-    return 0
+    return await _call_and_emit_text(
+        url, "inbox", {"project": "operator", "peek": True}, as_json=as_json, title="desk",
+        error_prefix="osiris desk", text_only=text)
 
 
-async def cmd_show(ref: str, *, as_json: bool = False) -> int:
+async def cmd_show(ref: str, *, as_json: bool = False, text: bool = False) -> int:
     """osiris show <ref> — the full, untruncated record for one Thread or Decision, by
     UUID, 8-char short id, or summary substring — the same recall() an agent already reads.
     Refuses loudly (never guesses) when nothing matches; exits nonzero either way a script
@@ -2366,7 +2417,8 @@ async def cmd_show(ref: str, *, as_json: bool = False) -> int:
         print(f"osiris show: {result} — is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
-    render.emit(result, as_json=as_json, title=f"show · {ref}")
+    # recall() has no server-side render='text' shape — same fallback note as cmd_search.
+    render.emit(result, as_json=as_json and not text, title=f"show · {ref}")
     return 1 if result.get("error") else 0
 
 
@@ -7047,7 +7099,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   start a mind          new, launch, resume, mint-seat, attach
   end one               stop
   see the fleet         fleet, roster, backlog, team, status, boot-status, smoke, lint,
-                        audit, graph-export
+                        audit, graph-export, digest
   read the record       desk, show, threads, inbox, search, dossier, object-events,
                         succession-chain, candidates, composition, citation, inspect,
                         practices
@@ -7079,6 +7131,16 @@ class _RawSubparser(argparse.ArgumentParser):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
         super().__init__(*args, **kwargs)
+
+
+def _add_text_flag(parser: argparse.ArgumentParser) -> None:
+    """`--text` (#92, the zero-token read hook, Thoth mail 11780 item B): print the raw
+    server-rendered string verbatim, no box, no title, no color — exactly what a slash
+    face already prints in a code block. Shared across every door the hook serves so its
+    static `osiris <verb> --text` invocation is uniform."""
+    parser.add_argument("--text", action="store_true",
+                        help="raw rendered text, no box/title/color — for scripting or "
+                             "a hook, never a human at an interactive terminal")
 
 
 def _d(text: str) -> str:
@@ -7270,6 +7332,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris status")
     p_status.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_status)
 
     p_search = sub.add_parser("search", description=_d(
         "search the graph's knowledge — the same search() the MCP tool answers, called "
@@ -7279,6 +7342,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--limit", type=int, default=15, help="max results (default 15)")
     p_search.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_search)
 
     p_fleet = sub.add_parser("fleet", description=_d(
         "the fleet roster, grouped by project — the same "
@@ -7303,6 +7367,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                "a one-line count+pointer, same diet as the MCP tool)")
     p_roster.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_roster)
 
     p_backlog = sub.add_parser("backlog", description=_d(
         "per-project open obligations against target, past-window first, oldest owners — "
@@ -7318,6 +7383,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                 "backlog fleet-wide, takes priority over --all-projects")
     p_backlog.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_backlog)
 
     p_threads = sub.add_parser("threads", description=_d(
         "MINE: every OPEN thread you own, one line each with a short id — the same "
@@ -7328,6 +7394,7 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="the repo to list open threads for")
     p_threads.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_threads)
 
     p_team = sub.add_parser("team", description=_d(
         "a manager's own seats: live, owe, envelope — the same team() the MCP tool "
@@ -7339,6 +7406,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="the manager's own handle (bypasses the MCP self-scoping gap)")
     p_team.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_team)
 
     p_inbox = sub.add_parser("inbox", description=_d(
         "a peek at a project's own mailbox — the same inbox() the MCP tool answers, "
@@ -7347,6 +7415,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inbox.add_argument("--project", required=True, help="the project mailbox to peek at")
     p_inbox.add_argument("--json", action="store_true", dest="as_json",
                          help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_inbox)
 
     p_desk = sub.add_parser("desk", description=_d(
         "the operator's own organized queue — needs_decision / needs_hands / fyi bands, "
@@ -7356,6 +7425,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="example: osiris desk\nexample: osiris desk --json")
     p_desk.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_desk)
 
     p_show = sub.add_parser("show", description=_d(
         "the full, untruncated record for one Thread or Decision — by UUID, 8-char short "
@@ -7365,6 +7435,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("ref", help="UUID, 8-char short id, or summary substring")
     p_show.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_show)
 
     p_dossier = sub.add_parser("dossier", description=_d(
         "the full entity dossier for one object — the same dossier() MCP tool, called "
@@ -7377,6 +7448,7 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="also include the object's own relationship edges")
     p_dossier.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
+    _add_text_flag(p_dossier)
 
     p_object_events = sub.add_parser("object-events", description=_d(
         "the append-only event history for one object — the same object_events() MCP "
@@ -7412,6 +7484,22 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="max candidates returned (default 50)")
     p_candidates.add_argument("--json", action="store_true", dest="as_json",
                               help="machine-readable: one compact JSON line")
+    _add_text_flag(p_candidates)
+
+    p_digest = sub.add_parser("digest", description=_d(
+        "the operator's own membrane into the autonomous fleet — the same fleet_digest() "
+        "MCP tool, called over the wire. Omitting --hours matches watermark mode: what's "
+        "new since the operator last looked, never advancing it unless --mark-seen says so"),
+        epilog="example: osiris digest\nexample: osiris digest --hours 24"
+               "\nexample: osiris digest --mark-seen")
+    p_digest.add_argument("--hours", type=int, default=None,
+                          help="an ad-hoc rolling window instead of watermark mode")
+    p_digest.add_argument("--mark-seen", action="store_true", dest="mark_seen",
+                          help="advance the operator watermark to now (only once you're "
+                               "actually done reading)")
+    p_digest.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line")
+    _add_text_flag(p_digest)
 
     p_inspect = sub.add_parser("inspect", description=_d(
         "WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic 'look at this object' "
@@ -8631,31 +8719,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "stop":
         return asyncio.run(cmd_stop(args.handle, reason=args.reason, as_json=args.as_json))
     if args.command == "status":
-        return asyncio.run(cmd_status(as_json=args.as_json))
+        return asyncio.run(cmd_status(as_json=args.as_json, text=args.text))
     if args.command == "search":
-        return asyncio.run(cmd_search(args.query, limit=args.limit, as_json=args.as_json))
+        return asyncio.run(cmd_search(args.query, limit=args.limit, as_json=args.as_json,
+                                      text=args.text))
     if args.command == "fleet":
         return asyncio.run(cmd_fleet(full=args.full, as_json=args.as_json))
     if args.command == "roster":
         return asyncio.run(cmd_roster(repo=args.repo, want_caveats=args.want_caveats,
-                                      as_json=args.as_json))
+                                      as_json=args.as_json, text=args.text))
     if args.command == "backlog":
         return asyncio.run(cmd_backlog(all_projects=args.all_projects, fleet=args.fleet,
-                                       as_json=args.as_json))
+                                       as_json=args.as_json, text=args.text))
     if args.command == "threads":
-        return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json))
+        return asyncio.run(cmd_threads(project=args.project, as_json=args.as_json,
+                                       text=args.text))
     if args.command == "inbox":
-        return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json))
+        return asyncio.run(cmd_inbox(project=args.project, as_json=args.as_json,
+                                     text=args.text))
     if args.command == "team":
-        return asyncio.run(cmd_team(seat=args.seat, as_json=args.as_json))
+        return asyncio.run(cmd_team(seat=args.seat, as_json=args.as_json, text=args.text))
     if args.command == "desk":
-        return asyncio.run(cmd_desk(as_json=args.as_json))
+        return asyncio.run(cmd_desk(as_json=args.as_json, text=args.text))
     if args.command == "show":
-        return asyncio.run(cmd_show(args.ref, as_json=args.as_json))
+        return asyncio.run(cmd_show(args.ref, as_json=args.as_json, text=args.text))
     if args.command == "dossier":
         return asyncio.run(cmd_dossier(
             args.object_ref, want_relationships=args.want_relationships,
-            as_json=args.as_json))
+            as_json=args.as_json, text=args.text))
     if args.command == "object-events":
         return asyncio.run(cmd_object_events(
             args.object_ref, event_type=args.event_type, as_json=args.as_json))
@@ -8676,6 +8767,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_practices(
             args.action, args.ref, surface=args.surface, limit=args.limit,
             recent=args.recent, as_json=args.as_json))
+    if args.command == "digest":
+        return asyncio.run(cmd_digest(
+            hours=args.hours, mark_seen=args.mark_seen, as_json=args.as_json,
+            text=args.text))
     if args.command == "composition":
         return asyncio.run(cmd_composition(
             args.action, args.name, spec=args.spec, kind=args.kind, room=args.room,

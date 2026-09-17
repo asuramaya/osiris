@@ -375,6 +375,14 @@ backup-lane timer schedules, and off-box repositories, the same functions the
 `backup_settings` MCP tool and the CMD-K panel call. `write` requires `--because`;
 `--timer-schedules` is a full-replace field (an omitted unit is cleared).
 
+## `osiris digest [--hours N] [--mark-seen] [--json] [--text]`
+
+The console-script door onto `fleet_digest` — the operator's own membrane into the
+autonomous fleet (roster/health, activity, the danger map, laundering, spend,
+obligation_pressure). Omitting `--hours` matches watermark mode: what's new since the
+operator last looked, never advancing the watermark unless `--mark-seen` says so
+explicitly. `--text` prints the raw human render with no `--json`, for a script or a hook.
+
 ## The house law behind every subcommand
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an
