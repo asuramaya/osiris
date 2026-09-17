@@ -4584,6 +4584,76 @@ async def test_sweep_seat_trees_skips_a_seat_with_a_real_tree_already(
     assert not any(e["seat"] == "seat:sweep-already-real" for e in out["entries"])
 
 
+async def test_sweep_seat_trees_collapses_a_real_row_stuck_beside_a_fabricated_one(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Thoth mail 11844: the LIMIT-1 read used to skip a seat whenever its real row
+    happened to win the read, leaving a fabricated sibling row current forever
+    (dustin/chowder's own live specimen)."""
+    from src.orchestrator.seats import sweep_seat_trees
+
+    real_tree = tmp_path / "real-beside-fabricated"
+    (real_tree / ".git").mkdir(parents=True)
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-collapse", "test")
+    await actions.assert_property(seat, "handle", "SweepCollapse", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", "/home/asuramaya/code/sweepcollapse",
+                                  "console", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", str(real_tree), "manager",
+                                  datetime.now(UTC), 0.9)
+
+    dry = await sweep_seat_trees(actions, apply=False, actor="operator")
+    entry = next(e for e in dry["entries"] if e["seat"] == "seat:sweep-collapse")
+    assert entry["new_tree_cwd"] == str(real_tree)
+    assert entry["refused_why"] is None
+    assert sorted(entry["old_tree_cwd"]) == sorted(
+        ["/home/asuramaya/code/sweepcollapse", str(real_tree)])
+    # dry run writes nothing -- both rows still current
+    still = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd'", seat)
+    assert len(still) == 2
+
+    out = await sweep_seat_trees(actions, apply=True, actor="operator")
+    assert out["repaired"] >= 1
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd'", seat)
+    assert len(rows) == 1
+    assert rows[0]["v"] == str(real_tree)
+
+
+async def test_sweep_seat_trees_collapses_a_same_value_duplicate(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """jenny's own specimen (Thoth mail 11844): two current rows asserting the SAME
+    real value from different sources — still two rows to collapse to one."""
+    from src.orchestrator.seats import sweep_seat_trees
+
+    real_tree = tmp_path / "same-value-duplicate"
+    (real_tree / ".git").mkdir(parents=True)
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-dup-value", "test")
+    await actions.assert_property(seat, "handle", "SweepDupValue", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", str(real_tree), "console",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", str(real_tree), "manager",
+                                  datetime.now(UTC), 0.9)
+
+    still = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd'", seat)
+    assert len(still) == 2
+
+    out = await sweep_seat_trees(actions, apply=True, actor="operator")
+    assert out["repaired"] >= 1
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd'", seat)
+    assert len(rows) == 1
+    assert rows[0]["v"] == str(real_tree)
+
+
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
 
 
