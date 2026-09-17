@@ -73,7 +73,7 @@ def test_communities_lens_toggle_reinvokes_sync_community_visibility() -> None:
 def test_high_degree_lens_toggle_rebuilds_badges_and_edge_lines() -> None:
     body = _SPACE_JS.split('} else if (key === "highDegree") {', 1)[1][:200]
     assert "highDegreeBadgesHiddenByLens = !el.checked;" in body
-    assert "buildLandmarkBadges();" in body
+    assert "buildHighDegreeBadges();" in body
     assert "buildEdgeLines(idToNode, edges);" in body
 
 
@@ -95,23 +95,23 @@ def test_community_regions_visible_is_gated_by_the_lens_too() -> None:
         "communityZoomViewSize > 0 && viewSize < communityZoomViewSize;" in body
 
 
-def test_landmark_badges_build_nothing_at_all_when_the_lens_hides_them() -> None:
-    body = _SPACE_JS.split("function buildLandmarkBadges()", 1)[1][:700]
+def test_high_degree_badges_build_nothing_at_all_when_the_lens_hides_them() -> None:
+    body = _SPACE_JS.split("function buildHighDegreeBadges()", 1)[1][:700]
     assert "if (highDegreeBadgesHiddenByLens) return;" in body
 
 
 # --- accounting stays exact under every lens state (the receipt's own acceptance line) ----
 
-def test_hidden_high_degree_badge_edges_count_as_lines_not_landmarks() -> None:
+def test_hidden_high_degree_badge_edges_count_as_lines_not_high_degree() -> None:
     body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:700]
-    assert "if (highDegreeBadgesHiddenByLens) { line++; } else { landmark++; }" in body
-    assert "accounted: fill + landmark + line + ribbon + communityRibbon + other };" in \
+    assert "if (highDegreeBadgesHiddenByLens) { line++; } else { highDegree++; }" in body
+    assert "accounted: fill + highDegree + line + ribbon + communityRibbon + other };" in \
         _SPACE_JS.split("function edgeAccounting()", 1)[1][:2200]
 
 
 def test_hidden_high_degree_badge_edges_draw_as_ordinary_lines() -> None:
-    # never routed through district/community ribbon aggregation -- computeRibbons excludes
-    # landmark-type edges unconditionally, badge shown or not, so falling through to that
+    # never routed through project/community ribbon aggregation -- computeRibbons excludes
+    # high-degree-type edges unconditionally, badge shown or not, so falling through to that
     # swap here would misclassify (and potentially never-draw) them.
     body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:1500]
     assert "if (lm && e.target === lm.id) {" in body
@@ -125,7 +125,7 @@ def test_hidden_high_degree_badge_edges_draw_as_ordinary_lines() -> None:
 def test_lens_state_is_read_from_the_hash_before_the_first_build_scene() -> None:
     body = _SPACE_JS.split("await fetchStreamSnapshot();", 1)[1][:300]
     assert "applyLensStateFromHash();" in body
-    assert body.index("applyLensStateFromHash();") < body.index("buildDistrictModel(")
+    assert body.index("applyLensStateFromHash();") < body.index("buildProjectFillModel(")
 
 
 def test_write_lens_state_serializes_every_toggle_with_sorted_arrays() -> None:
@@ -210,7 +210,7 @@ def test_hashchange_reapplies_lens_state_and_rebuilds_every_dependent_view() -> 
     assert "buildEdgeLines(idToNode, edges);" in body
     assert "scheduleLabelPick();" in body
     assert "syncCommunityVisibility();" in body
-    assert "buildLandmarkBadges();" in body
+    assert "buildHighDegreeBadges();" in body
 
 
 def test_lens_state_is_a_single_named_hash_param_not_the_whole_hash() -> None:
@@ -229,6 +229,6 @@ def test_debug_api_exposes_lens_panel_live_verification_hooks() -> None:
     assert "isStructuralLike," in body
     assert "get communitiesHiddenByLens()" in body
     assert "get highDegreeBadgesHiddenByLens()" in body
-    assert "get landmarkBadgeEntryCount()" in body
+    assert "get highDegreeBadgeEntryCount()" in body
     assert "get lensHashParam()" in body
     assert "readLensStateFromHash, applyLensStateFromHash," in body

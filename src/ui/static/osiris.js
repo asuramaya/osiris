@@ -139,7 +139,7 @@ const Osiris = (() => {
       <div class="o-sect"><h3>Relationships (1-Hop)</h3><div data-rels class="o-muted">…</div></div>`;
   }
 
-  // walk the 1-hop neighbourhood, GROUPED by (direction, link type) with counts (W3).
+  // walk the 1-hop focus, GROUPED by (direction, link type) with counts (W3).
   // The flat 80-row dump becomes `→ authored_by (80) ▸` — collapsed, expand on demand, and
   // "open as set" promotes the group into the center as a result set (a typed pivot).
   // `onOpenSet(type, dir, label)` renders that set; `onPick(id)` inspects one neighbour.

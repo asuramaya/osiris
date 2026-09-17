@@ -78,8 +78,9 @@ def test_structural_class_is_no_longer_hidden_by_default() -> None:
     # ruling c5953bb1's own "structural hidden at rest" is superseded outright by THE
     # DRAWING TIP's own operator ruling (4a51cab1/1178e7d9, thread 325ef660, mail 11408):
     # "nothing hidden, nothing drawn twice" -- caps and hides were the old answer to
-    # density; membership is a district fill and the two universal fans are landmarks now,
-    # not a blanket structural-class hide. See tests/test_drawing_tip.py for the full model.
+    # density; membership is a project fill and the two universal fans are high-degree
+    # objects now, not a blanket structural-class hide. See tests/test_drawing_tip.py for
+    # the full model.
     assert 'const hiddenEdgeClasses = new Set();' in _SPACE_JS
     assert 'const hiddenEdgeClasses = new Set(["structural"]);' not in _SPACE_JS
 

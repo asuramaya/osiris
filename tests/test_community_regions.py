@@ -1,14 +1,17 @@
 """WAVE 26, PIECE 2: COMMUNITY REGIONS (Thoth mail 11592/11664, thread 3683a12a). At mid
-zoom inside a district, each community is a labelled region refined from the district
+zoom inside a project, each community is a labelled region refined from the project
 fill -- never replacing it. Reuses Khnum's own `community_code`/`communities` wire fields
 (the SAME Leiden partition his compact-arrangement layout is already built on) rather than
 re-deriving anything. Same-community edges draw as lines; cross-community edges (within one
-district only -- a community never spans two) aggregate into a per-(community,community,
-type) ribbon that resolves the same per-ribbon-screen-distance way district ribbons do.
-Nothing hidden below mid zoom either: a same-district cross-community edge just reads as an
-ordinary same-district line until the reader is zoomed in enough to see the refinement.
+project only -- a community never spans two) aggregate into a per-(community,community,
+type) ribbon that resolves the same per-ribbon-screen-distance way project ribbons do.
+Nothing hidden below mid zoom either: a same-project cross-community edge just reads as an
+ordinary same-project line until the reader is zoomed in enough to see the refinement.
 Mirrors the repo's existing static-source-guard convention: string/substring proofs against
 the served JS, no browser harness.
+
+WAVE 28, THE TAXONOMY SWEEP (ruling 70c001ec): district -> project, landmark -> high-degree
+object, renamed here in step with space.js itself.
 """
 from __future__ import annotations
 
@@ -24,25 +27,25 @@ def test_community_code_is_parsed_onto_every_node_off_the_wire() -> None:
     assert "communityCode: snap.community_code ? snap.community_code[i] : 0," in _SPACE_JS
 
 
-def test_community_aggregates_resolve_the_project_name_off_the_same_table_districts_use() -> None:
-    body = _SPACE_JS.split("const districtAggregates = ", 1)[1][:900]
+def test_community_aggregates_resolve_the_project_name_off_the_same_table_projects_use() -> None:
+    body = _SPACE_JS.split("const projectAggregates = ", 1)[1][:900]
     assert "const communityAggregates = (snap.communities || []).map((c) => ({" in body
-    assert "code: c.community, districtName: snap.projects[c.project]," in body
+    assert "code: c.community, projectName: snap.projects[c.project]," in body
 
 
-def test_fetch_stream_snapshot_returns_community_aggregates_alongside_district_ones() -> None:
+def test_fetch_stream_snapshot_returns_community_aggregates_alongside_project_ones() -> None:
     body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:6000]
-    assert "return { nodes, edges, edgeClassByType, districtAggregates, communityAggregates };" \
+    assert "return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates };" \
         in body
 
 
-def test_init_space_wires_the_community_model_after_the_district_one() -> None:
+def test_init_space_wires_the_community_model_after_the_project_one() -> None:
     body = _SPACE_JS.split("await fetchStreamSnapshot();", 1)[1][:300]
-    assert "buildDistrictModel(districtAggregates, edges);" in body
+    assert "buildProjectFillModel(projectAggregates, edges);" in body
     assert "buildCommunityModel(communityAggregates);" in body
 
 
-# --- the model: nested inside the district model, not a peer of it -----------------------
+# --- the model: nested inside the project fill model, not a peer of it -------------------
 
 def test_build_community_model_indexes_by_code_and_gates_labels_by_size() -> None:
     assert "const COMMUNITY_LABEL_MIN_COUNT = 20;" in _SPACE_JS
@@ -54,7 +57,7 @@ def test_build_community_model_indexes_by_code_and_gates_labels_by_size() -> Non
 
 
 def test_community_zoom_view_size_uses_the_median_radius_defence() -> None:
-    # same "one outlier district dominates the extent" defence THE DRAWING TIP's own spike
+    # same "one outlier project dominates the extent" defence THE DRAWING TIP's own spike
     # used for its first (later replaced) ribbon threshold -- reused here because whole-view
     # community VISIBILITY genuinely is a single yes/no gate, unlike ribbon resolution.
     body = _SPACE_JS.split("function computeCommunityZoomViewSize()", 1)[1][:400]
@@ -62,26 +65,26 @@ def test_community_zoom_view_size_uses_the_median_radius_defence() -> None:
     assert "communityZoomViewSize = radii[Math.floor(radii.length / 2)] * 3;" in body
 
 
-# --- fills: a distinct nested layer, z between the district fill and edges ---------------
+# --- fills: a distinct nested layer, z between the project fill and edges ----------------
 
-def test_community_fills_sit_visually_nested_inside_the_district_fill() -> None:
+def test_community_fills_sit_visually_nested_inside_the_project_fill() -> None:
     body = _SPACE_JS.split("function buildCommunityFills()", 1)[1][:900]
-    assert 'const cc = new THREE.Color("#3a2f5f");' in body  # distinct from the district's #2a3f5f
-    assert "mesh.position.set(c.cx, c.cy, -0.45);" in body  # between district (-0.5), edges (-0.1)
+    assert 'const cc = new THREE.Color("#3a2f5f");' in body  # distinct from the project's #2a3f5f
+    assert "mesh.position.set(c.cx, c.cy, -0.45);" in body  # between project (-0.5), edges (-0.1)
     assert "communityMeshGroup.visible = communityRegionsVisible;" in body
 
 
-# --- ribbons: same-district only, cross-community, per-ribbon screen-distance resolve ----
+# --- ribbons: same-project only, cross-community, per-ribbon screen-distance resolve -----
 
-def test_community_ribbons_are_scoped_to_a_single_district_never_cross_district() -> None:
+def test_community_ribbons_are_scoped_to_a_single_project_never_cross_project() -> None:
     body = _SPACE_JS.split("function computeCommunityRibbons()", 1)[1][:900]
     assert "if (!na || !nb || na.project !== nb.project) continue; " \
-        "// community ribbons are SAME-district only" in body
+        "// community ribbons are SAME-project only" in body
     assert "if (!ca || !cb || ca === cb) continue; " \
-        "// same-community: drawn individually, like same-district" in body
+        "// same-community: drawn individually, like same-project" in body
 
 
-def test_community_ribbon_resolve_reuses_the_same_screen_px_threshold_as_districts() -> None:
+def test_community_ribbon_resolve_reuses_the_same_screen_px_threshold_as_projects() -> None:
     body = _SPACE_JS.split("function computeResolvedCommunityRibbonKeys()", 1)[1][:600]
     assert "if (!communityRegionsVisible) return resolved; " \
         "// hidden entirely below mid zoom" in body
@@ -93,7 +96,7 @@ def test_community_ribbon_lines_never_draw_below_mid_zoom() -> None:
     assert "const unresolved = communityRegionsVisible" in body
     assert "? communityRibbons.filter((r) => !communityRibbonsResolvedKeys.has(ribbonKey(r)))" \
         in body
-    assert ": []; // never drawn at all below mid zoom -- the plain same-district line " \
+    assert ": []; // never drawn at all below mid zoom -- the plain same-project line " \
         "covers it" in body
 
 
@@ -119,9 +122,9 @@ def test_sync_community_visibility_is_wired_into_both_zoom_and_fit() -> None:
         assert call_site in _SPACE_JS
 
 
-# --- buildEdgeLines: a same-district cross-community edge refines one level further -------
+# --- buildEdgeLines: a same-project cross-community edge refines one level further --------
 
-def test_build_edge_lines_refines_same_district_edges_by_community_when_visible() -> None:
+def test_build_edge_lines_refines_same_project_edges_by_community_when_visible() -> None:
     body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2700]
     assert "} else if (communityRegionsVisible && na && nb && na.project === nb.project &&" \
         in body
@@ -135,12 +138,12 @@ def test_build_edge_lines_refines_same_district_edges_by_community_when_visible(
 
 def test_edge_accounting_adds_a_community_ribbon_bucket_gated_on_visibility() -> None:
     body = _SPACE_JS.split("function edgeAccounting()", 1)[1][:2200]
-    assert "let fill = 0, landmark = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;" \
+    assert "let fill = 0, highDegree = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;" \
         in body
     assert "if (communityRegionsVisible && na && nb && na.project === nb.project &&" in body
     assert "if (communityRibbonsResolvedKeys.has(`${ca}|${cb}|${e.type}`)) line++; " \
         "else communityRibbon++;" in body
-    assert "accounted: fill + landmark + line + ribbon + communityRibbon + other };" in body
+    assert "accounted: fill + highDegree + line + ribbon + communityRibbon + other };" in body
 
 
 # --- labels: share the SAME N_LABELS pool and real-width declutter, gated on visibility ---
@@ -149,11 +152,11 @@ def test_community_labels_only_compete_for_a_slot_once_communities_are_visible()
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:2500]
     assert "const communityPool = communityRegionsVisible ? " \
         "communityLabelCandidates.filter(inView) : [];" in body
-    assert "labeledNodes = pool.concat(districtPool, communityPool)" in body
+    assert "labeledNodes = pool.concat(projectPool, communityPool)" in body
 
 
 def test_pseudo_nodes_get_their_own_priority_tier_never_crowded_out_by_object_degree() -> None:
-    # live-verification finding: a district's own count (thousands) always happened to
+    # live-verification finding: a project's own count (thousands) always happened to
     # beat an ordinary node's degree by luck, so it never needed special priority -- a
     # community's own count (order 10s-100s) does not have that luck, and the plain
     # degree-only sort silently crowded EVERY community label out (0 ever won a slot
@@ -161,19 +164,19 @@ def test_pseudo_nodes_get_their_own_priority_tier_never_crowded_out_by_object_de
     # community labels at a real osiris mid-zoom before this fix, non-zero after.
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:2500]
     assert "const tier = (nd) => (isLit(nd) ? 2 : " \
-        "(nd.__isDistrict || nd.__isCommunity) ? 1 : 0);" in body
+        "(nd.__isProjectFill || nd.__isCommunity) ? 1 : 0);" in body
 
 
 def test_community_pseudo_nodes_get_their_own_css_class_and_text() -> None:
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:3400]
-    assert 'div.className = nd.__isDistrict ? "lbl project-label"\n' \
+    assert 'div.className = nd.__isProjectFill ? "lbl project-label"\n' \
         '        : nd.__isCommunity ? "lbl community-label" : "lbl";' in body
-    assert "div.textContent = (nd.__isDistrict || nd.__isCommunity)" in body
+    assert "div.textContent = (nd.__isProjectFill || nd.__isCommunity)" in body
 
 
-def test_community_pseudo_nodes_declutter_like_district_ones_never_lit() -> None:
+def test_community_pseudo_nodes_declutter_like_project_ones_never_lit() -> None:
     body = _SPACE_JS.split("function positionLabels()", 1)[1][:1500]
-    assert "if (nd.__isDistrict || nd.__isCommunity) {" in body
+    assert "if (nd.__isProjectFill || nd.__isCommunity) {" in body
 
 
 def test_community_label_css_exists_in_both_pages() -> None:

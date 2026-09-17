@@ -183,7 +183,7 @@ def test_zoom_scrubs_the_axis_to_the_current_visible_time_window() -> None:
 
 def test_axis_labels_never_join_the_shared_lbl_declutter_pool() -> None:
     # deliberately a SEPARATE div class ("lod-glyph-label storyline-axis-label", the same
-    # convention landmark badges/the old district labels used) -- kept off pickLabels' own
+    # convention high-degree badges/the old project labels used) -- kept off pickLabels' own
     # N_LABELS/overlapsPlaced machinery, and given a real vertical margin below the deepest
     # sub-agent tier so it never collides with an object label floating above its own node.
     body = _SPACE_JS.split("function buildStorylineAxis(fromT, toT)", 1)[1][:900]
@@ -235,7 +235,7 @@ def test_storyline_nodes_never_get_the_lit_always_wins_declutter_bypass() -> Non
 # --- declutter: object labels (chain/sub-agent/tick nodes) share the real-width rule -------
 
 def test_storyline_nodes_use_the_same_shared_label_pool_no_special_casing() -> None:
-    # chain/sub-agent/tick members are real graph nodes (not district-style pseudo-nodes)
+    # chain/sub-agent/tick members are real graph nodes (not project-fill-style pseudo-nodes)
     # repositioned in place -- pickLabels' own nodeVisible+viewport pool, labelWidths' real-
     # width declutter, and overlapsPlaced already apply with zero new code needed there.
     assert "function pickLabels()" in _SPACE_JS

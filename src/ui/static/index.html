@@ -29,7 +29,7 @@
                 box-shadow: 0 0 8px rgba(88,166,255,0.6); }
   /* THE LEGIBILITY PASS, TIP 3 (Thoth mail 10930): the LOD glyph's own label -- a project
      or type summary ("name (count)") shown only at the far/mid zoom tiers, styled bigger
-     and bolder than a plain node .lbl since it's standing in for a whole cluster, not one
+     and bolder than a plain node .lbl since it's standing in for a whole group, not one
      object. */
   .lod-glyph-label { position: absolute; font-size: 12px; font-weight: 700; color: #f0f6fc;
                       background: rgba(13,18,25,0.82); padding: 2px 7px; border-radius: 4px;
@@ -194,7 +194,7 @@
 <script type="module">
   // NAVIGABLE SPACE, INTEGRATION (decision "NAVIGABLE SPACE, INTEGRATION SHAPE", mail 10550):
   // mounts the three.js renderer into #cy in place of the old cytoscape whole-graph/
-  // neighborhood content it replaces. window.__spaceReady lets console.js (a classic script,
+  // focus content it replaces. window.__spaceReady lets console.js (a classic script,
   // loaded first, can't import this module) await the instance before wiring it up.
   import { initSpace } from "/ui/space.js";
   window.__spaceReady = initSpace({
