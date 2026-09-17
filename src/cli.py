@@ -867,7 +867,8 @@ async def cmd_layout(
                     long_edge_note = (
                         f"\n  edges over 20k units: {receipt['layout_long_edge_total']}"
                         f"{by_type}"
-                        f"\n  container vertices relocated to hub zone: {relocated}")
+                        f"\n  container vertices relocated off high-degree objects: "
+                        f"{relocated}")
                 compact_note = ""
                 if "layout_compactness_ratio" in receipt:
                     ratio = receipt["layout_compactness_ratio"]
@@ -882,11 +883,11 @@ async def cmd_layout(
                         f"{receipt['layout_anchor_displacement_max']:.1f}"
                         if anchor_n else "\n  anchor displacement: n=0 (no previous run)")
                     compact_note = (
-                        f"\n  compactness ratio (bbox area / Sigma district area): {ratio_s}"
+                        f"\n  compactness ratio (bbox area / Sigma project area): {ratio_s}"
                         f"\n  osiris-only bbox width: {osiris_bbox if osiris_bbox else 'n/a'}"
-                        f"\n  intra-district edge length p50/p95 (n={intra.get('n', 0)}): "
+                        f"\n  intra-project edge length p50/p95 (n={intra.get('n', 0)}): "
                         f"{intra.get('p50')}/{intra.get('p95')}"
-                        f"\n  cross-district edge length p50/p95 (n={cross.get('n', 0)}): "
+                        f"\n  cross-project edge length p50/p95 (n={cross.get('n', 0)}): "
                         f"{cross.get('p50')}/{cross.get('p95')}"
                         f"{anchor_note}")
                 acceptance_note = (
@@ -1080,7 +1081,8 @@ async def _resolve_launch_target(
         return None
     if not facts["anchor_cwd"]:
         print(f"osiris {verb}: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
-              "establish_office first; a body needs a room to be born in.", file=sys.stderr)
+              "establish-seat-dir first; a body needs a seat directory to be born in.",
+              file=sys.stderr)
         return None
     facts["seat_id"] = seat_ids[0]
     return facts
@@ -1604,8 +1606,8 @@ async def _cmd_resume_harness(
               f"one by hand). Adopted as {holder}'s own continuation — its ledger and "
               "registry now name this seat's lineage.", file=sys.stderr)
     elif adoption.get("session_id") is None:
-        print("osiris resume: NOTE — no body appeared at the office within the check "
-              "window; `claude agents --json` is the witness, not this receipt.",
+        print("osiris resume: NOTE — no body appeared at the seat directory within the "
+              "check window; `claude agents --json` is the witness, not this receipt.",
               file=sys.stderr)
     if cleared:
         print(f"osiris resume: cleared a stale stopped record for "
@@ -4380,7 +4382,7 @@ async def cmd_backup_settings(
             if not (because or "").strip():
                 print("osiris backup-settings write: --because is required — a backup "
                       "config write is testimony, same discipline every other repair "
-                      "door in this house holds", file=sys.stderr)
+                      "door in this project holds", file=sys.stderr)
                 return 1
             fields: dict[str, Any] = {}
             if vault_path is not None:
@@ -5289,7 +5291,7 @@ async def cmd_correct_pin_value(
         print(f"osiris correct-pin-value: refused — {out['error']}", file=sys.stderr)
         return 1
     if not out.get("written"):
-        print(f"office: already {value!r} — nothing written (old_value={out.get('old_value')!r})")
+        print(f"{key}: already {value!r} — nothing written (old_value={out.get('old_value')!r})")
     else:
         print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
               f"{out['old_value']!r} -> {out['new_value']!r}")
@@ -5755,7 +5757,7 @@ async def cmd_backfill(
 
     if apply and not (because or "").strip():
         print("osiris backfill: --because is required to --apply — a backfill write is "
-              "testimony, same discipline every other repair door in this house holds",
+              "testimony, same discipline every other repair door in this project holds",
               file=sys.stderr)
         return 1
     owns_pool = pool is None
@@ -6015,14 +6017,14 @@ async def cmd_mint_seat(
           f"({out['seat_id']}), house={out['house']}")
     office = out.get("office")
     if office:
-        print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
+        print(f"seat directory: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
         # THE PROJECT CONFESSION, same voice as `osiris new`'s own (decision 24e0b761):
         # only fires when this call actually WROTE the pin (`project_declared is None`
         # means the pin already existed and was left untouched — nothing new to confess).
         if office.get("osiris_pin_project_declared") is False:
-            print("project: unset in this office's pin — no --project given, none "
-                  "invented. mount will fill this in on its own once the graph "
+            print("project: unset in this seat directory's pin — no --project given, "
+                  "none invented. mount will fill this in on its own once the graph "
                   "unambiguously knows it; `osiris mint-seat ... --project <name>` "
                   "declares it now.")
     print(f"model: {out['intended_model']}"
@@ -6123,7 +6125,7 @@ async def cmd_new(
     print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
     office = out.get("office")
     if office:
-        print(f"office: {office['office']} (pin {office['osiris_pin']}, orders "
+        print(f"seat directory: {office['office']} (pin {office['osiris_pin']}, orders "
               f"{office['standing_orders']}, charter {office['charter_file']})")
     # THE CASE NOTE (thread bc11a2d3/msg 6262): resolution is case-insensitive by design
     # — this is not a bug — but a caller who typed 'Chad' and sees 'chad' in every path
@@ -6523,7 +6525,7 @@ async def cmd_sweep_seat_disk(
             await pool.close()
     verb = "swept" if not dry_run else "would sweep (dry run — pass --apply to write)"
     print(f"{handle} {verb}:")
-    print(f"  office: {office_out}")
+    print(f"  seat directory: {office_out}")
     print(f"  workspace: {workspace_out}")
     return 0
 
@@ -6655,7 +6657,20 @@ async def cmd_reissue_office(
     seat_id: str, because: str, *, adopt: bool = False, actor: str,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reissue-office <seat> <because> [--adopt] [--actor W] — the console-script
+    """osiris reissue-office <seat> <because> [--adopt] [--actor W] — DEPRECATED alias
+    for `reissue-seat-dir`, kept this release only (ONE TAXONOMY, ruling
+    52a59652/70c001ec: "office" retired as a place-word in favor of "seat directory").
+    A thin wrapper, never a second implementation."""
+    print("osiris reissue-office: deprecated, use reissue-seat-dir — kept as an "
+          "alias this release only", file=sys.stderr)
+    return await cmd_reissue_seat_dir(seat_id, because, adopt=adopt, actor=actor, pool=pool)
+
+
+async def cmd_reissue_seat_dir(
+    seat_id: str, because: str, *, adopt: bool = False, actor: str,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris reissue-seat-dir <seat> <because> [--adopt] [--actor W] — the console-script
     door onto orchestrator.boot_compiler.reissue_office, the SAME function the
     reissue_office MCP tool wraps (forwards to seat(action='reissue_office'))."""
     from src.actions.core import Actions
@@ -6672,9 +6687,9 @@ async def cmd_reissue_office(
         try:
             pool = await create_pool(
                 settings.database_url, min_size=1, max_size=4,
-                application_name="osiris-cli:reissue-office")
+                application_name="osiris-cli:reissue-seat-dir")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris reissue-office: could not reach postgres at "
+            print(f"osiris reissue-seat-dir: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
@@ -6685,9 +6700,9 @@ async def cmd_reissue_office(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris reissue-office: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris reissue-seat-dir: refused — {out['error']}", file=sys.stderr)
         return 1
-    print(f"reissued office for {seat_id}")
+    print(f"reissued seat directory for {seat_id}")
     for k, v in out.items():
         print(f"  {k}: {v}")
     return 0
@@ -6696,10 +6711,21 @@ async def cmd_reissue_office(
 async def cmd_establish_office(
     seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris establish-office <seat> [--actor W] — the console-script door onto
+    """osiris establish-office <seat> [--actor W] — DEPRECATED alias for
+    `establish-seat-dir`, kept this release only (ONE TAXONOMY, ruling
+    52a59652/70c001ec). A thin wrapper, never a second implementation."""
+    print("osiris establish-office: deprecated, use establish-seat-dir — kept as "
+          "an alias this release only", file=sys.stderr)
+    return await cmd_establish_seat_dir(seat, actor=actor, pool=pool)
+
+
+async def cmd_establish_seat_dir(
+    seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris establish-seat-dir <seat> [--actor W] — the console-script door onto
     orchestrator.offices.establish_office, the SAME function the establish_office MCP
-    tool wraps (forwards to seat(action='establish_office')). The full office ceremony,
-    one receipt."""
+    tool wraps (forwards to seat(action='establish_office')). The full seat-directory
+    ceremony, one receipt."""
     from src.actions.core import Actions
     from src.orchestrator.offices import establish_office as _establish_office
 
@@ -6714,9 +6740,9 @@ async def cmd_establish_office(
         try:
             pool = await create_pool(
                 settings.database_url, min_size=1, max_size=4,
-                application_name="osiris-cli:establish-office")
+                application_name="osiris-cli:establish-seat-dir")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris establish-office: could not reach postgres at "
+            print(f"osiris establish-seat-dir: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
@@ -6726,9 +6752,9 @@ async def cmd_establish_office(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris establish-office: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris establish-seat-dir: refused — {out['error']}", file=sys.stderr)
         return 1
-    print(f"established office for {seat}")
+    print(f"established seat directory for {seat}")
     for k, v in out.items():
         print(f"  {k}: {v}")
     return 0
@@ -7168,8 +7194,11 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         transition-seat-project, correct-agent-house, reconcile-merge,
                         retire-agent, heal-seat-transcript, attach-seat, detach-seat,
                         promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
-                        sweep-seat-trees, rename-seat, set-seat-attended, reissue-office,
-                        establish-office, resync-seat-house, reconcile-seat-identity,
+                        sweep-seat-trees, rename-seat, set-seat-attended, reissue-seat-dir,
+                        establish-seat-dir, resync-seat-house, reconcile-seat-identity,
+                        reissue-office (deprecated alias for reissue-seat-dir, one release
+                        only), establish-office (deprecated alias for establish-seat-dir,
+                        one release only),
                         create-project, rename-project, retire-project, fork-project,
                         set-project-tag, proposal, settings, backup-settings,
                         retire-assertion, retire-link, retire-object, cite,
@@ -7623,7 +7652,6 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="a JSON object, required for save and run-spec (same "
                                     "convention as `osiris settings set`'s own --value)")
     p_composition.add_argument("--kind", default="lens", help="'lens' or 'watch' (default lens)")
-    p_composition.add_argument("--room", default=None, help="scope to a stance/room")
     p_composition.add_argument("--subject", default=None,
                                help="run a composition against this subject object")
     p_composition.add_argument("--fields", nargs="*", default=None,
@@ -7931,12 +7959,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "message the fleet — the same send the MCP tool wraps, exposed as a bare-"
         "terminal door. `--to`=<project> is a BROADCAST; `--to-agent`=<agent> is a "
         "private DM. Refuses a project nobody has mounted under, or a broadcast whose "
-        "body names a real seat mounted in a different room, exactly as the MCP tool "
-        "does"),
+        "body names a real seat mounted in a different project, exactly as the MCP "
+        "tool does"),
         epilog="example, a broadcast: osiris send 'deploy landing' --to osiris\n"
                "example, a DM: osiris send 'ship it' --to-agent agent:abc123")
     p_send.add_argument("body", help="the message text")
-    p_send.add_argument("--to", default=None, help="broadcast to this project's room")
+    p_send.add_argument("--to", default=None, help="broadcast to this project")
     p_send.add_argument("--to-agent", default=None, help="DM this agent id or live handle")
     p_send.add_argument("--reply-to", type=int, default=None,
                         help="the message id this answers")
@@ -8100,7 +8128,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rebind_seat.add_argument("--because", default="",
                                help="why this seat is moving — the audit reason the MCP "
                                     "tool takes; a repair with no stated reason is exactly "
-                                    "what this house forbids, so supply it")
+                                    "what this project forbids, so supply it")
     p_rebind_seat.add_argument("--force", action="store_true",
                                help="override rebind_seat's own refusals (it refuses loudly "
                                     "by default) — same flag, same semantics as the MCP tool")
@@ -8140,7 +8168,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                     "rule as the MCP tool")
     p_heal_anchor.add_argument("--apply", action="store_true",
                                help="actually write — default is a dry-run report, same "
-                                    "convention as every other repair verb in this house")
+                                    "convention as every other repair verb in this project")
     p_heal_anchor.add_argument("--actor", default=_CONSOLE_ACTOR,
                                help=f"who is performing this repair — defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
@@ -8171,7 +8199,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "--apply, same rule as the MCP tool")
     p_transition.add_argument("--apply", action="store_true",
                               help="actually write — default is a dry-run plan, same "
-                                   "convention as every other repair verb in this house")
+                                   "convention as every other repair verb in this project")
 
     p_correct_agent_house = sub.add_parser(
         "correct-agent-house", description=_d(
@@ -8291,7 +8319,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "docstring for what each target does")
     p_backfill.add_argument("--apply", action="store_true",
                             help="actually write — default is a dry-run report, same "
-                                 "convention as every other repair verb in this house")
+                                 "convention as every other repair verb in this project")
     p_backfill.add_argument("--because", default=None,
                             help="why this backfill is being applied — required to "
                                  "--apply regardless of target (this door's own, "
@@ -8346,14 +8374,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_heal_transcript = sub.add_parser(
         "heal-seat-transcript", description=_d(
             "splice a seat's session, fragmented across multiple project slugs by a "
-            "mid-session cwd move, back into ONE file at its own office slug — the same "
-            "orchestrator.transcript_splice.heal_seat_transcript the MCP tool wraps. "
-            "Never touches a Seat row, anchor_cwd, or any source transcript"),
+            "mid-session cwd move, back into ONE file at its own seat-directory slug — "
+            "the same orchestrator.transcript_splice.heal_seat_transcript the MCP tool "
+            "wraps. Never touches a Seat row, anchor_cwd, or any source transcript"),
         epilog="example: osiris heal-seat-transcript Jesus "
             "/path/to/fragment1.jsonl /path/to/fragment2.jsonl --apply --because "
             "\"mid-session cwd move split the transcript\"")
-    p_heal_transcript.add_argument("seat", help="the seat whose office the spliced "
-                                   "result lands at")
+    p_heal_transcript.add_argument("seat", help="the seat whose seat directory the "
+                                   "spliced result lands at")
     p_heal_transcript.add_argument("source_paths", nargs="+",
                                    help="the original fragments, IN CHAIN ORDER (oldest "
                                         "first) — needs at least two")
@@ -8388,7 +8416,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_mint_seat = sub.add_parser(
         "mint-seat", description=_d(
-            "Mint (or adopt) a worker seat: ensure_seat + an office scaffold on "
+            "Mint (or adopt) a worker seat: ensure_seat + a seat-directory scaffold on "
             "disk (a directory, an .osiris pin carrying project AND model, CLAUDE.md, "
             "charter.md) + an intended_model stamp + a managed_by link to the manager. "
             "Idempotent — a handle that already names a living seat is ADOPTED (missing "
@@ -8408,7 +8436,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                   "else the cwd's .osiris pin, else the cwd's own name) — "
                                   "refuses loudly instead of guessing among several")
     p_mint_seat.add_argument("--project", default=None,
-                             help="the project the new seat's office is stamped with "
+                             help="the project the new seat's directory is stamped with "
                                   "(defaults to the manager's own house)")
     p_mint_seat.add_argument("--house", default=None,
                              help="defaults to the manager's own house; naming a house with "
@@ -8431,7 +8459,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "new", description=(
             _d("Create a new independent seat and its workspace, in one command.") + "\n\n" +
             _d("You get: a directory to work in (~/code/<handle> unless you name one), "
-               "a seat that owns it, and an identity office at "
+               "a seat that owns it, and an identity seat directory at "
                "~/.osiris/seats/<handle>/. Then `osiris launch <handle>` gives it a "
                "body.") + "\n\n" +
             _d("Use `new` for a seat that answers to nobody. Use `mint-seat` for a "
@@ -8544,7 +8572,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_bind_seat_tree = sub.add_parser(
         "bind-seat-tree", description=_d(
-            "point a seat's CODE checkout, distinct from its anchor office — the "
+            "point a seat's CODE checkout, distinct from its anchor seat directory — the "
             "console-script door onto orchestrator.seats.bind_seat_tree, the SAME "
             "function the bind_seat_tree MCP tool wraps (wave 3, thread 5bf6447c)"),
         epilog="example: osiris bind-seat-tree seat:e355913e ~/code/osiris \"tree moved\"")
@@ -8557,7 +8585,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_sweep_seat_disk = sub.add_parser(
         "sweep-seat-disk", description=_d(
-            "sweep a retired seat's office and workspace off disk — the console-script "
+            "sweep a retired seat's directory and workspace off disk — the console-script "
             "door onto orchestrator.offices.sweep_retired_office + "
             "sweep_seat_workspace, the SAME two functions the sweep_seat_disk MCP tool "
             "wraps (wave 3, thread 5bf6447c). Dry-run by default"),
@@ -8610,26 +8638,31 @@ def _build_parser() -> argparse.ArgumentParser:
                                           f"{_CONSOLE_ACTOR!r}")
 
     p_reissue_office = sub.add_parser(
-        "reissue-office", description=_d(
-            "recompile a seat's managed office section on demand — the console-script "
+        "reissue-seat-dir", aliases=["reissue-office"], description=_d(
+            "recompile a seat's managed directory section on demand — the console-script "
             "door onto orchestrator.boot_compiler.reissue_office, the SAME function the "
-            "reissue_office MCP tool wraps (wave 3, thread 5bf6447c)"),
-        epilog="example: osiris reissue-office seat:e355913e \"manager changed\"")
+            "reissue_office MCP tool wraps (wave 3, thread 5bf6447c). `reissue-office` "
+            "still works this release as a deprecated alias (ONE TAXONOMY, ruling "
+            "52a59652/70c001ec)."),
+        epilog="example: osiris reissue-seat-dir seat:e355913e \"manager changed\"")
     p_reissue_office.add_argument("seat_id", help="the seat's own canonical id")
-    p_reissue_office.add_argument("because", help="why this office needs recompiling")
+    p_reissue_office.add_argument("because",
+                                  help="why this seat directory needs recompiling")
     p_reissue_office.add_argument("--adopt", action="store_true",
-                                  help="one-time on-ramp for an office predating the "
-                                       "compiler")
+                                  help="one-time on-ramp for a seat directory predating "
+                                       "the compiler")
     p_reissue_office.add_argument("--actor", default=_CONSOLE_ACTOR,
                                   help=f"who is performing this act — defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_establish_office = sub.add_parser(
-        "establish-office", description=_d(
-            "the full office ceremony, one receipt — the console-script door onto "
-            "orchestrator.offices.establish_office, the SAME function the "
-            "establish_office MCP tool wraps (wave 3, thread 5bf6447c)"),
-        epilog="example: osiris establish-office seat:e355913e")
+        "establish-seat-dir", aliases=["establish-office"], description=_d(
+            "the full seat-directory ceremony, one receipt — the console-script door "
+            "onto orchestrator.offices.establish_office, the SAME function the "
+            "establish_office MCP tool wraps (wave 3, thread 5bf6447c). "
+            "`establish-office` still works this release as a deprecated alias (ONE "
+            "TAXONOMY, ruling 52a59652/70c001ec)."),
+        epilog="example: osiris establish-seat-dir seat:e355913e")
     p_establish_office.add_argument("seat", help="a claimed handle, raw agent id, or "
                                     "unclaimed seat's own handle/canonical")
     p_establish_office.add_argument("--actor", default=_CONSOLE_ACTOR,
@@ -8860,7 +8893,7 @@ def main(argv: list[str] | None = None) -> int:
             text=args.text))
     if args.command == "composition":
         return asyncio.run(cmd_composition(
-            args.action, args.name, spec=args.spec, kind=args.kind, room=args.room,
+            args.action, args.name, spec=args.spec, kind=args.kind,
             subject=args.subject, fields=args.fields, take=args.take, depth=args.depth,
             offset=args.offset, actor=args.actor, as_json=args.as_json))
     if args.command == "retire-assertion":
@@ -9039,9 +9072,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "set-seat-attended":
         return asyncio.run(cmd_set_seat_attended(args.seat_id, args.attended, args.because,
                                                   actor=args.actor))
+    if args.command == "reissue-seat-dir":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_reissue_seat_dir(args.seat_id, args.because,
+                                                adopt=args.adopt, actor=args.actor))
     if args.command == "reissue-office":
-        return asyncio.run(cmd_reissue_office(args.seat_id, args.because, adopt=args.adopt,
-                                              actor=args.actor))
+        return asyncio.run(cmd_reissue_office(args.seat_id, args.because,
+                                              adopt=args.adopt, actor=args.actor))
+    if args.command == "establish-seat-dir":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_establish_seat_dir(args.seat, actor=args.actor))
     if args.command == "establish-office":
         return asyncio.run(cmd_establish_office(args.seat, actor=args.actor))
     if args.command == "resync-seat-house":

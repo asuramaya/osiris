@@ -850,8 +850,8 @@ async def _establish_pure_seat_office(
     facts = await seat_facts(actions.pool, seat_id)
     handle = facts["handle"]
     if not handle:
-        return {"error": f"{seat_id} has no handle on record — an office is named for its "
-                         "seat's handle, and this one has none"}
+        return {"error": f"{seat_id} has no handle on record — a seat directory is named "
+                         "for its seat's handle, and this one has none"}
     # A HOUSE IS OPTIONAL (ruling 860b0306): a seat governing a single repo carries none —
     # this used to refuse the whole ceremony on a houseless seat, the exact shape the
     # ruling exists to end ("nothing in osiris may require a house"). `house` renders as
@@ -882,8 +882,8 @@ async def _establish_pure_seat_office(
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
     if orders.exists() and agents.exists():
-        orders_state = "left in place — the office already has standing orders"
-        agents_state = "left in place — the office already has this file"
+        orders_state = "left in place — the seat directory already has standing orders"
+        agents_state = "left in place — the seat directory already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
@@ -911,7 +911,7 @@ async def _establish_pure_seat_office(
         office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
-        "office_deed": "n/a — no claimed occupant yet to deed an office to",
+        "office_deed": "n/a — no claimed occupant yet to deed a seat directory to",
         "seat": seat_id,
         "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
@@ -919,9 +919,9 @@ async def _establish_pure_seat_office(
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
-        "note": f"{handle}'s office stands at {office} — no agent has ever claimed this "
-                "seat, so this ceremony ran off the Seat record alone; the first launch at "
-                "this office is what claims it",
+        "note": f"{handle}'s seat directory stands at {office} — no agent has ever "
+                "claimed this seat, so this ceremony ran off the Seat record alone; the "
+                "first launch at this seat directory is what claims it",
     }
 
 
@@ -966,8 +966,8 @@ async def establish_office(
             "WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))",
             seat_or_agent)
     if agent_id is None and direct_seat_id is None:
-        return {"error": f"no such seat or agent: {seat_or_agent!r} — an office ceremony "
-                         "never invents its occupant"}
+        return {"error": f"no such seat or agent: {seat_or_agent!r} — a seat-directory "
+                         "ceremony never invents its occupant"}
     if agent_id is None and direct_seat_id is not None:
         # THE OCCUPANCY GAP (Deckard's live run, thread 8833/msg 8835): `resolve_handle`
         # and the direct-Agent-canonical check above both only ever match a bare HANDLE
@@ -991,8 +991,9 @@ async def establish_office(
             projects_root=projects_root, claude_json=claude_json)
     handle = await _handle_of(actions.pool, agent_id)
     if not handle:
-        return {"error": f"{agent_id} has never claimed a name — an office is named for its "
-                         "seat. claim_name first, then establish the office"}
+        return {"error": f"{agent_id} has never claimed a name — a seat directory is "
+                         "named for its seat. claim_name first, then establish the "
+                         "seat directory"}
     # RESOLVED, NEVER A RAW COPY (decision 68fba2e4, thread 19d6bdcb7fa9): house_of's raw
     # `project` stamp could be a mint-time fabrication (24e0b761) — project_of resolves
     # through charter/lineage works_in instead, never house. The refuse-on-nothing behavior
@@ -1072,8 +1073,8 @@ async def establish_office(
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
     if orders.exists() and agents.exists():
-        orders_state = "left in place — the office already has standing orders"
-        agents_state = "left in place — the office already has this file"
+        orders_state = "left in place — the seat directory already has standing orders"
+        agents_state = "left in place — the seat directory already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
@@ -1121,9 +1122,9 @@ async def establish_office(
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
-        "note": f"{handle}'s office stands at {office} — the whisper will mount house "
-                f"{house} from the pin; transcripts moved are re-addressed so resume "
-                "works in place",
+        "note": f"{handle}'s seat directory stands at {office} — the whisper will mount "
+                f"house {house} from the pin; transcripts moved are re-addressed so "
+                "resume works in place",
     }
 
 
