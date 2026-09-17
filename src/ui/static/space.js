@@ -75,6 +75,15 @@ const STRUCTURAL_EDGE_TYPES = new Set([
 function classOfEdgeType(type) {
   return STRUCTURAL_EDGE_TYPES.has(type) ? "structural" : "semantic";
 }
+// WAVE 27, THE LENS PANEL: "container" is its own distinct edgeClass now (see the wire
+// classification comment above, in fetchStreamSnapshot), but every pre-existing check that
+// used to rely on container reading as "structural" (membership-degree detection: a real
+// container-focus walk, the drill's own focus-type gate) still needs to treat the two
+// alike -- this is the one place that equivalence lives now, instead of re-normalizing at
+// ingest.
+function isStructuralLike(edgeClass) {
+  return edgeClass === "structural" || edgeClass === "container";
+}
 
 // THE READING LAYER, part B (ruling c5953bb1): the curated provenance/evidence edge-type
 // allowlist a real FOCUS walks — the actual "long paths leading back and upstream" the
@@ -180,18 +189,21 @@ async function fetchStreamSnapshot() {
   // structural/container), which is exactly why the browser marked authored_by/spawned_by
   // "semantic" and drew them at rest (6,413 authored_by edges over 20k units read as the
   // yellow beam) while the header's own link_type_class says authored_by is structural.
-  // "container" (membership/containment, distinct from ordinary structural) hides at rest
-  // exactly like "structural" -- every existing check in this file only ever distinguishes
-  // "structural" from everything else, so normalize container -> structural here rather
-  // than special-case it at every call site. Built once from the type vocabulary itself
-  // (edge_types), not per-edge, so a type with zero edges in THIS snapshot still has a
-  // real effective class to report on the debug API.
+  // "container" (membership/containment, distinct from ordinary structural) used to
+  // normalize to "structural" here -- every existing check in this file only ever
+  // distinguished "structural" from everything else, so collapsing it avoided special-
+  // casing every call site. WAVE 27, THE LENS PANEL (Thoth mail 11754) asks for container
+  // as its OWN lens toggle, alongside semantic/structural -- kept distinct now; every call
+  // site that relied on container reading as structural (isContainerFocus,
+  // containerMembersByType, the pathReachable one-hop widen fallback) goes through
+  // isStructuralLike() instead, below, so their own behavior is unchanged. Built once from
+  // the type vocabulary itself (edge_types), not per-edge, so a type with zero edges in
+  // THIS snapshot still has a real effective class to report on the debug API.
   const edgeClassByType = {};
   if (snap.edge_types) {
     for (let i = 0; i < snap.edge_types.length; i++) {
       const t = snap.edge_types[i];
-      let cls = snap.link_type_class && snap.link_type_class[i];
-      if (cls === "container") cls = "structural";
+      const cls = snap.link_type_class && snap.link_type_class[i];
       edgeClassByType[t] = cls || classOfEdgeType(t); // no header value -- the client fallback
     }
   }
@@ -452,6 +464,57 @@ export async function initSpace(container) {
   // TIP 1(e): header taxonomy-pill type filters hide instances through the same per-instance
   // aVisible flag focus uses (1(d)) — empty means nothing filtered, everything shown.
   let hiddenNodeTypes = new Set();
+  // WAVE 27, THE LENS PANEL (Thoth mail 11754): two more reader-opt-OUT toggles alongside
+  // the legend's existing node-type/edge-class/edge-type checkboxes — default false (shown),
+  // same "a reader's lens, never a default hide" convention. Declared here, not down by
+  // their own build functions, for the same TDZ-safety reason as every other early-block
+  // state this file already collects (syncCommunityVisibility/buildLandmarkBadges run
+  // during initSpace's own synchronous setup, before a `let` declared near those functions'
+  // own definitions would have executed yet).
+  let communitiesHiddenByLens = false;
+  let highDegreeBadgesHiddenByLens = false;
+  // WAVE 27, THE LENS PANEL: "state on the URL hash so a view is shareable" -- one JSON
+  // blob under its own hash param (never the whole hash, so other hash consumers keep their
+  // own room), sorted arrays so two sessions with the same lens produce the SAME hash text,
+  // not just an equivalent one. Read once at load (applyLensStateFromHash, before the first
+  // buildScene/renderLegend), written after every toggle (renderLegend's own last line) --
+  // never a live hashchange listener, since a shared link is opened fresh, not edited by
+  // hand mid-session.
+  const LENS_HASH_PARAM = "lens";
+  function readLensStateFromHash() {
+    const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const raw = params.get(LENS_HASH_PARAM);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  function writeLensStateToHash() {
+    const state = {
+      hiddenNodeTypes: [...hiddenNodeTypes].sort(),
+      hiddenEdgeClasses: [...hiddenEdgeClasses].sort(),
+      hiddenEdgeTypes: [...hiddenEdgeTypes].sort(),
+      hideCommunities: communitiesHiddenByLens,
+      hideHighDegree: highDegreeBadgesHiddenByLens,
+    };
+    const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+    params.set(LENS_HASH_PARAM, JSON.stringify(state));
+    history.replaceState(null, "", `#${params.toString()}`);
+  }
+  function applyLensStateFromHash() {
+    const state = readLensStateFromHash();
+    if (!state) return;
+    hiddenNodeTypes.clear();
+    for (const t of state.hiddenNodeTypes || []) hiddenNodeTypes.add(t);
+    hiddenEdgeClasses.clear();
+    for (const c of state.hiddenEdgeClasses || []) hiddenEdgeClasses.add(c);
+    hiddenEdgeTypes.clear();
+    for (const t of state.hiddenEdgeTypes || []) hiddenEdgeTypes.add(t);
+    communitiesHiddenByLens = !!state.hideCommunities;
+    highDegreeBadgesHiddenByLens = !!state.hideHighDegree;
+  }
   // CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7, thread 0be2f790's own operator-
   // finding follow-up): the header's repo selector drives the SAME aVisible flag through
   // this sibling set — nd.project (already carried on every node since the snapshot's own
@@ -740,7 +803,13 @@ export async function initSpace(container) {
     for (const e of edges) {
       if (DISTRICT_FILL_TYPES.has(e.type)) { fill++; continue; }
       const lm = landmarks[e.type];
-      if (lm && e.target === lm.id) { landmark++; continue; }
+      // WAVE 27, THE LENS PANEL: a hidden badge still isn't "gone" -- its own edges just
+      // draw (and count) as ordinary lines instead, same "nothing hidden" promise the
+      // community bucket below already keeps under its own visibility gate.
+      if (lm && e.target === lm.id) {
+        if (highDegreeBadgesHiddenByLens) { line++; } else { landmark++; }
+        continue;
+      }
       const na = idById.get(e.source), nb = idById.get(e.target);
       if (na && nb && na.project !== nb.project &&
         districtByName.has(na.project) && districtByName.has(nb.project)) {
@@ -847,6 +916,11 @@ export async function initSpace(container) {
   function buildLandmarkBadges() {
     for (const e of landmarkBadgeEntries) e.div.remove();
     landmarkBadgeEntries = [];
+    // WAVE 27, THE LENS PANEL: the lens's own hide -- no divs at all, same "rare, deliberate
+    // rebuild" convention every other legend checkbox already uses (not a per-frame CSS
+    // hide). buildEdgeLines/edgeAccounting's own highDegreeBadgesHiddenByLens checks are
+    // what keep those edges drawn as ordinary lines instead of vanishing outright.
+    if (highDegreeBadgesHiddenByLens) return;
     for (const t of LANDMARK_EDGE_TYPES) {
       const lm = landmarks[t];
       if (!lm) continue;
@@ -1000,7 +1074,12 @@ export async function initSpace(container) {
   function syncCommunityVisibility() {
     if (!communities.length) return;
     const wasVisible = communityRegionsVisible;
-    communityRegionsVisible = communityZoomViewSize > 0 && viewSize < communityZoomViewSize;
+    // WAVE 27, THE LENS PANEL: the lens toggle is a hard AND on top of the zoom gate --
+    // hidden means hidden regardless of scale, same call site either way (a checkbox
+    // change re-invokes this function directly, so the existing wasVisible/resolvedChanged
+    // early-return already covers "did anything actually change" for both triggers).
+    communityRegionsVisible = !communitiesHiddenByLens &&
+      communityZoomViewSize > 0 && viewSize < communityZoomViewSize;
     const resolved = computeResolvedCommunityRibbonKeys();
     const resolvedChanged = !ribbonKeySetsEqual(resolved, communityRibbonsResolvedKeys);
     if (wasVisible === communityRegionsVisible && !resolvedChanged) return;
@@ -1050,7 +1129,15 @@ export async function initSpace(container) {
     const visible = edgeList.filter((e) => {
       if (DISTRICT_FILL_TYPES.has(e.type)) return false;
       const lm = landmarks[e.type];
-      if (lm && e.target === lm.id) return false;
+      // WAVE 27, THE LENS PANEL: hiding the badge falls through to an ordinary line, never
+      // to the district/community ribbon logic below (a landmark type's edges were never
+      // part of any ribbon aggregate -- computeRibbons excludes them unconditionally, badge
+      // shown or not -- so routing them through that swap here would misclassify them).
+      if (lm && e.target === lm.id) {
+        if (!highDegreeBadgesHiddenByLens) return false;
+        return !hiddenEdgeClasses.has(e.edgeClass) && !hiddenEdgeTypes.has(e.type) &&
+          nodeVisible(byId.get(e.source)) && nodeVisible(byId.get(e.target));
+      }
       const na = byId.get(e.source), nb = byId.get(e.target);
       if (na && nb && na.project !== nb.project &&
         districtByName.has(na.project) && districtByName.has(nb.project)) {
@@ -1112,7 +1199,7 @@ export async function initSpace(container) {
     if (!legendPanel) return;
     const classOf = new Map();
     for (const e of edgeList) classOf.set(e.type, e.edgeClass);
-    const byClass = { semantic: [], structural: [] };
+    const byClass = { semantic: [], structural: [], container: [] };
     for (const [type, cls] of classOf) (byClass[cls] || (byClass[cls] = [])).push(type);
     for (const k of Object.keys(byClass)) byClass[k].sort();
     const nodeTypes = [...new Set((nodeList || []).map((nd) => nd.type))].sort();
@@ -1132,11 +1219,20 @@ export async function initSpace(container) {
       const esc = String(type).replace(/"/g, "&quot;");
       return `<label class="legend-row legend-node-type"><input type="checkbox" data-legend-node-type="${esc}" ${checked} /> <span class="legend-swatch" style="background:${typeColors.get(type) || "#6e7681"}"></span>${esc}</label>`;
     };
+    // WAVE 27, THE LENS PANEL (Thoth mail 11754): two more opt-OUT rows past the edge/node
+    // type checkboxes above -- same convention (checked = shown, the default), same rebuild-
+    // on-toggle discipline, just gating a mesh/badge group instead of hiddenEdgeClasses/Types.
+    const lensRow = (key, label, checked) =>
+      `<label class="legend-row legend-lens"><input type="checkbox" data-legend-lens="${key}" ${checked ? "checked" : ""} /> ${label}</label>`;
     legendPanel.innerHTML =
       `<div class="legend-row legend-class"><strong>node types</strong></div>` +
       nodeTypes.map(nodeTypeRow).join("") +
       classRow("semantic") + (byClass.semantic || []).map(typeRow).join("") +
-      classRow("structural") + (byClass.structural || []).map(typeRow).join("");
+      classRow("structural") + (byClass.structural || []).map(typeRow).join("") +
+      classRow("container") + (byClass.container || []).map(typeRow).join("") +
+      `<div class="legend-row legend-class"><strong>lens</strong></div>` +
+      lensRow("communities", "communities", !communitiesHiddenByLens) +
+      lensRow("highDegree", "high-degree objects", !highDegreeBadgesHiddenByLens);
 
     legendPanel.querySelectorAll("[data-legend-node-type]").forEach((el) => {
       el.addEventListener("change", () => {
@@ -1161,6 +1257,25 @@ export async function initSpace(container) {
         buildEdgeLines(idToNode, edges);
       });
     });
+    legendPanel.querySelectorAll("[data-legend-lens]").forEach((el) => {
+      el.addEventListener("change", () => {
+        const key = el.dataset.legendLens;
+        if (key === "communities") {
+          communitiesHiddenByLens = !el.checked;
+          syncCommunityVisibility();
+        } else if (key === "highDegree") {
+          highDegreeBadgesHiddenByLens = !el.checked;
+          buildLandmarkBadges();
+          buildEdgeLines(idToNode, edges);
+        }
+        // syncCommunityVisibility bails out before reaching buildEdgeLines/renderLegend's
+        // own writeLensStateToHash call when this graph has zero communities at all
+        // (communities.length === 0) -- the toggle's own state must still reach the hash
+        // even then, so this doesn't rely on that indirect path alone.
+        writeLensStateToHash();
+      });
+    });
+    writeLensStateToHash();
   }
   if (legendBtn && legendPanel) {
     legendBtn.addEventListener("click", () => { legendPanel.hidden = !legendPanel.hidden; });
@@ -1370,6 +1485,7 @@ export async function initSpace(container) {
   setStatus("loading the whole graph…");
   let { nodes, edges, edgeClassByType, districtAggregates, communityAggregates } =
     await fetchStreamSnapshot();
+  applyLensStateFromHash(); // before the first buildScene/fitToNodes so the initial render already reflects a shared link
   buildDistrictModel(districtAggregates, edges);
   buildCommunityModel(communityAggregates);
   buildScene(nodes, edges);
@@ -1960,7 +2076,7 @@ export async function initSpace(container) {
   function containerMembersByType(id) {
     const byType = new Map(); // type -> nd[]
     for (const e of edges) {
-      if (e.edgeClass !== "structural") continue;
+      if (!isStructuralLike(e.edgeClass)) continue;
       const other = e.source === id ? e.target : e.target === id ? e.source : null;
       if (other == null) continue;
       const nd = idById.get(other);
@@ -1982,7 +2098,7 @@ export async function initSpace(container) {
     if (!nd || !CONTAINER_FOCUS_TYPES.has(nd.type)) return false;
     let n = 0;
     for (const e of edges) {
-      if (e.edgeClass !== "structural") continue;
+      if (!isStructuralLike(e.edgeClass)) continue;
       if (e.source === id || e.target === id) { n++; if (n > MAX_EGO_NODES) return true; }
     }
     return false;
@@ -3039,7 +3155,7 @@ export async function initSpace(container) {
     if (pathReachable.size <= 1) {
       for (const e of edges) {
         if (pathReachable.size >= MAX_EGO_NODES) break;
-        if (e.edgeClass !== "structural") continue;
+        if (!isStructuralLike(e.edgeClass)) continue;
         const other = e.source === id ? e.target : e.target === id ? e.source : null;
         if (other == null || pathReachable.has(other)) continue;
         pathReachable.add(other);
@@ -3376,6 +3492,13 @@ export async function initSpace(container) {
     get communityLabelCandidateCount() { return communityLabelCandidates.length; },
     get communityZoomViewSize() { return communityZoomViewSize; },
     get communityRegionsDrawn() { return communityRegionsVisible ? communities.length : 0; },
+    // WAVE 27, THE LENS PANEL (mail 11754) -- live-verification hooks, same convention.
+    isStructuralLike,
+    get communitiesHiddenByLens() { return communitiesHiddenByLens; },
+    get highDegreeBadgesHiddenByLens() { return highDegreeBadgesHiddenByLens; },
+    get landmarkBadgeEntryCount() { return landmarkBadgeEntries.length; },
+    get lensHashParam() { return new URLSearchParams(location.hash.replace(/^#/, "")).get(LENS_HASH_PARAM); },
+    readLensStateFromHash, applyLensStateFromHash,
     get edgeSegmentsDrawn() { return edgeLines ? edgeLines.geometry.attributes.position.count / 2 : 0; },
     get ribbonSegmentsDrawn() { return ribbonLines ? ribbonLines.geometry.attributes.position.count / 2 : 0; },
     camera, pickAt, mesh: () => mesh, worldPerPx, nodeScreenPx, renderer,

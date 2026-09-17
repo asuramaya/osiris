@@ -46,20 +46,23 @@ def test_classification_reads_the_wire_field_link_type_class_not_edge_classes() 
     assert "classOfEdgeType(type)" in body  # still the fallback for a type the header lacks
 
 
-def test_header_container_class_normalizes_to_structural() -> None:
-    # "container" (membership/containment, distinct from ordinary structural) hides at
-    # rest exactly like "structural" -- every existing check in this file only ever
-    # distinguishes "structural" from everything else.
+def test_header_container_class_no_longer_normalizes_to_structural() -> None:
+    # WAVE 27, THE LENS PANEL (Thoth mail 11754): "container" used to normalize to
+    # "structural" here (every pre-existing check only ever distinguished "structural" from
+    # everything else) -- now kept distinct so the legend can offer it as its own lens
+    # toggle, alongside semantic/structural. Every call site that relied on the old
+    # normalization goes through isStructuralLike() instead (see tests/test_lens_panel.py).
     body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3200]
-    assert 'if (cls === "container") cls = "structural";' in body
+    assert 'if (cls === "container") cls = "structural";' not in body
+    assert "function isStructuralLike(edgeClass)" in _SPACE_JS
 
 
 def test_a_header_class_overrides_the_client_fallback_table() -> None:
     # live-verified regression (mail 11291): the browser marked authored_by "semantic"
     # (STRUCTURAL_EDGE_TYPES doesn't list it) while the header's own link_type_class says
     # authored_by is structural -- edgeClassByType must prefer the header's own value.
-    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3200]
-    assert "let cls = snap.link_type_class && snap.link_type_class[i];" in body
+    body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3400]
+    assert "const cls = snap.link_type_class && snap.link_type_class[i];" in body
     assert "edgeClassByType[t] = cls || classOfEdgeType(t);" in body
 
 
@@ -143,7 +146,10 @@ def test_legend_checkboxes_rebuild_edge_lines_on_change() -> None:
     # revealProjectStub (a stub reveal changes nodeVisible for the revealed ids, so the base
     # layer must rebuild too) — nine call sites. WAVE 26, THE STORYLINE (mail 11534) added a
     # tenth: renderStoryline rebuilds the base layer same as an ordinary focus or the drill.
-    # This slice runs unbounded to end-of-file (no closing boundary in the split above), so
-    # it catches every function defined after renderLegend, not just renderLegend's own body
-    # — noted rather than silently re-scoping an existing test's own slicing choice.
-    assert body.count("buildEdgeLines(idToNode, edges);") == 10
+    # WAVE 27, THE LENS PANEL (mail 11754) added an eleventh: the new "high-degree objects"
+    # lens checkbox rebuilds the base layer too (its own toggle changes which edges fold
+    # into a badge vs. draw as a line). This slice runs unbounded to end-of-file (no closing
+    # boundary in the split above), so it catches every function defined after renderLegend,
+    # not just renderLegend's own body — noted rather than silently re-scoping an existing
+    # test's own slicing choice.
+    assert body.count("buildEdgeLines(idToNode, edges);") == 11
