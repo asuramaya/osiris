@@ -18,8 +18,6 @@
   "src/orchestrator/graph_stream.py": 2,
   "src/orchestrator/textrender.py": 10,
   "src/ui/static/console.js": 6,
-  "src/ui/static/index.html": 2,
-  "src/ui/static/osiris.js": 1,
-  "src/ui/static/space.html": 1,
-  "src/ui/static/space.js": 33
+  "src/ui/static/index.html": 1,
+  "src/ui/static/space.js": 31
 }

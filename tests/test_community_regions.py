@@ -166,7 +166,7 @@ def test_pseudo_nodes_get_their_own_priority_tier_never_crowded_out_by_object_de
 
 def test_community_pseudo_nodes_get_their_own_css_class_and_text() -> None:
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:3400]
-    assert 'div.className = nd.__isDistrict ? "lbl district-label"\n' \
+    assert 'div.className = nd.__isDistrict ? "lbl project-label"\n' \
         '        : nd.__isCommunity ? "lbl community-label" : "lbl";' in body
     assert "div.textContent = (nd.__isDistrict || nd.__isCommunity)" in body
 

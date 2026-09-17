@@ -3287,7 +3287,7 @@ export async function initSpace(container) {
     districtLabelCandidates = districts
       .filter((d) => d.count >= DISTRICT_LABEL_MIN_COUNT)
       .map((d) => ({
-        __isDistrict: true, id: `district:${d.name}`, name: d.name,
+        __isDistrict: true, id: `project:${d.name}`, name: d.name,
         x: d.cx, y: d.cy, degree: d.count,
       }));
   }
@@ -3330,7 +3330,7 @@ export async function initSpace(container) {
     for (const nd of labeledNodes) {
       if (labelDivs.has(nd)) continue;
       const div = document.createElement("div");
-      div.className = nd.__isDistrict ? "lbl district-label"
+      div.className = nd.__isDistrict ? "lbl project-label"
         : nd.__isCommunity ? "lbl community-label" : "lbl";
       // fallback text now, swapped for the real name async (real nodes only)
       div.textContent = (nd.__isDistrict || nd.__isCommunity)
