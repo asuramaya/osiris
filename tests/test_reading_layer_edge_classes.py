@@ -148,8 +148,11 @@ def test_legend_checkboxes_rebuild_edge_lines_on_change() -> None:
     # tenth: renderStoryline rebuilds the base layer same as an ordinary focus or the drill.
     # WAVE 27, THE LENS PANEL (mail 11754) added an eleventh: the new "high-degree objects"
     # lens checkbox rebuilds the base layer too (its own toggle changes which edges fold
-    # into a badge vs. draw as a line). This slice runs unbounded to end-of-file (no closing
-    # boundary in the split above), so it catches every function defined after renderLegend,
-    # not just renderLegend's own body — noted rather than silently re-scoping an existing
-    # test's own slicing choice.
-    assert body.count("buildEdgeLines(idToNode, edges);") == 11
+    # into a badge vs. draw as a line). The same wave's hash-restore fix (Thoth mail 11981/
+    # 12052) added a twelfth: a hashchange listener reapplies a shared lens link's state and
+    # must rebuild the edge layer the same way a legend checkbox does, since the restored
+    # state can change which edge classes/types are hidden. This slice runs unbounded to
+    # end-of-file (no closing boundary in the split above), so it catches every function
+    # defined after renderLegend, not just renderLegend's own body — noted rather than
+    # silently re-scoping an existing test's own slicing choice.
+    assert body.count("buildEdgeLines(idToNode, edges);") == 12
