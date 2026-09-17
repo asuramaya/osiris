@@ -77,6 +77,8 @@ JSON_COMMANDS = frozenset({
     "backup-settings",
     # SEAT TREE FABRICATION priority fix (Thoth mail 11759)
     "sweep-seat-trees",
+    # WAVE 27, PARITY GAPS 5/6 (Thoth mail 11752)
+    "inspect", "practices",
 })
 
 
