@@ -153,6 +153,11 @@ NO_MCP_EQUIVALENT = {
     "sweep-seat-disk": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
         "house's own entry above; sweep_seat_disk carries meta={'deprecated': True} from "
         "the #202 seat-dispatcher build (msg 7039), still fully callable.",
+    "sweep-seat-trees": "SEAT TREE FABRICATION priority fix (operator-flagged via "
+        "Nebbercracker DM 11747, Thoth mail 11759): a genuinely NEW capability, built "
+        "CLI-only per the dispatch's own literal wording ('osiris seat sweep-trees "
+        "[--apply]'), same precedent as graph-migrate's own entry above — an MCP tool "
+        "can follow if a live caller actually needs one; none was asked for in this tip.",
     "rename-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
         "house's own entry above; rename_seat carries meta={'deprecated': True} from "
         "the #202 seat-dispatcher build (msg 7039), still fully callable.",

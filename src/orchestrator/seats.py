@@ -2016,8 +2016,22 @@ async def bind_seat_tree(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         row["id"])
-    await actions.assert_property(row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC),
-                                  _CONF, evidence_class=_EC)
+    # THE SEAT TREE FABRICATION FIX (operator-flagged via Nebbercracker DM 11747, Thoth
+    # mail 11759): plain assert_property's own supersession is same-source-only, so a
+    # manager's later, correct bind_seat_tree call here never retired an earlier
+    # mint-time fabrication written by a DIFFERENT source (e.g. "console") -- both sat
+    # simultaneously current, and launch trusted whichever row current_assertions
+    # happened to return first. Live specimen: seat:7740974b (dustin) carried BOTH
+    # '/home/asuramaya/code/dustin' (source=console, fabricated at mint) and
+    # '/home/asuramaya/code/monsterhouse' (source=nebbercracker, a real manual fix that
+    # silently never won). tree_cwd is single-valued per seat regardless of who wrote
+    # it last -- assert_singular_property (ruling 1335332e) is the house's own door for
+    # exactly this shape, collapsing every other current row, not just this source's own.
+    await actions.assert_singular_property(
+        row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC), _CONF,
+        because=f"{because} (bind_seat_tree: tree_cwd is single-valued per seat, "
+                "cross-source collapse, ruling 1335332e)",
+        evidence_class=_EC)
     out = {"seat": seat_id, "old_tree_cwd": old_tree, "tree_cwd": tree_cwd,
            "because": because,
            "note": "recorded — osiris never provisions the directory itself; launch_seat "
@@ -2025,6 +2039,70 @@ async def bind_seat_tree(
     if self_authorized:
         out["authorization"] = "self-authorized, no manager on record"
     return out
+
+
+async def sweep_seat_trees(
+    actions: Actions, *, apply: bool = False, actor: str,
+) -> dict[str, Any]:
+    """THE SEAT TREE FABRICATION SWEEP (operator-flagged via Nebbercracker DM 11747,
+    Thoth mail 11759): every active seat whose `tree_cwd` is null, or names a directory
+    that is not a real git tree of its own governed project, listed (dry run) or
+    rebound (`apply=True`) — the fleet-wide cleanup for every specimen `found_seat`'s
+    own mint-time fabrication already produced before its fix landed (this sweep never
+    touches a seat minted AFTER the fix, since those never fabricated a tree to begin
+    with). Reuses `bind_seat_tree` unchanged for every real write (the SAME cross-
+    source-safe collapse, never a second implementation), scoped by `actor` exactly as
+    that verb already enforces (operator, or the target seat's own manager).
+
+    A seat REPAIRS when its own charter (`governed_trees`) names EXACTLY ONE project
+    with a recorded, real git tree — the unambiguous case. Every other shape is
+    reported, never guessed: no tree_cwd problem at all (skipped, not listed), no
+    charter (`refused-why: no charter`), more than one real governed tree
+    (`refused-why: ambiguous charter`), or a charter whose own recorded path isn't
+    actually a git tree either (`refused-why: no real governed tree`)."""
+    from src.orchestrator.charter import governed_trees
+    from src.orchestrator.trigger import _is_git_tree, _tree_exists
+
+    rows = await actions.pool.fetch(
+        "SELECT o.canonical AS seat_id, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='tree_cwd' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS tree_cwd "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active'")
+
+    entries: list[dict[str, Any]] = []
+    for r in rows:
+        seat_id, tree_cwd = r["seat_id"], r["tree_cwd"]
+        if tree_cwd and _tree_exists(tree_cwd) and _is_git_tree(tree_cwd):
+            continue  # a real, bound tree — nothing to sweep
+        real_trees = [
+            (repo, p) for repo, p in await governed_trees(actions.pool, seat_id)
+            if _tree_exists(p) and _is_git_tree(p)]
+        if len(real_trees) != 1:
+            entries.append({
+                "seat": seat_id, "old_tree_cwd": tree_cwd, "new_tree_cwd": None,
+                "refused_why": "no charter" if not real_trees else "ambiguous charter",
+            })
+            continue
+        repo, real_path = real_trees[0]
+        if not apply:
+            entries.append({
+                "seat": seat_id, "old_tree_cwd": tree_cwd, "new_tree_cwd": real_path,
+                "refused_why": None, "repo": repo})
+            continue
+        bound = await bind_seat_tree(
+            actions, seat_id=seat_id, tree_cwd=real_path, actor=actor,
+            because=f"sweep_seat_trees: repaired from its own charter ({repo})")
+        entries.append({
+            "seat": seat_id, "old_tree_cwd": tree_cwd,
+            "new_tree_cwd": bound.get("tree_cwd") if "error" not in bound else None,
+            "refused_why": bound.get("error"), "repo": repo})
+    return {
+        "apply": apply, "swept": len(entries),
+        "repaired": sum(1 for e in entries if e["new_tree_cwd"] and not e["refused_why"]),
+        "refused": sum(1 for e in entries if e["refused_why"]),
+        "entries": entries,
+    }
 
 
 async def bind_holder(

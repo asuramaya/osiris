@@ -74,6 +74,7 @@ from src.cli import (
     cmd_smoke_chaos,
     cmd_smoke_reboot,
     cmd_status,
+    cmd_sweep_seat_trees,
     cmd_team,
     cmd_thread,
     cmd_threads,
@@ -4250,6 +4251,19 @@ async def test_cmd_boot_status_fleet_emits_json(
     monkeypatch.setattr(mounts, "registry_census", _empty_census)
     out = await cmd_boot_status(pool=actions.pool, fleet=True, as_json=True)
     assert out == 0
+
+
+# --- cmd_sweep_seat_trees: SEAT TREE FABRICATION priority fix (Thoth mail 11759) -----------
+
+async def test_cmd_sweep_seat_trees_dry_run_reports_json(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = await cmd_sweep_seat_trees(apply=False, actor="operator", as_json=True,
+                                     pool=actions.pool)
+    assert out == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["apply"] is False
+    assert "entries" in payload
 
 
 # --- cmd_lint: the graph_lint mirror (WAVE 22 item 2, mail 10109, thread bf10608b) — a real

@@ -6213,6 +6213,45 @@ async def cmd_sweep_seat_disk(
     return 0
 
 
+async def cmd_sweep_seat_trees(
+    *, apply: bool = False, actor: str, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris sweep-seat-trees [--apply] [--actor W] [--json] — WAVE 27 priority fix
+    (operator-flagged via Nebbercracker DM 11747, Thoth mail 11759): the console-script
+    door onto orchestrator.seats.sweep_seat_trees, fleet-wide, listing every seat whose
+    tree_cwd is null or not a real git tree of its own governed project, repairing on
+    --apply. Dry run by default."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import sweep_seat_trees
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:sweep-seat-trees")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris sweep-seat-trees: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await sweep_seat_trees(Actions(pool), apply=apply, actor=actor)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="sweep-seat-trees")
+    return 0
+
+
 async def cmd_rename_seat(
     seat_id: str, new_handle: str, because: str, *, actor: str,
     pool: asyncpg.Pool | None = None,
@@ -6813,7 +6852,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         transition-seat-project, correct-agent-house, reconcile-merge,
                         retire-agent, heal-seat-transcript, attach-seat, detach-seat,
                         promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
-                        rename-seat, set-seat-attended, reissue-office,
+                        sweep-seat-trees, rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project,
                         set-project-tag, proposal, settings, backup-settings,
@@ -8100,6 +8139,22 @@ def _build_parser() -> argparse.ArgumentParser:
                                    help="write; default is a dry-run report")
     p_sweep_seat_disk.add_argument("--because", default="", help="why this is being swept")
 
+    p_sweep_seat_trees = sub.add_parser(
+        "sweep-seat-trees", description=_d(
+            "WAVE 27 priority fix (Thoth mail 11759): fleet-wide, every seat whose "
+            "tree_cwd is null or not a real git tree of its own governed project, "
+            "listed (dry run) or repaired (--apply) — the console-script door onto "
+            "orchestrator.seats.sweep_seat_trees"),
+        epilog="example: osiris sweep-seat-trees\n"
+               "example: osiris sweep-seat-trees --apply --actor operator")
+    p_sweep_seat_trees.add_argument("--apply", action="store_true",
+                                    help="write; default is a dry-run report")
+    p_sweep_seat_trees.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                    help="bind_seat_tree's own authorization identity — "
+                                         f"defaults to {_CONSOLE_ACTOR!r}")
+    p_sweep_seat_trees.add_argument("--json", action="store_true", dest="as_json",
+                                    help="machine-readable: the full receipt")
+
     p_rename_seat = sub.add_parser(
         "rename-seat", description=_d(
             "rename a seat's handle deliberately — the console-script door onto "
@@ -8522,6 +8577,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sweep-seat-disk":
         return asyncio.run(cmd_sweep_seat_disk(args.handle, dry_run=not args.apply_,
                                                because=args.because))
+    if args.command == "sweep-seat-trees":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_sweep_seat_trees(
+            apply=args.apply, actor=args.actor, as_json=args.as_json))
     if args.command == "rename-seat":
         return asyncio.run(cmd_rename_seat(args.seat_id, args.new_handle, args.because,
                                            actor=args.actor))

@@ -4380,6 +4380,35 @@ async def test_bind_seat_tree_rebinding_reports_the_old_value(actions: Actions) 
     assert out["old_tree_cwd"] == "/repo/first" and out["tree_cwd"] == "/repo/second"
 
 
+async def test_bind_seat_tree_supersedes_a_different_sources_prior_tree(
+    actions: Actions,
+) -> None:
+    """THE SEAT TREE FABRICATION FIX (Thoth mail 11759, live specimen: seat:7740974b/
+    dustin carried BOTH a fabricated 'console'-sourced tree_cwd and nebbercracker's own
+    later, correct one, simultaneously current — plain assert_property's own same-
+    source-only supersession let the correction silently coexist instead of winning).
+    A rebind from a DIFFERENT actor than the one who wrote the prior value must still
+    collapse to exactly one current tree_cwd, never two contradicting rows."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    seat = await actions.create_or_find_object("Seat", "seat:bt-crosssrc", "test")
+    await actions.assert_property(seat, "handle", "CrossSource", "test",
+                                  datetime.now(UTC), 0.9)
+    # the mint-time fabrication, written by one source ("console")
+    await actions.assert_property(seat, "tree_cwd", "/home/asuramaya/code/crosssource",
+                                  "console", datetime.now(UTC), 0.9)
+    # the manager's own later, correct fix, from a DIFFERENT source
+    await bind_seat_tree(
+        actions, seat_id="seat:bt-crosssrc", tree_cwd="/home/asuramaya/code/monsterhouse",
+        actor="operator", because="test: the real tree")
+
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions "
+        "WHERE object_id=$1 AND name='tree_cwd'", seat)
+    assert len(rows) == 1
+    assert rows[0]["v"] == "/home/asuramaya/code/monsterhouse"
+
+
 async def test_bind_seat_tree_refuses_a_blank_tree_cwd(actions: Actions) -> None:
     from src.orchestrator.seats import bind_seat_tree
 
@@ -4480,6 +4509,79 @@ async def test_bind_seat_tree_still_refuses_a_managed_seats_holder_bypassing_its
                                actor="agent:managed-holder",
                                because="the holder tries to skip its own manager")
     assert "not authorized to bind" in out["error"]
+
+
+# --- sweep_seat_trees (Thoth mail 11759, operator-flagged via Nebbercracker DM 11747) ------
+
+async def test_sweep_seat_trees_repairs_a_fabricated_tree_on_apply(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import sweep_seat_trees
+
+    real_tree = tmp_path / "real-repo"
+    (real_tree / ".git").mkdir(parents=True)
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-repair", "test")
+    await actions.assert_property(seat, "handle", "SweepRepair", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", "/home/asuramaya/code/sweeprepair",
+                                  "console", datetime.now(UTC), 0.9)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:sweeprepair", "test")
+    await actions.assert_property(proj, "on_disk_path", str(real_tree), "test",
+                                  datetime.now(UTC), 0.9)
+    await set_charter(actions, "seat:sweep-repair", ["sweeprepair"], actor="test")
+
+    dry = await sweep_seat_trees(actions, apply=False, actor="operator")
+    entry = next(e for e in dry["entries"] if e["seat"] == "seat:sweep-repair")
+    assert entry["new_tree_cwd"] == str(real_tree)
+    assert entry["refused_why"] is None
+    # dry run writes nothing
+    still = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd' ORDER BY confidence DESC, observed_at DESC LIMIT 1", seat)
+    assert still == "/home/asuramaya/code/sweeprepair"
+
+    out = await sweep_seat_trees(actions, apply=True, actor="operator")
+    assert out["repaired"] >= 1
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='tree_cwd'", seat)
+    assert len(rows) == 1
+    assert rows[0]["v"] == str(real_tree)
+
+
+async def test_sweep_seat_trees_reports_no_charter_without_guessing(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import sweep_seat_trees
+
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-nocharter", "test")
+    await actions.assert_property(seat, "handle", "SweepNoCharter", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", "/home/asuramaya/code/sweepnocharter",
+                                  "console", datetime.now(UTC), 0.9)
+
+    out = await sweep_seat_trees(actions, apply=False, actor="operator")
+    entry = next(e for e in out["entries"] if e["seat"] == "seat:sweep-nocharter")
+    assert entry["new_tree_cwd"] is None
+    assert entry["refused_why"] == "no charter"
+
+
+async def test_sweep_seat_trees_skips_a_seat_with_a_real_tree_already(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    from src.orchestrator.seats import sweep_seat_trees
+
+    real_tree = tmp_path / "already-real"
+    (real_tree / ".git").mkdir(parents=True)
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-already-real", "test")
+    await actions.assert_property(seat, "handle", "SweepAlready", "test",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "tree_cwd", str(real_tree), "test",
+                                  datetime.now(UTC), 0.9)
+
+    out = await sweep_seat_trees(actions, apply=False, actor="operator")
+    assert not any(e["seat"] == "seat:sweep-already-real" for e in out["entries"])
 
 
 # ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
