@@ -6035,7 +6035,7 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     assert out == 0
     text = buf.getvalue()
     assert "minted CliMintWorker1" in text and "house=clihouse" in text
-    assert "office:" in text
+    assert "seat directory:" in text
     assert f"manager: {manager['seat_id']} (linked)" in text
     # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/msg 6262 — this assertion used to
     # PROVE the bug, not catch it: a terminal caller was handed `launch(target=...)`,
@@ -6050,6 +6050,44 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     assert len(worker_ids) == 1
     facts = await seat_facts(actions.pool, worker_ids[0])
     assert facts["anchor_cwd"]
+
+
+async def test_cmd_reissue_office_is_a_deprecated_alias_for_reissue_seat_dir(
+    actions: Actions,
+) -> None:
+    """ONE TAXONOMY (ruling 52a59652/70c001ec): the old subcommand still works this
+    release, but warns and delegates — never a second implementation."""
+    import io
+    from contextlib import redirect_stderr
+
+    from src.cli import cmd_reissue_office
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_reissue_office(
+            "no-such-seat-anywhere", "test", actor="operator", pool=actions.pool)
+    assert out == 1
+    text = buf.getvalue()
+    assert "deprecated, use reissue-seat-dir" in text
+    assert "osiris reissue-seat-dir: refused" in text
+
+
+async def test_cmd_establish_office_is_a_deprecated_alias_for_establish_seat_dir(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    from src.cli import cmd_establish_office
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_establish_office(
+            "no-such-seat-or-agent-anywhere", actor="operator", pool=actions.pool)
+    assert out == 1
+    text = buf.getvalue()
+    assert "deprecated, use establish-seat-dir" in text
+    assert "osiris establish-seat-dir: refused" in text
 
 
 async def test_cmd_mint_seat_refuses_unknown_manager(actions: Actions) -> None:

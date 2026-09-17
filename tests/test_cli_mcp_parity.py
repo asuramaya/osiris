@@ -174,11 +174,24 @@ NO_MCP_EQUIVALENT = {
         "fully callable.",
     "reissue-office": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
         "house's own entry above; reissue_office carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable.",
+        "the #202 seat-dispatcher build (msg 7039), still fully callable. DEPRECATED "
+        "CLI alias for reissue-seat-dir this release only (ONE TAXONOMY, ruling "
+        "52a59652/70c001ec).",
     "establish-office": "NOT actually MCP-less — same hidden-alias shape as correct-"
         "agent-house's own entry above; establish_office carries meta="
         "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
-        "fully callable.",
+        "fully callable. DEPRECATED CLI alias for establish-seat-dir this release only "
+        "(ONE TAXONOMY, ruling 52a59652/70c001ec).",
+    "reissue-seat-dir": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "agent-house's own entry above; the underlying MCP action is still named "
+        "reissue_office (Sekhmet's own MCP-surface rename lands separately, ONE "
+        "TAXONOMY wave 28) — this CLI door renamed ahead of it, ruling 52a59652/"
+        "70c001ec.",
+    "establish-seat-dir": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "agent-house's own entry above; the underlying MCP action is still named "
+        "establish_office (Sekhmet's own MCP-surface rename lands separately, ONE "
+        "TAXONOMY wave 28) — this CLI door renamed ahead of it, ruling 52a59652/"
+        "70c001ec.",
     "resync-seat-house": "NOT actually MCP-less — same hidden-alias shape as correct-"
         "agent-house's own entry above; resync_seat_house carries meta="
         "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
@@ -421,7 +434,6 @@ CLI_ONLY_PARAMS = {
     ("composition", "name"): "dispatcher fan-out param — see the block comment above.",
     ("composition", "spec"): "dispatcher fan-out param — see the block comment above.",
     ("composition", "kind"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "room"): "dispatcher fan-out param — see the block comment above.",
     ("composition", "subject"): "dispatcher fan-out param — see the block comment above.",
     ("composition", "fields"): "dispatcher fan-out param — see the block comment above.",
     ("composition", "take"): "dispatcher fan-out param — see the block comment above.",

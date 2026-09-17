@@ -70,6 +70,7 @@ from src.cli import (
     cmd_digest,
     cmd_dossier,
     cmd_establish_office,
+    cmd_establish_seat_dir,
     cmd_fleet,
     cmd_fleet_prune,
     cmd_fleet_reconcile,
@@ -93,6 +94,7 @@ from src.cli import (
     cmd_reconcile_merge,
     cmd_reconcile_seat_identity,
     cmd_reissue_office,
+    cmd_reissue_seat_dir,
     cmd_rematerialize,
     cmd_rename_project,
     cmd_rename_seat,
@@ -282,6 +284,10 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "reissue-office": lambda a: cmd_reissue_office(
         "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
     "establish-office": lambda a: cmd_establish_office(
+        "no-such-seat-or-agent-anywhere", actor="operator", pool=a.pool),
+    "reissue-seat-dir": lambda a: cmd_reissue_seat_dir(
+        "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
+    "establish-seat-dir": lambda a: cmd_establish_seat_dir(
         "no-such-seat-or-agent-anywhere", actor="operator", pool=a.pool),
     "reconcile-seat-identity": lambda a: cmd_reconcile_seat_identity(
         "no-such-seat-anywhere", "test", actor="operator", pool=a.pool),
