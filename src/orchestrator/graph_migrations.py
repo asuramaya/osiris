@@ -30,8 +30,10 @@ from src.parsers.evidence import confidence_for
 MIGRATION_TARGETS = frozenset({
     "repo_seats_fix", "file_the_unfiled", "assertion_links",
     "owned_by_second_pass", "file_the_residual", "commits_to_agents",
-    "house_to_project",
+    "house_to_project", "holds_sandwich",
 })
+
+_BIND_BEFORE_SPAWN_PREFIX = "launch_seat: bind-before-spawn"
 
 _TIER = EvidenceClass.DIRECT_OBSERVATION
 _CONF = confidence_for(_TIER)
@@ -65,6 +67,9 @@ async def run_migration(
             actions, actor=actor, dry_run=dry_run, because=because)
     if name == "house_to_project":
         return await migrate_house_to_project(
+            actions, actor=actor, dry_run=dry_run, because=because)
+    if name == "holds_sandwich":
+        return await migrate_holds_sandwich(
             actions, actor=actor, dry_run=dry_run, because=because)
     return {"error": f"unknown migration {name!r}", "valid_targets": sorted(MIGRATION_TARGETS)}
 
@@ -1096,5 +1101,106 @@ async def migrate_house_to_project(
         "repaired": sum(1 for e in entries if e["new_project"] and not e["refused_why"]),
         "refused": sum(1 for e in entries if e["refused_why"]),
         "entries": entries,
+        "because": because if not dry_run else None,
+    }
+
+
+async def migrate_holds_sandwich(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE HOLDS-SANDWICH REPAIR (WAVE 27/28 boundary, Thoth dispatch 12079/12190,
+    off Sekhmet's own commits_to_agents diagnosis): `_bind_before_spawn` used to mint a
+    fresh, real generation and move the seat's `holds` link onto it purely as pre-spawn
+    bookkeeping (agents.py's `mint_heir` now takes `bind_seat=False` for that one call
+    site, the going-forward fix, commit alongside this one) — every holds history
+    minted before that fix can carry a real generation's own continuous tenure split
+    into two rows with a near-instant `launch_seat: bind-before-spawn`-minted phantom
+    sandwiched between them. The holds link is the fact of record for "who held this
+    seat at time T" — wrong data regardless of how few readers ever asked that exact
+    question.
+
+    A SANDWICH: three CONSECUTIVE holds rows on one seat (ordered by `first_seen`)
+    where the middle row's holder carries a `minted_because` starting with
+    "launch_seat: bind-before-spawn" and the first and third rows' holder is the SAME
+    agent — never a bare "the gap belongs to the nearest neighbour" guess (that would
+    also swallow a genuine vacancy after a real vacate_dead_seat); this recognizes only
+    the one diagnosed, precisely-named shape.
+
+    REPAIR, COMPENSATING, NEVER A DELETE: `invalidate_link`'s own door only ever closes
+    a CURRENTLY-open link (`WHERE valid_until IS NULL`), so it cannot touch these three
+    rows — every one of them is already closed, historical, by the time this migration
+    ever runs. This is the one shape in this file that reaches past that door on
+    purpose: it extends the FIRST row's own `valid_until` forward to the THIRD row's own
+    `valid_until` (re-opening the real holder's continuous tenure across the whole
+    sandwich) and closes the phantom middle row and the now-redundant third row down to
+    zero width at their own `first_seen` — retired, never deleted, every original row
+    stays exactly where it was written, in whose name, and why; only the recorded
+    interval each one covers changes.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds no sandwich left (the middle and third rows read zero-width,
+    never matching the three-consecutive-rows shape again)."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "migrating without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT t.canonical AS seat, f.canonical AS holder, l.id, l.first_seen, "
+        " l.valid_until, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=f.id "
+        "   AND a.name='minted_because' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS minted_because "
+        "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE l.type='holds' AND t.type='Seat' "
+        "ORDER BY t.canonical, l.first_seen")
+
+    by_seat: dict[str, list[Any]] = defaultdict(list)
+    for r in rows:
+        by_seat[r["seat"]].append(r)
+
+    sandwiches: list[dict[str, Any]] = []
+    for seat, windows in by_seat.items():
+        i = 0
+        while i + 2 < len(windows):
+            w1, w2, w3 = windows[i], windows[i + 1], windows[i + 2]
+            phantom = (w2["minted_because"] or "").startswith(_BIND_BEFORE_SPAWN_PREFIX)
+            # IDEMPOTENCY: a repaired sandwich's own middle/third rows read zero-width
+            # (valid_until == first_seen) — a live, real window never does (`create_link`
+            # always mints valid_until IS NULL, later closed to a real, later instant by
+            # a real event) — so a zero-width row here means this exact sandwich was
+            # already repaired, never a fresh match on the very rows this migration wrote.
+            already_repaired = (w2["valid_until"] == w2["first_seen"]
+                                or w3["valid_until"] == w3["first_seen"])
+            if (phantom and not already_repaired
+                    and w1["holder"] == w3["holder"] and w1["holder"] != w2["holder"]):
+                sandwiches.append({
+                    "seat": seat, "real_holder": w1["holder"], "phantom": w2["holder"],
+                    "window": [w1["first_seen"].isoformat(),
+                              w3["valid_until"].isoformat() if w3["valid_until"] else None],
+                    "_w1_id": w1["id"], "_w2_id": w2["id"], "_w3_id": w3["id"],
+                    "_w3_valid_until": w3["valid_until"],
+                })
+                i += 3  # the whole sandwich is consumed — never re-match its own pieces
+            else:
+                i += 1
+
+    if not dry_run:
+        for s in sandwiches:
+            await pool.execute(
+                "UPDATE links SET valid_until=$1 WHERE id=$2",
+                s["_w3_valid_until"], s["_w1_id"])
+            await pool.execute(
+                "UPDATE links SET valid_until=first_seen WHERE id=$1", s["_w2_id"])
+            await pool.execute(
+                "UPDATE links SET valid_until=first_seen WHERE id=$1", s["_w3_id"])
+
+    for s in sandwiches:  # internal row ids are an implementation detail, never in the receipt
+        for key in ("_w1_id", "_w2_id", "_w3_id", "_w3_valid_until"):
+            del s[key]
+
+    return {
+        "dry_run": dry_run,
+        "sandwiches_found": len(sandwiches),
+        "sandwiches": sandwiches,
         "because": because if not dry_run else None,
     }

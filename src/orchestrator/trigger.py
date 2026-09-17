@@ -3023,7 +3023,7 @@ async def _bind_before_spawn(
         heir_id, _heir_oid = await mint_heir(
             actions, ancestor, ancestor_oid,
             because="launch_seat: bind-before-spawn (piece 1, msg 6692)", succession=None,
-            now=now, minting_door=anchor, upcoming_project=house)
+            now=now, minting_door=anchor, upcoming_project=house, bind_seat=False)
     else:
         from src.parsers.base import EvidenceClass
         from src.parsers.evidence import confidence_for
@@ -3040,12 +3040,19 @@ async def _bind_before_spawn(
                                       evidence_class=do.value)
         await actions.assert_property(heir_oid, "seat_generation", "1", source, now, conf,
                                       evidence_class=do.value)
-    # EXPLICIT, ALWAYS — never left to mint_heir's own follow_binding alone (see docstring:
-    # a corrected-lineage ancestor may not itself hold `target_seat` yet). Idempotent
-    # (bind_holder checks for an already-live identical link before writing) so this is a
-    # no-op when follow_binding already did the work, and the actual correction when it
-    # didn't.
-    await bind_holder(actions, seat_id=target_seat, agent_id=heir_id, source=source)
+    # THE HOLDS-SANDWICH FIX: bind the REAL holder, never the fresh bookkeeping heir — the
+    # heir has done no work yet and may never do any (a resume/launch outcome can supersede
+    # it within seconds), so opening the seat's own holds window on it would leave a
+    # phantom sandwiched inside a real generation's continuous tenure the instant anything
+    # reverts. The ancestor case binds `ancestor` (never `heir_id`, and mint_heir was called
+    # above with bind_seat=False so it never touched holds either) — EXPLICIT, ALWAYS, never
+    # left to mint_heir's own follow_binding alone (see its docstring: a corrected-lineage
+    # ancestor may not itself hold `target_seat` yet). The no-ancestor case has no continuous
+    # tenure to protect (the seat was genuinely vacant) — heir_id becomes the real first
+    # holder directly. Idempotent either way (bind_holder checks for an already-live
+    # identical link before writing).
+    await bind_holder(actions, seat_id=target_seat, agent_id=(ancestor or heir_id),
+                      source=source)
     await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id,
                      project=resolved_project if resolved_project is not None else house,
                      cwd=office, model=None, session_key=None, alive=False)
