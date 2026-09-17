@@ -49,6 +49,7 @@ from src.orchestrator.offices import is_bare_office_root
 
 PgrepFn = Callable[[], "list[int] | None"]
 ReadFn = Callable[[int], "str | None"]
+CmdlineFn = Callable[[int], bytes]
 
 
 def _pgrep_candidates() -> list[int] | None:
@@ -108,6 +109,23 @@ def _proc_cmdline(pid: int) -> bytes:
         return b""
 
 
+def _is_bg_spare(cmdline: bytes) -> bool:
+    """THE LIVENESS CONVERGENCE FIX, PIECE B2 (Nebbercracker's monsterhouse report, DM
+    11817/11821): a `claude bg-spare --bg-spare <sock>` pre-warmed body is a real,
+    exe-verified `claude` process sitting at a real cwd (often a seat's own office root,
+    the same "bare container" `_is_bg_spare_process`'s own docstring names) — `_is_
+    claude_body` and a cwd match both correctly fire on it, and until this check existed
+    nothing downstream could tell it apart from an actual live mind. Live specimen: pid
+    3750764, 14h old, cwd = jenny's seat directory, no turns ever — `wake()` refused
+    `refused-occupied-foreign` and `launch()` refused `already-live` on a STALE
+    generation because this spare read as the occupant. Classify by CMDLINE (the same
+    `b"bg-spare" in cmdline` probe `osiris_hook.py`'s own `_is_bg_spare_process` already
+    uses for a hook's own parent), never by cwd or exe alone — a spare is never a
+    genuine occupant of anything, and stays invisible to both `live_bodies` and
+    `live_bodies_by_cwd`."""
+    return b"bg-spare" in cmdline
+
+
 def _is_claude_body(exe: str | None) -> bool:
     """Confirms `exe` is really the packaged claude binary (`.../claude/versions/<ver>`) and
     not some other process that happens to share `claude`'s truncated 15-char `comm` field —
@@ -126,6 +144,7 @@ def live_bodies(
     pgrep: PgrepFn = _pgrep_candidates,
     read_cwd: ReadFn = _proc_cwd,
     read_exe: ReadFn = _proc_exe,
+    read_cmdline: CmdlineFn = _proc_cmdline,
 ) -> dict[str, list[int]]:
     """{project: [pid, ...]} — real OS processes backing a project RIGHT NOW. Pure OS truth: no
     graph read, no notion of "mounted" or "live" from the registry's side at all.
@@ -134,8 +153,13 @@ def live_bodies(
     `.osiris` walk, falling back to the cwd's basename) so a census label always lines up with
     whatever a mount row calls the same project — this module does not invent a second mapping.
 
-    Injectable seam (`pgrep`/`read_cwd`/`read_exe`) so tests drive this with fakes; the module
-    functions above are the real OS-facing default and are never exercised by a test directly.
+    A `claude bg-spare` pre-warmed body is never counted (`_is_bg_spare`, THE LIVENESS
+    CONVERGENCE FIX PIECE B2) — a real, exe-verified claude process with no conversation
+    of its own is not a live BODY of anything.
+
+    Injectable seam (`pgrep`/`read_cwd`/`read_exe`/`read_cmdline`) so tests drive this with
+    fakes; the module functions above are the real OS-facing default and are never exercised
+    by a test directly.
 
     Best-effort at every layer, not just its own default `pgrep`: an INJECTED `pgrep` that
     raises (or returns None — the blind census) degrades to an empty census exactly the same
@@ -151,6 +175,8 @@ def live_bodies(
     out: dict[str, list[int]] = defaultdict(list)
     for pid in pids:
         if not _is_claude_body(read_exe(pid)):
+            continue
+        if _is_bg_spare(read_cmdline(pid)):
             continue
         cwd = read_cwd(pid)
         if not cwd:
@@ -174,10 +200,22 @@ def live_bodies_by_cwd(
     pgrep: PgrepFn = _pgrep_candidates,
     read_cwd: ReadFn = _proc_cwd,
     read_exe: ReadFn = _proc_exe,
+    read_cmdline: CmdlineFn = _proc_cmdline,
 ) -> dict[str, list[int]] | None:
     """{resolved cwd: [pid, ...]} — the door sweep's witness, cwd-grained where `live_bodies`
     is project-grained: an office and the repo it governs can share one project label, and a
-    door may only be released on the word of the exact directory it opens into.
+    door may only be released on the word of the exact directory it opens into. This is also
+    `_resume_occupancy_gate`'s own 'foreign' signal (trigger.py) — a real claude process of
+    unknown identity sitting in the exact directory a resume would land in.
+
+    A `claude bg-spare` pre-warmed body is never counted (`_is_bg_spare`, THE LIVENESS
+    CONVERGENCE FIX PIECE B2, Nebbercracker's monsterhouse report DM 11817/11821): live
+    specimen, jenny's own seat directory read as occupied by a 14h-old warm spare (pid
+    3750764, cwd = the seat directory, no turns ever), so `wake()` refused
+    `refused-occupied-foreign` and `launch()` refused `already-live` on the wrong
+    generation. A spare is a real, exe-verified, cwd-matching process — cmdline
+    (`b"bg-spare" in cmdline`) is the only signal that tells it apart from an actual
+    occupant.
 
     None means the census was BLIND (pgrep itself failed) — a caller holding a delete verb
     must skip its tick entirely, never treat blindness as an empty box: releasing every fresh
@@ -191,6 +229,8 @@ def live_bodies_by_cwd(
     out: dict[str, list[int]] = defaultdict(list)
     for pid in pids:
         if not _is_claude_body(read_exe(pid)):
+            continue
+        if _is_bg_spare(read_cmdline(pid)):
             continue
         cwd = read_cwd(pid)
         if not cwd:

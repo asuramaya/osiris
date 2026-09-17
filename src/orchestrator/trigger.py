@@ -1868,6 +1868,31 @@ async def dispatch_dm(
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
     fresh_spawn: Any = None,
 ) -> dict[str, str]:
+    """Thin wrapper around `_dispatch_dm_body`: persists the verdict it returns onto the
+    message (WAVE 27 BUG 3, DM 11799/11853, thread bc517864) before handing it back — one
+    write site instead of duplicating it onto every one of the body's ~20 return points.
+    `dispatch_mode`/`dispatch_mode_at` are audit-only (never read back to gate anything);
+    the re-dispatch itself already works without them — the ~60s backstop sweep
+    (trigger_mail_tick) calls this same function fresh every tick, and a mid-turn
+    addressee's own transcript-freshness check naturally falls open into a real nudge the
+    moment its turn actually ends. What was missing was a durable answer to "was this
+    message caught mid-turn, and when did we last check" — this closes that, nothing else."""
+    result = await _dispatch_dm_body(
+        pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings,
+        spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge,
+        agents_json=agents_json, fresh_spawn=fresh_spawn)
+    await pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode=$1, dispatch_mode_at=now() WHERE id=$2",
+        result["mode"], msg_id)
+    return result
+
+
+async def _dispatch_dm_body(
+    pool: asyncpg.Pool, *, addressee: str, msg_id: int, sender: str | None,
+    settings: Settings | None = None, spawn: Any = None, windows: Any = None,
+    poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
+    fresh_spawn: Any = None,
+) -> dict[str, str]:
     """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
     send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
     lanes must never drift). Returns the per-hop RECEIPT {mode, detail}:

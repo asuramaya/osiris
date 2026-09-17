@@ -961,6 +961,73 @@ async def _no_job(ids: set[str]) -> dict[str, Any] | None:
     return None
 
 
+async def test_dispatch_dm_persists_its_own_verdict_onto_the_message(
+    actions: Actions,
+) -> None:
+    """WAVE 27 BUG 3 (DM 11799/11853, thread bc517864): dispatch_dm's own mode never used
+    to leave a durable trace on the message it dispatched — only the cron log line saw it.
+    `dispatch_mode`/`dispatch_mode_at` on fleet_messages now do, regardless of which branch
+    returns (here: the cheapest one, trigger-dark) — audit-only, nothing reads it back to
+    gate anything."""
+    msg_id = await _dm_to_owner(actions)
+    d = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                          sender="agent:sender", settings=_settings(enabled=False))
+    assert d["mode"] == "trigger-dark"
+    row = await actions.pool.fetchrow(
+        "SELECT dispatch_mode, dispatch_mode_at FROM fleet_messages WHERE id=$1", msg_id)
+    assert row["dispatch_mode"] == "trigger-dark"
+    assert row["dispatch_mode_at"] is not None
+
+
+async def test_dispatch_dm_persists_mid_turn_and_then_the_later_resumed_verdict(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The shape BUG 3 actually cares about: the SAME message's dispatch_mode moves from
+    'mid-turn' to whatever the backstop sweep's next tick finds once the addressee goes
+    idle — a durable trail of the classification changing, not just the final word. This
+    is the existing re-dispatch machinery (trigger_mail_tick calling dispatch_dm fresh
+    every ~60s, already correct — no new sweep needed) exercised twice by hand."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    transcript = sense / "-repo-demo" / f"{FULL_SID}.jsonl"
+    msg_id = await _dm_to_owner(actions)
+    signed = ('{"type":"user","toolUseResult":'
+             '"{\\"sent\\":1,\\"from\\":\\"agent:abcd1234\\"}"}\n')
+
+    # a real conversational line, freshly timestamped = a turn genuinely in flight = mid-turn
+    fresh_line = json.dumps({"type": "assistant", "timestamp": datetime.now(UTC).isoformat()})
+    transcript.write_text(signed + fresh_line + "\n")
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("mid-turn must never reach the wake lane")
+
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender",
+                           settings=_settings(enabled=True, sense=str(sense)),
+                           windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d1["mode"] == "mid-turn"
+    assert await actions.pool.fetchval(
+        "SELECT dispatch_mode FROM fleet_messages WHERE id=$1", msg_id) == "mid-turn"
+
+    # the transcript's last real line ages past active_secs (its own turn ended) — the
+    # identical call, re-run exactly as the ~60s backstop sweep would, now falls through
+    # to a real dispatch
+    stale_line = json.dumps({"type": "assistant", "timestamp": "2020-01-01T00:00:00+00:00"})
+    transcript.write_text(signed + stale_line + "\n")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append((repo, kw))
+
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=msg_id,
+                           sender="agent:sender",
+                           settings=_settings(enabled=True, sense=str(sense)),
+                           spawn=_spawn, windows=_no_windows, jobs=_no_job, nudge=_boom)
+    assert d2["mode"] == "resumed"
+    assert calls
+    assert await actions.pool.fetchval(
+        "SELECT dispatch_mode FROM fleet_messages WHERE id=$1", msg_id) == "resumed"
+
+
 async def test_a_dm_resumes_the_addressee_itself(actions: Actions, tmp_path: Path) -> None:
     """The payoff: a DM to a stale-but-resumable agent wakes THAT agent via its own session
     — mode 'dm-resume' in the ledger, the private prompt, never a twin."""

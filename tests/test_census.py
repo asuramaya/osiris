@@ -154,3 +154,75 @@ def test_live_bodies_by_cwd_is_directory_grained(tmp_path: Path) -> None:
         read_exe={1: _versions_exe(), 2: _versions_exe(), 3: _versions_exe(),
                   4: "/usr/bin/node"}.get)
     assert out == {str(a.resolve()): [1, 2], str(b.resolve()): [3]}
+
+
+# ═══ THE LIVENESS CONVERGENCE FIX, PIECE B2 (Nebbercracker's monsterhouse report,
+# DM 11817/11821): a `claude bg-spare` pre-warmed body is a real, exe-verified claude
+# process sitting at a real cwd — cmdline is the only signal that tells it apart from
+# an actual occupant. Live specimen: pid 3750764, 14h old, cwd = jenny's own seat
+# directory, no turns ever — misread as the occupant by both census functions.
+
+def test_is_bg_spare_matches_the_hook_s_own_probe() -> None:
+    from src.orchestrator.census import _is_bg_spare
+
+    assert _is_bg_spare(b"claude\x00bg-spare\x00--bg-spare\x00/tmp/cc-daemon/spare.sock")
+    assert not _is_bg_spare(b"claude\x00--bg\x00--session-id\x00abc123")
+    assert not _is_bg_spare(b"")
+
+
+def test_live_bodies_excludes_a_bg_spare_process(tmp_path: Path) -> None:
+    d = tmp_path / "jenny-office"
+    d.mkdir()
+    out = live_bodies(
+        pgrep=lambda: [1, 2],
+        read_cwd={1: str(d), 2: str(d)}.get,
+        read_exe={1: _versions_exe(), 2: _versions_exe()}.get,
+        read_cmdline={1: b"claude\x00--bg\x00--session-id\x00abc",
+                     2: b"claude\x00bg-spare\x00--bg-spare\x00/tmp/x.sock"}.get)
+    assert out == {"jenny-office": [1]}
+
+
+def test_live_bodies_by_cwd_excludes_a_bg_spare_process(tmp_path: Path) -> None:
+    """The exact live shape: a spare sitting in a seat's own office directory must never
+    read as the occupant `_resume_occupancy_gate`'s own 'foreign' signal trusts."""
+    from src.orchestrator.census import live_bodies_by_cwd
+
+    office = tmp_path / "seats" / "jenny"
+    office.mkdir(parents=True)
+    out = live_bodies_by_cwd(
+        pgrep=lambda: [3750764],
+        read_cwd={3750764: str(office)}.get,
+        read_exe={3750764: _versions_exe()}.get,
+        read_cmdline={3750764: b"claude\x00bg-spare\x00--bg-spare\x00"
+                               b"/tmp/cc-daemon-1000/x/spare/1.claim.sock"}.get)
+    assert out == {}
+
+
+def test_live_bodies_by_cwd_still_counts_a_real_occupant_beside_a_spare(
+    tmp_path: Path,
+) -> None:
+    from src.orchestrator.census import live_bodies_by_cwd
+
+    office = tmp_path / "seats" / "jenny"
+    office.mkdir(parents=True)
+    out = live_bodies_by_cwd(
+        pgrep=lambda: [1, 2],
+        read_cwd={1: str(office), 2: str(office)}.get,
+        read_exe={1: _versions_exe(), 2: _versions_exe()}.get,
+        read_cmdline={1: b"claude\x00bg-spare\x00--bg-spare\x00/tmp/x.sock",
+                     2: b"claude\x00--bg\x00--session-id\x00real"}.get)
+    assert out == {str(office.resolve()): [2]}
+
+
+def test_live_bodies_by_cwd_cmdline_default_is_empty_bytes_never_a_false_spare(
+    tmp_path: Path,
+) -> None:
+    """The real `_proc_cmdline` default reads empty bytes for a fake/vanished pid (caught
+    OSError) — never mistaken for a spare match, same vanished-process race every sibling
+    probe here absorbs."""
+    d = tmp_path / "osiris"
+    d.mkdir()
+    out = live_bodies(pgrep=lambda: [999999999],
+                      read_cwd={999999999: str(d)}.get,
+                      read_exe={999999999: _versions_exe()}.get)
+    assert out == {"osiris": [999999999]}

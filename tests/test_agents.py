@@ -2485,6 +2485,79 @@ async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: 
     assert await house_of(actions.pool, "agent:ghosttest") == "osiris"
 
 
+async def test_mint_heir_never_carries_a_leased_but_unread_message_forward(
+    actions: Actions,
+) -> None:
+    """WAVE 27 BUG 4 (Thoth DM 11781, thread bc517864): a message_recipients row with
+    read_at IS NULL is a LEASE the ancestor held, never a memory — the old unconditional
+    carry-forward handed the heir the ancestor's own (recent) delivered_at, so the heir's
+    very next inbox() read it as already-delivered-within-its-lease-window and stayed
+    silent about a message it had never actually seen (Imhotep's specimen: two leased
+    asks read as settled by the mint). The fix: only read_at IS NOT NULL rows carry
+    forward; a leased-but-unread one carries nothing, so the heir's own inbox() finds it
+    fresh — no prior row, genuinely unread."""
+    from src.orchestrator.agents import claim_name, mint_heir
+    from src.orchestrator.mailbox import read_inbox, send_message
+
+    anc = await actions.create_or_find_object("Agent", "agent:leasetest", "test")
+    await actions.assert_property(anc, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await claim_name(actions, "agent:leasetest", "Leaseholder", source="test")
+
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent="agent:leasetest", body="an ask that never got answered")
+    msg_id = int(out["id"])
+    # the ancestor LEASES it (a non-peek inbox read) but never replies or acks — dies here
+    leased = await read_inbox(actions.pool, "osiris", reader_agent="agent:leasetest")
+    assert [r["id"] for r in leased] == [msg_id]
+    row = await actions.pool.fetchrow(
+        "SELECT delivered_at, read_at FROM message_recipients "
+        "WHERE message_id=$1 AND agent_id='agent:leasetest'", msg_id)
+    assert row["delivered_at"] is not None and row["read_at"] is None
+
+    heir, _heir_oid = await mint_heir(actions, "agent:leasetest", anc,
+                                      because="compaction", succession=None)
+
+    # no inherited lease at all — a fresh identity, never delivered
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg_id, heir) is None
+    # and the heir's OWN next inbox() read genuinely finds it, unread
+    rediscovered = await read_inbox(actions.pool, "osiris", reader_agent=heir)
+    assert [r["id"] for r in rediscovered] == [msg_id]
+
+
+async def test_mint_heir_still_carries_a_genuinely_settled_message_forward(
+    actions: Actions,
+) -> None:
+    """The other half stays true: a message the ancestor actually READ (read_at set, via
+    ack/reply) is real memory, not a lease — it still carries onto the heir exactly as
+    before this fix, so a settled broadcast never redelivers across a mint."""
+    from src.orchestrator.agents import claim_name, mint_heir
+    from src.orchestrator.mailbox import read_inbox, send_message
+
+    anc = await actions.create_or_find_object("Agent", "agent:settledtest", "test")
+    await actions.assert_property(anc, "project", "osiris", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+    await claim_name(actions, "agent:settledtest", "Settledholder", source="test")
+
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent="agent:settledtest", body="already handled")
+    msg_id = int(out["id"])
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at) "
+        "VALUES ($1,'agent:settledtest',now(),now())", msg_id)
+
+    heir, _heir_oid = await mint_heir(actions, "agent:settledtest", anc,
+                                      because="compaction", succession=None)
+
+    assert await actions.pool.fetchval(
+        "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg_id, heir) is not None
+    still_settled = await read_inbox(actions.pool, "osiris", reader_agent=heir)
+    assert still_settled == []
+
+
 async def test_mint_heir_counts_by_the_seats_true_house_not_the_ancestors_stamp(
     actions: Actions,
 ) -> None:
