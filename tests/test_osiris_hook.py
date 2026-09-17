@@ -1648,6 +1648,30 @@ def test_cmd_read_search_joins_its_words_into_one_query_arg(monkeypatch: Any) ->
         osiris_hook._OSIRIS_BIN, "search", "quorumlatch counter", "--text"]
 
 
+def test_cmd_read_inspect_shells_out_to_the_real_inspect_aggregator_not_dossier(
+    monkeypatch: Any,
+) -> None:
+    """WAVE 28 (Thoth mail 11962): `osiris inspect` landed on main in fc2eea19, so the
+    read hook's /inspect matcher now serves off the real aggregator (dossier + the
+    events/chain/candidates flags this bare-ref-only hook never passes through, same
+    discipline as every other ref-taking door here), not the flat `dossier` door it was
+    scoped to before that branch merged."""
+    import subprocess as _subprocess
+
+    seen: dict[str, Any] = {}
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen["args"] = args
+        return _subprocess.CompletedProcess(args, returncode=0, stdout="inspect · x\n",
+                                            stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    assert _cmd_read({"prompt": "/inspect agent:ad1a1cb0"}) == 0
+    assert seen["args"] == [
+        osiris_hook._OSIRIS_BIN, "inspect", "agent:ad1a1cb0", "--text"]
+
+
 def test_cmd_read_ref_verb_with_no_ref_falls_through(monkeypatch: Any) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(osiris_hook.subprocess, "run",

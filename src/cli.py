@@ -1834,7 +1834,7 @@ async def cmd_candidates(*, project: str | None = None, limit: int = 50,
 async def cmd_inspect(
     ref: str, *, want_events: bool = False, want_chain: bool = False,
     want_candidates: bool = False, want_relationships: bool = False,
-    as_json: bool = False,
+    as_json: bool = False, text: bool = False,
 ) -> int:
     """osiris inspect <ref> [--events] [--chain] [--candidates] [--relationships]
     [--json] — WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic "look at this
@@ -1888,7 +1888,10 @@ async def cmd_inspect(
         if isinstance(candidates_result, dict) and candidates_result.get("error"):
             rc = 1
 
-    render.emit(out, as_json=as_json, title=f"inspect · {ref}")
+    # inspect() has no server-side render='text' shape (it's a client-side fan-out over
+    # four wire calls, none of which is a single string) — `--text` falls back to the
+    # same human render `--text`-less mode already gives, same as dossier/search's own note.
+    render.emit(out, as_json=as_json and not text, title=f"inspect · {ref}")
     return rc
 
 
@@ -7577,6 +7580,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                 "row, not just the first 10 per type")
     p_inspect.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one combined JSON receipt")
+    _add_text_flag(p_inspect)
 
     p_practices = sub.add_parser("practices", description=_d(
         "WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain reads of the practices "
@@ -8844,7 +8848,7 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_inspect(
             args.ref, want_events=args.want_events, want_chain=args.want_chain,
             want_candidates=args.want_candidates, want_relationships=args.want_relationships,
-            as_json=args.as_json))
+            as_json=args.as_json, text=args.text))
     if args.command == "practices":
         # unbounded-wait-ok: asyncio.run() drives the event loop to completion
         return asyncio.run(cmd_practices(
