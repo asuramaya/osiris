@@ -2101,7 +2101,8 @@ async def sweep_seat_trees(
         seat_id, tree_cwds = r["seat_id"], list(r["tree_cwds"] or [])
         distinct = sorted(set(tree_cwds))
         real_current = [v for v in distinct if _tree_exists(v) and _is_git_tree(v)]
-        old_display: Any = tree_cwds[0] if len(tree_cwds) <= 1 else tree_cwds
+        old_display: Any = tree_cwds[0] if len(tree_cwds) == 1 else (
+            tree_cwds if tree_cwds else None)
         if len(tree_cwds) <= 1 and len(real_current) == 1:
             continue  # exactly one current row, and it's a real, bound tree
         if len(real_current) > 1:
