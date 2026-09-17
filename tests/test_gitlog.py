@@ -61,6 +61,100 @@ async def test_ingests_a_repo_history(actions: Actions, tmp_path: Path) -> None:
     assert ec == "authoritative_api"
 
 
+def _dated_commit(repo: Path, *, date: str, message: str, content: str) -> None:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "Ada", "GIT_AUTHOR_EMAIL": "ada@x.io",
+           "GIT_COMMITTER_NAME": "Ada", "GIT_COMMITTER_EMAIL": "ada@x.io",
+           "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    (repo / "f").write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True,
+                   timeout=10)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", message], check=True,
+                   capture_output=True, env=env, timeout=10)
+
+
+def _toplevel(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
+        check=True, capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """WAVE 27 COMMITS ATTRIBUTED TO AGENT IDENTITIES (ruling 4cf5e4b3/b8fb26494e0e): a
+    commit made while agent:committer-i held the seat gets committed_by=agent:committer-i,
+    even once agent:committer-ii holds it by the time ingest actually runs — the resolver
+    reads the HOLDS LINK'S OWN HISTORY at the commit's own author time, never "whoever
+    holds it now"."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
+
+    repo = tmp_path / "committed-by-proj"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    toplevel = _toplevel(repo)
+
+    seat = await ensure_seat(actions, house="osiris", handle="CommittedBy1", source="test")
+    await actions.create_or_find_object("Agent", "agent:committer-i", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:committer-i")
+    bound = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=toplevel,
+                                 actor="agent:committer-i", because="test")
+    assert "error" not in bound, bound
+
+    # GIT'S OWN COMMIT-DATE PRECISION IS WHOLE SECONDS ONLY (no sub-second component
+    # survives a round trip through GIT_AUTHOR_DATE/%aI) — a commit dated `now()` can
+    # store as a timestamp EARLIER, at full DB precision, than the very bind_holder call
+    # that ran moments before it in the same wall-clock second. A real sleep across the
+    # second boundary is the honest fix, not a smaller and smaller synthetic offset.
+
+    # the FIRST commit's own author time sits inside agent:committer-i's holds window
+    await asyncio.sleep(1.1)
+    _dated_commit(repo, date=datetime.now(UTC).isoformat(), message="first", content="1")
+
+    # the holder changes BEFORE ingest ever runs — the SECOND commit's own author time
+    # sits inside committer-ii's holds window instead, again past the second boundary
+    await actions.create_or_find_object("Agent", "agent:committer-ii", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:committer-ii")
+    await asyncio.sleep(1.1)
+    _dated_commit(repo, date=datetime.now(UTC).isoformat(), message="second", content="2")
+
+    await ingest_repo(actions, str(repo))
+
+    rows = await actions.pool.fetch(
+        "SELECT c.canonical AS commit, a.canonical AS committer FROM links l "
+        "JOIN objects c ON c.id=l.from_id AND c.type='Commit' "
+        "JOIN objects a ON a.id=l.to_id AND a.type='Agent' "
+        "WHERE l.type='committed_by' ORDER BY c.canonical")
+    by_subject = {}
+    for r in rows:
+        short = r["commit"].removeprefix("commit:")
+        by_subject[short] = r["committer"]
+    assert len(by_subject) == 2
+    committers = set(by_subject.values())
+    assert committers == {"agent:committer-i", "agent:committer-ii"}
+
+
+async def test_committed_by_never_asserted_when_no_seat_is_bound_to_the_worktree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A bare checkout nobody bound as a seat's tree — never guesses, never mints."""
+    repo = tmp_path / "no-seat-proj"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "solo")
+
+    await ingest_repo(actions, str(repo))
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='committed_by'") == 0
+
+
 async def test_reingest_same_history_does_not_regrow_dev_assertions(
     actions: Actions, tmp_path: Path
 ) -> None:

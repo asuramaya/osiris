@@ -9,6 +9,8 @@ and the commit date is the observed-at clock (time-travel the graph by commit).
 
   SoftwareProject ──in_repo── Commit ──authored_by── Person(dev)
                               Commit ──follows──────► parent Commit
+                              Commit ──committed_by── Agent (the live generation that ran
+                                                       it, additional to authored_by)
 
 Run: `python -m src.ingest.gitlog [path] [limit]`.
 """
@@ -230,17 +232,81 @@ async def declare_machine_identity(
     }
 
 
+async def _seat_holder_at(pool: Any, *, seat_id: str, at: datetime) -> str | None:
+    """Which Agent generation held `seat_id` at time `at` — the seat's own `holds` link
+    history (bind_holder's own convention: the prior holder's link heals by `valid_until`,
+    never deleted, so the full holder history stays walkable), time-windowed. None when no
+    holder's window covers `at` — a commit older than the seat's first holder, or one that
+    falls in a gap nothing bound — never guesses to the nearest one either side."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' "
+        "AND l.first_seen <= $2 AND (l.valid_until IS NULL OR l.valid_until > $2) "
+        "LIMIT 1", seat_id, at)
+
+
+async def _worktree_seat(pool: Any, *, worktree_path: str) -> str | None:
+    """The seat bound to this commit's own worktree — `tree_seat_hint` (the same
+    mechanical-mount primitive `mount()` already trusts, never a string-guess off the
+    directory name), resolved to a single unambiguous Seat id via `seats_by_handle`. None
+    when no seat is bound here, or (should never happen for a real `tree_cwd` binding, but
+    never guessed through) more than one carries the same handle."""
+    from src.orchestrator.seats import seats_by_handle, tree_seat_hint
+
+    handle = await tree_seat_hint(pool, cwd=worktree_path)
+    if handle is None:
+        return None
+    seats = await seats_by_handle(pool, handle)
+    if len(seats) != 1:
+        return None
+    return seats[0]
+
+
+async def resolve_committed_by(
+    pool: Any, *, worktree_path: str, author_date: datetime,
+) -> str | None:
+    """WAVE 27 COMMITS ATTRIBUTED TO AGENT IDENTITIES (ruling 4cf5e4b3/b8fb26494e0e,
+    amended by decision 830a6c0a: the Claude-Session trailer is a claude.ai WEB session id,
+    a different namespace from the local job_dir/anchor_sid sids this house's own
+    provenance actually tracks — it resolves nothing on its own). Primary signal, and in
+    this build the ONLY one: `_worktree_seat` crossed with WHICH GENERATION held that seat
+    at the commit's own author time (`_seat_holder_at`, the holds link's own history). None
+    on any miss — never guesses. A per-commit convenience; `ingest_repo` resolves the seat
+    ONCE per run instead (the worktree is fixed for the whole call) and calls
+    `_seat_holder_at` directly per commit.
+
+    SCOPED OUT OF THIS BUILD, named rather than rushed in (see the tip that shipped this):
+    the ruling also names an ingest-actor fallback for when no worktree is bound, and
+    Claude-Session-trailer disambiguation for when the worktree-handle signal and the
+    ingest actor disagree (a successor ingesting commits its own ancestor authored, the
+    exact BUG 4 shape). Both need a bounded-scan-of-candidates'-own-transcripts primitive
+    this build does not build — left as a named follow-up rather than a rushed one."""
+    seat_id = await _worktree_seat(pool, worktree_path=worktree_path)
+    if seat_id is None:
+        return None
+    return await _seat_holder_at(pool, seat_id=seat_id, at=author_date)
+
+
 async def ingest_repo(
     actions: Actions, path: str = ".", *, limit: int | None = None,
     source_id: str = _SOURCE, case_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Ingest a repository's history into the entity graph. Idempotent (find-or-create
-    on the commit sha / dev email), so re-running just adds new commits."""
-    name = Path(_git(path, "rev-parse", "--show-toplevel").strip()).name
+    on the commit sha / dev email), so re-running just adds new commits.
+
+    COMMITTED_BY (WAVE 27, ruling 4cf5e4b3/b8fb26494e0e): each commit's own author time
+    is crossed against `toplevel`'s bound seat (`resolve_committed_by`, resolved ONCE per
+    run since the worktree is fixed for the whole call) to mint an ADDITIONAL committed_by
+    Agent link beside authored_by — never a replacement, never asserted when the resolver
+    can't name a live holder for that exact instant."""
+    toplevel = _git(path, "rev-parse", "--show-toplevel").strip()
+    name = Path(toplevel).name
     commits = read_commits(path, limit=limit)
     latest = (
         datetime.fromisoformat(commits[-1].date) if commits else datetime.now(UTC)
     )
+    committed_by_seat = await _worktree_seat(actions.pool, worktree_path=toplevel)
 
     repo = await actions.create_or_find_object(
         "SoftwareProject", f"repo:{name}", source_id, case_id
@@ -255,7 +321,8 @@ async def ingest_repo(
     # set: a re-ingest must never re-bridge or re-link what a prior run already minted.
     existing = {(r["from_id"], r["to_id"], r["type"]) for r in await actions.pool.fetch(
         "SELECT from_id, to_id, type FROM links "
-        "WHERE type IN ('authored_by', 'in_repo', 'follows', 'committer_for', 'same_as')")}
+        "WHERE type IN ('authored_by', 'in_repo', 'follows', 'committer_for', 'same_as', "
+        "'committed_by')")}
 
     async def _link(frm: uuid.UUID, to: uuid.UUID, typ: str, observed: datetime, *,
                     properties: dict[str, Any] | None = None) -> None:
@@ -340,6 +407,12 @@ async def ingest_repo(
 
         await _link(cm, dev, "authored_by", observed)
         await _link(cm, repo, "in_repo", observed)
+        if committed_by_seat is not None:
+            holder = await _seat_holder_at(actions.pool, seat_id=committed_by_seat, at=observed)
+            if holder is not None:
+                agent = await actions.create_or_find_object(
+                    "Agent", holder, source_id, case_id)
+                await _link(cm, agent, "committed_by", observed)
         for parent in c.parents:
             par = await actions.create_or_find_object(
                 "Commit", f"commit:{parent[:12]}", source_id, case_id

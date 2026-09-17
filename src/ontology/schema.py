@@ -446,6 +446,15 @@ _LINK_TYPES: tuple[LinkType, ...] = (
     LinkType("subtechnique-of", "A more specific technique under a broader one.",
              ("AttackPattern",), ("AttackPattern",)),
     LinkType("authored_by", "Commit authored by a developer.", ("Commit",), ("Person",)),
+    LinkType("committed_by", "Commit made by an Osiris Agent — additional to authored_by, "
+             "never a replacement (ruling 4cf5e4b3/b8fb26494e0e, WAVE 27, 32693f68 "
+             "answered): authored_by keeps naming the git identity (the Person the commit "
+             "trailer's Co-Authored-By names is only the model, never the body); this "
+             "names WHICH LIVE GENERATION actually ran the commit, resolved from the "
+             "seat bound to the commit's own worktree at the commit's own author time "
+             "(never string-matched from the Claude-Session trailer alone — a different "
+             "namespace, decision 830a6c0a's own amendment).",
+             ("Commit",), ("Agent",)),
     LinkType("committer_for", "A MachineIdentity's own standing relationship to a "
              "SoftwareProject it commits for (thread 2619f011, ruling edb6b0fc) — "
              "STRICT domain/range, unlike most link types here: this one never means "

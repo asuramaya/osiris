@@ -3292,7 +3292,7 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         }, ["action"]),
         _dispatcher_action_schema({
             "action": _action_const("rehold"), "target": _s(), "agent_id": _s(),
-            "because": _s(), "override_live": _b(False),
+            "because": _s(), "override_live": _b(False), "dry_run": _b(True),
         }, ["action", "target", "agent_id", "because"]),
         _dispatcher_action_schema({
             "action": _action_const("correct_house"), "new_house": _s(),
@@ -3366,7 +3366,7 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "establish_office": (["target"], ["target"]),
     "invalidate_works_in": (["stale_project", "because"], ["stale_project", "because"]),
     "reconcile_identity": (["target", "agent_id", "because"], []),
-    "rehold": (["target", "agent_id", "because", "override_live"],
+    "rehold": (["target", "agent_id", "because", "override_live", "dry_run"],
               ["target", "agent_id", "because"]),
     "correct_house": (["new_house"], ["new_house"]),
     "correct_pin": (["key", "value", "reason"], ["key", "reason"]),
@@ -3797,7 +3797,7 @@ async def _seat_impl(
         from src.orchestrator.seats import rehold_seat as _rehold_seat
         return await _rehold_seat(
             Actions(await _pool_get()), seat_id=target, agent_id=agent_id, because=because,
-            actor=ident.agent_id, override_live=override_live)
+            actor=ident.agent_id, override_live=override_live, dry_run=dry_run)
 
     if action == "correct_house":
         assert new_house is not None and new_house is not _UNSET  # already validated
@@ -3988,7 +3988,7 @@ async def seat(
       establish_office: move a seat into its Osiris-owned office (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
-      rehold: third-party re-hold a seat's `holds` link (target, agent_id, because)
+      rehold: third-party re-hold a seat's holds link (target, agent_id, because)
       correct_house: a head corrects its OWN house (new_house)
       correct_pin: correct an existing key in your own seat's pin (key, reason)
       resync_pin: third-party pin correction, dry_run default (target, key)
@@ -4001,8 +4001,7 @@ async def seat(
       refresh_project: force a fresh graph read of this mind's own cached project, no target
 
     DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
-    transition_project, sweep_disk, resync_pin) — same convention as their standalone
-    predecessors."""
+    transition_project, sweep_disk, resync_pin, rehold)"""
     return await _seat_impl(
         action, target=target, handle=handle, manager=manager, new_cwd=new_cwd,
         extract=extract, force=force, because=because, reason=reason, dry_run=dry_run,
