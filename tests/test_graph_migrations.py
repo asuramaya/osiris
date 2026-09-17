@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from src.actions.core import Actions
 from src.orchestrator.graph_migrations import (
     migrate_assertion_links,
+    migrate_commits_to_agents,
     migrate_file_the_residual,
     migrate_file_the_unfiled,
     migrate_owned_by_second_pass,
@@ -582,3 +583,109 @@ async def test_file_the_residual_only_touches_messages(actions: Actions) -> None
 
     out = await migrate_file_the_residual(actions, actor="test", dry_run=True)
     assert out["scanned"] == 0
+
+
+# --- commits_to_agents (backfill door, WAVE 27 ruling 4cf5e4b3/b8fb26494e0e) --------
+
+
+async def test_commits_to_agents_requires_because_to_apply(actions: Actions) -> None:
+    out = await migrate_commits_to_agents(actions, actor="test", dry_run=False, because="")
+    assert "error" in out
+
+
+async def test_commits_to_agents_mints_the_correct_generation_and_is_idempotent(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
+
+    t1 = datetime(2026, 1, 1, tzinfo=UTC)
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gm-c2a-proj", "test")
+    await actions.assert_property(proj, "on_disk_path", "/tmp/gm-c2a-proj", "test", t1, 0.9)
+
+    seat = await ensure_seat(actions, house="osiris", handle="GmC2a", source="test")
+    await actions.create_or_find_object("Agent", "agent:gm-c2a-i", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:gm-c2a-i")
+    bound = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd="/tmp/gm-c2a-proj",
+                                 actor="agent:gm-c2a-i", because="test")
+    assert "error" not in bound, bound
+    # this migration reads Commit.authored_date, a plain assertion value -- unlike
+    # ingest_repo's own live tests (git's own whole-second-truncated timestamp), no
+    # real-clock sleep is needed here: the holds link's own first_seen moves straight
+    # into the past.
+    await actions.pool.execute(
+        "UPDATE links SET first_seen=$1 WHERE from_id="
+        "(SELECT id FROM objects WHERE canonical='agent:gm-c2a-i') AND type='holds'", t1)
+
+    commit = await actions.create_or_find_object("Commit", "commit:gm-c2a-1", "test")
+    await actions.assert_property(commit, "authored_date", t2.isoformat(), "test", t2, 0.9)
+    await actions.create_link(commit, proj, "in_repo", "test", t2, 1.0)
+
+    dry = await migrate_commits_to_agents(actions, actor="test", dry_run=True)
+    assert dry["minted_by_worktree_time"] >= 1
+    assert dry["sharpened_by_trailer"] == 0
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE type='committed_by'") == 0
+
+    out = await migrate_commits_to_agents(
+        actions, actor="test", dry_run=False, because="test backfill")
+    assert out["minted_by_worktree_time"] >= 1
+    committer = await actions.pool.fetchval(
+        "SELECT a.canonical FROM links l JOIN objects a ON a.id=l.to_id "
+        "WHERE l.from_id=$1 AND l.type='committed_by'", commit)
+    assert committer == "agent:gm-c2a-i"
+
+    # idempotent: a repeat apply never re-mints or duplicates
+    await migrate_commits_to_agents(actions, actor="test", dry_run=False, because="again")
+    count = await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='committed_by'", commit)
+    assert count == 1
+
+
+async def test_commits_to_agents_abstains_when_no_seat_bound_to_the_worktree(
+    actions: Actions,
+) -> None:
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:gm-c2a-unbound", "test")
+    await actions.assert_property(
+        proj, "on_disk_path", "/tmp/gm-c2a-unbound-nobody", "test", now, 0.9)
+    commit = await actions.create_or_find_object("Commit", "commit:gm-c2a-unbound-1", "test")
+    await actions.assert_property(commit, "authored_date", now.isoformat(), "test", now, 0.9)
+    await actions.create_link(commit, proj, "in_repo", "test", now, 1.0)
+
+    out = await migrate_commits_to_agents(actions, actor="test", dry_run=True)
+    assert out["minted_by_worktree_time"] == 0
+    assert out["abstained"] >= 1
+    assert out["abstained_reasons"].get("no-seat-bound-to-worktree", 0) >= 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='committed_by'", commit) == 0
+
+
+async def test_commits_to_agents_abstains_when_the_commit_predates_any_holder(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
+
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:gm-c2a-predates", "test")
+    await actions.assert_property(
+        proj, "on_disk_path", "/tmp/gm-c2a-predates", "test", now, 0.9)
+    seat = await ensure_seat(actions, house="osiris", handle="GmC2aPredates", source="test")
+    await actions.create_or_find_object("Agent", "agent:gm-c2a-predates-i", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:gm-c2a-predates-i")
+    bound = await bind_seat_tree(
+        actions, seat_id=seat["seat_id"], tree_cwd="/tmp/gm-c2a-predates",
+        actor="agent:gm-c2a-predates-i", because="test")
+    assert "error" not in bound, bound
+
+    commit = await actions.create_or_find_object("Commit", "commit:gm-c2a-predates-1", "test")
+    await actions.assert_property(commit, "authored_date", old.isoformat(), "test", old, 0.9)
+    await actions.create_link(commit, proj, "in_repo", "test", old, 1.0)
+
+    out = await migrate_commits_to_agents(actions, actor="test", dry_run=True)
+    assert out["abstained_reasons"].get("no-holder-at-author-time", 0) >= 1
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM links WHERE from_id=$1 AND type='committed_by'", commit) == 0

@@ -155,6 +155,71 @@ async def test_committed_by_never_asserted_when_no_seat_is_bound_to_the_worktree
         "SELECT count(*) FROM links WHERE type='committed_by'") == 0
 
 
+async def test_committed_by_falls_back_to_the_ingest_actor_when_no_seat_is_bound(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """WAVE 27, piece (1) of the follow-up sequence (Thoth dispatch 11924): a bare
+    checkout with no seat bound to it at all is a DIFFERENT shape from a seat that IS
+    bound but whose holds history doesn't cover the commit's own author time (that one
+    stays a genuine miss, never masked by this fallback) — here there is no seat to ask,
+    so the caller's own identity (`actor`, when it has one to offer) is the best
+    available signal, scoped to commits this run actually touches."""
+    repo = tmp_path / "actor-fallback-proj"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "solo")
+
+    await ingest_repo(actions, str(repo), actor="agent:the-ingest-caller")
+    committer = await actions.pool.fetchval(
+        "SELECT a.canonical FROM links l JOIN objects a ON a.id=l.to_id "
+        "WHERE l.type='committed_by' LIMIT 1")
+    assert committer == "agent:the-ingest-caller"
+
+
+async def test_committed_by_worktree_time_wins_over_the_ingest_actor_when_both_apply(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The fallback only ever fires when there is NO seat bound at all — a genuinely
+    resolved worktree+time holder always wins over whoever happens to be running this
+    particular ingest, even when they differ."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
+
+    repo = tmp_path / "actor-loses-proj"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Ada")
+    _git(repo, "config", "user.email", "ada@x.io")
+    (repo / "a.txt").write_text("1")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "solo")
+    toplevel = _toplevel(repo)
+
+    seat = await ensure_seat(actions, house="osiris", handle="ActorLoses", source="test")
+    await actions.create_or_find_object("Agent", "agent:actor-loses-holder", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:actor-loses-holder")
+    bound = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=toplevel,
+                                 actor="agent:actor-loses-holder", because="test")
+    assert "error" not in bound, bound
+    # the holds link's own first_seen moves into the past — no real-clock wait needed,
+    # this test never asks git to date anything
+    await actions.pool.execute(
+        "UPDATE links SET first_seen=$1 WHERE from_id="
+        "(SELECT id FROM objects WHERE canonical='agent:actor-loses-holder') "
+        "AND type='holds'", datetime(2020, 1, 1, tzinfo=UTC))
+
+    await ingest_repo(actions, str(repo), actor="agent:the-ingest-caller")
+    committer = await actions.pool.fetchval(
+        "SELECT a.canonical FROM links l JOIN objects a ON a.id=l.to_id "
+        "WHERE l.type='committed_by' LIMIT 1")
+    assert committer == "agent:actor-loses-holder"
+
+
 async def test_reingest_same_history_does_not_regrow_dev_assertions(
     actions: Actions, tmp_path: Path
 ) -> None:

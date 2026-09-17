@@ -143,7 +143,8 @@ async def ingest_project(
             "closure_preview": closure_preview,
         }
 
-    ingested = await ingest_repo(actions, path=on_disk_path, source_id=f"ingest_project:{actor}")
+    ingested = await ingest_repo(actions, path=on_disk_path,
+                                 source_id=f"ingest_project:{actor}", actor=actor)
     closure = await close_by_commits(actions, repo=name, dry_run=False)
     return {"project": canonical, "dry_run": False, "on_disk_path": on_disk_path,
             "ingest": ingested, "closure": closure}

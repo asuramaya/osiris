@@ -290,7 +290,7 @@ async def resolve_committed_by(
 
 async def ingest_repo(
     actions: Actions, path: str = ".", *, limit: int | None = None,
-    source_id: str = _SOURCE, case_id: uuid.UUID | None = None,
+    source_id: str = _SOURCE, case_id: uuid.UUID | None = None, actor: str | None = None,
 ) -> dict[str, Any]:
     """Ingest a repository's history into the entity graph. Idempotent (find-or-create
     on the commit sha / dev email), so re-running just adds new commits.
@@ -299,7 +299,24 @@ async def ingest_repo(
     is crossed against `toplevel`'s bound seat (`resolve_committed_by`, resolved ONCE per
     run since the worktree is fixed for the whole call) to mint an ADDITIONAL committed_by
     Agent link beside authored_by — never a replacement, never asserted when the resolver
-    can't name a live holder for that exact instant."""
+    can't name a live holder for that exact instant.
+
+    THE INGEST-ACTOR FALLBACK (piece (1) of the same ruling, Thoth dispatch 11924,
+    built after the primary signal and the backfill door): when NO seat is bound to this
+    worktree at all (`committed_by_seat is None` — a bare checkout, or a project nobody
+    has ever `bind_seat_tree`d), `actor` (the identity that CALLED this ingest, when the
+    caller has one to pass — `ingest_project`'s own self-service door does) is the
+    fallback committed_by for every commit THIS RUN newly links `in_repo` — a strictly
+    weaker signal than the worktree+time primary (it names who ran ingest NOW, not who
+    held any seat when the commit was AUTHORED), scoped on purpose to commits actually
+    touched by this call, never applied retroactively to the whole repo's history (the
+    backfill door's own time-windowed resolution stays the only door for that). A seat
+    IS bound but its holds history doesn't cover the commit's own author time is a
+    DIFFERENT, genuine "don't know" shape (the backfill door's `abstained` bucket) —
+    this fallback never masks that one; it only fires when there is no seat to ask at
+    all. `actor=None` (the default — most callers, including the bare CLI/cron path,
+    have no caller identity to offer) leaves this fallback dark, unchanged from before
+    it existed."""
     toplevel = _git(path, "rev-parse", "--show-toplevel").strip()
     name = Path(toplevel).name
     commits = read_commits(path, limit=limit)
@@ -407,12 +424,16 @@ async def ingest_repo(
 
         await _link(cm, dev, "authored_by", observed)
         await _link(cm, repo, "in_repo", observed)
+        committer: str | None = None
         if committed_by_seat is not None:
-            holder = await _seat_holder_at(actions.pool, seat_id=committed_by_seat, at=observed)
-            if holder is not None:
-                agent = await actions.create_or_find_object(
-                    "Agent", holder, source_id, case_id)
-                await _link(cm, agent, "committed_by", observed)
+            committer = await _seat_holder_at(
+                actions.pool, seat_id=committed_by_seat, at=observed)
+        elif actor is not None:
+            committer = actor  # the ingest-actor fallback — no seat bound at all here
+        if committer is not None:
+            agent = await actions.create_or_find_object(
+                "Agent", committer, source_id, case_id)
+            await _link(cm, agent, "committed_by", observed)
         for parent in c.parents:
             par = await actions.create_or_find_object(
                 "Commit", f"commit:{parent[:12]}", source_id, case_id
