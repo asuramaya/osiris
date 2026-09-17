@@ -539,12 +539,18 @@ async def found_seat(
     # flags that specific method inside an async def; a shell has already expanded a
     # literal `~` in `path` by the time argv reaches this call anyway — this only
     # defensively handles a caller that passed one through unexpanded, e.g. a test).
+    # THE SEAT TREE FABRICATION FIX (operator-flagged via Nebbercracker DM 11747, Thoth
+    # mail 11759): an omitted `path` used to fall back to `~/code/<handle>` unconditionally
+    # — the exact same fabrication-from-handle disease `house`/`project` were already
+    # cured of one door up (see this function's own docstring), just never applied to the
+    # tree. `workspace` stays `None` here when omitted; resolved below, once the seat is
+    # known, from its own real charter rather than guessed from its name.
     if path and (path == "~" or path.startswith("~/")):
-        workspace = Path.home() / path[2:]
+        workspace: Path | None = Path.home() / path[2:]
     elif path:
         workspace = Path(path)
     else:
-        workspace = Path.home() / "code" / handle.lower()
+        workspace = None
 
     existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
     if existing_seat_id is not None:
@@ -590,21 +596,49 @@ async def found_seat(
                 evidence_class=_EC)
         worker_house = house_name
 
-    workspace.mkdir(parents=True, exist_ok=True)
-    workspace_pin = workspace / ".osiris"
-    workspace_pin_state = "left in place"
-    if not workspace_pin.exists():
-        workspace_pin.write_text(f'project = "{project_name}"\n' if project_name else "")
-        workspace_pin_state = "written"
+    tree_derivation = "explicit"
+    if workspace is None:
+        # THE REPAIR HALF (Thoth mail 11759): an omitted path on a CONVERGENCE (an
+        # already-founded seat, `existing_seat_id` above) checks the seat's own real
+        # charter first — `governed_trees` returns only projects this seat actively
+        # governs AND that carry a recorded on_disk_path, so an unambiguous single
+        # real git tree there is genuinely this seat's own code home, never a guess.
+        # A brand-new seat has no charter yet (it self-charters live, on its own
+        # first turn, per this function's own docstring) and a seat with zero or
+        # more than one real governed tree has nothing unambiguous to derive — both
+        # cases leave `workspace` unset, same "never fabricate, leave genuinely
+        # unset" law this function already holds for house/project.
+        from src.orchestrator.charter import governed_trees
+        from src.orchestrator.trigger import _is_git_tree, _tree_exists
+
+        real_trees = [
+            (repo, p) for repo, p in await governed_trees(actions.pool, worker_seat_id)
+            if _tree_exists(p) and _is_git_tree(p)]
+        if len(real_trees) == 1:
+            workspace = Path(real_trees[0][1])
+            tree_derivation = f"charter:{real_trees[0][0]}"
+        else:
+            tree_derivation = "unset — no path given and no single real governed tree"
+
+    workspace_pin_state = "not applicable — no workspace resolved"
+    tree: dict[str, Any] | None = None
+    if workspace is not None:
+        workspace.mkdir(parents=True, exist_ok=True)
+        workspace_pin = workspace / ".osiris"
+        workspace_pin_state = "left in place"
+        if not workspace_pin.exists():
+            workspace_pin.write_text(f'project = "{project_name}"\n' if project_name else "")
+            workspace_pin_state = "written"
 
     office_result = await _scaffold_office(
         actions, handle=handle, house=worker_house or "", project=project_name,
         intended_model=intended_model, office_root=root, seat_id=worker_seat_id,
         manager_seat_id=None)
 
-    tree = await bind_seat_tree(
-        actions, seat_id=worker_seat_id, tree_cwd=str(workspace), actor=actor,
-        because=f"osiris new: {handle}'s own code workspace")
+    if workspace is not None:
+        tree = await bind_seat_tree(
+            actions, seat_id=worker_seat_id, tree_cwd=str(workspace), actor=actor,
+            because=f"osiris new: {handle}'s own code workspace ({tree_derivation})")
 
     worker_obj = await actions.create_or_find_object("Seat", worker_seat_id, actor)
     worker_facts = await seat_facts(actions.pool, worker_seat_id)
@@ -629,9 +663,11 @@ async def found_seat(
 
     return {
         "seat_id": worker_seat_id, "handle": handle, "house": worker_house,
-        "seat_minted": seat_minted, "project": project_name, "workspace": str(workspace),
+        "seat_minted": seat_minted, "project": project_name,
+        "workspace": str(workspace) if workspace is not None else None,
         "workspace_pin": workspace_pin_state, "office": office_result,
-        "tree_cwd": tree.get("tree_cwd"),
+        "tree_cwd": tree.get("tree_cwd") if tree else None,
+        "tree_derivation": tree_derivation,
         "intended_model": intended_model if stamped_model else worker_facts.get("intended_model"),
         "intended_model_stamped": stamped_model,
         "managed_by": None,

@@ -763,22 +763,70 @@ async def test_found_seat_stamps_a_per_seat_founder_source_not_the_shared_actor(
     assert await _founded_by(out_b["seat_id"]) == "khnum"  # attribution, kept, just inert
 
 
-async def test_found_seat_leaves_project_unset_and_defaults_path_to_home_code(
+async def test_found_seat_leaves_project_and_tree_unset_with_no_path_and_no_charter(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """THE SEAT TREE FABRICATION FIX (Thoth mail 11759): an omitted `path` used to
+    default to `~/code/<handle>` unconditionally — the exact fabrication-from-handle
+    disease `project` was already cured of, one door up. A brand-new seat with no
+    charter yet has nothing real to derive a tree from, so both project AND
+    workspace/tree_cwd now stay genuinely unset, never guessed."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
     out = await found_seat(actions, handle="Aster", actor="console",
                            office_root=tmp_path / "seats")
-    # NO FABRICATION (decision 24e0b761): the path default is unrelated and unchanged;
-    # project stays unset because none was given — neither pin gets a project line.
+    # NO FABRICATION (decision 24e0b761, extended to the tree by 11759): project AND
+    # workspace/tree_cwd stay unset because neither a path nor a real charter exists.
     assert out["project"] is None
-    assert out["workspace"] == str(tmp_path / "fakehome" / "code" / "aster")
-    assert Path(out["workspace"]).is_dir()
-    workspace_pin = Path(out["workspace"]) / ".osiris"
-    assert "project" not in workspace_pin.read_text()
+    assert out["workspace"] is None
+    assert out["tree_cwd"] is None
+    assert out["tree_derivation"] == "unset — no path given and no single real governed tree"
     office_pin = (tmp_path / "seats" / "aster" / ".osiris").read_text()
     assert "project" not in office_pin
     assert 'model = "claude-sonnet-5"' in office_pin
+
+
+async def test_found_seat_explicit_path_still_binds_the_tree(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """An EXPLICIT path is never second-guessed — only the OMITTED-path default was
+    ever fabrication; a caller who names a real directory is trusted exactly as
+    before this fix."""
+    explicit = tmp_path / "explicit-workspace"
+    out = await found_seat(actions, handle="Birch", path=str(explicit), actor="console",
+                           office_root=tmp_path / "seats")
+    assert out["workspace"] == str(explicit)
+    assert out["tree_cwd"] == str(explicit)
+    assert out["tree_derivation"] == "explicit"
+    assert explicit.is_dir()
+
+
+async def test_found_seat_converges_onto_the_seats_own_real_charter(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE REPAIR HALF (Thoth mail 11759): converging on an EXISTING seat (a second
+    `found_seat` call, no path) that already charters exactly one project with a
+    recorded, real git tree derives the workspace from THAT — never the handle."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
+    from datetime import UTC, datetime
+
+    from src.orchestrator.charter import set_charter
+
+    real_tree = tmp_path / "real-monsterhouse"
+    (real_tree / ".git").mkdir(parents=True)
+
+    first = await found_seat(actions, handle="Cedar", actor="console",
+                             office_root=tmp_path / "seats")
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:cedarhouse", "test")
+    await actions.assert_property(proj, "on_disk_path", str(real_tree), "test",
+                                  datetime.now(UTC), 0.9)
+    await set_charter(actions, first["seat_id"], ["cedarhouse"], actor="test")
+
+    out = await found_seat(actions, handle="Cedar", actor="console",
+                           office_root=tmp_path / "seats")
+    assert out["workspace"] == str(real_tree)
+    assert out["tree_cwd"] == str(real_tree)
+    assert out["tree_derivation"] == "charter:cedarhouse"
 
 
 async def test_found_seat_with_explicit_project_writes_it_to_both_pins(

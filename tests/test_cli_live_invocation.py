@@ -114,6 +114,7 @@ from src.cli import (
     cmd_stop,
     cmd_succession_chain,
     cmd_sweep_seat_disk,
+    cmd_sweep_seat_trees,
     cmd_team,
     cmd_thread,
     cmd_threads,
@@ -219,6 +220,8 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     # --- of whether the ref resolves at all
     "sweep-seat-disk": lambda a: cmd_sweep_seat_disk(
         "no-such-handle", dry_run=True, pool=a.pool),
+    "sweep-seat-trees": lambda a: cmd_sweep_seat_trees(
+        apply=False, actor="operator", pool=a.pool),
     "transition-seat-project": lambda a: cmd_transition_seat_project(
         "no-such-handle", apply=False, pool=a.pool),
     "heal-seat-anchor": lambda a: cmd_heal_seat_anchor(
