@@ -7,5 +7,41 @@
   },
   "worktree": {
     "baseRef": "head"
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/asuramaya/code/osiris/scripts/osiris_hook.py precompact",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/asuramaya/code/osiris/scripts/osiris_hook.py settle-gate",
+            "timeout": 5
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "OSIRIS_HOOK_PROJECT=osiris python3 /home/asuramaya/code/osiris/scripts/osiris_hook.py read",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
   }
 }
