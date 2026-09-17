@@ -450,6 +450,42 @@ async def test_rehold_seat_moves_the_holds_link_and_names_both_sides(
     assert not await _active_holds(actions, "agent:rehold-old", seat["seat_id"])
 
 
+async def test_rehold_seat_dry_run_previews_without_writing(actions: Actions) -> None:
+    """WAVE 27 BUG 4 follow-up (Thoth DM 11850): dry_run=True used to be silently dropped
+    — never declared on rehold_seat's own signature, so it never reached here at all, and
+    the write happened regardless. Now it runs every guard and stops before the bind."""
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="ReholdDry", source="test")
+    await actions.create_or_find_object("Agent", "agent:reholddry-old", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:reholddry-old")
+    await actions.create_or_find_object("Agent", "agent:reholddry-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id="agent:reholddry-new",
+                            because="test repair", actor="test", dry_run=True)
+    assert out["dry_run"] is True
+    assert out["old_holder"] == "agent:reholddry-old"
+    assert out["new_holder"] == "agent:reholddry-new"
+    # NOTHING WRITTEN — the old holder's link is untouched, the new one never gained one
+    assert await _active_holds(actions, "agent:reholddry-old", seat["seat_id"])
+    assert not await _active_holds(actions, "agent:reholddry-new", seat["seat_id"])
+
+
+async def test_rehold_seat_dry_run_still_runs_the_reason_guard(actions: Actions) -> None:
+    """A preview that skips a real guard is a lie, not a preview — dry_run must never
+    mask a refusal a real call would also hit."""
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="ReholdDryReason", source="test")
+    await actions.create_or_find_object("Agent", "agent:reholddryreason-new", "test")
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"],
+                            agent_id="agent:reholddryreason-new",
+                            because="", actor="test", dry_run=True)
+    assert "error" in out
+    assert "dry_run" not in out
+
+
 async def test_rehold_seat_refuses_without_a_reason(actions: Actions) -> None:
     from src.orchestrator.seats import rehold_seat
 

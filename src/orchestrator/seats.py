@@ -2217,7 +2217,7 @@ async def bind_holder(
 
 async def rehold_seat(
     actions: Actions, *, seat_id: str, agent_id: str, because: str, actor: str,
-    override_live: bool = False,
+    override_live: bool = False, dry_run: bool = False,
 ) -> dict[str, Any]:
     """THE THIRD-PARTY RE-HOLD DOOR (decision fb85dd4f's own live specimen: Thoth's
     compaction successor lost its own seat's binding to a wrongly-grafted sibling
@@ -2239,7 +2239,17 @@ async def rehold_seat(
     invalidate_link, never deleted, history walkable, both sides symmetric (a stray hold
     the new holder carried elsewhere heals too) — this adds only the guard, the required
     reason (kept on the seat as `rehold_because`), and a receipt naming both sides of the
-    change, never a second implementation of the bind itself."""
+    change, never a second implementation of the bind itself.
+
+    `dry_run` (default False — every existing caller already calls this expecting a real
+    write, so flipping the default would silently no-op them; this only adds the flag,
+    never changes what an omitted one does): a follow-up specimen of WAVE 27 BUG 4 (Thoth
+    DM 11850) — a caller passed `dry_run=True` meaning a preview and got the real write
+    instead, because neither this function's own signature nor the MCP schema in front of
+    it ever declared the parameter, so it silently vanished before reaching here.
+    `dry_run=True` runs every guard above exactly as a real call would (a preview that
+    could not actually be performed is a lie, not a preview) and returns before the
+    write — honoured or refused, never silently dropped."""
     because = (because or "").strip()
     if not because:
         return {"error": "a rehold with no stated reason is exactly the silent overwrite "
@@ -2265,6 +2275,11 @@ async def rehold_seat(
                      f"lineage than {agent_id!r} — refusing without override_live=True",
             "old_holder": old_holder, "live": True,
         }
+    if dry_run:
+        return {"dry_run": True, "seat_id": seat_id, "old_holder": old_holder,
+                "new_holder": agent_id, "because": because,
+                "detail": "PREVIEW ONLY — every guard above passed and nothing was "
+                          "written; call again with dry_run=False to perform this rebind"}
     now = datetime.now(UTC)
     await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=actor)
     await actions.assert_property(seat_row["id"], "rehold_because", because, actor, now,
