@@ -6030,11 +6030,11 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_mint_seat(
-            "CliMintWorker1", manager=manager["seat_id"], project="cliproj1", house=None,
+            "CliMintWorker1", manager=manager["seat_id"], project="cliproj1",
             model=None, actor="agent:climinter1", pool=actions.pool, office_root=tmp_path)
     assert out == 0
     text = buf.getvalue()
-    assert "minted CliMintWorker1" in text and "house=clihouse" in text
+    assert "minted CliMintWorker1" in text and "project=clihouse" in text
     assert "seat directory:" in text
     assert f"manager: {manager['seat_id']} (linked)" in text
     # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/msg 6262 — this assertion used to
@@ -6097,30 +6097,12 @@ async def test_cmd_mint_seat_refuses_unknown_manager(actions: Actions) -> None:
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await cmd_mint_seat(
-            "CliMintWorker2", manager="NoSuchManagerAnywhere", project=None, house=None,
+            "CliMintWorker2", manager="NoSuchManagerAnywhere", project=None,
             model=None, actor="agent:climinter2", pool=actions.pool)
     assert out == 1
     assert "no such manager seat" in buf.getvalue()
 
 
-async def test_cmd_mint_seat_refuses_cross_house_without_operator_actor(
-    actions: Actions,
-) -> None:
-    import io
-    from contextlib import redirect_stderr
-
-    from src.orchestrator.seats import ensure_seat
-
-    manager = await ensure_seat(actions, house="clihouseA", handle="CliMintMgr3",
-                                source="test")
-
-    buf = io.StringIO()
-    with redirect_stderr(buf):
-        out = await cmd_mint_seat(
-            "CliMintWorker3", manager=manager["seat_id"], project=None, house="clihouseB",
-            model=None, actor="agent:climinter3", pool=actions.pool)
-    assert out == 1
-    assert "cross-house mint refused" in buf.getvalue()
 
 
 async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
@@ -6134,7 +6116,7 @@ async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
     assert args.handle == "NewWorker"
     assert args.manager == "seat:abc12345"
     assert args.actor == "operator"
-    assert args.project is None and args.house is None and args.model is None
+    assert args.project is None and args.model is None
     assert args.adopt is False and args.force is False
 
 
@@ -6295,21 +6277,28 @@ async def test_cmd_retention_refuses_an_unknown_table(actions: Actions) -> None:
 
 
 async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
-    actions: Actions, tmp_path: Path,
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """dispatch 3678: --manager omitted infers the ONE seat in the target --house."""
+    """Thoth mail 12000, implements 70c001ec: no --house flag any more — --manager
+    omitted infers the ONE seat in the project pinned at the cwd (--house retired,
+    no alias)."""
     import io
+    import os
     from contextlib import redirect_stdout
 
     from src.orchestrator.seats import ensure_seat
 
     manager = await ensure_seat(actions, house="soleseathouse", handle="OnlySeatHere",
                                 source="test")
+    cwd = tmp_path / "pinned"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "soleseathouse"\n')
+    monkeypatch.setattr(os, "getcwd", lambda: str(cwd))
 
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_mint_seat(
-            "InferredWorker1", manager=None, project=None, house="soleseathouse",
+            "InferredWorker1", manager=None, project=None,
             model=None, actor="console", pool=actions.pool, office_root=tmp_path)
     assert out == 0
     text = buf.getvalue()
@@ -6318,39 +6307,50 @@ async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
 
 
 async def test_cmd_mint_seat_refuses_to_infer_manager_with_no_seats_in_house(
-    actions: Actions,
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import io
+    import os
     from contextlib import redirect_stderr
+
+    cwd = tmp_path / "pinned-empty"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "totallyemptyhouse"\n')
+    monkeypatch.setattr(os, "getcwd", lambda: str(cwd))
 
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await cmd_mint_seat(
-            "InferredWorker2", manager=None, project=None, house="totallyemptyhouse",
+            "InferredWorker2", manager=None, project=None,
             model=None, actor="console", pool=actions.pool)
     assert out == 1
-    assert "no seats exist in house 'totallyemptyhouse'" in buf.getvalue()
+    assert "no seats exist in project 'totallyemptyhouse'" in buf.getvalue()
 
 
 async def test_cmd_mint_seat_refuses_to_infer_manager_with_several_seats_in_house(
-    actions: Actions,
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import io
+    import os
     from contextlib import redirect_stderr
 
     from src.orchestrator.seats import ensure_seat
 
     await ensure_seat(actions, house="crowdedhouse", handle="CrowdedA", source="test")
     await ensure_seat(actions, house="crowdedhouse", handle="CrowdedB", source="test")
+    cwd = tmp_path / "pinned-crowded"
+    cwd.mkdir()
+    (cwd / ".osiris").write_text('project = "crowdedhouse"\n')
+    monkeypatch.setattr(os, "getcwd", lambda: str(cwd))
 
     buf = io.StringIO()
     with redirect_stderr(buf):
         out = await cmd_mint_seat(
-            "InferredWorker3", manager=None, project=None, house="crowdedhouse",
+            "InferredWorker3", manager=None, project=None,
             model=None, actor="console", pool=actions.pool)
     assert out == 1
     text = buf.getvalue()
-    assert "2 seats in house 'crowdedhouse'" in text
+    assert "2 seats in project 'crowdedhouse'" in text
     assert "CrowdedA" in text and "CrowdedB" in text
 
 
@@ -6392,7 +6392,7 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Henry", str(workspace), project=None, house=None, model=None,
+        out = await cmd_new("Henry", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
 
     assert out == 0
@@ -6400,13 +6400,11 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     assert "founded Henry" in text and "self-managed, no manager" in text
     # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
     # chad project" — decision 24e0b761): no --project given, so none is invented, and
-    # the receipt confesses it plainly rather than staying silent.
+    # the receipt confesses it plainly rather than staying silent. No separate --house
+    # print any more either (Thoth mail 12000, implements 70c001ec): house is always
+    # project's own value now, never a second line to confess separately.
     assert "project: unset" in text and "none invented" in text
     assert "project: Henry" not in text
-    # SAME LAW, ONE FIELD OVER (ruling 68fba2e4/thread ef0e94d5): no --house given,
-    # none invented from the handle either.
-    assert "house: unset" in text and "none invented" in text
-    assert "house: Henry" not in text
     assert f"workspace: {workspace}" in text
     assert "next: osiris launch Henry" in text
     assert workspace.is_dir()
@@ -6426,36 +6424,13 @@ async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Bartow", str(workspace), project="dtfb", house=None, model=None,
+        out = await cmd_new("Bartow", str(workspace), project="dtfb", model=None,
                             actor="console", pool=actions.pool)
 
     assert out == 0
     text = buf.getvalue()
     assert "project: dtfb" in text
-    assert "house: unset" in text
     assert (workspace / ".osiris").read_text() == 'project = "dtfb"\n'
-
-
-async def test_cmd_new_with_explicit_house_writes_it_and_prints_it(
-    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # THE MIRROR OF project's OWN TEST ABOVE: an explicit --house still lands exactly
-    # as intended, and the receipt confesses THAT rather than "unset".
-    import io
-    from contextlib import redirect_stdout
-
-    workspace = tmp_path / "dtfb-ws2"
-    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
-
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        out = await cmd_new("Loom", str(workspace), project=None, house="dtfb", model=None,
-                            actor="console", pool=actions.pool)
-
-    assert out == 0
-    text = buf.getvalue()
-    assert "house: dtfb" in text
-    assert "house: unset" not in text
 
 
 async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
@@ -6478,7 +6453,7 @@ async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_defa
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await cmd_new("Chad", None, project=None, house=None, model=None,
+        out = await cmd_new("Chad", None, project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0  # the confession is advisory, never a refusal
     err = buf.getvalue()
@@ -6502,7 +6477,7 @@ async def test_cmd_new_stays_silent_when_a_path_is_given(
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await cmd_new("Named", str(workspace), project=None, house=None, model=None,
+        out = await cmd_new("Named", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     assert buf.getvalue() == ""
@@ -6522,7 +6497,7 @@ async def test_cmd_new_notes_the_case_drift_when_handle_capitalization_differs(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Chad", str(workspace), project=None, house=None, model=None,
+        out = await cmd_new("Chad", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     text = buf.getvalue()
@@ -6541,7 +6516,7 @@ async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("flatname", str(workspace), project=None, house=None, model=None,
+        out = await cmd_new("flatname", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     assert "note: paths use the lowercase form" not in buf.getvalue()

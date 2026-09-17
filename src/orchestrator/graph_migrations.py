@@ -30,6 +30,7 @@ from src.parsers.evidence import confidence_for
 MIGRATION_TARGETS = frozenset({
     "repo_seats_fix", "file_the_unfiled", "assertion_links",
     "owned_by_second_pass", "file_the_residual", "commits_to_agents",
+    "house_to_project",
 })
 
 _TIER = EvidenceClass.DIRECT_OBSERVATION
@@ -61,6 +62,9 @@ async def run_migration(
             actions, actor=actor, dry_run=dry_run, because=because)
     if name == "commits_to_agents":
         return await migrate_commits_to_agents(
+            actions, actor=actor, dry_run=dry_run, because=because)
+    if name == "house_to_project":
+        return await migrate_house_to_project(
             actions, actor=actor, dry_run=dry_run, because=because)
     return {"error": f"unknown migration {name!r}", "valid_targets": sorted(MIGRATION_TARGETS)}
 
@@ -1012,5 +1016,73 @@ async def migrate_commits_to_agents(
         "abstained": sum(abstained.values()),
         "abstained_reasons": dict(abstained),
         "abstained_sample": dict(abstained_sample),
+        "because": because if not dry_run else None,
+    }
+
+
+async def migrate_house_to_project(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE Seat.house REPAIR (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"):
+    fleet-wide backfill for every active Seat whose stamped `house` is null,
+    fabricated, or simply out of step with what its own charter actually governs —
+    the same sweep shape `sweep_seat_trees` already established for `tree_cwd`, one
+    property over. REUSES `seats.resync_seat_project` for every real write (the SAME
+    re-derive-from-charter door the CLI's own `resync-seat-project` calls), never a
+    second implementation.
+
+    A seat's project is DERIVED, never a second value: this migration only ever
+    touches a seat whose charter governs EXACTLY ONE project, and stamps that.
+    Every other shape is reported, never guessed: no charter at all (`refused_why:
+    "no charter"`), a charter governing more than one project (`refused_why:
+    "ambiguous charter"`), or a seat whose stamped house ALREADY matches its
+    charter's own single governed project (skipped, not listed — nothing to repair).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`.
+    Idempotent: a repeat call finds every already-repaired seat's house matching its
+    charter and skips it."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "migrating without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.orchestrator.charter import charter_of
+    from src.orchestrator.seats import resync_seat_project
+
+    pool = actions.pool
+    rows = await pool.fetch(
+        "SELECT o.canonical AS seat_id, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='house' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS house "
+        "FROM objects o WHERE o.type='Seat' AND o.status='active'")
+
+    entries: list[dict[str, Any]] = []
+    for r in rows:
+        seat_id, house = r["seat_id"], (r["house"] or None)
+        governed = await charter_of(pool, seat_id)
+        if len(governed) != 1:
+            entries.append({
+                "seat": seat_id, "old_house": house, "new_project": None,
+                "refused_why": "no charter" if not governed else "ambiguous charter",
+            })
+            continue
+        new_project = governed[0]
+        if house == new_project:
+            continue  # already correct -- nothing to repair
+        if dry_run:
+            entries.append({"seat": seat_id, "old_house": house,
+                            "new_project": new_project, "refused_why": None})
+            continue
+        result = await resync_seat_project(
+            actions, seat_id, source=actor,
+            reason=f"{because} (migrate_house_to_project: fleet-wide backfill)")
+        entries.append({
+            "seat": seat_id, "old_house": house,
+            "new_project": result.get("project") if "error" not in result else None,
+            "refused_why": result.get("error")})
+    return {
+        "dry_run": dry_run, "scanned": len(rows), "swept": len(entries),
+        "repaired": sum(1 for e in entries if e["new_project"] and not e["refused_why"]),
+        "refused": sum(1 for e in entries if e["refused_why"]),
+        "entries": entries,
         "because": because if not dry_run else None,
     }

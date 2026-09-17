@@ -2856,6 +2856,64 @@ async def resync_seat_house_third_party(
             "reason": reason, "still_contradicted": still_contradicted}
 
 
+async def resync_seat_project(
+    actions: Actions, seat_id: str, *, source: str, reason: str,
+) -> dict[str, Any]:
+    """ONE REPAIR DOOR, not two (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"):
+    collapses `correct_house` (self-scoped, HEAD only) and
+    `resync_seat_house_third_party` (third-party, took an arbitrary declared value)
+    into a single door that RE-DERIVES a seat's own stamped house/project property
+    FROM ITS OWN CHARTER — a seat's project is never a second, independently-declared
+    value, so there is nothing left here to self-scope OR to hand a caller-chosen
+    value: works for ANY seat, on a stated reason, same third-party discipline
+    `resync_seat_house_third_party` always held.
+
+    THE MECHANISM BELOW THIS PROPERTY IS UNTOUCHED (derive_house, seats.py:1577):
+    this only ever writes the same `house` property derive_house already reads for a
+    HEAD seat's own stamp — the house-anchor/ghost-clause boundary-crossing logic that
+    protects against a repeat of the Ferryman/halcyon annexation never changes shape;
+    it just keeps reading whatever this door writes, exactly as it read whatever
+    correct_house/resync_seat_house_third_party used to write.
+
+    Refuses on: an empty reason (a correction with no stated reason is exactly the
+    silent overwrite 719ed5b1 rules against); an unknown/inactive seat; a charter
+    governing ZERO projects (nothing to derive from — never invents one, the same
+    "never fabricate, leave genuinely unset" law this property has always held); a
+    charter governing MORE THAN ONE (ambiguous — no single project to derive, names
+    them all, never guesses)."""
+    if not reason.strip():
+        return {"error": "a correction with no reason is exactly the silent overwrite "
+                         "719ed5b1 rules against — refusing"}
+    seat_row = await actions.pool.fetchrow(
+        "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
+        seat_id)
+    if seat_row is None:
+        return {"error": f"no active seat matches {seat_id!r}"}
+    from src.orchestrator.charter import charter_of
+
+    governed = await charter_of(actions.pool, seat_id)
+    if not governed:
+        return {"error": f"{seat_id} has no charter — nothing to derive a project from"}
+    if len(governed) > 1:
+        return {"error": f"{seat_id}'s charter governs {len(governed)} projects "
+                         f"({', '.join(governed)}) — ambiguous, no single project to "
+                         "derive"}
+    new_project = governed[0]
+    facts = await seat_facts(actions.pool, seat_id)
+    was = facts.get("house") or None
+    seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
+    await actions.assert_singular_property(
+        seat_obj, "house", new_project, source, datetime.now(UTC), _CONF,
+        because=f"{reason} (resync_seat_project: re-derived from its own charter, "
+                "cross-source collapse, ruling 1335332e)",
+        evidence_class=_EC)
+    from src.orchestrator.identity_heal import heal_contradicting_property
+    await heal_contradicting_property(actions, object_id=seat_obj, name="house",
+                                      actor=source)
+    return {"seat_id": seat_id, "project": new_project, "was": was,
+            "already_correct": was == new_project, "reason": reason}
+
+
 async def _move_seat_estate(
     actions: Actions, dupe_oid: uuid.UUID, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:

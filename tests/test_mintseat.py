@@ -845,15 +845,16 @@ async def test_found_seat_with_explicit_project_writes_it_to_both_pins(
     assert 'project = "dtfb"' in office_pin
 
 
-async def test_found_seat_with_explicit_house_stamps_the_seat(
+async def test_found_seat_house_always_equals_project_never_a_second_value(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    # THE MIRROR OF project's OWN TEST ABOVE: an explicit --house must still land exactly
-    # as intended — the fabrication path removed is "no --house given", never "an
-    # explicit one is ignored".
+    """Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY": found_seat no longer
+    takes a `house` argument at all — a self-managed seat's own house property is
+    always its own --project value, never a second, independently-given one."""
     workspace = tmp_path / "workspace"
-    out = await found_seat(actions, handle="Loom", path=str(workspace), house="dtfb",
+    out = await found_seat(actions, handle="Loom", path=str(workspace), project="dtfb",
                            actor="console", office_root=tmp_path / "seats")
+    assert out["project"] == "dtfb"
     assert out["house"] == "dtfb"
 
     facts = await seat_facts(actions.pool, out["seat_id"])
@@ -863,15 +864,15 @@ async def test_found_seat_with_explicit_house_stamps_the_seat(
 async def test_found_seat_is_idempotent_on_house_a_second_call_never_regresses_it(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A second call with no --house given must not read as 'now homeless' — the
+    """A second call with no --project given must not read as 'now homeless' — the
     seat's already-real house (from the first call) survives, read fresh off the
     graph rather than echoing whatever this particular call happened to pass."""
     offices = tmp_path / "seats"
     workspace = tmp_path / "workspace"
 
-    first = await found_seat(actions, handle="Loom", path=str(workspace), house="dtfb",
+    first = await found_seat(actions, handle="Loom", path=str(workspace), project="dtfb",
                              actor="console", office_root=offices)
-    second = await found_seat(actions, handle="Loom", path=str(workspace), house=None,
+    second = await found_seat(actions, handle="Loom", path=str(workspace),
                               actor="console", office_root=offices)
 
     assert first["house"] == "dtfb"

@@ -4965,6 +4965,98 @@ async def test_resync_seat_house_third_party_none_is_a_noop_when_already_unset(
                    "still_contradicted": []}
 
 
+# ═══ resync_seat_project (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY") ═══════════
+# Collapses correct_house (self-scoped) and resync_seat_house_third_party (third-party,
+# above) into one door: a seat's project is never a second, declared value — it always
+# re-derives from the seat's own charter, so there is no value argument left to take.
+
+async def test_resync_seat_project_re_derives_from_the_charter(actions: Actions) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import resync_seat_project, seat_facts
+
+    seat = await actions.create_or_find_object("Seat", "seat:rsp1derive", "test")
+    await actions.assert_property(seat, "house", "stale", "test", datetime.now(UTC), 0.9)
+    await actions.create_or_find_object("SoftwareProject", "repo:rsp1real", "test")
+    await set_charter(actions, "seat:rsp1derive", ["rsp1real"], actor="test")
+
+    out = await resync_seat_project(
+        actions, "seat:rsp1derive", source="test", reason="charter changed")
+    assert out["project"] == "rsp1real"
+    assert out["was"] == "stale"
+    assert out["already_correct"] is False
+    facts = await seat_facts(actions.pool, "seat:rsp1derive")
+    assert facts["house"] == "rsp1real"
+
+
+async def test_resync_seat_project_refuses_an_empty_reason(actions: Actions) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import resync_seat_project
+
+    await actions.create_or_find_object("Seat", "seat:rsp2noreas", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:rsp2real", "test")
+    await set_charter(actions, "seat:rsp2noreas", ["rsp2real"], actor="test")
+
+    out = await resync_seat_project(actions, "seat:rsp2noreas", source="test", reason="  ")
+    assert "silent overwrite" in out["error"]
+
+
+async def test_resync_seat_project_refuses_an_unknown_seat(actions: Actions) -> None:
+    from src.orchestrator.seats import resync_seat_project
+
+    out = await resync_seat_project(
+        actions, "seat:rsp3nosuch", source="test", reason="x")
+    assert "no active seat" in out["error"]
+
+
+async def test_resync_seat_project_refuses_no_charter_without_guessing(
+    actions: Actions,
+) -> None:
+    from src.orchestrator.seats import resync_seat_project
+
+    await actions.create_or_find_object("Seat", "seat:rsp4nochart", "test")
+
+    out = await resync_seat_project(actions, "seat:rsp4nochart", source="test", reason="x")
+    assert "no charter" in out["error"]
+
+
+async def test_resync_seat_project_refuses_an_ambiguous_charter(actions: Actions) -> None:
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import resync_seat_project
+
+    await actions.create_or_find_object("Seat", "seat:rsp5ambig", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:rsp5a", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:rsp5b", "test")
+    await set_charter(actions, "seat:rsp5ambig", ["rsp5a", "rsp5b"], actor="test")
+
+    out = await resync_seat_project(actions, "seat:rsp5ambig", source="test", reason="x")
+    assert "ambiguous" in out["error"]
+
+
+async def test_resync_seat_project_collapses_a_cross_source_duplicate(
+    actions: Actions,
+) -> None:
+    """The exact SEAT TREE FABRICATION shape, one property over: two simultaneously-
+    current `house` rows from different sources both retire to the one re-derived
+    value, cross-source (assert_singular_property, ruling 1335332e)."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import resync_seat_project
+
+    seat = await actions.create_or_find_object("Seat", "seat:rsp6dup", "test")
+    await actions.assert_property(seat, "house", "console-stale", "console",
+                                  datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "house", "manager-stale", "manager",
+                                  datetime.now(UTC), 0.9)
+    await actions.create_or_find_object("SoftwareProject", "repo:rsp6real", "test")
+    await set_charter(actions, "seat:rsp6dup", ["rsp6real"], actor="test")
+
+    await resync_seat_project(actions, "seat:rsp6dup", source="test", reason="collapse")
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='house'", seat)
+    assert len(rows) == 1
+    assert rows[0]["v"] == "rsp6real"
+
+
 async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
     actions: Actions,
 ) -> None:

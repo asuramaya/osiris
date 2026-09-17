@@ -5482,11 +5482,27 @@ async def cmd_correct_agent_house(
     actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris correct-agent-house <agent> [--project P] [--seat-generation N] [--actor W]
+    — DEPRECATED alias for `correct-agent-project`, kept this release only (ONE
+    TAXONOMY, ruling 52a59652/70c001ec). A thin wrapper, never a second
+    implementation — the underlying Agent property was already named `project`."""
+    print("osiris correct-agent-house: deprecated, use correct-agent-project — kept as "
+          "an alias this release only", file=sys.stderr)
+    return await cmd_correct_agent_project(
+        handle_or_agent, project=project, seat_generation=seat_generation, actor=actor,
+        pool=pool)
+
+
+async def cmd_correct_agent_project(
+    handle_or_agent: str, *, project: str | None = None, seat_generation: int | None = None,
+    actor: str, pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris correct-agent-project <agent> [--project P] [--seat-generation N] [--actor W]
     — the console-script door onto orchestrator.agents.correct_agent_house, the SAME
     function the correct_agent_house MCP tool wraps (#204, the #199 lane 3B audit's
-    real gap). UNLIKE correct_house (self-scoped), NOT self-scoped — the target need not
-    be the caller, so this takes an EXPLICIT target, resolved the same handle-or-raw-id
-    way correct-pin-value's own console door does."""
+    real gap; the MCP action's own name is Sekhmet's surface, unchanged this wave).
+    UNLIKE correct_house (self-scoped), NOT self-scoped — the target need not be the
+    caller, so this takes an EXPLICIT target, resolved the same handle-or-raw-id way
+    correct-pin-value's own console door does."""
     from src.actions.core import Actions
     from src.orchestrator.agents import correct_agent_house as _correct_agent_house
 
@@ -5501,9 +5517,9 @@ async def cmd_correct_agent_house(
         try:
             pool = await create_pool(
                 settings.database_url, min_size=1, max_size=4,
-                application_name="osiris-cli:correct-agent-house")
+                application_name="osiris-cli:correct-agent-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris correct-agent-house: could not reach postgres at "
+            print(f"osiris correct-agent-project: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
@@ -5511,7 +5527,7 @@ async def cmd_correct_agent_house(
         actions = Actions(pool)
         agent_id = await _resolve_target_agent(actions, handle_or_agent)
         if agent_id is None:
-            print(f"osiris correct-agent-house: refused — no such claimed seat or live "
+            print(f"osiris correct-agent-project: refused — no such claimed seat or live "
                   f"agent: {handle_or_agent!r}", file=sys.stderr)
             return 1
         out = await _correct_agent_house(actions, agent_id=agent_id, project=project,
@@ -5520,7 +5536,7 @@ async def cmd_correct_agent_house(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris correct-agent-house: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris correct-agent-project: refused — {out['error']}", file=sys.stderr)
         return 1
     print(f"corrected {agent_id}: {out}")
     return 0
@@ -5892,57 +5908,64 @@ async def cmd_heal_seat_transcript(
 
 # --- mint-seat -----------------------------------------------------------------------------------
 
-def _context_house(house: str | None) -> str | None:
-    """The house to hunt for a lone manager candidate in: `--house` if given, else the
-    cwd's own `.osiris` pin (`project = "..."`), else the cwd's own basename — the same
-    fallback chain seats.resolve_project runs for an unseated caller (a raw terminal has
-    no seated agent_id to short-circuit through, so the seated branch never applies here)."""
-    if house:
-        return house
+def _context_project() -> str | None:
+    """The project to hunt for a lone manager candidate in: the cwd's own `.osiris` pin
+    (`project = "..."`) only (Thoth mail 12000, implements 70c001ec) — a seat's project
+    is never taken as a second, independently-given value, so there is no `--project`
+    override here and no bare-cwd-basename guess either; a caller outside a pinned
+    directory must pass `--manager` explicitly."""
     from src.orchestrator.agents import read_project_label
 
-    pinned = read_project_label(os.getcwd())
-    if pinned:
-        return pinned
-    return Path.cwd().name or None
+    return read_project_label(os.getcwd()) or None
 
 
 async def _infer_manager(
-    pool: asyncpg.Pool, house: str | None,
+    pool: asyncpg.Pool, project: str | None,
 ) -> tuple[str | None, str | None]:
-    """(manager_handle, error). The SOLE existing seat in `house`, never a guess among
-    several and never a fabricated manager for an empty house — crossing into a brand-new
-    house always needs an explicit --manager naming a seat that already exists somewhere
-    else (mint_seat's own cross-house guard requires it; an empty house has nothing to
-    infer from by construction, and inventing one here would be exactly the silent-guess
-    failure #135 exists to name)."""
-    if not house:
-        return None, ("no --manager given and no house could be inferred (no --house, no "
-                      ".osiris pin, empty cwd name) — pass --manager explicitly, or --house, "
-                      "or run this from inside a project directory")
+    """(manager_handle, error). The SOLE existing seat whose own derived project matches
+    `project`, never a guess among several and never a fabricated manager for an empty
+    project — crossing into a brand-new project always needs an explicit --manager naming
+    a seat that already exists somewhere else (mint_seat's own cross-house guard requires
+    it; an empty project has nothing to infer from by construction, and inventing one here
+    would be exactly the silent-guess failure #135 exists to name)."""
+    if not project:
+        return None, ("no --manager given and no project could be inferred (no .osiris "
+                      "pin here) — pass --manager explicitly, or run this from inside a "
+                      "pinned project directory")
     from src.orchestrator.seats import fleet_occupancy
 
-    candidates = [s for s in await fleet_occupancy(pool) if s.get("house") == house]
+    candidates = [s for s in await fleet_occupancy(pool) if s.get("house") == project]
     if not candidates:
-        return None, (f"no seats exist in house {house!r} yet — mint-seat needs an existing "
-                      "seat as manager-of-record even to start a brand-new house (crossing "
-                      "into one always does); pass --manager naming any existing seat")
+        return None, (f"no seats exist in project {project!r} yet — mint-seat needs an "
+                      "existing seat as manager-of-record even to start a brand-new "
+                      "project (crossing into one always does); pass --manager naming "
+                      "any existing seat")
     if len(candidates) > 1:
         names = ", ".join(sorted(c["handle"] for c in candidates if c.get("handle")))
-        return None, (f"{len(candidates)} seats in house {house!r} ({names}) — ambiguous, "
-                      "name one explicitly with --manager")
+        return None, (f"{len(candidates)} seats in project {project!r} ({names}) — "
+                      "ambiguous, name one explicitly with --manager")
     return candidates[0]["handle"], None
 
 
 async def cmd_mint_seat(
-    handle: str, *, manager: str | None, project: str | None, house: str | None,
+    handle: str, *, manager: str | None, project: str | None,
     model: str | None, actor: str, adopt: bool = False, force: bool = False,
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
-    """osiris mint-seat <handle> [--manager <seat>] [--project P] [--house H] [--model M]
+    """osiris mint-seat <handle> [--manager <seat>] [--project P] [--model M]
     [--actor <who>] [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
     the SAME function the mint_seat MCP tool wraps (no duplicated guard: the near-miss/
     cross-house/live-adopt refusals are exactly mint_seat's own, untouched here).
+
+    NO SEPARATE --house FLAG (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): a
+    seat's project is never a second, independently-declared value — the new worker's
+    own project comes from its manager's own project by construction (mint_seat's own
+    `resolved_house = house or manager_house`, house always omitted from this door now),
+    the same "house(seat) IS the manager's own project" convention derive_house's own
+    docstring already names. `--project` here is unrelated: it stamps this worker's own
+    `.osiris` pin (never a `governs` charter edge — mint_seat deliberately never mints
+    one, "inventing it on an unlaunched mind's behalf"), a distinct fact from which
+    project it belongs to.
 
     A DIFFERENT SHAPE OF GAP than fold_project/charter_for/amend_practice's stale-tool-
     index class: mint_seat's own MCP tool has no `manager` parameter at all — it INFERS
@@ -5952,11 +5975,11 @@ async def cmd_mint_seat(
     infer from, so this door took `manager` explicitly at first — then dispatch 3678 (the
     operator's own "make the cli friendly") asked for that requirement inferred too, the
     same way `--actor` already is: when `manager` is omitted, `_infer_manager` looks for
-    the SOLE seat in the target house (`_context_house`: --house, else the cwd's own
-    .osiris pin, else the cwd's own name) and refuses loudly — never guesses — if that's
-    zero or several. Closes the exact gap CLI.md's own house law names: an operator
-    standing up a brand-new seat had no door but a hand-rolled `python -c` heredoc against
-    the live DB — precisely what ruling 45b074bf bans.
+    the SOLE seat in the target project (`_context_project`: the cwd's own .osiris pin
+    only) and refuses loudly — never guesses — if that's zero or several. Closes the
+    exact gap CLI.md's own house law names: an operator standing up a brand-new seat had
+    no door but a hand-rolled `python -c` heredoc against the live DB — precisely what
+    ruling 45b074bf bans.
 
     Prints mint_seat's own occupancy-aware `next_step_cli` (vacant: `osiris launch
     <handle>`; occupied/cold: nothing needed) rather than a second, driftable copy of
@@ -5993,18 +6016,18 @@ async def cmd_mint_seat(
             return 1
     try:
         if manager is None:
-            ctx_house = _context_house(house)
-            manager, infer_error = await _infer_manager(pool, ctx_house)
+            ctx_project = _context_project()
+            manager, infer_error = await _infer_manager(pool, ctx_project)
             if infer_error:
                 print(f"osiris mint-seat: {infer_error}", file=sys.stderr)
                 return 1
             assert manager is not None  # _infer_manager's own contract: error XOR manager
             print(f"osiris mint-seat: inferred --manager={manager!r} — the only seat in "
-                  f"house {ctx_house!r}; pass --manager explicitly to override")
+                  f"project {ctx_project!r}; pass --manager explicitly to override")
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
         if office_root is not None:
             kwargs["office_root"] = office_root
-        out = await _mint_seat(Actions(pool), manager=manager, handle=handle, house=house,
+        out = await _mint_seat(Actions(pool), manager=manager, handle=handle,
                                project=project, actor=actor, adopt=adopt, force=force,
                                **kwargs)
     finally:
@@ -6014,7 +6037,7 @@ async def cmd_mint_seat(
         print(f"osiris mint-seat: refused — {out['error']}", file=sys.stderr)
         return 1
     print(f"{'minted' if out['seat_minted'] else 'adopted'} {out['handle']} "
-          f"({out['seat_id']}), house={out['house']}")
+          f"({out['seat_id']}), project={out['house']}")
     office = out.get("office")
     if office:
         print(f"seat directory: {office['office']} (pin {office['osiris_pin']}, orders "
@@ -6037,10 +6060,14 @@ async def cmd_mint_seat(
 # --- new -----------------------------------------------------------------------------------------
 
 async def cmd_new(
-    handle: str, path: str | None, *, project: str | None, house: str | None,
+    handle: str, path: str | None, *, project: str | None,
     model: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris new <handle> [path] [--project P] [--house H] [--model M] [--actor <who>] —
+    """osiris new <handle> [path] [--project P] [--model M] [--actor <who>] — NO
+    SEPARATE --house FLAG (Thoth mail 12000, implements 70c001ec): a self-managed
+    seat has no manager to derive its own project from, so `--project` is the ONE
+    source for both the pin declaration and the Seat's own house/project property —
+    never two flags that could disagree.
     ONE command, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft to
     spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
     Ooblek's own real shape, read off its own dossier before this was built rather than
@@ -6095,7 +6122,7 @@ async def cmd_new(
     try:
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
         out = await _found_seat(Actions(pool), handle=handle, path=path, project=project,
-                                house=house, actor=actor, **kwargs)
+                                actor=actor, **kwargs)
     finally:
         if owns_pool:
             await pool.close()
@@ -6116,12 +6143,6 @@ async def cmd_new(
         print("project: unset — no --project given, none invented. mount will fill "
               "this in on its own once the graph unambiguously knows it; "
               "`osiris new <handle> --project <name>` declares it now.")
-    if out["house"]:
-        print(f"house: {out['house']}")
-    else:
-        print("house: unset — no --house given, none invented (ruling 68fba2e4: homeless "
-              "is a legal state, never fabricated from the handle). "
-              "`osiris new <handle> --house <name>` declares it now.")
     print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
     office = out.get("office")
     if office:
@@ -6760,18 +6781,18 @@ async def cmd_establish_seat_dir(
     return 0
 
 
-async def cmd_resync_seat_house(
-    seat_id: str, new_house: str | None, reason: str, *, actor: str,
-    pool: asyncpg.Pool | None = None,
+async def cmd_resync_seat_project(
+    seat_id: str, reason: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris resync-seat-house <seat> <new_house|--none> <reason> [--actor W] — the
-    console-script door onto orchestrator.seats.resync_seat_house_third_party, the SAME
-    function the resync_seat_house MCP tool wraps (forwards to
-    seat(action='resync_house')). `new_house=None` unsets a redundant house third-party
-    (thread dc1b5a20's own door note: this, never retire_assertion, is how a house third-
-    party is genuinely unset)."""
+    """osiris resync-seat-project <seat> <reason> [--actor W] — RETIRES resync-seat-house
+    outright, no alias (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): the
+    console-script door onto orchestrator.seats.resync_seat_project, which collapses
+    the old third-party `resync_seat_house_third_party` AND the old self-scoped
+    `correct_house` into one door — a seat's project is never a second, declared
+    value, so there is no `<new_house>` argument left to take; this always
+    RE-DERIVES from the seat's own charter instead."""
     from src.actions.core import Actions
-    from src.orchestrator.seats import resync_seat_house_third_party
+    from src.orchestrator.seats import resync_seat_project as _resync_seat_project
 
     owns_pool = pool is None
     if pool is None:
@@ -6784,22 +6805,22 @@ async def cmd_resync_seat_house(
         try:
             pool = await create_pool(
                 settings.database_url, min_size=1, max_size=4,
-                application_name="osiris-cli:resync-seat-house")
+                application_name="osiris-cli:resync-seat-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris resync-seat-house: could not reach postgres at "
+            print(f"osiris resync-seat-project: could not reach postgres at "
                   f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
-        out = await resync_seat_house_third_party(
-            Actions(pool), seat_id, new_house, source=actor, reason=reason)
+        out = await _resync_seat_project(Actions(pool), seat_id, source=actor, reason=reason)
     finally:
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris resync-seat-house: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris resync-seat-project: refused — {out['error']}", file=sys.stderr)
         return 1
-    print(f"{seat_id} house -> {new_house!r}")
+    print(f"{seat_id} project -> {out['project']!r}"
+          + (" (already correct)" if out.get("already_correct") else ""))
     for k, v in out.items():
         print(f"  {k}: {v}")
     return 0
@@ -7191,18 +7212,19 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   write to the record   send, decide, settle, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
-                        transition-seat-project, correct-agent-house, reconcile-merge,
+                        transition-seat-project, correct-agent-project, reconcile-merge,
                         retire-agent, heal-seat-transcript, attach-seat, detach-seat,
                         promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
                         sweep-seat-trees, rename-seat, set-seat-attended, reissue-seat-dir,
-                        establish-seat-dir, resync-seat-house, reconcile-seat-identity,
+                        establish-seat-dir, resync-seat-project, reconcile-seat-identity,
                         reissue-office (deprecated alias for reissue-seat-dir, one release
                         only), establish-office (deprecated alias for establish-seat-dir,
                         one release only),
                         create-project, rename-project, retire-project, fork-project,
                         set-project-tag, proposal, settings, backup-settings,
                         retire-assertion, retire-link, retire-object, cite,
-                        declare-machine-identity
+                        declare-machine-identity, correct-agent-house (deprecated alias
+                        for correct-agent-project, one release only)
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
 
@@ -8202,13 +8224,14 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "convention as every other repair verb in this project")
 
     p_correct_agent_house = sub.add_parser(
-        "correct-agent-house", description=_d(
+        "correct-agent-project", aliases=["correct-agent-house"], description=_d(
             "heal an already-polluted agent's own project/seat_generation stamps — the "
             "same orchestrator.agents.correct_agent_house the MCP tool wraps, given an "
             "explicit target (a terminal has no mounted identity to be self-scoped "
             "about; correct-house's own self-scoped act has no console door for that "
-            "reason)"),
-        epilog="example: osiris correct-agent-house Jesus --project godel")
+            "reason). `correct-agent-house` still works this release as a deprecated "
+            "alias (ONE TAXONOMY, ruling 52a59652/70c001ec)."),
+        epilog="example: osiris correct-agent-project Jesus --project godel")
     p_correct_agent_house.add_argument("seat", help="a claimed handle or a raw agent id "
                                        "— the agent whose stamps this corrects")
     p_correct_agent_house.add_argument("--project", default=None,
@@ -8425,24 +8448,26 @@ def _build_parser() -> argparse.ArgumentParser:
             "terminal holds no seat of its own to infer them from, so this door infers "
             "them a different way — see their own --help below) and --adopt/--force are "
             "deliberate console-only escape hatches an agent caller can never reach."),
-        epilog="example, adding a worker to your own house:\n"
+        epilog="example, adding a worker to your own project:\n"
             "    osiris mint-seat NewBot\n"
-            "example, starting a brand-new house/project:\n"
-            "    osiris mint-seat NewBot --manager Thoth --house NewProject")
+            "example, starting a brand-new project (an existing seat crossing into it, "
+            "operator authority required):\n"
+            "    osiris mint-seat NewBot --manager Thoth --project NewProject")
     p_mint_seat.add_argument("handle", help="the new worker seat's handle")
     p_mint_seat.add_argument("--manager", default=None,
                              help="the minting seat's own handle or seat_id. Omit it and "
-                                  "this infers the sole seat in the target house (--house, "
-                                  "else the cwd's .osiris pin, else the cwd's own name) — "
-                                  "refuses loudly instead of guessing among several")
+                                  "this infers the sole seat in the cwd's own pinned "
+                                  "project — refuses loudly instead of guessing among "
+                                  "several. A seat's own project is never a second, "
+                                  "independently-given value — no --house flag here; the "
+                                  "new worker's project comes from its manager's own "
+                                  "project by construction")
     p_mint_seat.add_argument("--project", default=None,
-                             help="the project the new seat's directory is stamped with "
-                                  "(defaults to the manager's own house)")
-    p_mint_seat.add_argument("--house", default=None,
-                             help="defaults to the manager's own house; naming a house with "
-                                  "no seats in it yet CREATES that house/project in this "
-                                  "same act (a console actor already carries the operator "
-                                  "authority a house crossing needs)")
+                             help="stamped into this new seat's own .osiris pin (never "
+                                  "invented if omitted — declare it later with "
+                                  "`charter(repos=[...])` once it actually governs one); "
+                                  "distinct from which project the seat itself belongs "
+                                  "to, which is never a flag here (see --manager)")
     p_mint_seat.add_argument("--model", default=None,
                              help="defaults to mint_seat's own worker default")
     p_mint_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
@@ -8463,7 +8488,7 @@ def _build_parser() -> argparse.ArgumentParser:
                "~/.osiris/seats/<handle>/. Then `osiris launch <handle>` gives it a "
                "body.") + "\n\n" +
             _d("Use `new` for a seat that answers to nobody. Use `mint-seat` for a "
-               "worker in a house you already run.")),
+               "worker in a project you already run.")),
         epilog="example, converging on ~/code/henry:\n"
             "    osiris new henry\n"
             "example, naming the workspace explicitly:\n"
@@ -8476,10 +8501,10 @@ def _build_parser() -> argparse.ArgumentParser:
                             "defaults to ~/code/<handle>")
     p_new.add_argument("--project", default=None,
                        help="the project name written into the workspace's own .osiris "
-                            "pin — omit it and none is invented; it stays unset")
-    p_new.add_argument("--house", default=None,
-                       help="this seat's own house — omit it and none is invented; it "
-                            "stays homeless (ruling 68fba2e4: homeless is a legal state)")
+                            "pin AND this seat's own identity — no separate --house flag "
+                            "(a self-managed seat has no manager to derive one from "
+                            "instead); omit it and none is invented, it stays "
+                            "genuinely unset (ruling 68fba2e4: homeless is a legal state)")
     p_new.add_argument("--model", default=None,
                        help="defaults to mint_seat's own worker default")
     p_new.add_argument("--actor", default=_CONSOLE_ACTOR,
@@ -8669,24 +8694,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                     help=f"who is performing this act — defaults to "
                                          f"{_CONSOLE_ACTOR!r}")
 
-    p_resync_seat_house = sub.add_parser(
-        "resync-seat-house", description=_d(
-            "correct or unset a Seat's own house third-party — the console-script door "
-            "onto orchestrator.seats.resync_seat_house_third_party, the SAME function "
-            "the resync_seat_house MCP tool wraps (wave 3, thread 5bf6447c). Omit "
-            "--house to UNSET a redundant house (never retire-assertion — thread "
-            "dc1b5a20's own door note)"),
-        epilog="example: osiris resync-seat-house seat:e355913e \"canon spelling\" "
-              "--house ramstein"
-              "\nexample, unsetting: osiris resync-seat-house seat:e355913e "
-              "\"redundant with project\"")
-    p_resync_seat_house.add_argument("seat_id", help="the seat's own canonical id")
-    p_resync_seat_house.add_argument("reason", help="why this house is changing")
-    p_resync_seat_house.add_argument("--house", default=None, dest="new_house",
-                                     help="the corrected house — omit entirely to unset")
-    p_resync_seat_house.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                     help=f"who is performing this act — defaults to "
-                                          f"{_CONSOLE_ACTOR!r}")
+    p_resync_seat_project = sub.add_parser(
+        "resync-seat-project", description=_d(
+            "re-derive a Seat's own project property FROM ITS CHARTER — RETIRES "
+            "resync-seat-house outright, no alias (Thoth mail 12000, implements "
+            "70c001ec, \"ONE TAXONOMY\"): collapses the old third-party "
+            "resync_seat_house_third_party AND the old self-scoped correct_house into "
+            "one door, since a seat's project is never a second, declared value. "
+            "Refuses on a charter governing zero or more than one project — never "
+            "guesses."),
+        epilog="example: osiris resync-seat-project seat:e355913e \"charter changed\"")
+    p_resync_seat_project.add_argument("seat_id", help="the seat's own canonical id")
+    p_resync_seat_project.add_argument("reason", help="why this is being re-derived")
+    p_resync_seat_project.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                       help=f"who is performing this act — defaults to "
+                                            f"{_CONSOLE_ACTOR!r}")
 
     p_reconcile_seat_identity = sub.add_parser(
         "reconcile-seat-identity", description=_d(
@@ -8997,6 +9019,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_transition_seat_project(
             args.seat, because=args.because, fabricated_project=args.fabricated_project,
             real_project=args.real_project, repos=transition_repos, apply=args.apply))
+    if args.command == "correct-agent-project":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_correct_agent_project(
+            args.seat, project=args.project, seat_generation=args.seat_generation,
+            actor=args.actor))
     if args.command == "correct-agent-house":
         return asyncio.run(cmd_correct_agent_house(
             args.seat, project=args.project, seat_generation=args.seat_generation,
@@ -9036,11 +9063,11 @@ def main(argv: list[str] | None = None) -> int:
                                              force=args.force))
     if args.command == "mint-seat":
         return asyncio.run(cmd_mint_seat(
-            args.handle, manager=args.manager, project=args.project, house=args.house,
+            args.handle, manager=args.manager, project=args.project,
             model=args.model, actor=args.actor, adopt=args.adopt, force=args.force))
     if args.command == "new":
         return asyncio.run(cmd_new(
-            args.handle, args.path, project=args.project, house=args.house,
+            args.handle, args.path, project=args.project,
             model=args.model, actor=args.actor))
     if args.command == "bootstrap":
         return asyncio.run(cmd_bootstrap(args.cwd, project=args.project, actor=args.actor))
@@ -9084,9 +9111,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_establish_seat_dir(args.seat, actor=args.actor))
     if args.command == "establish-office":
         return asyncio.run(cmd_establish_office(args.seat, actor=args.actor))
-    if args.command == "resync-seat-house":
-        return asyncio.run(cmd_resync_seat_house(args.seat_id, args.new_house, args.reason,
-                                                  actor=args.actor))
+    if args.command == "resync-seat-project":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_resync_seat_project(args.seat_id, args.reason,
+                                                   actor=args.actor))
     if args.command == "reconcile-seat-identity":
         return asyncio.run(cmd_reconcile_seat_identity(
             args.seat_id, args.because, agent_id=args.agent_id, actor=args.actor))
