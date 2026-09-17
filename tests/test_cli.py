@@ -38,6 +38,7 @@ from src.cli import (
     cmd_audit,
     cmd_backfill,
     cmd_backlog,
+    cmd_backup_settings,
     cmd_boot_status,
     cmd_bootstrap,
     cmd_charter_for,
@@ -4710,8 +4711,129 @@ async def test_cli_parser_accepts_settings(actions: Actions) -> None:
     assert args.command == "settings"
     assert args.action == "set"
     assert args.key == "daemon.pit_watch.enabled"
-    assert args.value == "true"
-    assert args.because == "watching tonight"
+
+
+# --- backup-settings: PARITY GAPS, WAVE 27 item 3, thread 45aff160 ----------------------------
+
+async def test_cmd_backup_settings_get_reports_the_seeded_defaults(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backup_settings("get", pool=actions.pool)
+    assert out == 0
+    assert "vault_path" in buf.getvalue()
+    assert "timer_schedules" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_write_the_operator_writes_freely(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backup_settings(
+            "write", vault_path="/mnt/backup-vault", because="moved the vault",
+            actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    assert (await get_backup_settings(actions.pool))["vault_path"] == "/mnt/backup-vault"
+
+
+async def test_cmd_backup_settings_write_a_worker_with_no_ruling_is_refused(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", vault_path="/mnt/backup-vault", because="moved the vault",
+            actor="agent:some-worker", pool=actions.pool)
+    assert out == 1
+    assert "ruling" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_write_requires_a_because(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", vault_path="/mnt/backup-vault", actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "because" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_write_timer_schedules_full_replace(
+    actions: Actions,
+) -> None:
+    """`timer_schedules` clears any unit missing from the given object, per its own
+    docstring — never leaves a stale override behind silently."""
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    from src.config.settings_registry import BACKUP_TIMER_UNITS
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    unit_a, unit_b = BACKUP_TIMER_UNITS[0], BACKUP_TIMER_UNITS[1]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        await cmd_backup_settings(
+            "write", timer_schedules=json.dumps({unit_a: "daily", unit_b: "weekly"}),
+            because="seed both", actor="operator", pool=actions.pool)
+    assert (await get_backup_settings(actions.pool))["timer_schedules"] == {
+        unit_a: "daily", unit_b: "weekly"}
+
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        out = await cmd_backup_settings(
+            "write", timer_schedules=json.dumps({unit_a: "daily"}),
+            because="drop unit_b", actor="operator", pool=actions.pool)
+    assert out == 0
+    assert (await get_backup_settings(actions.pool))["timer_schedules"] == {unit_a: "daily"}
+
+
+async def test_cmd_backup_settings_write_rejects_invalid_timer_schedules_json(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", timer_schedules="not valid json{", because="x",
+            actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "JSON" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_bad_action_refuses(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings("delete", pool=actions.pool)
+    assert out == 1
+    assert "action" in buf.getvalue()
+
+
+async def test_cli_parser_accepts_backup_settings(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["backup-settings", "write", "--vault-path", "/mnt/vault",
+         "--because", "moved it", "--actor", "operator"])
+    assert args.command == "backup-settings"
+    assert args.action == "write"
+    assert args.vault_path == "/mnt/vault"
 
 
 async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:

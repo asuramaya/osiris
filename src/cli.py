@@ -4147,6 +4147,94 @@ async def cmd_settings(
     return 0
 
 
+async def cmd_backup_settings(
+    action: str, *, vault_path: str | None = None, timer_schedules: str | None = None,
+    offbox_repositories: str | None = None, because: str | None = None,
+    ruling: str | None = None, actor: str = _CONSOLE_ACTOR, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris backup-settings <get|write> [--vault-path P] [--timer-schedules JSON]
+    [--offbox-repositories JSON] [--because R] [--ruling REF] [--json] [--actor W] —
+    the console-script door onto orchestrator.backup_settings.{get_backup_settings,
+    write_backup_settings}, the SAME functions the `backup_settings` MCP tool and the
+    CMD-K backup config panel call (PARITY GAPS, WAVE 27 item 3, thread 45aff160 —
+    `cmd_settings`'s own docstring already named this exact gap: "the CLI
+    backup_settings itself never got, per Thoth's own ask on thread f4498ab304e4").
+
+    `action='get'` reads current settings, no authority needed. `action='write'`
+    changes them — gated like `charter-for`: the operator (a raw terminal call already
+    carries operator authority, same law every other sanctioned-second-door command
+    here holds) writes freely, anyone else must cite a standing `--ruling` naming
+    'backup_settings'; `--because` is required to write. `--timer-schedules`/
+    `--offbox-repositories` are JSON strings, same `--value` convention `osiris
+    settings set` already uses. `timer_schedules` is a FULL-REPLACE field: any of the
+    five backup-lane timer units missing from the given object is explicitly cleared
+    (written as null), not left alone — "clearing an input and saving drops it" holds
+    per-unit here too."""
+    import json as _json
+
+    from src.orchestrator.backup_settings import get_backup_settings, write_backup_settings
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:backup-settings")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris backup-settings: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        if action == "get":
+            out = await get_backup_settings(pool)
+        elif action == "write":
+            if not (because or "").strip():
+                print("osiris backup-settings write: --because is required — a backup "
+                      "config write is testimony, same discipline every other repair "
+                      "door in this house holds", file=sys.stderr)
+                return 1
+            fields: dict[str, Any] = {}
+            if vault_path is not None:
+                fields["vault_path"] = vault_path
+            if timer_schedules is not None:
+                try:
+                    fields["timer_schedules"] = _json.loads(timer_schedules)
+                except _json.JSONDecodeError:
+                    print("osiris backup-settings write: --timer-schedules must be "
+                          "valid JSON (a unit-name -> OnCalendar= object)", file=sys.stderr)
+                    return 1
+            if offbox_repositories is not None:
+                try:
+                    fields["offbox_repositories"] = _json.loads(offbox_repositories)
+                except _json.JSONDecodeError:
+                    print("osiris backup-settings write: --offbox-repositories must be "
+                          "valid JSON (a list of {url, schedule, enabled})", file=sys.stderr)
+                    return 1
+            out = await write_backup_settings(
+                pool, actor=actor, because=because or "", ruling=ruling, **fields)
+        else:
+            print(f"osiris backup-settings: action must be 'get' or 'write' (got "
+                  f"{action!r})", file=sys.stderr)
+            return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris backup-settings {action}: refused — {out['error']}", file=sys.stderr)
+        return 1
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title=f"backup-settings {action}")
+    return 0
+
+
 # --- amend-practice ----------------------------------------------------------------------------
 
 async def cmd_amend_practice(
@@ -6728,8 +6816,9 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         rename-seat, set-seat-attended, reissue-office,
                         establish-office, resync-seat-house, reconcile-seat-identity,
                         create-project, rename-project, retire-project, fork-project,
-                        set-project-tag, proposal, settings, retire-assertion,
-                        retire-link, retire-object, cite, declare-machine-identity
+                        set-project-tag, proposal, settings, backup-settings,
+                        retire-assertion, retire-link, retire-object, cite,
+                        declare-machine-identity
   operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
                         fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
 
@@ -7322,6 +7411,38 @@ def _build_parser() -> argparse.ArgumentParser:
                             help=f"who is making this change — defaults to {_CONSOLE_ACTOR!r}")
     p_settings.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
+
+    p_backup_settings = sub.add_parser(
+        "backup-settings", description=_d(
+            "the backup config panel's own CLI door (PARITY GAPS, WAVE 27 item 3, "
+            "thread 45aff160) — get/write over vault_path, the five backup-lane "
+            "timer schedules, and offbox_repositories, the same functions the "
+            "`backup_settings` MCP tool and the CMD-K panel call"),
+        epilog="example: osiris backup-settings get\n"
+               "example: osiris backup-settings write --vault-path /mnt/backup-vault "
+               "--because 'moved the vault to the new NAS mount'")
+    p_backup_settings.add_argument("action", choices=("get", "write"))
+    p_backup_settings.add_argument("--vault-path", default=None, dest="vault_path",
+                                   help="write only — absolute path, local disk or an "
+                                        "OS-mounted NAS share")
+    p_backup_settings.add_argument(
+        "--timer-schedules", default=None, dest="timer_schedules",
+        help="write only — a JSON object mapping unit name -> OnCalendar= "
+             "(full-replace: an omitted unit is explicitly cleared)")
+    p_backup_settings.add_argument(
+        "--offbox-repositories", default=None, dest="offbox_repositories",
+        help="write only — a JSON list of {url, schedule, enabled}")
+    p_backup_settings.add_argument("--because", default=None,
+                                   help="required to write")
+    p_backup_settings.add_argument("--ruling", default=None,
+                                   help="a standing operator ruling naming "
+                                        "'backup_settings' — lets a non-operator write "
+                                        "under that ruling's authority")
+    p_backup_settings.add_argument("--actor", default=_CONSOLE_ACTOR,
+                                   help=f"who is making this change — defaults to "
+                                        f"{_CONSOLE_ACTOR!r}")
+    p_backup_settings.add_argument("--json", action="store_true", dest="as_json",
+                                   help="machine-readable: one compact JSON line")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
         "narrow or correct a LIVE practice's "
@@ -8282,6 +8403,11 @@ def main(argv: list[str] | None = None) -> int:
             args.action, key=args.key, value=args.value, because=args.because,
             ruling=args.ruling, scope_id=args.scope_id, actor=args.actor,
             as_json=args.as_json))
+    if args.command == "backup-settings":
+        return asyncio.run(cmd_backup_settings(
+            args.action, vault_path=args.vault_path, timer_schedules=args.timer_schedules,
+            offbox_repositories=args.offbox_repositories, because=args.because,
+            ruling=args.ruling, actor=args.actor, as_json=args.as_json))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     if args.command == "annotate-thread":

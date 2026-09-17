@@ -73,6 +73,8 @@ JSON_COMMANDS = frozenset({
     # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832)
     "dossier", "object-events", "succession-chain", "candidates", "composition",
     "retire-assertion", "retire-link", "cite", "citation",
+    # PARITY GAPS, WAVE 27 item 3 (thread 45aff160)
+    "backup-settings",
 })
 
 

@@ -356,6 +356,25 @@ This closes the exact gap this file's own house law names below: before this com
 existed, standing up a brand-new seat from a terminal had no door but a hand-rolled
 `python -c` heredoc against the live DB — precisely what ruling `45b074bf` bans.
 
+## `osiris backfill <target> [--apply] [--because R] [--only-bases ID,...] [--limit N] [--newest-first]`
+
+The console-script door onto one of seven repair targets (identity/provenance backfills),
+the same `orchestrator.backfill.run_backfill` the `backfill` MCP tool and the UI's Repairs
+panel call. Dry run is the default for every target; `--apply` writes and requires
+`--because`.
+
+## `osiris composition <list|run|run-spec|save> [name] [--spec JSON] [--json]`
+
+Mirrors the `composition` MCP tool for `list`/`run`/`save`; `run-spec` is a CLI-only
+fourth mode straight onto `compositions.run_spec` for an ephemeral, never-saved spec.
+
+## `osiris backup-settings <get|write> [--vault-path P] [--timer-schedules JSON] [--offbox-repositories JSON] [--because R] [--ruling REF]`
+
+The backup config panel's own CLI door — get/write over the vault path, the five
+backup-lane timer schedules, and off-box repositories, the same functions the
+`backup_settings` MCP tool and the CMD-K panel call. `write` requires `--because`;
+`--timer-schedules` is a full-replace field (an omitted unit is cleared).
+
 ## The house law behind every subcommand
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an
