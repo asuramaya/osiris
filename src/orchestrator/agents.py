@@ -3465,10 +3465,26 @@ async def mint_heir(
     # mint (i.e. every compaction) would redeliver the project's whole settled broadcast
     # history to the new mind. The heir literally remembers reading them — that memory is
     # exactly what survived the seam.
+    #
+    # BUT ONLY THE SETTLED HALF (WAVE 27 BUG 4, Thoth DM 11781, thread bc517864): a
+    # message_recipients row with read_at IS NULL is a LEASE, not a memory — the ancestor
+    # read it (delivered_at) but never replied or acked before dying, and a lease belongs
+    # to the mind that holds it, not to whoever inherits its name next. The old
+    # unconditional copy carried the ancestor's own (recent) delivered_at straight onto the
+    # heir, so the heir's very next inbox() read the message as "already delivered inside
+    # its lease window" and stayed silent about it for as long as that lease had left to
+    # run — a genuinely unread ask going dark across the one seam that most needs it
+    # surfaced (Imhotep's specimen: two leased asks read as settled by the mint, neither
+    # ever answered). Filtering to read_at IS NOT NULL here is the fix: a truly settled
+    # message still carries its memory forward exactly as before; a merely-leased one
+    # carries NOTHING, so the heir's own next inbox() finds it with no prior row at all —
+    # fresh, undelivered, exactly as if this mind were reading it for the first time,
+    # which it is.
     await actions.pool.execute(
         "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at, deliveries)"
         " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
-        " WHERE agent_id=$2 ON CONFLICT (message_id, agent_id) DO NOTHING", heir, ancestor_id)
+        " WHERE agent_id=$2 AND read_at IS NOT NULL"
+        " ON CONFLICT (message_id, agent_id) DO NOTHING", heir, ancestor_id)
     return heir, a
 
 
