@@ -642,6 +642,7 @@ export async function initSpace(container) {
   let storylineMinT = 0, storylineMaxT = 1, storylineAxisWidthWorld = 1;
   let storylineLines = null;
   let storylineAxisEntries = []; // [{t, x, y, div}]
+  let storylineMaxSubrowOffsetPx = 0; // deepest sub-agent arc offset (raw px) used this render (THE SPAWN ROW)
   // WAVE 26, COMMUNITY REGIONS (mail 11592/11664): declared here for the same reason as
   // the storyline state just above -- syncCommunityVisibility (further down) is read from
   // fitToNodes' own initial synchronous call site, well before this point in the file
@@ -2164,8 +2165,22 @@ export async function initSpace(container) {
   const STORYLINE_AXIS_WIDTH_PX = 3600;
   const STORYLINE_ROW_OFFSET_PX = 90;
   const STORYLINE_SUBROW_STEP_PX = 26;
-  const STORYLINE_SUBROW_TIERS = 5;
   const STORYLINE_AXIS_TICK_COUNT = 6;
+  // WAVE 27, THE SPAWN ROW (Thoth mail 11754, her w313 review note): a real burst-spawned
+  // parent (50 sub-agents minted within the same short window) collapsed onto a HANDFUL of
+  // rows once the old tier count wrapped modulo a fixed cap (5) -- two siblings 10 apart in
+  // spawn order landed on the exact same (dir, tier), and with near-identical createdAt too,
+  // the exact same (x, y). No amount of label decluttering can separate two coincident
+  // points. FIRST ATTEMPT (live-caught regression, kept here as a warning): uncapping the
+  // tier LINEARLY (tier * STEP_PX) fixes the collision but a real fleet burst (measured
+  // live: one parent, 1188 siblings) then explodes the vertical extent to +-12,000 world
+  // units, zooming the WHOLE storyline down to a handful of visible pixels -- "0 label
+  // overlaps" only because nothing is legible. The offset below grows with sqrt(tier)
+  // instead: still strictly monotonic (no two siblings of one parent ever share a
+  // position -- sqrt is injective on non-negative integers), but a burst 100x bigger only
+  // needs ~10x the height, not 100x. storylineMaxSubrowOffsetPx tracks the deepest offset
+  // actually used this render (in raw, pre-wpp pixels) so the axis (below) clears
+  // whatever extent really occurred, instead of assuming a fixed constant.
   function buildSuccessionAdjacency() {
     const adj = new Map();
     for (const e of edges) {
@@ -2227,6 +2242,7 @@ export async function initSpace(container) {
     storylineChainIds = new Set();
     storylineSubAgentOf = new Map();
     storylineTickOf = new Map();
+    storylineMaxSubrowOffsetPx = 0;
   }
   // a dedicated straight-line overlay -- NOT updatePathEdges (its own cross-cluster bow/
   // bundle logic answers a different question, "how far apart are two projects", which
@@ -2276,7 +2292,7 @@ export async function initSpace(container) {
     disposeStorylineAxis();
     if (!Number.isFinite(fromT) || !Number.isFinite(toT) || toT <= fromT) return;
     const wpp = maxViewSize / wrap.clientHeight;
-    const axisY = -((STORYLINE_ROW_OFFSET_PX + STORYLINE_SUBROW_TIERS * STORYLINE_SUBROW_STEP_PX + 40) * wpp);
+    const axisY = -((storylineMaxSubrowOffsetPx + 40) * wpp);
     for (let i = 0; i <= STORYLINE_AXIS_TICK_COUNT; i++) {
       const frac = i / STORYLINE_AXIS_TICK_COUNT;
       const t = fromT + frac * (toT - fromT);
@@ -2339,8 +2355,6 @@ export async function initSpace(container) {
     const timeSpan = Math.max(maxT - minT, 1);
     const wpp = maxViewSize / wrap.clientHeight;
     const axisWidth = STORYLINE_AXIS_WIDTH_PX * wpp;
-    const rowOffset = STORYLINE_ROW_OFFSET_PX * wpp;
-    const subrowStep = STORYLINE_SUBROW_STEP_PX * wpp;
     const timeToX = (t) => ((t - minT) / timeSpan) * axisWidth;
     storylineMinT = minT; storylineMaxT = maxT; storylineAxisWidthWorld = axisWidth;
 
@@ -2356,15 +2370,18 @@ export async function initSpace(container) {
       nd.y = 0;
     }
     const subAgentRow = new Map(); // parentId -> siblings placed so far (staggers them)
+    storylineMaxSubrowOffsetPx = STORYLINE_ROW_OFFSET_PX;
     for (const [subId, parentId] of subAgentOf) {
       const nd = idById.get(subId);
       if (!nd) continue;
       const n = subAgentRow.get(parentId) || 0;
       subAgentRow.set(parentId, n + 1);
       const dir = n % 2 === 0 ? 1 : -1;
-      const tier = Math.floor(n / 2) % STORYLINE_SUBROW_TIERS;
+      const tier = Math.floor(n / 2); // sqrt(tier) is injective on tier -- never repeats
+      const offsetPx = STORYLINE_ROW_OFFSET_PX + Math.sqrt(tier) * STORYLINE_SUBROW_STEP_PX;
+      if (offsetPx > storylineMaxSubrowOffsetPx) storylineMaxSubrowOffsetPx = offsetPx;
       nd.x = timeToX(nd.createdAt || minT);
-      nd.y = dir * (rowOffset + tier * subrowStep);
+      nd.y = dir * offsetPx * wpp;
     }
     for (const [tickId, bodyId] of ticksOf) {
       const nd = idById.get(tickId), body = idById.get(bodyId);
@@ -3350,6 +3367,7 @@ export async function initSpace(container) {
     get storylineTickCount() { return storylineTickOf.size; },
     get storylineTimeSpanSeconds() { return storylineMaxT - storylineMinT; },
     get storylineAxisLabelCount() { return storylineAxisEntries.length; },
+    get storylineMaxSubrowOffsetPx() { return storylineMaxSubrowOffsetPx; },
     // WAVE 26, PIECE 2: COMMUNITY REGIONS (mail 11592/11664) -- live-verification hooks.
     get communities() { return communities.map((c) => ({ ...c })); },
     get communityRegionsVisible() { return communityRegionsVisible; },
@@ -3365,6 +3383,9 @@ export async function initSpace(container) {
     // zoomAt bypasses the rAF-coalesced wheel path for direct exercise; forceRender skips
     // the dirty check for a synchronous frame.
     zoomAt, forceRender: () => { renderScene(); positionLabels(); },
+    // same "debug/test hooks only" convention as forceRender above -- skips
+    // scheduleLabelPick's own 150ms debounce for direct live-verification exercise.
+    pickLabelsNow: () => pickLabels(),
     // live-verification/test hooks for the top-N-by-degree label pool -- same "debug hooks
     // alongside the real api" convention as zoomAt/forceRender above.
     get toneMapActive() { return !!sceneTarget; },
