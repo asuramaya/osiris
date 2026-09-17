@@ -307,6 +307,25 @@ CLI_ONLY_PARAMS = {
     ("search", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
         "entry above; search() has no render param of its own to counter (its receipt is "
         "already small), so this is purely the terminal-vs-caller presentation split.",
+    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `--text` prints the raw
+    # server-rendered string verbatim (or, where none exists server-side, the same human
+    # render --text-less mode already gives) — a SECOND presentation flag alongside
+    # --json, same "terminal-vs-caller split" reasoning as every --json entry above, for
+    # the hook's own static `osiris <verb> --text` invocation to have a real flag to pass.
+    ("roster", "text"): "same PRESENTATION-flag reasoning as roster's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("backlog", "text"): "same PRESENTATION-flag reasoning as backlog's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("threads", "text"): "same PRESENTATION-flag reasoning as threads's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("inbox", "text"): "same PRESENTATION-flag reasoning as inbox's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("team", "text"): "same PRESENTATION-flag reasoning as team's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("status", "text"): "same PRESENTATION-flag reasoning as status's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("search", "text"): "same PRESENTATION-flag reasoning as search's own --json entry "
+        "above — #92, the zero-token read hook.",
     ("team", "seat"): "the named gap's own fix (thread 68f1bafa/642c4754): a terminal has "
         "no mounted identity for team()'s deliberately self-scoped MCP contract to resolve "
         "-- --seat resolves the manager by handle DIRECTLY against postgres (seats.py's "
@@ -370,6 +389,20 @@ CLI_ONLY_PARAMS = {
         "as fleet's own entry above.",
     ("candidates", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
         "fleet's own entry above.",
+    ("dossier", "text"): "same PRESENTATION-flag reasoning as dossier's own --json entry "
+        "above — #92, the zero-token read hook.",
+    ("candidates", "text"): "same PRESENTATION-flag reasoning as candidates's own --json "
+        "entry above — #92, the zero-token read hook.",
+    ("digest", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry above — #92, the zero-token read hook (fleet_digest had no CLI door "
+        "at all until this).",
+    ("digest", "text"): "same PRESENTATION-flag reasoning as digest's own --json entry "
+        "directly above — #92, the zero-token read hook.",
+    ("settle", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry above — #93, the mechanical settle (settle had no CLI door at all "
+        "until this).",
+    ("settle", "text"): "same PRESENTATION-flag reasoning as settle's own --json entry "
+        "directly above — #93, the mechanical settle.",
     # 'composition' is a DISPATCHER tool (COMPOSITION_INPUT_SCHEMA's oneOf, task #202,
     # operator ruling f9182ad7): its own bare top-level schema has NO properties at all
     # (every real param lives behind one of the save/run/list branches) — same shape
@@ -440,6 +473,10 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     # first shipped it) — the CLI door is named for the human at a terminal, not renamed
     # to match.
     "status": "get_status",
+    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `digest` is the terminal-
+    # native word for fleet_digest, same naming-freedom `status`'s own entry above takes —
+    # matches a real tool 1:1, just not by literal name.
+    "digest": "fleet_digest",
     # THE WRITE TRIANGLE (dispatch a354ba28, msg 7882 item 2): `decide` is the terminal-
     # native word for record_decision, same naming-freedom `desk`/`show` already took for
     # inbox/recall (NO_MCP_EQUIVALENT above) — but this one DOES match a real tool 1:1,
@@ -1892,6 +1929,13 @@ def test_the_slash_reference_extractor_catches_the_reverse_phrasing_too() -> Non
 HUMAN_FACING_VERBS = frozenset({
     "get_status", "backlog", "threads", "roster", "team", "inbox",   # the read triangle
     "send", "record_decision", "thread", "launch", "resume", "stop",  # the write triangle
+    # WAVE 27 follow-up (Thoth mail 11780, thread 11771/11772): the second read triangle
+    # plus the operator-facing ops verbs, each gaining a dedicated slash face this same
+    # wave — same population-widening shape as the two comments above.
+    "search", "graph_search", "dossier", "object_events", "succession_chain", "candidates",
+    "recall", "open_thread", "wake", "merge", "unmerge", "graph_lint", "triage",
+    "fleet_digest", "settings", "backup_settings", "smoke", "orient", "ack_handoff",
+    "practices",
 })
 
 # mcp_tool -> reason: a HUMAN_FACING_VERBS member with no slash reference anywhere in

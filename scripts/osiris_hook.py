@@ -16,6 +16,11 @@ Subcommands:
   precompact     PreCompact death rite — ring sweep doorbell
   spawn          SubagentStart/SubagentStop
   anchor         PreToolUse stdin filter — inject session_anchor + subagent_id
+  read           UserPromptSubmit — the zero-token read hook: a matched bare slash read
+                 renders straight to the screen (block+reason), never reaches the model
+  settle-gate    PreToolUse — THE MECHANICAL SETTLE: refuses non-osiris tool calls past
+                 context 65% until a complete settle lands; precompact also mints a
+                 machine handoff marker as a last resort when one never did
 
 FAIL-OPEN: any error exits 0 silently — a session is never blocked by a hook glitch.
 """
@@ -24,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -126,6 +132,7 @@ def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool
 _TIMEOUTS: dict[str, int] = {
     "statusline": 3, "stop": 3, "whisper": 3, "session-end": 2,
     "precompact": 2, "spawn": 2, "anchor": 5, "stop_stage_a": 2,
+    "settle_gate": 3,
 }
 
 # THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has to
@@ -1078,6 +1085,171 @@ def _clear_life_markers(marker_dir: Path | None) -> None:
             pass
 
 
+# --- settle-gate (PreToolUse) + the PreCompact fallback — THE MECHANICAL SETTLE (#93,
+# operator ruling 2026-09-17, narrows a3fb7c11: "settle always runs before the compact
+# injection, not as an art or a discipline, but a mechanical mandate"). Once context is at
+# or past MECHANICAL_SETTLE_PCT and no complete settle exists since, every tool call is
+# refused except the handful that can actually CLOSE that gap — never left to a body's own
+# discipline under pressure. If compaction still arrives unsettled anyway (the gate missed
+# it, or fired too late), PreCompact mints a MACHINE handoff marker as a last resort: a
+# pointer for the successor, never a substitute for the board a real settle() would leave.
+
+_SETTLE_GATE_ALLOWLIST = frozenset({
+    "mcp__osiris__settle", "mcp__osiris__record_decision", "mcp__osiris__open_thread",
+    "mcp__osiris__thread", "mcp__osiris__amend_decision", "mcp__osiris__get_status",
+})
+_CALL_LOG_CAP = 10
+
+
+def _call_log_path(session_id: str) -> Path | None:
+    sid8 = (session_id or "")[:8]
+    return (Path.home() / ".claude" / "jobs" / sid8 / ".osiris_call_log") \
+        if len(sid8) == 8 else None
+
+
+def _append_call_log(session_id: str, tool_name: str) -> None:
+    """Every PreToolUse fire, allow or refuse, gate crossed or not — the PreCompact
+    fallback below needs the session's REAL recent activity, not just what happened
+    after the line was crossed. Best-effort: never blocks a tool call over a log write."""
+    path = _call_log_path(session_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = path.read_text().splitlines() if path.exists() else []
+        lines.append(tool_name)
+        path.write_text("\n".join(lines[-_CALL_LOG_CAP:]) + "\n")
+    except OSError:
+        pass
+
+
+def _read_call_log(session_id: str) -> list[str]:
+    path = _call_log_path(session_id)
+    if path is None or not path.exists():
+        return []
+    try:
+        return path.read_text().splitlines()[-_CALL_LOG_CAP:]
+    except OSError:
+        return []
+
+
+def _settle_boxes_now(cwd: str, session_id: str) -> dict[str, Any] | None:
+    """The SAME `/stop` `phase='offload'` round trip `_self_compact_ready` already POSTs
+    (settle_boxes under the hood) — no new server route, no persisted flag: a settle is
+    "complete" exactly when its own boxes read empty right now, the live definition
+    settle() itself uses, never a second, independently-drifting notion of "settled".
+    None on any probe trouble — the caller decides how to fail, never guessed here."""
+    resp = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd, "session_id": session_id},
+                 timeout=_TIMEOUTS["settle_gate"])
+    if resp is None or resp.get("error"):
+        return None
+    boxes = resp.get("result") if isinstance(resp.get("result"), dict) else resp
+    return boxes if isinstance(boxes, dict) else None
+
+
+def _gate_context_pct(hook: dict[str, Any]) -> int | None:
+    """Prefer the harness's own figure when PreToolUse carries one (unconfirmed whether
+    it always does — this is the fallback-first, not fallback-only, so either way is
+    covered); else derive the same way `_cmd_stop`'s own alarm gate does — via context_
+    lens's own primitives, NEVER alarming on an assumed window (a guessed window is not
+    a real measurement to hard-block a whole session over)."""
+    cw = hook.get("context_window")
+    if isinstance(cw, dict):
+        raw = cw.get("used_percentage")
+        if isinstance(raw, (int, float)):
+            return int(raw)
+    pct, assumed = _offload_pct(hook, None)
+    return None if assumed else pct
+
+
+def _cmd_settle_gate(hook: dict[str, Any]) -> int:
+    """PreToolUse filter. Logs every call, allow or refuse; refuses non-allowlisted tools
+    once past MECHANICAL_SETTLE_PCT with no complete settle since. Fails OPEN on every
+    kind of trouble (no tool name, no import, a probe failure, an unmeasurable context) —
+    a missed refusal costs nothing new; a wrong one would freeze a session on a hook
+    glitch, exactly the failure this whole file's own module docstring forbids."""
+    tool_name = str(hook.get("tool_name") or "")
+    session_id = str(hook.get("session_id") or "")
+    if tool_name:
+        _append_call_log(session_id, tool_name)
+    if not tool_name or tool_name in _SETTLE_GATE_ALLOWLIST:
+        return 0
+    if tool_name == "mcp__osiris__inbox":
+        ti = hook.get("tool_input")
+        if isinstance(ti, dict) and ti.get("peek"):
+            return 0
+    try:
+        from src.orchestrator.context_lens import MECHANICAL_SETTLE_PCT
+    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+        return 0
+    pct = _gate_context_pct(hook)
+    if pct is None or pct < MECHANICAL_SETTLE_PCT:
+        return 0
+    boxes = _settle_boxes_now(str(hook.get("cwd") or ""), session_id)
+    if boxes is None or not _missing_boxes(boxes):
+        return 0  # settled, or unmeasurable — same fail-open floor `_missing_boxes` holds
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"settle first: context {pct}% ≥ {MECHANICAL_SETTLE_PCT}% and no "
+            "complete settle since; call settle() then /compact"),
+    }}))
+    return 0
+
+
+def _git_status_porcelain(repo_dir: str, *, timeout_s: float = 2.0) -> str:
+    """Same subprocess shape as `src.orchestrator.settle.uncommitted_git_work` — a
+    direct call here rather than importing that DB-flavored module into a stdlib-only
+    script for one subprocess line. Empty string on any trouble (not a git repo, no
+    such path, a timeout) — the fallback marker still mints without it."""
+    if not repo_dir:
+        return ""
+    try:
+        proc = subprocess.run(["git", "-C", repo_dir, "status", "--porcelain"],
+                              capture_output=True, text=True, timeout=timeout_s,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _mint_machine_handoff(hook: dict[str, Any], boxes: dict[str, Any]) -> None:
+    """THE LAST RESORT (#93 item 2): compaction is about to destroy this session's own
+    context and no complete settle happened first — mint a pointer for the successor
+    anyway, tagged plainly as machine-assembled so nobody mistakes it for a mind's own
+    judgment. Built from what a stdlib-only script CAN actually see without a DB/MCP
+    client: which boxes are still missing, `git status --porcelain` of the governed
+    repo, and the session's own last 10 tool calls (`_append_call_log`'s own log) — never
+    a re-listing of this session's decisions/threads verbatim, which would need the graph
+    itself. Best-effort throughout: a failure here costs a missing pointer, never a
+    crashed hook."""
+    session_id = str(hook.get("session_id") or "")
+    cwd = str(hook.get("cwd") or "")
+    missing = _missing_boxes(boxes)
+    calls = _read_call_log(session_id)
+    git_status = _git_status_porcelain(cwd)
+    summary = "MACHINE-MINTED FALLBACK HANDOFF — no complete settle before compaction"
+    rationale = (
+        f"Assembled by scripts/osiris_hook.py's own PreCompact fallback, not judged by "
+        f"a mind — a pointer, never a board. Missing settle box(es): "
+        f"{', '.join(missing) if missing else '(unknown)'}. "
+        f"Last {len(calls)} tool call(s), oldest first: "
+        f"{', '.join(calls) if calls else '(none logged)'}. "
+        f"git status --porcelain at {cwd!r}: "
+        f"{git_status.strip() if git_status.strip() else '(clean, or unavailable)'}"
+    )
+    decisions = json.dumps([{
+        "summary": summary, "kind": "ruling", "rationale": rationale,
+        "is_handoff": True,
+    }])
+    try:
+        subprocess.run([_OSIRIS_BIN, "settle", "--decisions", decisions],
+                       capture_output=True, text=True, timeout=8, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def _cmd_precompact(hook: dict[str, Any]) -> int:
     transcript = str(hook.get("transcript_path") or "")
     sid8 = str(hook.get("session_id") or "")[:8]
@@ -1089,6 +1261,14 @@ def _cmd_precompact(hook: dict[str, Any]) -> int:
                            "trigger": str(hook.get("trigger") or "")},
                      timeout=_TIMEOUTS["precompact"])
         _log_post("osiris_hook.precompact", url, resp)
+    # #93 item 2, THE FALLBACK: if a complete settle never happened this session, mint the
+    # machine handoff before the compaction that's about to destroy this context. A probe
+    # failure (boxes is None) is treated as "cannot confirm settled" — mint anyway, since
+    # staying silent on an unmeasurable state is exactly the gap this fallback exists to
+    # close, and a redundant handoff costs nothing a real one wouldn't have superseded.
+    boxes = _settle_boxes_now(str(hook.get("cwd") or ""), str(hook.get("session_id") or ""))
+    if boxes is None or _missing_boxes(boxes):
+        _mint_machine_handoff(hook, boxes or {})
     return 0
 
 
@@ -1224,10 +1404,144 @@ def _cmd_anchor(hook: dict[str, Any]) -> int:
     return 0
 
 
+# --- read (UserPromptSubmit) — THE ZERO-TOKEN READ HOOK (operator: "some of the slash
+# commands should not go through the agent, when they can just be rendered into the
+# screen", Thoth mail 11780 item B). A bare slash command that only ever READS gets
+# rendered here, server-rendered text, and never reaches the model at all — `decision:
+# block` (the same JSON protocol `_cmd_stop` already uses) with the rendered text as the
+# `reason` shows it on screen and costs zero tokens. Anything else (an argument that
+# implies an act, an unmatched verb, a CLI door that doesn't exist yet on this machine,
+# any subprocess trouble) falls through silently — return 0 with no output, exactly the
+# same as no hook fired at all, so the model handles it the ordinary way.
+#
+# SHELLS OUT to the already-installed `osiris` console script rather than importing the
+# MCP client here: this file is deliberately stdlib-only (module docstring, "zero cold
+# connections") and `call_mcp_tool` needs the `mcp` package + an event loop, the exact
+# weight the whole hook-unification effort exists to avoid paying on every keystroke.
+# `osiris <verb> --text` is a SEPARATE, already-venv'd process (same "statusline needs
+# the venv" shape `_hook_command(..., venv=True)` already uses elsewhere) -- cheap
+# relative to a model turn, not free, which is why the matcher below refuses anything
+# that isn't a bare, unambiguous read before ever spawning it.
+
+_OSIRIS_BIN = os.environ.get("OSIRIS_CLI_BIN", "osiris")
+
+# verb -> (cli subcommand, needs_project). needs_project verbs read `OSIRIS_HOOK_PROJECT`
+# from the environment (baked into the wired hook command at onboarding time, `merge_
+# settings(..., reads=True, project=<name>)` — a per-repo settings.json is tied to one
+# project by definition, so this is resolved once, not guessed per-invocation) and fall
+# through when it's unset, rather than ever guessing a project from cwd.
+_READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
+    "status": ("status", False),
+    "backlog": ("backlog", False),
+    "threads": ("threads", False),
+    "roster": ("roster", False),
+    "team": ("team", False),
+    "search": ("search", False),
+    "recall": ("show", False),
+    # `osiris inspect` (Khnum's own fan-out aggregator, WAVE 27 PARITY GAPS 2/5/6, branch
+    # khnum-parity-gaps commit a7ca7dc9) is not yet on main as of this wave — served here
+    # off the flat `dossier` door (identity properties only, no --events/--chain/
+    # --candidates) until that branch lands; update to `inspect` then, not before.
+    "inspect": ("dossier", False),
+    "digest": ("digest", False),
+    "mail": ("inbox", True),
+    "desk": ("desk", False),
+    # `osiris practices` (Khnum's own CLI door, same branch/commit as `inspect` above) is
+    # also not yet on main -- served here anyway, on purpose: a subprocess call to an
+    # unrecognized subcommand exits nonzero, which `_cmd_read` already treats as a clean
+    # fall-through (see below), so this starts working the instant that branch merges,
+    # with no further change needed here.
+    "practices": ("practices", False),
+}
+
+# arguments that imply an ACT rather than a read — never served by the hook, always falls
+# through to the model. Deliberately generous (a false positive here just costs one
+# ordinary model turn; a false negative would silently hide a real mutation from view).
+_ACT_WORDS = frozenset({
+    "settle", "clear", "ack", "mark_seen", "mark-seen", "seen", "resolve", "write",
+    "set", "annotate",
+})
+
+
+def _parse_slash_read(prompt: str) -> tuple[str, list[str]] | None:
+    """`/verb rest...` -> (verb, [args]) iff verb is one this hook serves; else None. Only
+    ever the prompt's own FIRST line, first word -- a slash command mid-paragraph, or
+    trailing prose after it, is never a real invocation of it."""
+    text = prompt.strip()
+    if not text.startswith("/"):
+        return None
+    first_line = text.splitlines()[0]
+    parts = first_line[1:].split()
+    if not parts:
+        return None
+    verb = parts[0].lower()
+    if verb not in _READ_HOOK_VERBS:
+        return None
+    return verb, parts[1:]
+
+
+def _implies_an_act(args: list[str]) -> bool:
+    return any(a.lower().strip("-") in _ACT_WORDS for a in args)
+
+
+def _cmd_read(hook: dict[str, Any]) -> int:
+    """UserPromptSubmit filter. Never raises past `main`'s own fail-open wrapper; every
+    branch below that isn't a clean serve returns 0 with no output, the same as if this
+    hook never fired -- a miss here costs nothing, a wrong serve would hide a real act."""
+    prompt = str(hook.get("prompt") or "")
+    parsed = _parse_slash_read(prompt)
+    if parsed is None:
+        return 0
+    verb, args = parsed
+    if _implies_an_act(args):
+        return 0
+    subcmd, needs_project = _READ_HOOK_VERBS[verb]
+    cli_args = [_OSIRIS_BIN, subcmd]
+    if needs_project:
+        project = os.environ.get("OSIRIS_HOOK_PROJECT", "")
+        if not project:
+            return 0  # no project baked into this seat's own wired hook command
+        cli_args += ["--project", project]
+    if subcmd in ("dossier", "show"):
+        if not args:
+            return 0  # a ref-taking door with no ref -- nothing to render
+        cli_args.append(args[0])
+    elif subcmd == "search":
+        if not args:
+            return 0
+        cli_args.append(" ".join(args))
+    elif subcmd == "practices":
+        if args and args != ["list"]:
+            return 0  # only the bare form or an explicit `list` -- never `show <ref>`
+        if args == ["list"]:
+            cli_args.append("list")
+    elif args:
+        # every other served door here is BARE-ONLY -- a flag like `--repo`/`--seat`/
+        # `--project` this hook does not itself know how to pass through would otherwise
+        # get silently dropped, serving the UNSCOPED bare form as if it were what was
+        # asked for. Falling through to the model (which reads the real flag correctly)
+        # is the safe failure; guessing at a scope is not.
+        return 0
+    cli_args.append("--text")
+    try:
+        proc = subprocess.run(cli_args, capture_output=True, text=True, timeout=8,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if proc.returncode != 0:
+        return 0  # includes an unrecognized subcommand -- a door not yet on this machine
+    rendered = proc.stdout.strip()
+    if not rendered:
+        return 0
+    print(json.dumps({"decision": "block", "reason": rendered}))
+    return 0
+
+
 _CMDS = {
     "statusline": _cmd_statusline, "stop": _cmd_stop, "whisper": _cmd_whisper,
     "session-end": _cmd_session_end, "precompact": _cmd_precompact,
-    "spawn": _cmd_spawn, "anchor": _cmd_anchor,
+    "spawn": _cmd_spawn, "anchor": _cmd_anchor, "read": _cmd_read,
+    "settle-gate": _cmd_settle_gate,
 }
 
 

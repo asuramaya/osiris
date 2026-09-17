@@ -134,7 +134,8 @@ def _merge_hook(
 def merge_settings(
     existing: dict[str, Any] | None, osiris_home: Path, *, hook: bool = False,
     whisper: bool = False, anchor: bool = False, precompact: bool = False,
-    spawn: bool = False, session_end: bool = False,
+    spawn: bool = False, session_end: bool = False, reads: bool = False,
+    project: str | None = None, settle_gate: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Merge the statusLine command and the requested hooks into a settings.json WITHOUT
     dropping other keys (permissions, env, worktree, …): hook=Stop mail-drain, whisper=
@@ -144,8 +145,21 @@ def merge_settings(
     always shipped a `session-end` subcommand and mcp_server.py's own `/session-end` route
     has always been live; this installer just never had a flag to wire either one, a real
     gap found while flipping the live settings.json off the retired per-purpose scripts,
-    one of which — osiris_sessionend.py — this closes the last caller of). Returns (result,
-    changed)."""
+    one of which — osiris_sessionend.py — this closes the last caller of). reads=THE
+    ZERO-TOKEN READ HOOK (#92, Thoth mail 11780 item B): wires UserPromptSubmit ->
+    `osiris_hook.py read`. `project` (optional) is baked into the hook COMMAND itself as a
+    static `OSIRIS_HOOK_PROJECT=<name>` env var (a settings.json is tied to one repo, which
+    mounts one project, by definition — resolved once here rather than guessed per
+    keystroke) so the hook's own `/mail` matcher, which needs a project to peek at, can
+    serve at all; omitted, `/mail` degrades to a clean fall-through, same as any door not
+    yet installed. settle_gate=#93, THE MECHANICAL SETTLE (operator ruling 2026-09-17):
+    wires PreToolUse -> `osiris_hook.py settle-gate` (matcher `.*`, deliberately every
+    tool, not just `mcp__osiris__.*` — the gate must refuse Bash/Read/Edit too, not only
+    osiris calls, to actually be mechanical) AND ALSO wires PreCompact (the same command
+    `precompact=True` wires on its own, which now carries the machine-handoff fallback
+    too) — `settle_gate` implies the PreCompact wiring on its own rather than silently
+    depending on the caller having separately asked for `precompact`, since the gate
+    without the fallback is half the ruling. Returns (result, changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     # Unified osiris_hook.py — one script, all lifecycle events.
     # Statusline needs the venv (shares MCP server's warm pool).
@@ -180,18 +194,35 @@ def merge_settings(
                 {"type": "command",
                  "command": _hook_command(osiris_home, "spawn"),
                  "timeout": 5})
-    if precompact:
+    if precompact or settle_gate:
         changed |= _merge_hook(
             doc, "PreCompact",
             {"type": "command",
              "command": _hook_command(osiris_home, "precompact"),
              "timeout": 5})
+    if settle_gate:
+        changed |= _merge_hook(
+            doc, "PreToolUse",
+            {"type": "command",
+             "command": _hook_command(osiris_home, "settle-gate"),
+             "timeout": 5},
+            matcher=".*")
     if session_end:
         changed |= _merge_hook(
             doc, "SessionEnd",
             {"type": "command",
              "command": _hook_command(osiris_home, "session-end"),
              "timeout": 5})
+    if reads:
+        cmd = _hook_command(osiris_home, "read")
+        if project:
+            # baked in as a shell env-var prefix on the command string itself (settings.json
+            # hook entries have no separate `env` field) -- resolved once, at wiring time,
+            # never guessed per-keystroke by the hook.
+            cmd = f"OSIRIS_HOOK_PROJECT={project} {cmd}"
+        changed |= _merge_hook(
+            doc, "UserPromptSubmit",
+            {"type": "command", "command": cmd, "timeout": 8})
     return doc, changed
 
 
@@ -286,13 +317,18 @@ def onboard(
     precompact: bool = False,
     spawn: bool = False,
     session_end: bool = False,
+    reads: bool = False,
+    project: str | None = None,
+    settle_gate: bool = False,
     dry_run: bool = False,
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
 ) -> dict[str, Any]:
     """Wire `repo` into the fleet, locally. Returns a structured result (the applied Changes +
     the checklist text). Writes files unless `dry_run`; with `user_scope` it prints the box-wide
-    one-liner instead of writing `.mcp.json`. Raises InvalidConfigError on an unmergeable file."""
+    one-liner instead of writing `.mcp.json`. Raises InvalidConfigError on an unmergeable file.
+    `reads`/`project`: the zero-token read hook (#92). `settle_gate`: THE MECHANICAL SETTLE
+    (#93) — see `merge_settings`'s own docstring for both."""
     root = Path(repo).expanduser().resolve()
     if not root.is_dir():
         raise InvalidConfigError(f"{root} is not a directory")
@@ -303,13 +339,15 @@ def onboard(
         changes.append(Change("skipped", root / ".mcp.json"))  # print the one-liner instead
     else:
         changes.append(_apply(root / ".mcp.json", merge_mcp, dry_run=dry_run))
-    if statusline or hook or whisper or anchor or precompact or spawn or session_end:
+    if (statusline or hook or whisper or anchor or precompact or spawn or session_end
+            or reads or settle_gate):
         changes.append(
             _apply(
                 root / ".claude" / "settings.json",
                 lambda e: merge_settings(e, home, hook=hook, whisper=whisper, anchor=anchor,
                                          precompact=precompact, spawn=spawn,
-                                         session_end=session_end),
+                                         session_end=session_end, reads=reads,
+                                         project=project, settle_gate=settle_gate),
                 dry_run=dry_run,
             )
         )
@@ -385,6 +423,22 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
              "OPERATOR consent switch (blessing 2026-07-08)",
     )
     parser.add_argument(
+        "--reads",
+        action="store_true",
+        help="also install the UserPromptSubmit zero-token read hook (a matched bare slash "
+             "read like /status renders straight to the screen, never reaches the model) — "
+             "an OPERATOR consent switch (#92, Thoth mail 11780 item B)",
+    )
+    parser.add_argument(
+        "--settle-gate",
+        action="store_true",
+        dest="settle_gate",
+        help="also install THE MECHANICAL SETTLE (PreToolUse refuses non-osiris tool "
+             "calls past context 65%% until a complete settle lands; PreCompact mints a "
+             "machine handoff marker as a last resort) — an OPERATOR consent switch "
+             "(#93, Thoth mail 11789, operator ruling 2026-09-17)",
+    )
+    parser.add_argument(
         "--user-scope",
         action="store_true",
         help="print the box-wide `claude mcp add --scope user` one-liner; write no .mcp.json",
@@ -393,8 +447,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
         "--dry-run", action="store_true", help="show what would change without writing"
     )
     args = parser.parse_args(argv)
-    # --name is accepted for parity with the bootstrap tool (the graph half names the project);
-    # locally it changes nothing written, so it is not threaded further.
+    # --name, besides naming the project for the graph half, is now ALSO what --reads bakes
+    # into the read hook's own OSIRIS_HOOK_PROJECT (#92) — the one thing it was accepted-
+    # but-unused for before this.
     try:
         result = onboard(
             args.repo,
@@ -405,6 +460,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
             precompact=args.precompact,
             spawn=args.spawn,
             session_end=args.session_end,
+            reads=args.reads,
+            project=args.name,
+            settle_gate=args.settle_gate,
             dry_run=args.dry_run,
             user_scope=args.user_scope,
         )

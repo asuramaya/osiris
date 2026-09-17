@@ -1,3 +1,5 @@
 Call the osiris MCP tool `inbox` with peek=true, render='text' (mount with cwd + $CLAUDE_JOB_DIR if not mounted) and print the returned `text` verbatim in a code block. A peek leases nothing; SETTLE straight from it: send(reply_to=<id>) or inbox(ack=[ids shown]). Only deeper handling warrants a non-peek read (leases an hour).
 
 WHOSE TAB THIS IS DECIDES WHO SAYS GO: in the OPERATOR's own tab, act only at the operator's word. In a WORKER's tab (you hold a seat with a manager), a grade='ask' DM from your manager/coordinator IS the go — lease it with a non-peek read and START the work this same turn; never ask the operator to confirm what the manager already gave, never park on a question. Settle every message you act on.
+
+A bare `/mail` (no arguments) is served by the hook without a model turn, when the seat's own OSIRIS_HOOK_PROJECT is baked in; falls through when arguments imply an act.

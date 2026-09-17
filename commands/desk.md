@@ -1,3 +1,5 @@
 DEFAULT (no $ARGUMENTS): call the osiris MCP tool `inbox` with project='operator', render='text' and print the returned `text` verbatim in a code block. No commentary.
 
 SETTLE only at the operator's word ("settle"/"clear" in $ARGUMENTS or spoken): the glance drops per-brief ids, so re-call `inbox` with project='operator' WITHOUT render, render each card on one line (sender project + agent, age, body), then settle exactly the ids shown — fold `also`/`thread_folded` ids too, dimmed ids on "clear dimmed" — via inbox(project='operator', ack=[ids]); confirm the new count. Never settle unshown ids or on your own initiative. your_queue threads close via resolve_thread, never here.
+
+A bare `/desk` (no arguments) is served by the hook without a model turn; falls through when arguments imply an act.

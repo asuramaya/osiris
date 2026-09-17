@@ -38,6 +38,15 @@ HARD_ALARM_PCT = 85
 # harness's own ceiling): the soft nudge starts the ritual at 60, the compact is injected
 # at 70 once the boxes are complete, the blocking nudge holds at 85.
 SELF_COMPACT_PCT = 70
+# THE MECHANICAL SETTLE (operator ruling, 2026-09-17, narrows a3fb7c11: "settle always runs
+# before the compact injection, not as an art or a discipline, but a mechanical mandate").
+# Sits BETWEEN the soft nudge and the self-compact injection, on purpose: at ALARM_PCT (60)
+# a mind is only ASKED to write back; at this line every tool call except settle/record_
+# decision/open_thread/thread/amend_decision/get_status/inbox(peek) is REFUSED by
+# scripts/osiris_hook.py's own PreToolUse gate until settle's own boxes read complete — so
+# by the time SELF_COMPACT_PCT (70) would inject /compact, the settle the ruling requires
+# has already happened, mechanically, never left to a body's own discipline under pressure.
+MECHANICAL_SETTLE_PCT = 65
 
 
 def window_for(raw_model: str | None, used: int | None = None) -> tuple[int, bool]:

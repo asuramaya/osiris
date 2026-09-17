@@ -1,0 +1,3 @@
+Get the full, untruncated record for a Thread or Decision by `<ref>` (uuid, short id, or a distinctive summary substring) from `$ARGUMENTS`. Call the osiris MCP tool `recall` with `ref=<ref>` (and `kind='thread'`/`kind='decision'` only if the caller already knows which — omitted, it tries Thread then Decision). Print the returned result verbatim in a code block, including `notes`/`addenda` when present. No commentary, no re-rendering. It refuses rather than guesses; if it refuses, surface the refusal verbatim and suggest `/search` instead of retrying with a fuzzier ref.
+
+Served by the hook without a model turn (composes `osiris show`); falls through when arguments imply an act or no ref is given.

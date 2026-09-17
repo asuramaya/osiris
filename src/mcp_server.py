@@ -675,14 +675,15 @@ def _seam_note_once(agent_id: str, pct: int | None, whisper_pct: int) -> str | N
     return _seam_note(pct, whisper_pct)
 
 
-async def _seam_field(ctx: Context | None) -> str | None:
-    """The ambient context line for a mounted caller, or None (unmounted callers, young
-    sessions, guessed windows, an already-shown tier, any failure — the whisper never
-    becomes a hazard)."""
+async def _raw_context_pct(ctx: Context | None) -> int | None:
+    """THE RAW NUMBER `_seam_field` computes internally but never returns on its own (its
+    job is a debounced, threshold-gated human sentence, not a value another caller can do
+    arithmetic on) — extracted so settle()'s own `context_pct` field (#93, THE MECHANICAL
+    SETTLE, operator ruling 2026-09-17) and `_seam_field` itself share one lookup, never
+    two copies of the job_dir/model_raw/window_hint resolution drifting apart. None for
+    every reason `_seam_field` already tolerates (unmounted, young session, guessed
+    window, any failure) — never a hazard, an ambient best-effort read."""
     try:
-        st = get_settings()
-        if not st.osiris_seam_whisper_pct:
-            return None
         ident = await _ident_for(ctx)
         if ident is None:
             return None
@@ -701,7 +702,23 @@ async def _seam_field(ctx: Context | None) -> str | None:
         _, job, model_raw, window_hint = row
         if not job:
             return None
-        pct = await asyncio.to_thread(_seam_pct_sync, job, model_raw, window_hint)
+        return await asyncio.to_thread(_seam_pct_sync, job, model_raw, window_hint)
+    except Exception:  # noqa: BLE001 — ambient, never load-bearing
+        return None
+
+
+async def _seam_field(ctx: Context | None) -> str | None:
+    """The ambient context line for a mounted caller, or None (unmounted callers, young
+    sessions, guessed windows, an already-shown tier, any failure — the whisper never
+    becomes a hazard)."""
+    try:
+        st = get_settings()
+        if not st.osiris_seam_whisper_pct:
+            return None
+        ident = await _ident_for(ctx)
+        if ident is None:
+            return None
+        pct = await _raw_context_pct(ctx)
         return _seam_note_once(ident.agent_id, pct, st.osiris_seam_whisper_pct)
     except Exception:  # noqa: BLE001 — ambient, never load-bearing
         return None
@@ -11544,8 +11561,14 @@ async def settle(
     unevaluated_note = (
         f" — could not evaluate: {', '.join(unevaluated)} (fog-of-war, not a pass, "
         "never gates complete)" if unevaluated else "")
+    # #93, THE MECHANICAL SETTLE (operator ruling 2026-09-17): a plain numeric field, not
+    # the debounced/threshold-gated prose `_seam_field` puts on every OTHER tool's receipt
+    # (see `_raw_context_pct`'s own docstring) — scripts/osiris_hook.py's PreToolUse gate
+    # needs a number to compare against MECHANICAL_SETTLE_PCT, not a sentence to parse.
+    context_pct = await _raw_context_pct(ctx)
     out: dict[str, Any] = {
         "complete": complete,
+        "context_pct": context_pct,
         "boxes": boxes,
         "missing_boxes": missing,
         "unevaluated_boxes": unevaluated,

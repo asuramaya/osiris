@@ -65,12 +65,19 @@ def test_precompact_url_actually_used_not_just_the_constant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The module-level constant is read once at import; guard against a future refactor
-    that reads os.environ again at call time and silently drops the reload-time value."""
+    that reads os.environ again at call time and silently drops the reload-time value.
+
+    #93, THE MECHANICAL SETTLE: `precompact` now ALSO probes `_URLS["stop"]` (the same
+    offload round trip the fallback's own "is a settle complete" check uses) AFTER the
+    sweep POST, so this records every URL posted, in order, rather than a single
+    overwritten key — proving the sweep URL is AMONG them, not the only one, since
+    "only one POST happens" was never this test's own claim (its docstring names the
+    env-vs-import-time property, not the call count)."""
     import scripts.osiris_hook as hook
 
     monkeypatch.setenv("OSIRIS_SWEEP_URL", "http://worker.example:9000/sweep")
     hook = importlib.reload(hook)
-    posted: dict[str, str] = {}
+    posted: list[str] = []
 
     class _FakeResp:
         def __enter__(self) -> _FakeResp:
@@ -83,7 +90,7 @@ def test_precompact_url_actually_used_not_just_the_constant(
             return b"{}"
 
     def _fake_urlopen(req, timeout: float = 0) -> _FakeResp:  # noqa: ANN001
-        posted["url"] = req.full_url
+        posted.append(req.full_url)
         return _FakeResp()
 
     monkeypatch.setattr(hook.urllib.request, "urlopen", _fake_urlopen)
@@ -94,7 +101,7 @@ def test_precompact_url_actually_used_not_just_the_constant(
     # main() dispatches on sys.argv[1], not a parameter — drive it the way the harness does.
     monkeypatch.setattr(hook.sys, "argv", ["osiris_hook.py", "precompact"])
     hook.main()
-    assert posted["url"] == "http://worker.example:9000/sweep", (
+    assert "http://worker.example:9000/sweep" in posted, (
         "main() fails OPEN on any handler exception (returns 0), so a missing 'url' here "
         "means the precompact path never reached _post at all.")
 

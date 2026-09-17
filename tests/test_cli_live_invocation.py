@@ -67,6 +67,7 @@ from src.cli import (
     cmd_declare_machine_identity,
     cmd_desk,
     cmd_detach_seat,
+    cmd_digest,
     cmd_dossier,
     cmd_establish_office,
     cmd_fleet,
@@ -110,6 +111,7 @@ from src.cli import (
     cmd_set_project_tag,
     cmd_set_seat_attended,
     cmd_settings,
+    cmd_settle,
     cmd_show,
     cmd_smoke_chaos,
     cmd_status,
@@ -318,6 +320,12 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     # cite resolve-first-then-refuse on a nonexistent ref strictly before any write
     # (retirement.py's own body, read directly — see the CLI door's own docstring);
     # citation is a pure read, never writes.
+    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): fleet_digest is a pure
+    # read (watermark mode, mark_seen defaults False so this never advances it).
+    "digest": lambda a: cmd_digest(),
+    # #93, THE MECHANICAL SETTLE (Thoth mail 11789): no args is settle()'s own read-only
+    # completeness-boxes surface, per its own docstring — never a write.
+    "settle": lambda a: cmd_settle(),
     "dossier": lambda a: cmd_dossier("no-such-ref-anywhere"),
     "object-events": lambda a: cmd_object_events("no-such-ref-anywhere"),
     "succession-chain": lambda a: cmd_succession_chain("no-such-ref-anywhere"),

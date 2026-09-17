@@ -1,0 +1,3 @@
+Search the graph's knowledge. With no scoping args, call the osiris MCP tool `search` with `query` (and `limit` if given). With `--project <name>`, `--lineage <id>`, or `--depth <n>`, call the `graph_search` MCP tool instead (`query`, `project`, `lineage`, `max_depth`) — graph-aware, scoped to a subgraph. Print the returned result verbatim in a code block. No commentary, no re-rendering. Ask before deriving something: "has anyone decided/learned X?" is exactly this door's job.
+
+`/search <query>` with no scoping flags is served by the hook without a model turn; falls through when arguments imply an act or scoping flags are given.
