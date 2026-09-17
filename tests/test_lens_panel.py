@@ -196,6 +196,23 @@ def test_set_hidden_types_mutates_in_place_like_the_hash_restore_path_does() -> 
     assert "for (const t of types || []) hiddenNodeTypes.add(t);" in body
 
 
+def test_hashchange_reapplies_lens_state_and_rebuilds_every_dependent_view() -> None:
+    # THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): navigating to the
+    # same page with a different #lens fragment is a same-document hash navigation -- no
+    # reload, so applyLensStateFromHash's own once-at-load call (above) never re-runs, and the
+    # new hash's state was silently ignored until the next manual toggle overwrote it with
+    # stale in-memory state. A hashchange listener must reapply the hash and rebuild
+    # everything a toggle already rebuilds: dimming, edge geometry (which also re-renders the
+    # legend's own checkboxes), label picking, and both lens gates.
+    body = _SPACE_JS.split('window.addEventListener("hashchange"', 1)[1][:400]
+    assert "applyLensStateFromHash();" in body
+    assert "applyDim();" in body
+    assert "buildEdgeLines(idToNode, edges);" in body
+    assert "scheduleLabelPick();" in body
+    assert "syncCommunityVisibility();" in body
+    assert "buildLandmarkBadges();" in body
+
+
 def test_lens_state_is_a_single_named_hash_param_not_the_whole_hash() -> None:
     # shares the hash with any other future hash consumer -- URLSearchParams over the hash
     # string, one param, never a bare `location.hash = ...` overwrite.

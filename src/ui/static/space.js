@@ -1497,6 +1497,22 @@ export async function initSpace(container) {
   setStatus(`${nodes.length} objects, ${edges.length} edges`);
   levelBadge.textContent = "whole graph";
 
+  // THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): applyLensStateFromHash
+  // only ran once, at the top of this async function, on the assumption that a shared #lens
+  // link always means a full page load. It doesn't -- navigating to the same page with a
+  // different #lens fragment is a same-document hash navigation (no reload), so this whole
+  // function never re-runs and the new hash's state was silently ignored until the next
+  // manual toggle overwrote it with stale in-memory state. Listening for hashchange and
+  // re-running the same restore + rebuild a toggle already does closes that gap.
+  window.addEventListener("hashchange", () => {
+    applyLensStateFromHash();
+    applyDim();
+    buildEdgeLines(idToNode, edges);
+    scheduleLabelPick();
+    syncCommunityVisibility();
+    buildLandmarkBadges();
+  });
+
   // ---- deltas: GET /graph/stream/deltas is an SSE poll-diff over the outbox, keyed by
   // object id (not array index — see the module docstring). Applied live so the canvas
   // never needs a full reload after the first snapshot; a 'retired' delta drops the node
