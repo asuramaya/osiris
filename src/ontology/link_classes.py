@@ -34,6 +34,9 @@ STRUCTURAL_LINK_TYPES: frozenset[str] = frozenset({
     # membership / identity -- an object's own place in the fleet, not a claim about
     # what it says or means
     "in_repo", "works_in", "acts_for", "authored_by", "spawned_by",
+    # WHICH LIVE GENERATION ran a commit (ruling 4cf5e4b3/b8fb26494e0e) -- additional to
+    # authored_by, same identity/attribution shape, not a content claim.
+    "committed_by",
     # a MachineIdentity's own standing relationship to the SoftwareProject it commits
     # for (ruling edb6b0fc) -- same membership/identity shape as authored_by/in_repo
     # just above, not a claim about content.
