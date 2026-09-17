@@ -1627,7 +1627,17 @@ TOOL_CONTRACT_EXPECTED_COUNT = 89
 # genuinely different execution shape from layout_migrate (a single global force
 # simulation, not a batch loop) so not a parameterization of it. Measured exact
 # (141,046).
-TOOL_CONTRACT_CEILING_CHARS = 141045
+# -> 141889 (2026-09-17, Sekhmet, ruling 52a59652/70c001ec, ONE TAXONOMY WAVE 28): three
+# new schema branches (seat's reissue_seat_dir/establish_seat_dir, agent's
+# correct_project) — the canonical replacements for reissue_office/establish_office/
+# correct_house, each needing its own oneOf branch by this file's own one-branch-per-
+# action convention, the old branches kept unchanged as deprecated aliases for one
+# release (never a parameterization of an existing branch, so trimming an existing
+# entry would not have avoided this). Docstring prose already trimmed to the bare
+# action-table line each; no further category-rule trim available without dropping a
+# real action's own description. Tool count unchanged (no new @mcp.tool()). Measured
+# exact (141,888).
+TOOL_CONTRACT_CEILING_CHARS = 141888
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

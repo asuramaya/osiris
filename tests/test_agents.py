@@ -3733,6 +3733,54 @@ async def test_agent_retire_governs_drops_a_third_partys_edges(actions: Actions)
         "AND (valid_until IS NULL OR valid_until > now())", victim, garbage) is None
 
 
+async def test_agent_correct_project_is_the_canonical_name_correct_house_a_deprecated_alias(
+    actions: Actions,
+) -> None:
+    """ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): correct_house is retired in
+    favor of correct_project — both action strings reach the identical
+    correct_agent_house call underneath (renaming the MCP-facing name only, never the
+    orchestrator function, matching Khnum's own correct-agent-house -> correct-agent-
+    project CLI rename), so either spelling produces the same write, one release."""
+    from src import mcp_server as srv
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    agent = await actions.create_or_find_object("Agent", "agent:taxctp01", "test")
+    await actions.assert_property(agent, "project", "before", "test", datetime.now(UTC), 0.9,
+                                  evidence_class=EvidenceClass.SELF_DECLARED.value)
+
+    caller = AgentIdentity(agent_id="agent:taxctpcaller", session="taxctp", project="osiris",
+                           model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                           model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = caller
+    try:
+        out = await srv._agent_impl(
+            "correct_project", agent_id="agent:taxctp01", project="after-canonical", ctx=ctx)
+        assert "error" not in out
+        current = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='project'", agent)
+        assert current == "after-canonical"
+
+        # the deprecated alias reaches the SAME door
+        out2 = await srv._agent_impl(
+            "correct_house", agent_id="agent:taxctp01", project="after-alias", ctx=ctx)
+        assert "error" not in out2
+        current2 = await actions.pool.fetchval(
+            "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
+            "AND name='project'", agent)
+        assert current2 == "after-alias"
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+
+
 async def test_agent_retire_governs_refuses_before_mount(actions: Actions) -> None:
     from src import mcp_server as srv
 

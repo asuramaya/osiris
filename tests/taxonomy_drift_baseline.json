@@ -11,7 +11,7 @@
   "docs/REFERENCE.md": 10,
   "docs/SPEC-agent-manager.md": 7,
   "src/cli.py": 94,
-  "src/mcp_server.py": 75,
+  "src/mcp_server.py": 74,
   "src/orchestrator/graph_layout.py": 31,
   "src/orchestrator/graph_migrations.py": 25,
   "src/orchestrator/graph_physics.py": 42,

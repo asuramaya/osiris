@@ -3299,6 +3299,18 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("establish_office"), "target": _s(),
         }, ["action", "target"]),
+        # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): "office" retired as the
+        # place-word for a seat's own directory — reissue_office/establish_office kept
+        # above as deprecated aliases for one release only (same spelling the CLI's own
+        # reissue-office/establish-office aliases already carry for reissue-seat-dir/
+        # establish-seat-dir).
+        _dispatcher_action_schema({
+            "action": _action_const("reissue_seat_dir"), "target": _s(), "because": _s(),
+            "adopt": _b(False),
+        }, ["action", "target", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("establish_seat_dir"), "target": _s(),
+        }, ["action", "target"]),
         _dispatcher_action_schema({
             "action": _action_const("invalidate_works_in"), "stale_project": _s(),
             "because": _s(),
@@ -3379,8 +3391,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "sweep_disk": (["target", "dry_run", "because"], ["target"]),
     "rename": (["target", "new_handle", "because"], ["target", "new_handle", "because"]),
     "set_attended": (["target", "attended", "because"], ["target", "attended", "because"]),
-    "reissue_office": (["target", "because", "adopt"], ["target", "because"]),
-    "establish_office": (["target"], ["target"]),
+    "reissue_seat_dir": (["target", "because", "adopt"], ["target", "because"]),
+    "establish_seat_dir": (["target"], ["target"]),
     "invalidate_works_in": (["stale_project", "because"], ["stale_project", "because"]),
     "reconcile_identity": (["target", "agent_id", "because"], []),
     "rehold": (["target", "agent_id", "because", "override_live", "dry_run"],
@@ -3412,8 +3424,8 @@ _RETIRED_ALIAS_ACTIONS: dict[str, str] = {
     "heal_seat_anchor": "heal_anchor", "heal_seat_transcript": "heal_transcript",
     "transition_seat_project": "transition_project", "resync_seat_house": "resync_house",
     "sweep_seat_disk": "sweep_disk", "rename_seat": "rename",
-    "set_seat_attended": "set_attended", "reissue_office": "reissue_office",
-    "establish_office": "establish_office", "invalidate_works_in": "invalidate_works_in",
+    "set_seat_attended": "set_attended", "reissue_office": "reissue_seat_dir",
+    "establish_office": "establish_seat_dir", "invalidate_works_in": "invalidate_works_in",
     "reconcile_seat_identity": "reconcile_identity", "correct_house": "correct_house",
     "correct_pin_value": "correct_pin", "revert_own_pin_write": "revert_pin",
 }
@@ -3457,6 +3469,11 @@ async def _seat_impl(
     PRE-DISPATCH VALIDATION (price-minimizer #2): before any branch runs, checks the
     action is known and every REQUIRED param for it was actually supplied — a mistake
     costs one round trip naming exactly what was missing, never a wrong write."""
+    # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): reissue_office/establish_office's
+    # own deprecated spellings normalize to their canonical names here, before the params
+    # lookup — one dict entry per action under its new name, never a duplicate.
+    action = {"reissue_office": "reissue_seat_dir",
+             "establish_office": "establish_seat_dir"}.get(action, action)
     if action not in _SEAT_ACTION_PARAMS:
         return {"error": f"unknown action {action!r}",
                 "known_actions": sorted(_SEAT_ACTION_PARAMS)}
@@ -3759,7 +3776,7 @@ async def _seat_impl(
         return await _set_seat_attended(Actions(await _pool_get()), seat_id=target,
                                         attended=attended, because=because, actor=ident.agent_id)
 
-    if action == "reissue_office":
+    if action == "reissue_seat_dir":
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
@@ -3769,7 +3786,7 @@ async def _seat_impl(
         return await _reissue_office(Actions(await _pool_get()), seat_id=target,
                                      because=because, actor=ident.agent_id, adopt=adopt)
 
-    if action == "establish_office":
+    if action == "establish_seat_dir":
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
@@ -4001,8 +4018,8 @@ async def seat(
       sweep_disk: delete a retired seat's office+workspace directories (target)
       rename: change a seat's handle, manager/operator-invoked (target, new_handle, because)
       set_attended: stamp a seat 'human'/'worker' (target, attended, because)
-      reissue_office: recompile a seat's CLAUDE.md managed section (target, because)
-      establish_office: move a seat into its Osiris-owned office (target)
+      reissue_seat_dir: recompile a seat's CLAUDE.md managed section (target, because)
+      establish_seat_dir: move a seat into its Osiris-owned directory (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
       rehold: third-party re-hold a seat's holds link (target, agent_id, because)
@@ -7783,6 +7800,14 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("correct_house"), "agent_id": _s(),
             "project": _opt_s(), "seat_generation": _opt_int_s(),
         }, ["action", "agent_id"]),
+        # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): "house" retired as the word
+        # for the project a seat governs — correct_project is the real name now,
+        # correct_house kept above as a deprecated alias for one release only (same
+        # spelling as the CLI's own correct-agent-house -> correct-agent-project).
+        _dispatcher_action_schema({
+            "action": _action_const("correct_project"), "agent_id": _s(),
+            "project": _opt_s(), "seat_generation": _opt_int_s(),
+        }, ["action", "agent_id"]),
         _dispatcher_action_schema({
             "action": _action_const("correct_succession"), "agent_id": _s(),
             "value": _opt_s(), "because": _s(), "override_live": _b(False),
@@ -7819,7 +7844,7 @@ _HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
 
 _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "claim_name": (["name"], ["name"]),
-    "correct_house": (["agent_id", "project", "seat_generation"], ["agent_id"]),
+    "correct_project": (["agent_id", "project", "seat_generation"], ["agent_id"]),
     # `value` is deliberately NOT in required here, same _UNSET reason as correct_pin's own
     # `value` above — "" is a legal, meaningful retraction, not an omission, and the shared
     # missing-check below treats "" as absent; the branch itself refuses a genuine _UNSET.
@@ -7858,6 +7883,10 @@ async def _agent_impl(
     Thoth dispatch 7162).
 
     PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): correct_house's own deprecated
+    # spelling normalizes to its canonical name here, before the params lookup — one
+    # dict entry under the new name, never a duplicate.
+    action = {"correct_house": "correct_project"}.get(action, action)
     if action not in _AGENT_ACTION_PARAMS:
         return {"error": f"unknown action {action!r}",
                 "known_actions": sorted(_AGENT_ACTION_PARAMS)}
@@ -7877,7 +7906,7 @@ async def _agent_impl(
         from src.orchestrator.agents import claim_name as _claim
         return await _claim(Actions(await _pool_get()), ident.agent_id, name,
                             source=ident.agent_id)
-    if action == "correct_house":
+    if action == "correct_project":
         assert agent_id is not None
         ident = await _ident_for(ctx)
         if ident is None:
@@ -7982,7 +8011,7 @@ async def agent(
 
     ACTION TABLE — action: what it does (required params beyond action):
       claim_name: self-name your own mounted identity (name)
-      correct_house: heal an already-polluted agent's project/seat_generation stamps,
+      correct_project: heal an already-polluted agent's project/seat_generation stamps,
         third-party (agent_id; at least one of project/seat_generation)
       correct_succession: correct an agent's own succeeded_by pointer (agent_id,
         because, value="" or retract=True to retract). Refuses blank because or a LIVE target
@@ -8003,7 +8032,7 @@ async def agent(
         SoftwareProject, or resolves but the agent carries no live governs edge to it,
         is reported in `not_found`/`no_edge` rather than aborting the whole batch.
       invalidate_works_in: THIRD-PARTY works_in duplicate repair (agent_id; project=the
-        STALE project to drop, the same shared slot correct_house's own `project` uses
+        STALE project to drop, the same shared slot correct_project's own `project` uses
         above; because) — refuses agent_id naming your own mounted identity (use
         seat(action='invalidate_works_in') for that, self-scoped and auto-filled). The
         SAME underlying repair, exposed for a mind acting on someone ELSE's duplicate
@@ -8021,15 +8050,15 @@ async def agent(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "agent(action='correct_house')",
+    "use_instead": "agent(action='correct_project')",
     "since": "task #202 agent dispatcher (msg 7162)",
 })
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    agent(action='correct_house')."""
-    return await _agent_impl("correct_house", agent_id=agent_id, project=project,
+    agent(action='correct_project')."""
+    return await _agent_impl("correct_project", agent_id=agent_id, project=project,
                              seat_generation=seat_generation, ctx=ctx)
 
 
@@ -8343,16 +8372,16 @@ async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "seat(action='reissue_office')",
+    "use_instead": "seat(action='reissue_seat_dir')",
     "since": "task #202 seat dispatcher (msg 7039)",
 })
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    seat(action='reissue_office')."""
-    return await _seat_impl("reissue_office", target=seat_id, because=because, adopt=adopt,
-                            ctx=ctx)
+    seat(action='reissue_seat_dir')."""
+    return await _seat_impl("reissue_seat_dir", target=seat_id, because=because,
+                            adopt=adopt, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -8509,13 +8538,13 @@ async def fleet_reconcile(execute: bool = False,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "seat(action='establish_office')",
+    "use_instead": "seat(action='establish_seat_dir')",
     "since": "task #202 seat dispatcher (msg 7039)",
 })
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    seat(action='establish_office')."""
-    return await _seat_impl("establish_office", target=seat, ctx=ctx)
+    seat(action='establish_seat_dir')."""
+    return await _seat_impl("establish_seat_dir", target=seat, ctx=ctx)
 
 
 @mcp.tool(meta={
