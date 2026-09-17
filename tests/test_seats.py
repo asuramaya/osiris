@@ -4586,6 +4586,26 @@ async def test_sweep_seat_trees_repairs_a_fabricated_tree_on_apply(
     assert rows[0]["v"] == str(real_tree)
 
 
+async def test_sweep_seat_trees_reports_a_seat_with_zero_current_rows_without_crashing(
+    actions: Actions,
+) -> None:
+    """Thoth mail 11961, live regression from w331: a seat with NO tree_cwd assertion
+    at all (an unfixed no-charter seat from an earlier sweep, or one never bound)
+    crashed the collapse-pass read with IndexError on `tree_cwds[0]` -- the empty-
+    list case was never in the original two-row/one-row split."""
+    from src.orchestrator.seats import sweep_seat_trees
+
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-zero-rows", "test")
+    await actions.assert_property(seat, "handle", "SweepZeroRows", "test",
+                                  datetime.now(UTC), 0.9)
+
+    out = await sweep_seat_trees(actions, apply=False, actor="operator")
+    entry = next(e for e in out["entries"] if e["seat"] == "seat:sweep-zero-rows")
+    assert entry["old_tree_cwd"] is None
+    assert entry["new_tree_cwd"] is None
+    assert entry["refused_why"] == "no charter"
+
+
 async def test_sweep_seat_trees_reports_no_charter_without_guessing(
     actions: Actions,
 ) -> None:
